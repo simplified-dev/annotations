@@ -50,9 +50,11 @@ Published to:
 - `dev.sbs.resourcepath` — ResourcePath inspection + visitor + evaluator + change listener + startup activity.
 - `dev.sbs.contract` — **annotation-neutral** contract-DSL grammar infrastructure: `ContractAst`, `ContractLexer`, `ContractParser`, `ContractParseException`. Reusable for any annotation that carries the same contract DSL.
 - `dev.sbs.xcontract` — **specific to the `@XContract` annotation**: `XContractInspection` (declaration-side), `XContractCallInspection` (caller-side), `XContractInferredAnnotationProvider` (bridge to JetBrains `@Contract`), `XContractTranslator` (AST → `@Contract` string).
-- `dev.sbs.classbuilder.apt` — JSR 269 annotation processor: `ClassBuilderProcessor` (entry, registered via `META-INF/services/javax.annotation.processing.Processor`), `BuilderEmitter` (source generator for classes/records/interfaces), `InterfaceImplEmitter` (emits the `<Name>Impl` concrete class for interface targets), `FieldSpec` (per-field IR), `AnnotationLookup` (mirror attribute reader).
+- `dev.sbs.classbuilder.apt` — JSR 269 annotation processor: `ClassBuilderProcessor` (entry, registered via `META-INF/services/javax.annotation.processing.Processor`, dispatches class/record targets to the mutator and interface targets to the sibling emitter), `FieldSpec` (per-field IR), `SourceIntrospector` (Trees-API bridge for reading declared initialisers), `AnnotationLookup` (mirror attribute reader), `BuilderConfig` (resolved annotation attributes), `BuilderEmitter` (legacy source generator; now only handles interface targets since classes/records use AST mutation), `InterfaceImplEmitter` (emits the `<Name>Impl` concrete class for interface targets).
+- `dev.sbs.classbuilder.mutate` — javac AST mutation pipeline: `JavacBridge` (reflective gateway to `JavacProcessingEnvironment` internals), `MutationContext`, `BuilderMutator` (concrete/record orchestrator), `SuperBuilderMutator` (abstract-target and concrete-subclass orchestrator with self-typed generics), `NestedBuilderFactory`, `BootstrapMethodFactory`, `CopyConstructorFactory`, `FieldMutators`, `SelfTypedSetters`, `JavacTypeFactory`, `AstMarkers`. `compat/` subpackage carries `JavacCompat` interface + `JavacCompatFactory` version-gated static dispatch + `v17`/`v21`/`v23`/`v25` shims (only `v17` has real logic day-one; higher versions inherit unchanged).
+- `dev.sbs.classbuilder.editor` — IntelliJ editor-side synthesis: `ClassBuilderAugmentProvider` (surfaces bootstrap methods to the PSI layer so autocompletion works before the first javac round), `ClassBuilderLineMarkerProvider` (gutter icon on `@ClassBuilder` annotations), `GeneratedMemberFactory` + `GeneratedMemberMarker` (synthesis helpers and provenance key), `PsiFieldShape` + `PsiFieldShapeExtractor` (PSI analogue of `FieldSpec`).
 - `dev.sbs.classbuilder.validate` — runtime: `BuildFlagValidator` (reflective, per-class cached), `BuilderValidationException`, `Strings.formatNullable` helper.
-- `dev.sbs.classbuilder.inspect` — IDE-side: `ClassBuilderBootstrapInspection` + `AddBootstrapMethodsFix` (ERROR-level check for the three bootstrap methods), `ClassBuilderFieldInspection` (flags misuse of companion annotations at source-edit time), `ClassBuilderConstants` (shared FQNs + attribute readers).
+- `dev.sbs.classbuilder.inspect` — IDE-side: `ClassBuilderFieldInspection` (flags misuse of companion annotations at source-edit time), `ClassBuilderConstants` (shared FQNs + attribute readers). The bootstrap-methods inspection was retired in 1.2.0 since the methods are now auto-injected.
 
 ### Inspection (`dev.sbs.inspection`)
 
@@ -135,11 +137,28 @@ for each element annotated with @ClassBuilder (CLASS | RECORD | INTERFACE):
                                         abstract zero-arg methods for INTERFACE]
     FieldSpec.from(variableElement)    [classifies: primitive/boolean/String/Optional
                                         /list/set/map/array and pulls companion annos]
-  for INTERFACE only:
+  for CLASS / RECORD:
+    BuilderMutator.mutate()            [injects nested Builder + builder()/from()/mutate() via AST]
+      NestedBuilderFactory + FieldMutators build the JCClassDecl
+      BootstrapMethodFactory appends builder()/from()/mutate() onto target.defs
+      SuperBuilderMutator (abstract or annotated-super path) produces
+        self-typed <T, B> generics, abstract self()/build() on the root,
+        CopyConstructorFactory emits protected Target(Builder<?,?> b)
+    If JavacProcessingEnvironment cannot be unwrapped (ecj, unknown wrapper),
+      the processor ERRORs - consumers must use javac.
+  for INTERFACE:
     InterfaceImplEmitter.emit(...)     [writes <Name>Impl.java via Filer]
-  BuilderEmitter.emit()                [writes <Name>Builder.java via Filer]
+    BuilderEmitter.emit(INTERFACE)     [writes <Name>Builder.java via Filer]
+    - interfaces stay on the sibling-emission path because there is no in-source
+      mutation surface to inject into.
 ```
-At runtime (only if `validate=true`): generated `build()` calls `BuildFlagValidator.validate(this)`, which uses a per-class cached field list to enforce `@BuildFlag` constraints. No classpath entries beyond the plugin jar itself.
+Runtime: generated `build()` calls `BuildFlagValidator.validate(this)` when `validate=true`, enforcing `@BuildFlag` constraints via a per-class cached field list. No classpath entries beyond the plugin jar.
+
+Editor: `ClassBuilderAugmentProvider` surfaces the bootstrap methods to the PSI layer so autocompletion, goto-symbol, and type resolution all work before the first javac round. `ClassBuilderLineMarkerProvider` shows a gutter icon (placeholder `/icons/classbuilder_generated.svg`) on every `@ClassBuilder` annotation. The nested `Builder` class itself is NOT yet synthesised at editor time - `Target.Builder` references remain unresolved until a build runs, at which point the compiled class file makes the injected nested class visible.
+
+JDK compatibility: `mutate/compat/` carries per-JDK shims behind `JavacCompat`. Day-one all sweep JDKs (17, 21, 25) share the `v17` baseline; the `v21`/`v23`/`v25` subclasses are placeholders for future divergence. Adding a new JDK = one new subclass + one conditional line in `JavacCompatFactory`.
+
+Consumer requirements: javac-only (no ecj). Consumers must configure the same `--add-exports=jdk.compiler/com.sun.tools.javac.*=ALL-UNNAMED` flags the plugin's own build uses (see `build.gradle.kts`), since the mutator reaches into internal javac APIs.
 
 ### @ClassBuilder test strategy
 

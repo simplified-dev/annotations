@@ -40,30 +40,14 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     private static final String ANNOTATION_FQN = "dev.sbs.annotation.ClassBuilder";
 
     private final AnnotationLookup lookup = new AnnotationLookup();
-    private final boolean mutationEnabled;
     private SourceIntrospector introspector;
     private Optional<JavacBridge> javacBridge = Optional.empty();
-
-    /** Default constructor used by the JSR-269 META-INF/services entry. */
-    public ClassBuilderProcessor() {
-        this(true);
-    }
-
-    /**
-     * Test hook that disables the AST-mutation path. When {@code false} the
-     * processor always emits a sibling {@code <TypeName>Builder.java}, which
-     * keeps the legacy sibling test suite exercisable until Phase 6 retires
-     * the sibling emitter.
-     */
-    public ClassBuilderProcessor(boolean mutationEnabled) {
-        this.mutationEnabled = mutationEnabled;
-    }
 
     @Override
     public synchronized void init(ProcessingEnvironment processingEnv) {
         super.init(processingEnv);
         this.introspector = new SourceIntrospector(processingEnv);
-        this.javacBridge = mutationEnabled ? JavacBridge.of(processingEnv) : Optional.empty();
+        this.javacBridge = JavacBridge.of(processingEnv);
     }
 
     /** Exposed for tests. */
@@ -105,36 +89,23 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         return processingEnv.getElementUtils().getTypeElement(ANNOTATION_FQN);
     }
 
-    private void processClass(TypeElement target, Messager messager) throws IOException {
+    private void processClass(TypeElement target, Messager messager) {
         BuilderConfig config = extractConfig(target);
         List<FieldSpec> fields = collectFields(target, config);
-        boolean isRecord = target.getKind() == ElementKind.RECORD;
 
-        // AST-mutation path: inject a nested Builder class directly into the
-        // target's JCClassDecl. Falls through to sibling emission when the
-        // environment is not javac (no bridge) or the target lacks a source
-        // tree (e.g. elements derived from class files).
-        if (javacBridge.isPresent()) {
-            BuilderMutator mutator = new BuilderMutator(javacBridge.get(), messager);
-            if (mutator.mutate(target, config, fields)) return;
+        if (javacBridge.isEmpty()) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@ClassBuilder requires javac for AST mutation - current environment is not a "
+                    + "JavacProcessingEnvironment. Run your build under OpenJDK javac (no ecj).",
+                target);
+            return;
         }
-
-        emitSiblingBuilder(target, messager, config, fields, isRecord);
-    }
-
-    private void emitSiblingBuilder(TypeElement target, Messager messager, BuilderConfig config,
-                                    List<FieldSpec> fields, boolean isRecord) throws IOException {
-        String packageName = packageOf(target);
-        BuilderEmitter emitter = new BuilderEmitter(target, packageName, config, fields, messager, isRecord, BuilderEmitter.TargetKind.CLASS_OR_RECORD);
-        String source = emitter.emit();
-
-        String qualifiedName = packageName.isEmpty()
-            ? emitter.builderClassName()
-            : packageName + "." + emitter.builderClassName();
-
-        JavaFileObject file = processingEnv.getFiler().createSourceFile(qualifiedName, target);
-        try (Writer w = file.openWriter()) {
-            w.write(source);
+        BuilderMutator mutator = new BuilderMutator(javacBridge.get(), messager);
+        if (!mutator.mutate(target, config, fields)) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@ClassBuilder could not resolve a source tree for " + target
+                    + "; mutation requires the annotated element to have a source declaration.",
+                target);
         }
     }
 

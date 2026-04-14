@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "dev.sbs"
-version = "1.1.0"
+version = "1.2.0"
 
 repositories {
     mavenCentral()
@@ -38,6 +38,17 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h3>1.2.0</h3>
+            <ul>
+              <li><b>AST-mutation pivot</b> - <code>@ClassBuilder</code> now injects a <code>public static class Builder</code> directly into the annotated class via javac AST mutation rather than emitting a sibling <code>&lt;TypeName&gt;Builder.java</code>. Interface targets still emit sibling <code>&lt;Name&gt;Impl.java</code> + <code>&lt;Name&gt;Builder.java</code> since there is no in-source mutation surface on an interface body.</li>
+              <li><b>Auto-generated bootstrap methods</b> - <code>builder()</code>, <code>from(T)</code>, and <code>mutate()</code> are now injected on the annotated type automatically. Hand-written methods with the same name and arity win (skip-on-collision + <code>Kind.NOTE</code>). The bootstrap-methods inspection is retired.</li>
+              <li><b>SuperBuilder for abstract classes</b> - <code>@ClassBuilder</code> on an abstract class produces a self-typed <code>Builder&lt;T extends Target, B extends Builder&lt;T, B&gt;&gt;</code> with abstract <code>build()</code> and <code>self()</code>. Concrete subclasses carrying <code>@ClassBuilder</code> automatically inherit the parent's builder (<code>class Builder extends Super.Builder&lt;ThisType, ThisType.Builder&gt;</code>), override <code>self()</code> and <code>build()</code>, and get a protected copy constructor. Opt out with <code>generateCopyConstructor = false</code>.</li>
+              <li><b>IDE augmentation</b> - a new <code>PsiAugmentProvider</code> surfaces the injected bootstrap methods to the PSI layer, so autocompletion, goto-symbol, and type resolution all work before the first javac round. A gutter icon (replaceable SVG at <code>/icons/classbuilder_generated.svg</code>) marks every <code>@ClassBuilder</code> annotation.</li>
+              <li><b>Multi-JDK support</b> - versioned compat layer under <code>dev.sbs.classbuilder.mutate.compat</code> with <code>v17</code>/<code>v21</code>/<code>v23</code>/<code>v25</code> shims dispatched by <code>Runtime.version().feature()</code>. aptTest matrix covers JDK 17, 21, and 25.</li>
+              <li><b>Consumer requirement</b> - javac-only (ecj not supported). Consumers' builds need <code>--add-exports=jdk.compiler/com.sun.tools.javac.*=ALL-UNNAMED</code> on compile; see <code>build.gradle.kts</code> for the full list.</li>
+              <li><b>Gradle 9.4.1</b> - wrapper bumped so JDK 25 is natively supported without toolchain workarounds; unused Kotlin JVM plugin dropped.</li>
+            </ul>
+
             <h3>1.1.0</h3>
             <ul>
               <li><b>New @ClassBuilder annotation</b> - generates a sibling <code>&lt;TypeName&gt;Builder.java</code> via a JSR 269 annotation processor. Supports classes, records, and interfaces (interfaces also get a matching <code>&lt;Name&gt;Impl</code>). Full Lombok <code>@Builder</code> parity plus opinionated extras: configurable method prefix, <code>builderName</code>/<code>builderMethodName</code>/<code>buildMethodName</code>/<code>fromMethodName</code>/<code>toBuilderMethodName</code>, generated <code>from(T)</code> + <code>mutate()</code>, and emitted <code>@XContract</code> on every setter so IDE data-flow understands fresh-object and this-return shapes.</li>
