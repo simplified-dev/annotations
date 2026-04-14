@@ -345,4 +345,60 @@ public class ClassBuilderProcessorTest {
         assertFalse(out, out.contains("@XContract"));
     }
 
+    // ------------------------------------------------------------------
+    // Records - record-accessor style in from()
+    // ------------------------------------------------------------------
+
+    @Test
+    public void record_generatesBuilder() {
+        JavaFileObject source = JavaFileObjects.forSourceLines("demo.Point",
+            "package demo;",
+            "import dev.sbs.annotation.ClassBuilder;",
+            "@ClassBuilder",
+            "public record Point(int x, int y) { }");
+        Compilation c = compile(source);
+        assertThat(c).succeeded();
+        String out = generatedSource(c, "demo.PointBuilder");
+        assertTrue(out, out.contains("withX(int x)"));
+        assertTrue(out, out.contains("withY(int y)"));
+        // Record accessor style in from(): instance.x() not instance.getX()
+        assertTrue(out, out.contains("b.x = instance.x();"));
+        assertTrue(out, out.contains("b.y = instance.y();"));
+        assertTrue(out, out.contains("return new Point(x, y);"));
+    }
+
+    // ------------------------------------------------------------------
+    // Interfaces - generates both Impl and Builder
+    // ------------------------------------------------------------------
+
+    @Test
+    public void interface_generatesImplAndBuilder() {
+        JavaFileObject source = JavaFileObjects.forSourceLines("demo.Shape",
+            "package demo;",
+            "import dev.sbs.annotation.ClassBuilder;",
+            "@ClassBuilder",
+            "public interface Shape {",
+            "    int sides();",
+            "    String name();",
+            "}");
+        Compilation c = compile(source);
+        assertThat(c).succeeded();
+        String impl = generatedSource(c, "demo.ShapeImpl");
+        assertTrue(impl, impl.contains("final class ShapeImpl implements Shape"));
+        assertTrue(impl, impl.contains("private final int sides;"));
+        assertTrue(impl, impl.contains("private final String name;"));
+        assertTrue(impl, impl.contains("public int sides()"));
+        assertTrue(impl, impl.contains("public String name()"));
+        assertTrue(impl, impl.contains("boolean equals"));
+        assertTrue(impl, impl.contains("int hashCode"));
+        assertTrue(impl, impl.contains("String toString"));
+
+        String builder = generatedSource(c, "demo.ShapeBuilder");
+        assertTrue(builder, builder.contains("withSides(int sides)"));
+        assertTrue(builder, builder.contains("withName"));
+        assertTrue(builder, builder.contains("return new ShapeImpl(sides, name);"));
+        // from() uses interface accessor style
+        assertTrue(builder, builder.contains("b.sides = instance.sides();"));
+    }
+
 }

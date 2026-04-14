@@ -1,5 +1,6 @@
 package dev.sbs.classbuilder.apt;
 
+import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
@@ -94,6 +95,70 @@ final class FieldSpec {
     /** Whether this field uses {@code is*} setters (booleans) vs the configured prefix. */
     boolean usesBooleanPrefix() {
         return isBoolean;
+    }
+
+    /**
+     * Factory for interface abstract-accessor methods. The method name becomes the
+     * field name; the return type becomes the field type. No VariableElement is
+     * retained (the underlying element is a method), so {@link #element} is null
+     * and callers that need source reporting should fall back to the type element.
+     */
+    static FieldSpec fromInterfaceAccessor(ExecutableElement method, AnnotationLookup lookup) {
+        Builder b = new Builder();
+        b.element = null;
+        b.name = method.getSimpleName().toString();
+        b.type = method.getReturnType();
+        b.typeDisplay = b.type.toString();
+
+        b.notNull = lookup.hasAnnotation(method, "org.jetbrains.annotations.NotNull");
+        b.nullable = lookup.hasAnnotation(method, "org.jetbrains.annotations.Nullable");
+        classifyType(b);
+
+        b.formattable = lookup.hasAnnotation(method, "dev.sbs.annotation.Formattable");
+        b.formattableNullable = b.formattable
+            && lookup.booleanAttr(method, "dev.sbs.annotation.Formattable", "nullable", false);
+        b.negateName = lookup.stringAttr(method, "dev.sbs.annotation.Negate", "value", null);
+        if (lookup.hasAnnotation(method, "dev.sbs.annotation.Singular")) {
+            String v = lookup.stringAttr(method, "dev.sbs.annotation.Singular", "value", "");
+            b.singularName = v.isEmpty() ? defaultSingular(b.name) : v;
+        }
+        b.ignored = lookup.hasAnnotation(method, "dev.sbs.annotation.BuilderIgnore");
+
+        return new FieldSpec(b);
+    }
+
+    private static void classifyType(Builder b) {
+        TypeKind kind = b.type.getKind();
+        b.isPrimitive = kind.isPrimitive();
+        b.isBoolean = kind == TypeKind.BOOLEAN;
+        b.isArray = kind == TypeKind.ARRAY;
+
+        if (b.isArray) {
+            ArrayType array = (ArrayType) b.type;
+            b.collectionElement = array.getComponentType().toString();
+        } else if (kind == TypeKind.DECLARED) {
+            DeclaredType declared = (DeclaredType) b.type;
+            String raw = stripTypeArgs(declared.toString());
+            List<? extends TypeMirror> args = declared.getTypeArguments();
+
+            if ("java.lang.String".equals(raw)) {
+                b.isString = true;
+            } else if (OPTIONAL_FQN.equals(raw)) {
+                b.isOptional = true;
+                b.optionalInner = args.isEmpty() ? "java.lang.Object" : args.get(0).toString();
+            } else if (LIST_TYPES.contains(raw)) {
+                b.isListLike = true;
+                b.collectionElement = args.isEmpty() ? "java.lang.Object" : args.get(0).toString();
+            } else if (SET_TYPES.contains(raw)) {
+                b.isListLike = true;
+                b.isSet = true;
+                b.collectionElement = args.isEmpty() ? "java.lang.Object" : args.get(0).toString();
+            } else if (MAP_TYPES.contains(raw)) {
+                b.isMap = true;
+                b.mapKey = args.isEmpty() ? "java.lang.Object" : args.get(0).toString();
+                b.mapValue = args.size() < 2 ? "java.lang.Object" : args.get(1).toString();
+            }
+        }
     }
 
     static FieldSpec from(VariableElement element, AnnotationLookup lookup) {

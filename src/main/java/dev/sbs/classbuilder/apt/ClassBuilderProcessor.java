@@ -43,15 +43,20 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         TypeElement annotationElement = lookupAnnotationElement();
         if (annotationElement == null) return false;
         for (Element element : roundEnv.getElementsAnnotatedWith(annotationElement)) {
-            if (element.getKind() != ElementKind.CLASS) {
+            ElementKind kind = element.getKind();
+            if (kind != ElementKind.CLASS && kind != ElementKind.RECORD && kind != ElementKind.INTERFACE) {
                 messager.printMessage(Diagnostic.Kind.WARNING,
-                    "@ClassBuilder on " + element.getKind() + " targets is not yet supported - skipping",
+                    "@ClassBuilder on " + kind + " targets is not yet supported - skipping",
                     element
                 );
                 continue;
             }
             try {
-                processClass((TypeElement) element, messager);
+                if (kind == ElementKind.INTERFACE) {
+                    processInterface((TypeElement) element, messager);
+                } else {
+                    processClass((TypeElement) element, messager);
+                }
             } catch (Exception e) {
                 messager.printMessage(Diagnostic.Kind.ERROR,
                     "Failed to generate builder for " + element + ": " + e.getMessage(),
@@ -70,8 +75,9 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         BuilderEmitter.BuilderConfig config = extractConfig(target);
         List<FieldSpec> fields = collectFields(target, config);
         String packageName = packageOf(target);
+        boolean isRecord = target.getKind() == ElementKind.RECORD;
 
-        BuilderEmitter emitter = new BuilderEmitter(target, packageName, config, fields, messager);
+        BuilderEmitter emitter = new BuilderEmitter(target, packageName, config, fields, messager, isRecord, BuilderEmitter.TargetKind.CLASS_OR_RECORD);
         String source = emitter.emit();
 
         String qualifiedName = packageName.isEmpty()
@@ -82,6 +88,45 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         try (Writer w = file.openWriter()) {
             w.write(source);
         }
+    }
+
+    private void processInterface(TypeElement target, Messager messager) throws IOException {
+        BuilderEmitter.BuilderConfig config = extractConfig(target);
+        List<FieldSpec> fields = collectFieldsFromInterface(target, config);
+        String packageName = packageOf(target);
+
+        // Impl class first
+        String implName = target.getSimpleName().toString() + "Impl";
+        String implSource = InterfaceImplEmitter.emit(target, packageName, implName, fields);
+        String implQn = packageName.isEmpty() ? implName : packageName + "." + implName;
+        JavaFileObject implFile = processingEnv.getFiler().createSourceFile(implQn, target);
+        try (Writer w = implFile.openWriter()) { w.write(implSource); }
+
+        // Builder second - build() returns the interface, new impl instance
+        BuilderEmitter emitter = new BuilderEmitter(target, packageName, config, fields, messager, false, BuilderEmitter.TargetKind.INTERFACE);
+        emitter.setInterfaceImplName(implName);
+        String source = emitter.emit();
+        String qualifiedName = packageName.isEmpty() ? emitter.builderClassName() : packageName + "." + emitter.builderClassName();
+        JavaFileObject file = processingEnv.getFiler().createSourceFile(qualifiedName, target);
+        try (Writer w = file.openWriter()) { w.write(source); }
+    }
+
+    private List<FieldSpec> collectFieldsFromInterface(TypeElement target, BuilderEmitter.BuilderConfig config) {
+        List<FieldSpec> out = new ArrayList<>();
+        for (Element enclosed : target.getEnclosedElements()) {
+            if (enclosed.getKind() != ElementKind.METHOD) continue;
+            if (enclosed.getModifiers().contains(Modifier.STATIC)) continue;
+            if (enclosed.getModifiers().contains(Modifier.DEFAULT)) continue;
+            javax.lang.model.element.ExecutableElement method = (javax.lang.model.element.ExecutableElement) enclosed;
+            if (!method.getParameters().isEmpty()) continue; // only zero-arg abstract accessors become builder fields
+            if (method.getReturnType().getKind() == javax.lang.model.type.TypeKind.VOID) continue;
+            String name = method.getSimpleName().toString();
+            if (config.excludeSet().contains(name)) continue;
+            FieldSpec spec = FieldSpec.fromInterfaceAccessor(method, lookup);
+            if (spec.ignored) continue;
+            out.add(spec);
+        }
+        return out;
     }
 
     private BuilderEmitter.BuilderConfig extractConfig(TypeElement target) {

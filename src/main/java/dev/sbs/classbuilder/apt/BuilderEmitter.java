@@ -16,6 +16,8 @@ import java.util.TreeSet;
  */
 final class BuilderEmitter {
 
+    enum TargetKind { CLASS_OR_RECORD, INTERFACE }
+
     private final TypeElement target;
     private final String targetSimpleName;
     private final String packageName;
@@ -24,10 +26,18 @@ final class BuilderEmitter {
     private final List<FieldSpec> fields;
     private final Set<String> imports = new TreeSet<>();
     private final Messager messager;
+    private final boolean isRecord;
+    private final TargetKind targetKind;
+    private String interfaceImplName;
 
     private final StringBuilder body = new StringBuilder(2048);
 
     BuilderEmitter(TypeElement target, String packageName, BuilderConfig config, List<FieldSpec> fields, Messager messager) {
+        this(target, packageName, config, fields, messager, false, TargetKind.CLASS_OR_RECORD);
+    }
+
+    BuilderEmitter(TypeElement target, String packageName, BuilderConfig config, List<FieldSpec> fields,
+                   Messager messager, boolean isRecord, TargetKind targetKind) {
         this.target = target;
         this.targetSimpleName = target.getSimpleName().toString();
         this.packageName = packageName;
@@ -35,6 +45,12 @@ final class BuilderEmitter {
         this.builderName = targetSimpleName + "Builder";
         this.fields = fields;
         this.messager = messager;
+        this.isRecord = isRecord;
+        this.targetKind = targetKind;
+    }
+
+    void setInterfaceImplName(String implName) {
+        this.interfaceImplName = implName;
     }
 
     String emit() {
@@ -324,7 +340,10 @@ final class BuilderEmitter {
 
     private String readFromInstance(FieldSpec f) {
         String getter;
-        if (f.isBoolean) {
+        if (isRecord || targetKind == TargetKind.INTERFACE) {
+            // Records expose component accessors as `name()`; interfaces use the abstract method name directly.
+            getter = "instance." + f.name + "()";
+        } else if (f.isBoolean) {
             getter = "instance.is" + capitalise(f.name) + "()";
         } else {
             getter = "instance.get" + capitalise(f.name) + "()";
@@ -344,8 +363,15 @@ final class BuilderEmitter {
             body.append("        BuildFlagValidator.validate(this);\n");
         }
         boolean useFactory = !config.factoryMethod.isEmpty();
-        String head = useFactory ? (targetSimpleName + "." + config.factoryMethod) : ("new " + targetSimpleName);
-        body.append("        return ").append(head).append('(');
+        String constructorTarget;
+        if (targetKind == TargetKind.INTERFACE) {
+            constructorTarget = "new " + (interfaceImplName == null ? targetSimpleName + "Impl" : interfaceImplName);
+        } else if (useFactory) {
+            constructorTarget = targetSimpleName + "." + config.factoryMethod;
+        } else {
+            constructorTarget = "new " + targetSimpleName;
+        }
+        body.append("        return ").append(constructorTarget).append('(');
         for (int i = 0; i < fields.size(); i++) {
             if (i > 0) body.append(", ");
             body.append(fields.get(i).name);
