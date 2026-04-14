@@ -1,0 +1,38 @@
+<html>
+<body>
+Flags <code>@ClassBuilder</code>-annotated classes that are missing one or more
+of the three bootstrap methods the annotation processor expects to see on the
+class:
+
+<ul>
+  <li><code>public static <em>Builder</em> builder()</code></li>
+  <li><code>public static <em>Builder</em> from(<em>ClassName</em> instance)</code></li>
+  <li><code>public <em>Builder</em> mutate()</code></li>
+</ul>
+
+<p>
+These three methods are the only wiring required to expose the generated
+<code>&lt;ClassName&gt;Builder</code> class as a first-class part of the
+annotated type's public API. Method names and visibility are configurable
+via the <code>@ClassBuilder</code> attributes (<code>builderMethodName</code>,
+<code>fromMethodName</code>, <code>toBuilderMethodName</code>,
+<code>access</code>); the inspection honors those overrides.
+</p>
+
+<p>
+A quick-fix inserts all missing bootstrap methods at once, each decorated
+with the matching <code>@XContract</code> so IntelliJ data-flow analysis
+understands their fresh-object return shapes.
+</p>
+
+<!-- tooltip end -->
+
+<p>
+Reported at <b>ERROR</b> severity because call sites that use
+<code><em>ClassName</em>.builder()...</code> will fail to compile without
+these methods - the generated <code>&lt;ClassName&gt;Builder</code> file
+does not add them to the target class, only the bootstrap ones do.
+</p>
+
+</body>
+</html>

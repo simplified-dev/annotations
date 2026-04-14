@@ -101,6 +101,15 @@
                 displayName="XContract Violation at Call Site"
                 groupName="Simplified Annotations"
         />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.sbs.classbuilder.inspect.ClassBuilderBootstrapInspection"
+                enabledByDefault="true"
+                level="ERROR"
+                shortName="ClassBuilderBootstrapInspection"
+                displayName="@ClassBuilder bootstrap methods missing"
+                groupName="Simplified Annotations"
+        />
         <inferredAnnotationProvider implementation="dev.sbs.xcontract.XContractInferredAnnotationProvider"/>
         <postStartupActivity implementation="dev.sbs.resourcepath.ResourcePathStartupActivity"/>
     </extensions>
