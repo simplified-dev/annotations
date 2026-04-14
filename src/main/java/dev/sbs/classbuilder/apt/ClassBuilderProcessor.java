@@ -4,6 +4,7 @@ import dev.sbs.annotation.AccessLevel;
 
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.Messager;
+import javax.annotation.processing.ProcessingEnvironment;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.annotation.processing.SupportedSourceVersion;
@@ -36,6 +37,13 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     private static final String ANNOTATION_FQN = "dev.sbs.annotation.ClassBuilder";
 
     private final AnnotationLookup lookup = new AnnotationLookup();
+    private SourceIntrospector introspector;
+
+    @Override
+    public synchronized void init(ProcessingEnvironment processingEnv) {
+        super.init(processingEnv);
+        this.introspector = new SourceIntrospector(processingEnv);
+    }
 
     @Override
     public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
@@ -159,7 +167,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
             if (enclosed.getModifiers().contains(Modifier.TRANSIENT)) continue;
             String name = enclosed.getSimpleName().toString();
             if (config.excludeSet().contains(name)) continue;
-            FieldSpec spec = FieldSpec.from((VariableElement) enclosed, lookup);
+            FieldSpec spec = FieldSpec.from((VariableElement) enclosed, lookup, introspector);
             if (spec.ignored) continue;
             out.add(spec);
         }

@@ -371,6 +371,151 @@ public class ClassBuilderProcessorTest {
     // Interfaces - generates both Impl and Builder
     // ------------------------------------------------------------------
 
+    // ------------------------------------------------------------------
+    // @BuilderDefault - copies source initializer into builder field
+    // ------------------------------------------------------------------
+
+    @Test
+    public void builderDefault_stringLiteral_copiedVerbatim() {
+        JavaFileObject source = JavaFileObjects.forSourceLines("demo.Greeting",
+            "package demo;",
+            "import dev.sbs.annotation.ClassBuilder;",
+            "import dev.sbs.annotation.BuilderDefault;",
+            "@ClassBuilder(validate = false)",
+            "public class Greeting {",
+            "    @BuilderDefault private String salutation = \"Hello\";",
+            "    Greeting(String salutation) { this.salutation = salutation; }",
+            "    public String getSalutation() { return salutation; }",
+            "}");
+        Compilation c = compile(source);
+        assertThat(c).succeeded();
+        String out = generatedSource(c, "demo.GreetingBuilder");
+        assertTrue(out, out.contains("private String salutation = \"Hello\";"));
+    }
+
+    @Test
+    public void builderDefault_staticCall_addsImport() {
+        JavaFileObject source = JavaFileObjects.forSourceLines("demo.Token",
+            "package demo;",
+            "import dev.sbs.annotation.ClassBuilder;",
+            "import dev.sbs.annotation.BuilderDefault;",
+            "import java.util.UUID;",
+            "@ClassBuilder(validate = false)",
+            "public class Token {",
+            "    @BuilderDefault private UUID id = UUID.randomUUID();",
+            "    Token(UUID id) { this.id = id; }",
+            "    public UUID getId() { return id; }",
+            "}");
+        Compilation c = compile(source);
+        assertThat(c).succeeded();
+        String out = generatedSource(c, "demo.TokenBuilder");
+        assertTrue(out, out.contains("private UUID id = UUID.randomUUID();"));
+        assertTrue(out, out.contains("import java.util.UUID;"));
+    }
+
+    @Test
+    public void builderDefault_overridesCollectionDefault() {
+        JavaFileObject source = JavaFileObjects.forSourceLines("demo.Seed",
+            "package demo;",
+            "import dev.sbs.annotation.ClassBuilder;",
+            "import dev.sbs.annotation.BuilderDefault;",
+            "import java.util.ArrayList;",
+            "import java.util.List;",
+            "@ClassBuilder(validate = false)",
+            "public class Seed {",
+            "    @BuilderDefault private List<String> tags = new ArrayList<>(List.of(\"seeded\"));",
+            "    Seed(List<String> tags) { this.tags = tags; }",
+            "    public List<String> getTags() { return tags; }",
+            "}");
+        Compilation c = compile(source);
+        assertThat(c).succeeded();
+        String out = generatedSource(c, "demo.SeedBuilder");
+        // The source initializer wins over the default "new ArrayList<>()".
+        assertTrue(out, out.contains("new ArrayList<>(List.of(\"seeded\"))"));
+    }
+
+    @Test
+    public void builderDefault_withoutInitializer_errors() {
+        JavaFileObject source = JavaFileObjects.forSourceLines("demo.Missing",
+            "package demo;",
+            "import dev.sbs.annotation.ClassBuilder;",
+            "import dev.sbs.annotation.BuilderDefault;",
+            "@ClassBuilder(validate = false)",
+            "public class Missing {",
+            "    @BuilderDefault private String label;",
+            "    Missing(String label) { this.label = label; }",
+            "    public String getLabel() { return label; }",
+            "}");
+        Compilation c = compile(source);
+        assertThat(c).hadErrorContaining("@BuilderDefault requires the field to have an initializer");
+    }
+
+    // ------------------------------------------------------------------
+    // @ObtainVia - overrides the accessor used in from(T)
+    // ------------------------------------------------------------------
+
+    @Test
+    public void obtainVia_method_replacesDefaultGetter() {
+        JavaFileObject source = JavaFileObjects.forSourceLines("demo.Range",
+            "package demo;",
+            "import dev.sbs.annotation.ClassBuilder;",
+            "import dev.sbs.annotation.ObtainVia;",
+            "@ClassBuilder(validate = false)",
+            "public class Range {",
+            "    @ObtainVia(method = \"resolvedMax\") private int max;",
+            "    Range(int max) { this.max = max; }",
+            "    public int resolvedMax() { return max; }",
+            "}");
+        Compilation c = compile(source);
+        assertThat(c).succeeded();
+        String out = generatedSource(c, "demo.RangeBuilder");
+        assertTrue(out, out.contains("b.max = instance.resolvedMax();"));
+        assertFalse(out, out.contains("instance.getMax()"));
+    }
+
+    @Test
+    public void obtainVia_static_emitsStaticCall() {
+        JavaFileObject source = JavaFileObjects.forSourceLines("demo.Helped",
+            "package demo;",
+            "import dev.sbs.annotation.ClassBuilder;",
+            "import dev.sbs.annotation.ObtainVia;",
+            "@ClassBuilder(validate = false)",
+            "public class Helped {",
+            "    @ObtainVia(method = \"extractName\", isStatic = true) private String name;",
+            "    Helped(String name) { this.name = name; }",
+            "    public String getName() { return name; }",
+            "    public static String extractName(Helped h) { return h.name; }",
+            "}");
+        Compilation c = compile(source);
+        assertThat(c).succeeded();
+        String out = generatedSource(c, "demo.HelpedBuilder");
+        assertTrue(out, out.contains("b.name = Helped.extractName(instance);"));
+    }
+
+    @Test
+    public void obtainVia_field_emitsDirectFieldRead() {
+        JavaFileObject source = JavaFileObjects.forSourceLines("demo.Mirror",
+            "package demo;",
+            "import dev.sbs.annotation.ClassBuilder;",
+            "import dev.sbs.annotation.ObtainVia;",
+            "@ClassBuilder(validate = false)",
+            "public class Mirror {",
+            "    @ObtainVia(field = \"backing\") String label;",
+            "    String backing;",
+            "    Mirror(String label, String backing) { this.label = label; this.backing = backing; }",
+            "    public String getLabel() { return label; }",
+            "    public String getBacking() { return backing; }",
+            "}");
+        Compilation c = compile(source);
+        assertThat(c).succeeded();
+        String out = generatedSource(c, "demo.MirrorBuilder");
+        assertTrue(out, out.contains("b.label = instance.backing;"));
+    }
+
+    // ------------------------------------------------------------------
+    // Interfaces - generates both Impl and Builder
+    // ------------------------------------------------------------------
+
     @Test
     public void interface_generatesImplAndBuilder() {
         JavaFileObject source = JavaFileObjects.forSourceLines("demo.Shape",

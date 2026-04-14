@@ -6,6 +6,7 @@ import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -58,6 +59,8 @@ final class FieldSpec {
     final String singularName;               // null if no @Singular; filled from @Singular.value or defaulted
     final boolean ignored;                   // @BuilderIgnore or listed in @ClassBuilder.exclude
     final boolean builderDefault;
+    final String sourceInitializer;          // copied source text of the field's declared initializer
+    final Set<String> initializerImports;    // type FQNs referenced by sourceInitializer
     final String obtainViaMethod;            // null if none
     final String obtainViaField;
     final boolean obtainViaStatic;
@@ -87,6 +90,8 @@ final class FieldSpec {
         this.singularName = b.singularName;
         this.ignored = b.ignored;
         this.builderDefault = b.builderDefault;
+        this.sourceInitializer = b.sourceInitializer;
+        this.initializerImports = b.initializerImports == null ? Set.of() : b.initializerImports;
         this.obtainViaMethod = b.obtainViaMethod;
         this.obtainViaField = b.obtainViaField;
         this.obtainViaStatic = b.obtainViaStatic;
@@ -102,6 +107,10 @@ final class FieldSpec {
      * field name; the return type becomes the field type. No VariableElement is
      * retained (the underlying element is a method), so {@link #element} is null
      * and callers that need source reporting should fall back to the type element.
+     *
+     * <p>{@code @BuilderDefault} / {@code @ObtainVia} do not apply to interface
+     * accessors (the annotations target fields only), so no {@link SourceIntrospector}
+     * is threaded through this path.
      */
     static FieldSpec fromInterfaceAccessor(ExecutableElement method, AnnotationLookup lookup) {
         Builder b = new Builder();
@@ -161,7 +170,7 @@ final class FieldSpec {
         }
     }
 
-    static FieldSpec from(VariableElement element, AnnotationLookup lookup) {
+    static FieldSpec from(VariableElement element, AnnotationLookup lookup, SourceIntrospector introspector) {
         Builder b = new Builder();
         b.element = element;
         b.name = element.getSimpleName().toString();
@@ -215,6 +224,13 @@ final class FieldSpec {
         }
         b.ignored = lookup.hasAnnotation(element, "dev.sbs.annotation.BuilderIgnore");
         b.builderDefault = lookup.hasAnnotation(element, "dev.sbs.annotation.BuilderDefault");
+        if (b.builderDefault && introspector != null) {
+            SourceIntrospector.InitializerInfo info = introspector.readFieldInitializer(element);
+            if (info != null) {
+                b.sourceInitializer = info.text();
+                b.initializerImports = new LinkedHashSet<>(info.typeImports());
+            }
+        }
         if (lookup.hasAnnotation(element, "dev.sbs.annotation.ObtainVia")) {
             b.obtainViaMethod = lookup.stringAttr(element, "dev.sbs.annotation.ObtainVia", "method", "");
             b.obtainViaField = lookup.stringAttr(element, "dev.sbs.annotation.ObtainVia", "field", "");
@@ -253,6 +269,8 @@ final class FieldSpec {
         String negateName;
         String singularName;
         boolean ignored, builderDefault;
+        String sourceInitializer;
+        Set<String> initializerImports;
         String obtainViaMethod, obtainViaField;
         boolean obtainViaStatic;
     }

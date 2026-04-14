@@ -84,29 +84,31 @@ final class BuilderEmitter {
 
     private void emitFields() {
         for (FieldSpec f : fields) {
+            if (f.builderDefault && f.sourceInitializer == null && f.element != null) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@BuilderDefault requires the field to have an initializer expression",
+                    f.element
+                );
+            }
             body.append("    private ");
             body.append(typeName(f.typeDisplay));
             body.append(' ').append(f.name);
             String initializer = defaultInitializer(f);
             if (initializer != null) body.append(" = ").append(initializer);
             body.append(";\n");
-            if (f.builderDefault) {
-                messager.printMessage(Diagnostic.Kind.WARNING,
-                    "@BuilderDefault is not yet implemented - field will start at the JVM default",
-                    f.element
-                );
-            }
-            if (f.obtainViaMethod != null || f.obtainViaField != null) {
-                messager.printMessage(Diagnostic.Kind.WARNING,
-                    "@ObtainVia is not yet implemented - from() will call the standard getter",
-                    f.element
-                );
-            }
         }
         body.append('\n');
     }
 
     private String defaultInitializer(FieldSpec f) {
+        if (f.builderDefault && f.sourceInitializer != null) {
+            // Import the type references harvested from the source initializer so its simple
+            // names resolve in the generated builder. The expression text itself is emitted
+            // verbatim - it is general expression syntax, not the FQN-typed form that
+            // simplifyType() is built for.
+            for (String fqn : f.initializerImports) considerImport(fqn);
+            return f.sourceInitializer;
+        }
         if (f.isOptional) {
             imports.add("java.util.Optional");
             return "Optional.empty()";
@@ -340,7 +342,14 @@ final class BuilderEmitter {
 
     private String readFromInstance(FieldSpec f) {
         String getter;
-        if (isRecord || targetKind == TargetKind.INTERFACE) {
+        if (f.obtainViaStatic && f.obtainViaMethod != null) {
+            // Static helper: TargetType.method(instance)
+            getter = targetSimpleName + "." + f.obtainViaMethod + "(instance)";
+        } else if (f.obtainViaMethod != null) {
+            getter = "instance." + f.obtainViaMethod + "()";
+        } else if (f.obtainViaField != null) {
+            getter = "instance." + f.obtainViaField;
+        } else if (isRecord || targetKind == TargetKind.INTERFACE) {
             // Records expose component accessors as `name()`; interfaces use the abstract method name directly.
             getter = "instance." + f.name + "()";
         } else if (f.isBoolean) {
