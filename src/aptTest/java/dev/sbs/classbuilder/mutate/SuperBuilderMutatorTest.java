@@ -9,14 +9,18 @@ import org.junit.Test;
 import javax.tools.JavaFileObject;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Optional;
 
 import static com.google.testing.compile.CompilationSubject.assertThat;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -176,6 +180,248 @@ public class SuperBuilderMutatorTest {
     // ------------------------------------------------------------------
     // Abstract target has no static builder() / from() bootstraps
     // ------------------------------------------------------------------
+
+    // ------------------------------------------------------------------
+    // Advanced setter shapes on the abstract parent
+    // ------------------------------------------------------------------
+
+    /**
+     * {@code @Singular} on an abstract parent: child inherits the full
+     * varargs-replace + iterable-replace + add + clear family with the
+     * concrete child Builder threaded through self-typed returns.
+     */
+    @Test
+    public void singularOnAbstractParent_inheritedThroughChild() throws Exception {
+        JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Page",
+            "package demo;",
+            "import dev.sbs.annotation.ClassBuilder;",
+            "import dev.sbs.annotation.Singular;",
+            "import java.util.List;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Page {",
+            "    @Singular List<String> tags;",
+            "    public List<String> getTags() { return tags; }",
+            "}");
+        JavaFileObject child = JavaFileObjects.forSourceLines("demo.HomePage",
+            "package demo;",
+            "import dev.sbs.annotation.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class HomePage extends Page {",
+            "    int order;",
+            "    public int getOrder() { return order; }",
+            "}");
+        Compilation c = compile(parent, child);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> pageCls = Class.forName("demo.Page", true, cl);
+        Class<?> homeCls = Class.forName("demo.HomePage", true, cl);
+        Class<?> homeBuilder = nested(homeCls, "Builder");
+
+        // varargs-replace, then withTag (singular add via inherited setter)
+        Object b = homeCls.getMethod("builder").invoke(null);
+        Object after = homeBuilder.getMethod("withTags", String[].class)
+            .invoke(b, (Object) new String[]{"alpha", "beta"});
+        assertEquals("self-typed returns must remain the concrete child Builder",
+            homeBuilder, after.getClass());
+        homeBuilder.getMethod("withTag", String.class).invoke(b, "gamma");
+        Object built = homeBuilder.getMethod("build").invoke(b);
+        assertEquals(List.of("alpha", "beta", "gamma"), pageCls.getMethod("getTags").invoke(built));
+
+        // iterable-replace overload exists and works
+        Object b2 = homeCls.getMethod("builder").invoke(null);
+        homeBuilder.getMethod("withTags", Iterable.class).invoke(b2, List.of("x", "y"));
+        assertEquals(List.of("x", "y"),
+            pageCls.getMethod("getTags").invoke(homeBuilder.getMethod("build").invoke(b2)));
+
+        // clearTags lives on the parent, callable via the child
+        Object b3 = homeCls.getMethod("builder").invoke(null);
+        homeBuilder.getMethod("withTags", String[].class).invoke(b3, (Object) new String[]{"to-clear"});
+        homeBuilder.getMethod("clearTags").invoke(b3);
+        assertTrue(((List<?>) pageCls.getMethod("getTags").invoke(homeBuilder.getMethod("build").invoke(b3))).isEmpty());
+    }
+
+    /** {@code @Singular} on a Map field placed on the abstract parent. */
+    @Test
+    public void singularMapOnAbstractParent_putAndClear() throws Exception {
+        JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Doc",
+            "package demo;",
+            "import dev.sbs.annotation.ClassBuilder;",
+            "import dev.sbs.annotation.Singular;",
+            "import java.util.Map;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Doc {",
+            "    @Singular(\"meta\") Map<String, String> metas;",
+            "    public Map<String, String> getMetas() { return metas; }",
+            "}");
+        JavaFileObject child = JavaFileObjects.forSourceLines("demo.Article",
+            "package demo;",
+            "import dev.sbs.annotation.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Article extends Doc {",
+            "    String body;",
+            "    public String getBody() { return body; }",
+            "}");
+        Compilation c = compile(parent, child);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> docCls = Class.forName("demo.Doc", true, cl);
+        Class<?> articleCls = Class.forName("demo.Article", true, cl);
+        Class<?> articleBuilder = nested(articleCls, "Builder");
+
+        Object b = articleCls.getMethod("builder").invoke(null);
+        articleBuilder.getMethod("putMeta", String.class, String.class).invoke(b, "k1", "v1");
+        articleBuilder.getMethod("putMeta", String.class, String.class).invoke(b, "k2", "v2");
+        Object built = articleBuilder.getMethod("build").invoke(b);
+        assertEquals(2, ((java.util.Map<?, ?>) docCls.getMethod("getMetas").invoke(built)).size());
+
+        // clearMetas wipes
+        Object b2 = articleCls.getMethod("builder").invoke(null);
+        articleBuilder.getMethod("putMeta", String.class, String.class).invoke(b2, "k", "v");
+        articleBuilder.getMethod("clearMetas").invoke(b2);
+        assertTrue(((java.util.Map<?, ?>) docCls.getMethod("getMetas")
+            .invoke(articleBuilder.getMethod("build").invoke(b2))).isEmpty());
+    }
+
+    /** {@code @Negate} on a boolean field placed on the abstract parent. */
+    @Test
+    public void negateOnAbstractParent_inversePairInherited() throws Exception {
+        JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Switch",
+            "package demo;",
+            "import dev.sbs.annotation.ClassBuilder;",
+            "import dev.sbs.annotation.Negate;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Switch {",
+            "    @Negate(\"closed\") boolean open;",
+            "    public boolean isOpen() { return open; }",
+            "}");
+        JavaFileObject child = JavaFileObjects.forSourceLines("demo.Gate",
+            "package demo;",
+            "import dev.sbs.annotation.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Gate extends Switch {",
+            "    int height;",
+            "    public int getHeight() { return height; }",
+            "}");
+        Compilation c = compile(parent, child);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> switchCls = Class.forName("demo.Switch", true, cl);
+        Class<?> gateCls = Class.forName("demo.Gate", true, cl);
+        Class<?> gateBuilder = nested(gateCls, "Builder");
+
+        // isOpen() sets open=true
+        Object b = gateCls.getMethod("builder").invoke(null);
+        gateBuilder.getMethod("isOpen").invoke(b);
+        assertEquals(Boolean.TRUE,
+            switchCls.getMethod("isOpen").invoke(gateBuilder.getMethod("build").invoke(b)));
+
+        // isClosed() sets open=false (inverse)
+        Object b2 = gateCls.getMethod("builder").invoke(null);
+        gateBuilder.getMethod("isClosed").invoke(b2);
+        assertEquals(Boolean.FALSE,
+            switchCls.getMethod("isOpen").invoke(gateBuilder.getMethod("build").invoke(b2)));
+
+        // Typed forms: isClosed(true) -> open=false; isClosed(false) -> open=true
+        Object b3 = gateCls.getMethod("builder").invoke(null);
+        gateBuilder.getMethod("isClosed", boolean.class).invoke(b3, true);
+        assertEquals(Boolean.FALSE,
+            switchCls.getMethod("isOpen").invoke(gateBuilder.getMethod("build").invoke(b3)));
+        Object b4 = gateCls.getMethod("builder").invoke(null);
+        gateBuilder.getMethod("isClosed", boolean.class).invoke(b4, false);
+        assertEquals(Boolean.TRUE,
+            switchCls.getMethod("isOpen").invoke(gateBuilder.getMethod("build").invoke(b4)));
+    }
+
+    /** {@code @Formattable} on a String field placed on the abstract parent. */
+    @Test
+    public void formattableOnAbstractParent_overloadInherited() throws Exception {
+        JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Notice",
+            "package demo;",
+            "import dev.sbs.annotation.ClassBuilder;",
+            "import dev.sbs.annotation.Formattable;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Notice {",
+            "    @Formattable String message;",
+            "    public String getMessage() { return message; }",
+            "}");
+        JavaFileObject child = JavaFileObjects.forSourceLines("demo.Banner",
+            "package demo;",
+            "import dev.sbs.annotation.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Banner extends Notice {",
+            "    int priority;",
+            "    public int getPriority() { return priority; }",
+            "}");
+        Compilation c = compile(parent, child);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> noticeCls = Class.forName("demo.Notice", true, cl);
+        Class<?> bannerCls = Class.forName("demo.Banner", true, cl);
+        Class<?> bannerBuilder = nested(bannerCls, "Builder");
+
+        // Plain inherited setter
+        Object b = bannerCls.getMethod("builder").invoke(null);
+        bannerBuilder.getMethod("withMessage", String.class).invoke(b, "hi");
+        assertEquals("hi",
+            noticeCls.getMethod("getMessage").invoke(bannerBuilder.getMethod("build").invoke(b)));
+
+        // @PrintFormat overload inherited from parent
+        Object b2 = bannerCls.getMethod("builder").invoke(null);
+        Method formatted = bannerBuilder.getMethod("withMessage", String.class, Object[].class);
+        formatted.invoke(b2, "code=%d", new Object[]{42});
+        assertEquals("code=42",
+            noticeCls.getMethod("getMessage").invoke(bannerBuilder.getMethod("build").invoke(b2)));
+    }
+
+    /** {@code @Formattable} on an Optional<String> field on the abstract parent. */
+    @Test
+    public void formattableOptionalOnAbstractParent_nullSafe() throws Exception {
+        JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Item",
+            "package demo;",
+            "import dev.sbs.annotation.ClassBuilder;",
+            "import dev.sbs.annotation.Formattable;",
+            "import java.util.Optional;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Item {",
+            "    @Formattable Optional<String> caption;",
+            "    public Optional<String> getCaption() { return caption; }",
+            "}");
+        JavaFileObject child = JavaFileObjects.forSourceLines("demo.Photo",
+            "package demo;",
+            "import dev.sbs.annotation.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Photo extends Item {",
+            "    String url;",
+            "    public String getUrl() { return url; }",
+            "}");
+        Compilation c = compile(parent, child);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> itemCls = Class.forName("demo.Item", true, cl);
+        Class<?> photoCls = Class.forName("demo.Photo", true, cl);
+        Class<?> photoBuilder = nested(photoCls, "Builder");
+
+        // Format-string overload inherited
+        Object b = photoCls.getMethod("builder").invoke(null);
+        Method formatted = photoBuilder.getMethod("withCaption", String.class, Object[].class);
+        formatted.invoke(b, "tag=%s", new Object[]{"sunset"});
+        Optional<?> got = (Optional<?>) itemCls.getMethod("getCaption")
+            .invoke(photoBuilder.getMethod("build").invoke(b));
+        assertTrue(got.isPresent());
+        assertEquals("tag=sunset", got.get());
+
+        // Null format yields Optional.empty
+        Object b2 = photoCls.getMethod("builder").invoke(null);
+        formatted.invoke(b2, null, new Object[0]);
+        Optional<?> empty = (Optional<?>) itemCls.getMethod("getCaption")
+            .invoke(photoBuilder.getMethod("build").invoke(b2));
+        assertFalse(empty.isPresent());
+    }
 
     @Test
     public void abstractTarget_doesNotEmitBootstraps() throws Exception {
