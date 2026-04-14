@@ -14,7 +14,9 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Surfaces the bootstrap methods ({@code builder()}, {@code from(T)},
@@ -30,21 +32,42 @@ import java.util.List;
  */
 public final class ClassBuilderAugmentProvider extends PsiAugmentProvider {
 
+    /**
+     * Tracks targets currently undergoing synthesis on this thread. Editor-time
+     * type creation ({@code createTypeFromText}, {@code createType}) eagerly
+     * resolves nested-class references, which re-enters this provider for the
+     * same target. The guard breaks the cycle by returning empty for the
+     * inner call.
+     */
+    private static final ThreadLocal<Set<PsiClass>> IN_PROGRESS =
+        ThreadLocal.withInitial(HashSet::new);
+
     @Override
     protected @NotNull <Psi extends PsiElement> List<Psi> getAugments(@NotNull PsiElement element,
                                                                      @NotNull Class<Psi> type,
                                                                      @Nullable String nameHint) {
         if (!(element instanceof PsiClass target)) return Collections.emptyList();
-        if (!PsiMethod.class.isAssignableFrom(type)) return Collections.emptyList();
-        if (target.hasModifierProperty(PsiModifier.ABSTRACT)) return Collections.emptyList();
-
         if (findClassBuilderAnnotation(target) == null) return Collections.emptyList();
+        if (IN_PROGRESS.get().contains(target)) return Collections.emptyList();
 
-        // CachedValueProvider must not capture PsiElement instances - IntelliJ's
-        // leak-check fails the test otherwise. Re-resolve the annotation each
-        // time the cache recomputes (cheap: linear scan of class annotations).
-        @SuppressWarnings("unchecked")
-        List<Psi> cached = (List<Psi>) CachedValuesManager.getCachedValue(target, () -> {
+        if (PsiMethod.class.isAssignableFrom(type)) {
+            // Bootstrap methods (builder/from/mutate) only on concrete targets;
+            // abstract targets get their bootstraps from concrete subclasses.
+            if (target.hasModifierProperty(PsiModifier.ABSTRACT)) return Collections.emptyList();
+            @SuppressWarnings("unchecked")
+            List<Psi> methods = (List<Psi>) cachedMethods(target);
+            return methods;
+        }
+        if (PsiClass.class.isAssignableFrom(type)) {
+            @SuppressWarnings("unchecked")
+            List<Psi> classes = (List<Psi>) cachedNestedClasses(target);
+            return classes;
+        }
+        return Collections.emptyList();
+    }
+
+    private static List<PsiMethod> cachedMethods(PsiClass target) {
+        return CachedValuesManager.getCachedValue(target, () -> {
             PsiAnnotation resolved = findClassBuilderAnnotation(target);
             if (resolved == null) {
                 return CachedValueProvider.Result.create(Collections.<PsiMethod>emptyList(),
@@ -52,10 +75,47 @@ public final class ClassBuilderAugmentProvider extends PsiAugmentProvider {
             }
             GeneratedMemberFactory.EditorBuilderConfig config =
                 GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(resolved);
-            List<PsiMethod> methods = GeneratedMemberFactory.bootstrapMethods(target, config);
-            return CachedValueProvider.Result.create(methods, PsiModificationTracker.MODIFICATION_COUNT);
+            return CachedValueProvider.Result.create(
+                GeneratedMemberFactory.bootstrapMethods(target, config),
+                PsiModificationTracker.MODIFICATION_COUNT);
         });
-        return cached;
+    }
+
+    private static List<PsiClass> cachedNestedClasses(PsiClass target) {
+        return CachedValuesManager.getCachedValue(target, () -> {
+            PsiAnnotation resolved = findClassBuilderAnnotation(target);
+            if (resolved == null) {
+                return CachedValueProvider.Result.create(Collections.<PsiClass>emptyList(),
+                    PsiModificationTracker.MODIFICATION_COUNT);
+            }
+            // Skip when the target already declares a nested class with the
+            // configured Builder name - the user's hand-written version wins.
+            // Walk PSI children directly rather than calling getInnerClasses(),
+            // which would re-enter this augment provider and recurse.
+            GeneratedMemberFactory.EditorBuilderConfig config =
+                GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(resolved);
+            for (PsiElement child : target.getChildren()) {
+                if (child instanceof PsiClass nested
+                    && config.builderName().equals(nested.getName())) {
+                    return CachedValueProvider.Result.create(Collections.<PsiClass>emptyList(),
+                        PsiModificationTracker.MODIFICATION_COUNT);
+                }
+            }
+            // Wrap the synthesis in the recursion guard. Synthesising the
+            // Builder eagerly resolves the self-reference type, which re-enters
+            // getAugments() for the same target via the inner-class lookup;
+            // the guard ensures the inner call returns empty rather than
+            // looping until stack overflow.
+            IN_PROGRESS.get().add(target);
+            try {
+                PsiClass synthetic = GeneratedMemberFactory.synthesizeBuilderClass(target, config);
+                return CachedValueProvider.Result.create(
+                    List.of(synthetic),
+                    PsiModificationTracker.MODIFICATION_COUNT);
+            } finally {
+                IN_PROGRESS.get().remove(target);
+            }
+        });
     }
 
     private static PsiAnnotation findClassBuilderAnnotation(PsiClass target) {

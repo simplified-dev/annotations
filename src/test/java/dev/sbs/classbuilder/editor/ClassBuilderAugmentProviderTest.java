@@ -99,6 +99,57 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
         assertEquals(0, shape.findMethodsByName("mutate", false).length);
     }
 
+    public void testNestedBuilderClassSynthesized() {
+        PsiFile file = myFixture.configureByText("Card.java",
+            """
+            import dev.sbs.annotation.ClassBuilder;
+            @ClassBuilder
+            public class Card {
+                String label;
+                int rank;
+            }
+            """);
+        PsiClass card = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+        PsiClass[] inner = card.getInnerClasses();
+        assertEquals("Builder must be synthesised", 1, inner.length);
+        PsiClass builder = inner[0];
+        assertEquals("Builder", builder.getName());
+        assertTrue("synthesised Builder is static",
+            builder.hasModifierProperty(PsiModifier.STATIC));
+        assertTrue("synthesised Builder is public",
+            builder.hasModifierProperty(PsiModifier.PUBLIC));
+        assertTrue("synthesised Builder carries generated marker",
+            GeneratedMemberMarker.isGenerated(builder));
+
+        // One setter per field plus a build() method.
+        PsiMethod[] withLabel = builder.findMethodsByName("withLabel", false);
+        PsiMethod[] withRank = builder.findMethodsByName("withRank", false);
+        PsiMethod[] build = builder.findMethodsByName("build", false);
+        assertEquals(1, withLabel.length);
+        assertEquals(1, withRank.length);
+        assertEquals(1, build.length);
+    }
+
+    public void testHandWrittenBuilder_skipsSynthesis() {
+        PsiFile file = myFixture.configureByText("Manual.java",
+            """
+            import dev.sbs.annotation.ClassBuilder;
+            @ClassBuilder
+            public class Manual {
+                String x;
+                public static class Builder {
+                    public Manual build() { return null; }
+                }
+            }
+            """);
+        PsiClass manual = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+        PsiClass[] inner = manual.getInnerClasses();
+        // Only the user's hand-written Builder, no synthesised duplicate.
+        assertEquals("hand-written Builder must win", 1, inner.length);
+        assertFalse("hand-written Builder must not be marked synthesised",
+            GeneratedMemberMarker.isGenerated(inner[0]));
+    }
+
     public void testCustomBootstrapNames_respected() {
         PsiFile file = myFixture.configureByText("Named.java",
             """
