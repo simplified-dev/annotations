@@ -23,6 +23,10 @@ dependencies {
     intellijPlatform {
         create("IC", "2023.2")
         testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
+        // Adds LightJavaCodeInsightFixtureTestCase + JAVA_NN project descriptors
+        // (mock JDK), needed by AnnotationTest / ClassBuilder*Test for proper
+        // String/Object resolution during inspection highlighting.
+        testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Plugin.Java)
         bundledPlugin("com.intellij.java")
     }
 
