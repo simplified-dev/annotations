@@ -139,15 +139,6 @@
         />
         <localInspection
                 language="JAVA"
-                implementationClass="dev.sbs.classbuilder.inspect.ClassBuilderBootstrapInspection"
-                enabledByDefault="true"
-                level="ERROR"
-                shortName="ClassBuilderBootstrapInspection"
-                displayName="@ClassBuilder bootstrap methods missing"
-                groupName="Simplified Annotations"
-        />
-        <localInspection
-                language="JAVA"
                 implementationClass="dev.sbs.classbuilder.inspect.ClassBuilderFieldInspection"
                 enabledByDefault="true"
                 level="WARNING"

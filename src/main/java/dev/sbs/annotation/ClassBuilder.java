@@ -17,16 +17,20 @@ import java.lang.annotation.Target;
  * constructor} or static {@link ElementType#METHOD factory method} the builder
  * is derived from the parameters of that member.
  *
- * <p>The companion annotation processor in this plugin emits a sibling
- * {@code <TypeName>Builder.java} file. Three bootstrap methods are expected on
- * the annotated type to wire the generated builder into the public API:
+ * <p>The companion annotation processor in this plugin injects a
+ * {@code public static class Builder} directly into the annotated type via
+ * javac AST mutation, along with three bootstrap methods that wire the
+ * generated builder into the public API:
  * <ul>
  *   <li>a static factory returning a fresh builder - default name {@code builder}</li>
  *   <li>a static copy factory seeding a builder from an existing instance - default name {@code from}</li>
  *   <li>an instance method returning a builder seeded from {@code this} - default name {@code mutate}</li>
  * </ul>
- * The {@code ClassBuilderBootstrapInspection} flags any that are missing and
- * offers a quick-fix to insert all three.
+ * If the target already declares any of those methods by name and arity,
+ * injection is skipped for that name and the user-supplied version wins -
+ * a compiler {@code NOTE} is emitted for visibility. Interface targets still
+ * receive a sibling {@code <Name>Impl.java} plus {@code <Name>Builder.java}
+ * since there is no mutation surface on an interface body.
  *
  * <h2>Per-field customisation</h2>
  * <ul>

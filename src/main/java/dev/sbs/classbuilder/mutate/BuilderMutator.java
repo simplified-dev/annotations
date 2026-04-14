@@ -56,6 +56,8 @@ public final class BuilderMutator {
 
         JCClassDecl nested = new NestedBuilderFactory(ctx).build();
         bridge.compat().appendDef(target, nested);
+
+        new BootstrapMethodFactory(ctx, messager).appendAll();
         return true;
     }
 
