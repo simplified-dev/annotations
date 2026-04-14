@@ -1,0 +1,195 @@
+package dev.sbs.classbuilder.apt;
+
+import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.ArrayType;
+import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.TypeKind;
+import javax.lang.model.type.TypeMirror;
+import java.util.List;
+import java.util.Set;
+
+/**
+ * Intermediate representation of a single field on a {@code @ClassBuilder}-annotated class.
+ * All classification the emitter needs happens once in {@link #from(VariableElement, AnnotationLookup)},
+ * so the emitter only reads already-resolved properties.
+ */
+final class FieldSpec {
+
+    // Optional<T> is typed so we don't have to reflect on its FQN repeatedly.
+    private static final String OPTIONAL_FQN = "java.util.Optional";
+    private static final Set<String> LIST_TYPES = Set.of(
+        "java.util.List", "java.util.ArrayList", "java.util.LinkedList",
+        "java.util.Collection", "java.lang.Iterable"
+    );
+    private static final Set<String> SET_TYPES = Set.of(
+        "java.util.Set", "java.util.HashSet", "java.util.LinkedHashSet", "java.util.TreeSet"
+    );
+    private static final Set<String> MAP_TYPES = Set.of(
+        "java.util.Map", "java.util.HashMap", "java.util.LinkedHashMap", "java.util.TreeMap"
+    );
+
+    final String name;
+    final VariableElement element;
+    final TypeMirror type;
+    final String typeDisplay;
+
+    final boolean notNull;
+    final boolean nullable;
+
+    final boolean isBoolean;
+    final boolean isString;
+    final boolean isPrimitive;
+    final boolean isArray;
+
+    final boolean isOptional;
+    final String optionalInner;              // null unless isOptional
+
+    final boolean isListLike;                // List, Set, or Collection
+    final boolean isSet;
+    final boolean isMap;
+    final String collectionElement;          // element type for list/set/array
+    final String mapKey, mapValue;
+
+    // Companion annotations
+    final boolean formattable;
+    final boolean formattableNullable;
+    final String negateName;                 // null if no @Negate
+    final String singularName;               // null if no @Singular; filled from @Singular.value or defaulted
+    final boolean ignored;                   // @BuilderIgnore or listed in @ClassBuilder.exclude
+    final boolean builderDefault;
+    final String obtainViaMethod;            // null if none
+    final String obtainViaField;
+    final boolean obtainViaStatic;
+
+    private FieldSpec(Builder b) {
+        this.name = b.name;
+        this.element = b.element;
+        this.type = b.type;
+        this.typeDisplay = b.typeDisplay;
+        this.notNull = b.notNull;
+        this.nullable = b.nullable;
+        this.isBoolean = b.isBoolean;
+        this.isString = b.isString;
+        this.isPrimitive = b.isPrimitive;
+        this.isArray = b.isArray;
+        this.isOptional = b.isOptional;
+        this.optionalInner = b.optionalInner;
+        this.isListLike = b.isListLike;
+        this.isSet = b.isSet;
+        this.isMap = b.isMap;
+        this.collectionElement = b.collectionElement;
+        this.mapKey = b.mapKey;
+        this.mapValue = b.mapValue;
+        this.formattable = b.formattable;
+        this.formattableNullable = b.formattableNullable;
+        this.negateName = b.negateName;
+        this.singularName = b.singularName;
+        this.ignored = b.ignored;
+        this.builderDefault = b.builderDefault;
+        this.obtainViaMethod = b.obtainViaMethod;
+        this.obtainViaField = b.obtainViaField;
+        this.obtainViaStatic = b.obtainViaStatic;
+    }
+
+    /** Whether this field uses {@code is*} setters (booleans) vs the configured prefix. */
+    boolean usesBooleanPrefix() {
+        return isBoolean;
+    }
+
+    static FieldSpec from(VariableElement element, AnnotationLookup lookup) {
+        Builder b = new Builder();
+        b.element = element;
+        b.name = element.getSimpleName().toString();
+        b.type = element.asType();
+        b.typeDisplay = element.asType().toString();
+
+        // Nullability
+        b.notNull = lookup.hasAnnotation(element, "org.jetbrains.annotations.NotNull");
+        b.nullable = lookup.hasAnnotation(element, "org.jetbrains.annotations.Nullable");
+
+        TypeKind kind = b.type.getKind();
+        b.isPrimitive = kind.isPrimitive();
+        b.isBoolean = kind == TypeKind.BOOLEAN;
+        b.isArray = kind == TypeKind.ARRAY;
+
+        if (b.isArray) {
+            ArrayType array = (ArrayType) b.type;
+            b.collectionElement = array.getComponentType().toString();
+        } else if (kind == TypeKind.DECLARED) {
+            DeclaredType declared = (DeclaredType) b.type;
+            String raw = stripTypeArgs(declared.toString());
+            List<? extends TypeMirror> args = declared.getTypeArguments();
+
+            if ("java.lang.String".equals(raw)) {
+                b.isString = true;
+            } else if (OPTIONAL_FQN.equals(raw)) {
+                b.isOptional = true;
+                b.optionalInner = args.isEmpty() ? "java.lang.Object" : args.get(0).toString();
+            } else if (LIST_TYPES.contains(raw)) {
+                b.isListLike = true;
+                b.collectionElement = args.isEmpty() ? "java.lang.Object" : args.get(0).toString();
+            } else if (SET_TYPES.contains(raw)) {
+                b.isListLike = true;
+                b.isSet = true;
+                b.collectionElement = args.isEmpty() ? "java.lang.Object" : args.get(0).toString();
+            } else if (MAP_TYPES.contains(raw)) {
+                b.isMap = true;
+                b.mapKey = args.isEmpty() ? "java.lang.Object" : args.get(0).toString();
+                b.mapValue = args.size() < 2 ? "java.lang.Object" : args.get(1).toString();
+            }
+        }
+
+        // Companion annotations
+        b.formattable = lookup.hasAnnotation(element, "dev.sbs.annotation.Formattable");
+        b.formattableNullable = b.formattable
+            && lookup.booleanAttr(element, "dev.sbs.annotation.Formattable", "nullable", false);
+        b.negateName = lookup.stringAttr(element, "dev.sbs.annotation.Negate", "value", null);
+        if (lookup.hasAnnotation(element, "dev.sbs.annotation.Singular")) {
+            String v = lookup.stringAttr(element, "dev.sbs.annotation.Singular", "value", "");
+            b.singularName = v.isEmpty() ? defaultSingular(b.name) : v;
+        }
+        b.ignored = lookup.hasAnnotation(element, "dev.sbs.annotation.BuilderIgnore");
+        b.builderDefault = lookup.hasAnnotation(element, "dev.sbs.annotation.BuilderDefault");
+        if (lookup.hasAnnotation(element, "dev.sbs.annotation.ObtainVia")) {
+            b.obtainViaMethod = lookup.stringAttr(element, "dev.sbs.annotation.ObtainVia", "method", "");
+            b.obtainViaField = lookup.stringAttr(element, "dev.sbs.annotation.ObtainVia", "field", "");
+            b.obtainViaStatic = lookup.booleanAttr(element, "dev.sbs.annotation.ObtainVia", "isStatic", false);
+            if (b.obtainViaMethod.isEmpty()) b.obtainViaMethod = null;
+            if (b.obtainViaField.isEmpty()) b.obtainViaField = null;
+        }
+
+        return new FieldSpec(b);
+    }
+
+    private static String stripTypeArgs(String typeName) {
+        int lt = typeName.indexOf('<');
+        return lt < 0 ? typeName : typeName.substring(0, lt);
+    }
+
+    private static String defaultSingular(String fieldName) {
+        if (fieldName.endsWith("ies") && fieldName.length() > 3) return fieldName.substring(0, fieldName.length() - 3) + "y";
+        if (fieldName.endsWith("es") && fieldName.length() > 2) return fieldName.substring(0, fieldName.length() - 2);
+        if (fieldName.endsWith("s") && fieldName.length() > 1) return fieldName.substring(0, fieldName.length() - 1);
+        return fieldName;
+    }
+
+    private static final class Builder {
+        String name;
+        VariableElement element;
+        TypeMirror type;
+        String typeDisplay;
+        boolean notNull, nullable;
+        boolean isBoolean, isString, isPrimitive, isArray;
+        boolean isOptional;
+        String optionalInner;
+        boolean isListLike, isSet, isMap;
+        String collectionElement, mapKey, mapValue;
+        boolean formattable, formattableNullable;
+        String negateName;
+        String singularName;
+        boolean ignored, builderDefault;
+        String obtainViaMethod, obtainViaField;
+        boolean obtainViaStatic;
+    }
+
+}

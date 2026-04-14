@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "dev.sbs"
-version = "1.0.4"
+version = "1.0.5"
 
 repositories {
     mavenCentral()
@@ -27,9 +27,8 @@ dependencies {
     }
 
     // Tests
-    testImplementation(group = "org.hamcrest", name = "hamcrest", version = "2.2")
-    testImplementation(group = "org.junit.jupiter", name = "junit-jupiter-api", version = "5.9.2")
-    testRuntimeOnly(group = "org.junit.jupiter", name = "junit-jupiter-engine", version = "5.9.2")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("com.google.testing.compile:compile-testing:0.21.0")
 }
 
 intellijPlatform {
@@ -39,8 +38,15 @@ intellijPlatform {
         }
 
         changeNotes = """
-      Fix heavy lag in 800+ line files
-    """.trimIndent()
+            <ul>
+              <li><b>New @XContract annotation</b> - superset of JetBrains @Contract with relational comparisons, &amp;&amp;/|| grouping, named-parameter references, instanceof checks, typed throws returns, chained comparisons, and full pure/mutates support. A synthetic @Contract is inferred so IntelliJ data-flow works from a single annotation.</li>
+              <li><b>New XContract Call-Site inspection</b> - flags calls whose literal arguments deterministically trigger a fail or throws clause.</li>
+              <li><b>New ResourcePath Base-Prefix Usage inspection</b> - warns when a @ResourcePath(base="X") parameter is passed raw into a resource-loading call, with a quick-fix that prepends X/. Also flags base mismatches across call boundaries.</li>
+              <li><b>ResourcePath freeze fix</b> - removed the project-wide ReferencesSearch that locked up the IDE on large utility files.</li>
+              <li><b>Modernised PSI listener</b> - narrowed to annotation events only; replaced deprecated DaemonCodeAnalyzer.restart(PsiFile).</li>
+              <li><b>New settings</b> - additional resource-root paths, glob-based file exclusions, split severity dropdowns, inheritance and mutates checks.</li>
+            </ul>
+        """.trimIndent()
     }
     buildSearchableOptions = false
 }
@@ -50,7 +56,42 @@ sourceSets {
         java.srcDirs("src/main/java")
         resources.srcDirs("src/main/resources")
     }
+    // Separate source set for pure annotation-processor tests that must run on a full JDK
+    // outside the IntelliJ test framework (whose module layer hides javac).
+    create("aptTest") {
+        java.srcDir("src/aptTest/java")
+        compileClasspath += sourceSets.main.get().output + configurations["testCompileClasspath"]
+        runtimeClasspath += output + compileClasspath
+    }
 }
+
+configurations {
+    named("aptTestImplementation") { extendsFrom(configurations.testImplementation.get()) }
+    named("aptTestRuntimeOnly") { extendsFrom(configurations.testRuntimeOnly.get()) }
+}
+
+val aptTest by tasks.registering(Test::class) {
+    description = "Runs annotation-processor tests outside the IntelliJ test framework."
+    group = "verification"
+    testClassesDirs = sourceSets["aptTest"].output.classesDirs
+    classpath = sourceSets["aptTest"].runtimeClasspath
+    useJUnit()
+    // compile-testing + JDK internals on newer JDKs need these opens
+    jvmArgs(
+        "--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.comp=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.main=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.model=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.processing=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED"
+    )
+}
+
+tasks.named("check") { dependsOn(aptTest) }
 
 // Checksum Helpers
 fun File.generateChecksum(algorithm: String): String {
@@ -77,6 +118,9 @@ fun File.shouldSign(): Boolean {
 val mavenPublishDir = layout.buildDirectory.dir("publications/release")
 val cleanMavenPublishDir by tasks.registering(Delete::class) {
     delete(mavenPublishDir)
+}
+val cleanDistributions by tasks.registering(Delete::class) {
+    delete(layout.buildDirectory.dir("distributions"))
 }
 
 // Create Pom, Sources and Javadocs
@@ -134,7 +178,7 @@ tasks {
 
     // Zip the files in generated-resources into a single archive
     val mavenZip by registering(Zip::class) {
-        dependsOn(checksumAndSigning)
+        dependsOn(checksumAndSigning, cleanDistributions)
         archiveBaseName.set("${project.name}-${project.version}-maven")
         archiveVersion.set("")
         archiveClassifier.set("")
@@ -161,8 +205,17 @@ tasks {
     named("jar") { dependsOn(cleanMavenPublishDir) }
     sourcesJar { dependsOn(cleanMavenPublishDir) }
     javadocJar { dependsOn(cleanMavenPublishDir) }
+    // generatePomFileForReleasePublication has no dependency on cleanMavenPublishDir, so Gradle
+    // can schedule it before the clean runs and have its output deleted. Force it to run after.
+    // Use matching/configureEach because maven-publish registers this task lazily.
+    matching { it.name == "generatePomFileForReleasePublication" }.configureEach { mustRunAfter(cleanMavenPublishDir) }
+    // buildPlugin also outputs to distributions/; ensure it runs after the directory is cleaned
+    named("buildPlugin") { mustRunAfter(cleanDistributions) }
     register("publishAndPackage") {
         dependsOn("publishToMavenLocal", mavenZip)
+        // checksumAndSigning writes to publications/release/ while publishToMavenLocal reads from it;
+        // serialise the two paths to prevent a race condition on that directory
+        mavenZip.get().mustRunAfter("publishToMavenLocal")
     }
 }
 
