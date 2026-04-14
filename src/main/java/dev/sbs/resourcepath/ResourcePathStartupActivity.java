@@ -1,4 +1,4 @@
-package dev.sbs.inspection;
+package dev.sbs.resourcepath;
 
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.startup.ProjectActivity;

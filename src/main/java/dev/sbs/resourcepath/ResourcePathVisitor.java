@@ -1,6 +1,5 @@
-package dev.sbs.inspection;
+package dev.sbs.resourcepath;
 
-import com.esotericsoftware.kryo.kryo5.util.Null;
 import com.intellij.codeInspection.LocalInspectionTool;
 import com.intellij.codeInspection.ProblemHighlightType;
 import com.intellij.codeInspection.ProblemsHolder;
@@ -10,12 +9,18 @@ import com.intellij.lang.annotation.HighlightSeverity;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.roots.ProjectRootManager;
 import com.intellij.openapi.vfs.VirtualFile;
-import com.intellij.openapi.vfs.VirtualFileManager;
 import com.intellij.profile.codeInspection.InspectionProjectProfileManager;
-import com.intellij.psi.*;
-import com.intellij.psi.search.GlobalSearchScope;
-import com.intellij.psi.search.SearchScope;
-import com.intellij.psi.search.searches.ReferencesSearch;
+import com.intellij.psi.PsiAnnotation;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiEnumConstant;
+import com.intellij.psi.PsiExpression;
+import com.intellij.psi.PsiExpressionList;
+import com.intellij.psi.PsiField;
+import com.intellij.psi.PsiLiteralExpression;
+import com.intellij.psi.PsiMethod;
+import com.intellij.psi.PsiMethodCallExpression;
+import com.intellij.psi.PsiNameValuePair;
+import com.intellij.psi.PsiParameter;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.uast.UCallExpression;
@@ -23,6 +28,7 @@ import org.jetbrains.uast.UExpression;
 import org.jetbrains.uast.UField;
 import org.jetbrains.uast.UastContextKt;
 
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -31,15 +37,29 @@ class ResourcePathVisitor {
 
     private final @NotNull Set<PsiAnnotation> visitedAnnotations = new HashSet<>();
     private final @NotNull Set<PsiElement> inspectedExpressions = new HashSet<>();
-    private final @NotNull String annotationPath = "dev.sbs.annotation.ResourcePath";
     private final @NotNull LocalInspectionTool inspectionTool;
     private final @NotNull ProblemsHolder holder;
     private final @NotNull ProblemHighlightType baseHighlightType;
+    private final @NotNull List<String> additionalResourceRoots;
 
-    public ResourcePathVisitor(@NotNull LocalInspectionTool inspectionTool, @NotNull ProblemsHolder holder, @NotNull ProblemHighlightType baseHighlightType) {
+    public ResourcePathVisitor(
+        @NotNull LocalInspectionTool inspectionTool,
+        @NotNull ProblemsHolder holder,
+        @NotNull ProblemHighlightType baseHighlightType
+    ) {
+        this(inspectionTool, holder, baseHighlightType, Collections.emptyList());
+    }
+
+    public ResourcePathVisitor(
+        @NotNull LocalInspectionTool inspectionTool,
+        @NotNull ProblemsHolder holder,
+        @NotNull ProblemHighlightType baseHighlightType,
+        @NotNull List<String> additionalResourceRoots
+    ) {
         this.inspectionTool = inspectionTool;
         this.holder = holder;
         this.baseHighlightType = baseHighlightType;
+        this.additionalResourceRoots = additionalResourceRoots;
     }
 
     public void inspectMethod(@NotNull PsiMethodCallExpression methodCallExpr) {
@@ -50,78 +70,29 @@ class ResourcePathVisitor {
         PsiParameter[] parameters = method.getParameterList().getParameters();
         List<UExpression> arguments = callExpr.getValueArguments();
 
-        this.inspectMethodReturnValue(callExpr, method.getAnnotation(this.annotationPath));
+        // If the called method is itself @ResourcePath-annotated, evaluate its return values.
+        PsiAnnotation methodAnno = method.getAnnotation(ResourcePathConstants.ANNOTATION_FQN);
+        if (methodAnno != null)
+            this.inspectArgument(callExpr, methodAnno);
 
+        // Check each argument against its @ResourcePath-annotated parameter.
         for (int i = 0; i < Math.min(arguments.size(), parameters.length); i++)
-            this.inspectArgument(arguments.get(i), parameters[i].getAnnotation(this.annotationPath));
+            this.inspectArgument(arguments.get(i), parameters[i].getAnnotation(ResourcePathConstants.ANNOTATION_FQN));
     }
 
     public void inspectField(@NotNull PsiField field) {
+        PsiAnnotation fieldAnno = field.getAnnotation(ResourcePathConstants.ANNOTATION_FQN);
+        if (fieldAnno == null) return; // Early exit: no reason to process unannotated fields
+
         UField uField = UastContextKt.toUElement(field, UField.class);
         if (uField == null) return;
         UExpression expression = uField.getUastInitializer();
         if (expression == null) return;
 
-        if (expression instanceof UCallExpression uCall)
-            this.inspectMethodReturnValue(uCall, field.getAnnotation(this.annotationPath));
-        else if (expression instanceof PsiEnumConstant enumConst)
+        if (expression instanceof PsiEnumConstant enumConst)
             this.inspectEnumArguments(enumConst);
         else
-            this.inspectArgument(expression, field.getAnnotation(this.annotationPath));
-    }
-
-    public void inspectLiteral(@NotNull PsiLiteralExpression literalExpr) {
-        PsiElement current = literalExpr;
-
-        while (current != null) {
-            if (current instanceof PsiMethod method) {
-                this.inspectMethodCallRecursive(method, new HashSet<>());
-                break;
-            }
-
-            current = current.getParent();
-        }
-    }
-
-    private void inspectMethodReturnValue(@NotNull UCallExpression expression, @Null PsiAnnotation annotation) {
-        PsiMethod method = expression.resolve();
-        if (method == null || method.getBody() == null) return;
-
-        for (PsiStatement stmt : method.getBody().getStatements()) {
-            if (stmt instanceof PsiReturnStatement returnStmt) {
-                PsiExpression returnExpr = returnStmt.getReturnValue();
-                if (returnExpr == null) continue;
-                UExpression uReturnExpr = UastContextKt.toUElement(returnExpr, UExpression.class);
-
-                if (uReturnExpr != null)
-                    this.inspectArgument(expression, annotation);
-            }
-        }
-    }
-
-    private void inspectMethodCallRecursive(@NotNull PsiMethod method, @NotNull Set<PsiMethod> visitedMethods) {
-        if (!visitedMethods.add(method)) return; // Avoid infinite recursion
-        Project project = method.getProject();
-        SearchScope scope = GlobalSearchScope.projectScope(project);
-
-        // Find all usages of this method
-        for (PsiReference reference : ReferencesSearch.search(method, scope)) {
-            // Go up to find field that uses the method
-            PsiElement current = reference.getElement();
-
-            while (current != null) {
-                if (current instanceof PsiField field && field.getAnnotation(this.annotationPath) != null) {
-                    this.inspectField(field);
-                    break;
-                } else if (current instanceof PsiMethod parentMethod) {
-                    this.inspectMethodCallRecursive(parentMethod, visitedMethods);
-                    break;
-                }
-
-                if (current instanceof PsiClass) break; // Avoid traversing project
-                current = current.getParent();
-            }
-        }
+            this.inspectArgument(expression, fieldAnno);
     }
 
     public void inspectEnumArguments(@NotNull PsiEnumConstant enumConstant) {
@@ -133,9 +104,11 @@ class ResourcePathVisitor {
         PsiExpression[] arguments = args.getExpressions();
 
         for (int i = 0; i < Math.min(arguments.length, parameters.length); i++) {
+            PsiAnnotation paramAnno = parameters[i].getAnnotation(ResourcePathConstants.ANNOTATION_FQN);
+            if (paramAnno == null) continue;
             UExpression uArg = UastContextKt.toUElement(arguments[i], UExpression.class);
             if (uArg == null) continue;
-            this.inspectArgument(uArg, parameters[i].getAnnotation(this.annotationPath));
+            this.inspectArgument(uArg, paramAnno);
         }
     }
 
@@ -163,34 +136,17 @@ class ResourcePathVisitor {
     }
 
     /**
-     * Retrieves the 'base' folder from the {@code ResourcePath} annotation if present.
-     * If not present, returns an empty string (root).
-     *
-     * @param annotation the ResourcePath annotation to check
-     * @return the base folder path or empty string if none specified
-     */
-    private @NotNull String getBaseFolder(@NotNull PsiAnnotation annotation) {
-        if (annotation.findAttributeValue("base") instanceof PsiLiteralExpression literal && literal.getValue() instanceof String strValue)
-            return strValue;
-
-        return "";
-    }
-
-    /**
      * Validates that the base folder specified in the given {@code ResourcePath} annotation exists.
      * If the base folder does not exist, registers a problem with the provided {@link ProblemsHolder}.
-     *
-     * @param annotation the {@code ResourcePath} annotation containing the base folder information
-     * @return {@code true} if the base folder exists or validation passes; {@code false} otherwise
      */
     private boolean validateBaseFolder(@NotNull PsiAnnotation annotation) {
-        String base = getBaseFolder(annotation);
+        String base = ResourcePathConstants.getBase(annotation);
 
         if (!resourceExists(base, this.holder.getProject(), true)) {
             PsiNameValuePair[] attributes = annotation.getParameterList().getAttributes();
 
             for (PsiNameValuePair pair : attributes) {
-                if ("base".equals(pair.getName()) && pair.getValue() != null) {
+                if (ResourcePathConstants.BASE_ATTR.equals(pair.getName()) && pair.getValue() != null) {
                     this.holder.registerProblem(pair.getValue(), "Invalid Base Directory: " + base, this.baseHighlightType);
                     return false;
                 }
@@ -201,29 +157,33 @@ class ResourcePathVisitor {
     }
 
     private String resolveFullPath(@NotNull PsiAnnotation annotation, @NotNull String value) {
-        String base = getBaseFolder(annotation);
+        String base = ResourcePathConstants.getBase(annotation);
         return base.isEmpty() ? value : base + "/" + value;
     }
 
     /**
-     * Checks if the resource exists in the given project's resource directory.
-     *
-     * @param path the resource path
-     * @param project the project to check
-     * @return true if resource exists or path is null/empty, false otherwise
+     * Checks if the resource exists in the given project's resource directory, searching the
+     * project's content source roots plus any user-configured {@link #additionalResourceRoots}.
      */
     private boolean resourceExists(String path, @NotNull Project project, boolean isDirectory) {
         if (path == null || path.trim().isEmpty()) return true;
-
         String normalizedPath = path.replace('\\', '/');
-        String basePath = project.getBasePath();
-        if (basePath == null) return false;
 
-        VirtualFile baseDir = VirtualFileManager.getInstance().findFileByUrl("file://" + basePath);
-        if (baseDir == null) return false;
-
-        // Try relative to source/resource roots
+        // 1. Project content source roots
         for (VirtualFile root : ProjectRootManager.getInstance(project).getContentSourceRoots()) {
+            VirtualFile candidate = root.findFileByRelativePath(normalizedPath);
+            if (candidate != null) return isDirectory == candidate.isDirectory();
+        }
+
+        // 2. User-configured additional roots
+        String basePath = project.getBasePath();
+        for (String extra : this.additionalResourceRoots) {
+            if (extra == null || extra.isBlank()) continue;
+            String resolved = java.nio.file.Path.of(extra).isAbsolute() || basePath == null
+                ? extra
+                : basePath + "/" + extra;
+            VirtualFile root = com.intellij.openapi.vfs.LocalFileSystem.getInstance().findFileByPath(resolved);
+            if (root == null) continue;
             VirtualFile candidate = root.findFileByRelativePath(normalizedPath);
             if (candidate != null) return isDirectory == candidate.isDirectory();
         }
@@ -232,12 +192,7 @@ class ResourcePathVisitor {
     }
 
     /**
-     * Determines the appropriate highlight type to be applied for a detected problem.
-     * The method retrieves the inspection profile and resolves the highlight type
-     * based on the severity of the issue in the given context.
-     *
-     * @return the {@link ProblemHighlightType} corresponding to the severity of the problem;
-     *         never null
+     * Determines the appropriate highlight type based on the current inspection profile severity.
      */
     private @NotNull ProblemHighlightType getHighlightType() {
         InspectionProfileImpl profile = InspectionProjectProfileManager.getInstance(this.holder.getProject()).getCurrentProfile();

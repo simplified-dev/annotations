@@ -1,80 +1,81 @@
 package dev.sbs;
 
-import dev.sbs.annotation.ResourcePath;
-import org.hamcrest.MatcherAssert;
-import org.junit.jupiter.api.Test;
+import com.intellij.testFramework.fixtures.BasePlatformTestCase;
+import dev.sbs.resourcepath.ResourcePathInspection;
 
-public class AnnotationTest {
+public class AnnotationTest extends BasePlatformTestCase {
 
-    public enum TestEnum {
+    @Override
+    protected void setUp() throws Exception {
+        super.setUp();
+        myFixture.enableInspections(ResourcePathInspection.class);
 
-        OK("plugin.xml", "ok"),
-        ALSO("", "also"),
-        AND("", "and");
+        // Add @ResourcePath annotation source so the test project's PSI can resolve it
+        myFixture.addFileToProject("dev/sbs/annotation/ResourcePath.java",
+            """
+            package dev.sbs.annotation;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS)
+            @Target({ElementType.FIELD, ElementType.PARAMETER, ElementType.METHOD})
+            public @interface ResourcePath {
+                String base() default "";
+            }
+            """);
 
-        private final String resourcePath;
-
-        TestEnum(@ResourcePath(base = "META-INF") String resourcePath, String test) {
-            this.resourcePath = resourcePath;
-            testStaticMethod("plugin.xml");
-        }
-
+        // Add a resource file that the valid-path tests reference
+        myFixture.addFileToProject("META-INF/plugin.xml", "<idea-plugin/>");
     }
 
-    @ResourcePath
-    private final String testField = "META-INF/plugin.xml";
-
-    @ResourcePath(base = "META-INF")
-    private final String testEnumField = TestEnum.OK.resourcePath;
-
-    @ResourcePath
-    private final String testConcatField = "META-INF/" + getName();
-
-    @ResourcePath(base = "META-INF")
-    private final String testBaseField = "plugin.xml";
-
-    @ResourcePath(base = "META-INF")
-    private final String testBaseMethodField = getName();
-
-    private static void testStaticMethod(@ResourcePath(base = "META-INF") String resourcePath) { }
-
-    private void testMethod(@ResourcePath String resourcePath) { }
-
-    private void testMetaInfMethod(@ResourcePath(base = "META-INF") String resourcePath) { }
-
-    private String testRecursiveMethod(String resourcePath2) {
-        return resourcePath2 + getName();
+    /** A valid full path should produce no inspection error. */
+    public void testValidFullPath_noError() {
+        myFixture.configureByText("Test.java",
+            """
+            import dev.sbs.annotation.ResourcePath;
+            class Test {
+                @ResourcePath
+                private final String path = "META-INF/plugin.xml";
+            }
+            """);
+        myFixture.checkHighlighting(false, false, false);
     }
 
-    @ResourcePath
-    private String testReturnMethod(String resourcePath2) {
-        return resourcePath2 + getFiletype();
+    /** A valid base + relative path should produce no inspection error. */
+    public void testValidBaseAndRelativePath_noError() {
+        myFixture.configureByText("Test.java",
+            """
+            import dev.sbs.annotation.ResourcePath;
+            class Test {
+                @ResourcePath(base = "META-INF")
+                private final String path = "plugin.xml";
+            }
+            """);
+        myFixture.checkHighlighting(false, false, false);
     }
 
-    final String getName() {
-        return "plugin" + getFiletype();
+    /** A path that does not exist should be flagged as an error. */
+    public void testMissingPath_hasError() {
+        myFixture.configureByText("Test.java",
+            """
+            import dev.sbs.annotation.ResourcePath;
+            class Test {
+                @ResourcePath
+                private final String path = <error descr="Missing Resource File: META-INF/nonexistent.xml">"META-INF/nonexistent.xml"</error>;
+            }
+            """);
+        myFixture.checkHighlighting(false, false, false);
     }
 
-    final String getFiletype() {
-        return ".xml";
-    }
-
-    @Test
-    public void genericTest_ok() {
-        String base = "META-INF/";
-        String value = base + "plugin.xml";
-
-        // Works
-        testMethod(value);
-        testMethod("META-INF/" + getName());
-        testMetaInfMethod("plugin.xml");
-
-        final String recursiveValue = testRecursiveMethod("META-INF/");
-        testMethod(recursiveValue);
-        final String returnValue = testReturnMethod("META-INF/plugin");
-        testMethod(returnValue);
-
-        MatcherAssert.assertThat("Done", true);
+    /** A valid path on a method parameter should produce no inspection error. */
+    public void testValidPathOnParameter_noError() {
+        myFixture.configureByText("Test.java",
+            """
+            import dev.sbs.annotation.ResourcePath;
+            class Test {
+                void load(@ResourcePath String path) {}
+                void use() { load("META-INF/plugin.xml"); }
+            }
+            """);
+        myFixture.checkHighlighting(false, false, false);
     }
 
 }

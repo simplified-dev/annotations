@@ -1,49 +1,82 @@
 <html lang="en">
 <body>
-<h2>Simplified Annotations</h2>
 <p>
-    This plugin evaluates string expressions marked with the <code>@ResourcePath</code> annotation to check if resource files exist.
+    Verifies that every <code>@ResourcePath</code>-annotated field, parameter, or method
+    return resolves to a resource that exists in the project's content source roots
+    (or in user-configured additional roots).
 </p>
-<h3>Supported String Resolution</h3>
+<!-- tooltip end -->
+<h3>What is checked</h3>
 <ul>
-    <li>Direct literals (ULiteralExpression)</li>
-    <li>Binary concatenation (UPolyadicExpression)</li>
-    <li>Final/static/enum fields (PsiField)</li>
-    <li>Local variables (PsiLocalVariable)</li>
-    <li>Method calls (UCallExpression, Recursive)</li>
-    <li>Method bodies (PsiDeclarationStatement)</li>
-    <li>UAST local variables (UDeclarationsExpression)</li>
+    <li><b>Missing resource file</b> - the resolved path does not correspond to an
+        existing file on the classpath. Reported at the annotation site or the argument
+        expression.</li>
+    <li><b>Invalid base directory</b> - the optional <code>base</code> attribute points
+        to a folder that does not exist. Reported on the attribute value itself, with
+        its own configurable severity.</li>
 </ul>
-<h3>Code Example</h3>
-<pre><code>    // Class Field
-    &#64;ResourcePath
-    private String configFile = "config/settings.xml";
+<h3>Supported value resolution</h3>
+<p>
+    The inspection statically evaluates the annotated expression and compares every
+    possible resolved path against the classpath. Recognised value sources:
+</p>
+<ul>
+    <li>Direct string literals (<code>"config/settings.xml"</code>)</li>
+    <li>Binary concatenation (<code>"config/" + name</code>)</li>
+    <li>Final / static / enum fields</li>
+    <li>Local variables (including UAST declarations)</li>
+    <li>Method calls - the called method's body is recursively evaluated</li>
+    <li>Enum constructor argument bindings</li>
+</ul>
+<p>
+    Evaluation is bounded in both recursion depth and result-set size to stay responsive
+    in large projects; ambiguous branches degrade gracefully to &quot;skip this branch&quot; rather
+    than halt analysis.
+</p>
+<h3>Examples</h3>
+<pre><code>// Field with implicit root
+@ResourcePath
+private String configFile = "config/settings.xml";
 
-    // Class Field (with base)
-    &#64;ResourcePath(base = "config")
-    private String configFileWithBase = "settings.xml";
+// Field with base - validates config/settings.xml
+@ResourcePath(base = "config")
+private String configFile = "settings.xml";
 
-    // Method Return (with base)
-    &#64;ResourcePath(base = "config")
-    public String returnResource(String fileName) {
-        return fileName;
-    }
+// Method parameter - every call site's argument is checked
+void loadResource(@ResourcePath(base = "config") String fileName) { }
+loadResource("settings.xml");            // validates config/settings.xml
 
-    // Method Parameter (with base)
-    public void loadResource(&#64;ResourcePath(base = "config") String fileName) {
-        // implementation
-    }
+// Method return - validated against every return expression
+@ResourcePath(base = "config")
+String defaultConfigName() { return "settings.xml"; }
 
-    // Enum Constructor
-    public enum Files {
-        SETTINGS("settings.xml"); // assets/logo.png
+// Enum constructor
+public enum Files {
+    SETTINGS("settings.xml");             // validates config/settings.xml
 
-        private final String path;
-
-        Status(&#64;ResourcePath(base = "config") String path) {
-            this.path = "config/" + path;
-        }
-    }
+    Files(@ResourcePath(base = "config") String path) { ... }
+}
 </code></pre>
+<h3>Companion inspection</h3>
+<p>
+    The paired <b>Resource Path Base-Prefix Usage</b> inspection catches the common
+    runtime mistake of passing a <code>@ResourcePath(base = "X")</code> parameter raw
+    into a resource-loading call without prepending the <code>X/</code> prefix at
+    runtime.
+</p>
+<h3>Settings</h3>
+<ul>
+    <li><b>Highlight for invalid base directory</b> - severity applied when the
+        <code>base</code> attribute points to a folder that does not exist. Independent
+        from the main inspection severity (which governs missing-file reports).</li>
+    <li><b>Additional resource root paths</b> - project-relative or absolute paths
+        searched in addition to the project's content source roots. Useful for
+        generated resources (e.g. <code>build/resources/main</code>) or projects with
+        non-standard layouts.</li>
+    <li><b>Excluded file patterns</b> - glob patterns for files the inspection skips
+        entirely (e.g. <code>**/generated/**</code>, <code>*Test*.java</code>).
+        Supports <code>**</code> (any sequence including <code>/</code>), <code>*</code>
+        (any sequence excluding <code>/</code>), and <code>?</code> (single character).</li>
+</ul>
 </body>
 </html>

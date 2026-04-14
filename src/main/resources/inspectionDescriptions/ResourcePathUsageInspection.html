@@ -1,0 +1,77 @@
+<html lang="en">
+<body>
+<p>
+    Catches the common runtime mistake of forgetting that the <code>base</code>
+    attribute on <code>@ResourcePath</code> is a validation-time prefix only. At
+    runtime the annotated parameter holds just the suffix supplied by the caller -
+    the method body is responsible for prepending the base before actually loading
+    the resource.
+</p>
+<!-- tooltip end -->
+<h3>Sink check</h3>
+<p>
+    Warns when a <code>@ResourcePath(base = "X") String param</code> is passed directly
+    into a known resource-loading call without the <code>X/</code> prefix. Offers a
+    quick-fix that wraps the argument as <code>"X/" + param</code>.
+</p>
+<pre><code>void loadResource(@ResourcePath(base = "templates") String fileName) {
+    // Warned - at runtime, fileName is just "index.html", not "templates/index.html"
+    getClass().getResourceAsStream(fileName);
+
+    // Quick-fix rewrites to:
+    getClass().getResourceAsStream("templates/" + fileName);
+}
+</code></pre>
+<p>Recognised sinks:</p>
+<ul>
+    <li><code>Class.getResource</code>, <code>Class.getResourceAsStream</code></li>
+    <li><code>ClassLoader.getResource</code>, <code>getResourceAsStream</code>,
+        <code>getResources</code>, <code>resources</code>, and their
+        <code>getSystem*</code> variants</li>
+    <li><code>Path.of</code>, <code>Paths.get</code></li>
+    <li>Constructors: <code>File</code>, <code>FileInputStream</code>,
+        <code>FileOutputStream</code>, <code>FileReader</code>,
+        <code>FileWriter</code>, <code>RandomAccessFile</code></li>
+</ul>
+<h3>Forwarding check</h3>
+<p>
+    Warns when a <code>@ResourcePath(base = "X")</code> parameter is passed as the
+    argument to another parameter annotated <code>@ResourcePath(base = "Y")</code>
+    where <code>X != Y</code>. The two paths disagree about what prefix the string
+    represents, so the value will fail validation in one of the methods.
+</p>
+<pre><code>void outer(@ResourcePath(base = "assets") String assetName) {
+    // Warned - outer's base is "assets", loadTemplate expects "templates"
+    loadTemplate(assetName);
+}
+
+void loadTemplate(@ResourcePath(base = "templates") String name) { ... }
+</code></pre>
+<p>
+    Special cases:
+</p>
+<ul>
+    <li><b>Source has base, target has none</b> - quick-fix is offered (add the prefix).</li>
+    <li><b>Source has none, target has base</b> - warned without a quick-fix (direction is ambiguous).</li>
+    <li><b>Both have different non-empty bases</b> - warned without a quick-fix.</li>
+</ul>
+<h3>Conservatively skipped</h3>
+<p>
+    Non-literal expressions, arguments already wrapped in concatenation, values coming
+    through intermediate variables, and sinks outside the recognised list never produce
+    a warning - the inspection errs on the side of silence to avoid false positives.
+</p>
+<h3>Settings</h3>
+<ul>
+    <li><b>Warn when ... passed to a resource-loading call without the prefix</b> -
+        toggles the sink check.</li>
+    <li><b>Warn when ... forwarded to another parameter with a mismatched base</b> -
+        toggles the forwarding check.</li>
+    <li><b>Highlight for sink-check violations</b> - severity applied to sink warnings.</li>
+    <li><b>Highlight for forwarding-mismatch violations</b> - severity applied to
+        forwarding warnings. Independent from the sink severity.</li>
+    <li><b>Excluded file patterns</b> - glob patterns for files the inspection skips
+        entirely (e.g. <code>**/generated/**</code>).</li>
+</ul>
+</body>
+</html>
