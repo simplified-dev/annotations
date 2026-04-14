@@ -1,0 +1,34 @@
+<html>
+<body>
+Flags misuse of the per-field companion annotations that travel with
+<code>@ClassBuilder</code>:
+
+<ul>
+  <li><code>@Formattable</code> must apply to a <code>String</code> or
+      <code>Optional&lt;String&gt;</code> field - used to emit a
+      <code>@PrintFormat</code> overload setter.</li>
+  <li><code>@Negate</code> must apply to a primitive <code>boolean</code>
+      field - emits an inverse setter pair.</li>
+  <li><code>@Singular</code> must apply to a <code>Collection</code>,
+      <code>List</code>, <code>Set</code>, <code>Iterable</code>, or
+      <code>Map</code> field - emits add/put/varargs/clear setters.</li>
+  <li><code>@BuildFlag(pattern = ...)</code> is only meaningful on
+      <code>CharSequence</code> or <code>Optional&lt;String&gt;</code>
+      fields - the validator cannot check a regex against other types.</li>
+  <li><code>@BuildFlag(limit = N)</code> is only meaningful on
+      <code>CharSequence</code>, <code>Collection</code>, <code>Map</code>,
+      object arrays, or <code>Optional</code> of <code>String</code> /
+      <code>Number</code> - the validator has no notion of size on
+      other types.</li>
+</ul>
+
+<!-- tooltip end -->
+
+<p>
+Applies-to errors are reported at ERROR severity because they lead to
+invalid code generation (the emitted setter would not compile) or
+silently ignored runtime validation.
+</p>
+
+</body>
+</html>

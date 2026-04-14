@@ -110,6 +110,15 @@
                 displayName="@ClassBuilder bootstrap methods missing"
                 groupName="Simplified Annotations"
         />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.sbs.classbuilder.inspect.ClassBuilderFieldInspection"
+                enabledByDefault="true"
+                level="WARNING"
+                shortName="ClassBuilderFieldInspection"
+                displayName="@ClassBuilder field annotation misuse"
+                groupName="Simplified Annotations"
+        />
         <inferredAnnotationProvider implementation="dev.sbs.xcontract.XContractInferredAnnotationProvider"/>
         <postStartupActivity implementation="dev.sbs.resourcepath.ResourcePathStartupActivity"/>
     </extensions>
