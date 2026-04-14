@@ -1,6 +1,7 @@
 package dev.sbs.classbuilder.apt;
 
 import dev.sbs.annotation.AccessLevel;
+import dev.sbs.classbuilder.mutate.JavacBridge;
 
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.Messager;
@@ -23,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -38,11 +40,18 @@ public class ClassBuilderProcessor extends AbstractProcessor {
 
     private final AnnotationLookup lookup = new AnnotationLookup();
     private SourceIntrospector introspector;
+    private Optional<JavacBridge> javacBridge = Optional.empty();
 
     @Override
     public synchronized void init(ProcessingEnvironment processingEnv) {
         super.init(processingEnv);
         this.introspector = new SourceIntrospector(processingEnv);
+        this.javacBridge = JavacBridge.of(processingEnv);
+    }
+
+    /** Exposed for tests. */
+    Optional<JavacBridge> javacBridge() {
+        return javacBridge;
     }
 
     @Override

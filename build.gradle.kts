@@ -1,3 +1,4 @@
+import org.gradle.kotlin.dsl.support.serviceOf
 import java.security.MessageDigest
 
 plugins {
@@ -88,6 +89,17 @@ val aptTest by tasks.registering(Test::class) {
     testClassesDirs = sourceSets["aptTest"].output.classesDirs
     classpath = sourceSets["aptTest"].runtimeClasspath
     useJUnit()
+    // Cross-JDK sweep support: pass -PaptTestJdk=21 (or 17/25/etc.) to exercise
+    // the processor under a specific JDK without changing the main build JVM.
+    // Requires that JDK to be discoverable as a Gradle toolchain.
+    (project.findProperty("aptTestJdk") as String?)?.let { v ->
+        javaLauncher.set(javaToolchains.launcherFor {
+            languageVersion.set(JavaLanguageVersion.of(v.toInt()))
+        })
+    }
+    doFirst {
+        logger.lifecycle("aptTest JVM: ${javaLauncher.get().metadata.javaRuntimeVersion}")
+    }
     // compile-testing + JDK internals on newer JDKs need these opens
     jvmArgs(
         "--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
@@ -152,11 +164,25 @@ val sourcesJar by tasks.registering(Jar::class) {
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
+// Exports required by the AST-mutation pipeline (dev.sbs.classbuilder.mutate) which
+// reaches into com.sun.tools.javac.* internals. Used by both compileJava on the plugin
+// jar and by downstream consumers at javac-time; the consumer-side exports must be
+// configured in their own build (documented in MIGRATION.md).
+val javacInternalExports = listOf(
+    "--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
+    "--add-exports=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED",
+    "--add-exports=jdk.compiler/com.sun.tools.javac.model=ALL-UNNAMED",
+    "--add-exports=jdk.compiler/com.sun.tools.javac.processing=ALL-UNNAMED",
+    "--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED",
+    "--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED"
+)
+
 tasks {
     // Set the JVM compatibility versions
     withType<JavaCompile> {
         sourceCompatibility = "17"
         targetCompatibility = "17"
+        options.compilerArgs.addAll(javacInternalExports)
     }
     withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
         kotlinOptions.jvmTarget = "17"
@@ -173,6 +199,8 @@ tasks {
         dependsOn(buildPlugin, sourcesJar, javadocJar, "generatePomFileForReleasePublication")
         notCompatibleWithConfigurationCache("Accesses project files dynamically.")
 
+        // Gradle 9 removed Project.exec; ExecOperations must be injected instead.
+        val execOps = project.serviceOf<org.gradle.process.ExecOperations>()
         doLast {
             val outputDir = mavenPublishDir.get().asFile
             outputDir.walkTopDown()
@@ -182,7 +210,7 @@ tasks {
                     file.writeChecksumFile("MD5")
 
                     if (file.shouldSign()) {
-                        exec { commandLine("gpg", "-ab", file.absolutePath) }
+                        execOps.exec { commandLine("gpg", "-ab", file.absolutePath) }
                     }
                 }
         }
