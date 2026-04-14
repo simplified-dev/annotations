@@ -15,7 +15,7 @@ import java.util.Set;
  * All classification the emitter needs happens once in {@link #from(VariableElement, AnnotationLookup)},
  * so the emitter only reads already-resolved properties.
  */
-final class FieldSpec {
+public final class FieldSpec {
 
     // Optional<T> is typed so we don't have to reflect on its FQN repeatedly.
     private static final String OPTIONAL_FQN = "java.util.Optional";
@@ -30,40 +30,40 @@ final class FieldSpec {
         "java.util.Map", "java.util.HashMap", "java.util.LinkedHashMap", "java.util.TreeMap"
     );
 
-    final String name;
-    final VariableElement element;
-    final TypeMirror type;
-    final String typeDisplay;
+    public final String name;
+    public final VariableElement element;
+    public final TypeMirror type;
+    public final String typeDisplay;
 
-    final boolean notNull;
-    final boolean nullable;
+    public final boolean notNull;
+    public final boolean nullable;
 
-    final boolean isBoolean;
-    final boolean isString;
-    final boolean isPrimitive;
-    final boolean isArray;
+    public final boolean isBoolean;
+    public final boolean isString;
+    public final boolean isPrimitive;
+    public final boolean isArray;
 
-    final boolean isOptional;
-    final String optionalInner;              // null unless isOptional
+    public final boolean isOptional;
+    public final String optionalInner;              // null unless isOptional
 
-    final boolean isListLike;                // List, Set, or Collection
-    final boolean isSet;
-    final boolean isMap;
-    final String collectionElement;          // element type for list/set/array
-    final String mapKey, mapValue;
+    public final boolean isListLike;                // List, Set, or Collection
+    public final boolean isSet;
+    public final boolean isMap;
+    public final String collectionElement;          // element type for list/set/array
+    public final String mapKey, mapValue;
 
     // Companion annotations
-    final boolean formattable;
-    final boolean formattableNullable;
-    final String negateName;                 // null if no @Negate
-    final String singularName;               // null if no @Singular; filled from @Singular.value or defaulted
-    final boolean ignored;                   // @BuilderIgnore or listed in @ClassBuilder.exclude
-    final boolean builderDefault;
-    final String sourceInitializer;          // copied source text of the field's declared initializer
-    final Set<String> initializerImports;    // type FQNs referenced by sourceInitializer
-    final String obtainViaMethod;            // null if none
-    final String obtainViaField;
-    final boolean obtainViaStatic;
+    public final boolean formattable;
+    public final boolean formattableNullable;
+    public final String negateName;                 // null if no @Negate
+    public final String singularName;               // null if no @Singular; filled from @Singular.value or defaulted
+    public final boolean ignored;                   // @BuilderIgnore or listed in @ClassBuilder.exclude
+    public final boolean builderDefault;
+    public final String sourceInitializer;          // copied source text of the field's declared initializer
+    public final Set<String> initializerImports;    // type FQNs referenced by sourceInitializer
+    public final String obtainViaMethod;            // null if none
+    public final String obtainViaField;
+    public final boolean obtainViaStatic;
 
     private FieldSpec(Builder b) {
         this.name = b.name;

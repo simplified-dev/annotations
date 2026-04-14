@@ -5,7 +5,6 @@ plugins {
     id("java")
     id("signing")
     id("maven-publish")
-    id("org.jetbrains.kotlin.jvm") version "1.9.25"
     id("org.jetbrains.intellij.platform") version "2.6.0"
 }
 
@@ -183,9 +182,6 @@ tasks {
         sourceCompatibility = "17"
         targetCompatibility = "17"
         options.compilerArgs.addAll(javacInternalExports)
-    }
-    withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-        kotlinOptions.jvmTarget = "17"
     }
 
     named<Jar>("jar") {

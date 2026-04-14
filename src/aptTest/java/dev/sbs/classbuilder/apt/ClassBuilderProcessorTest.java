@@ -22,8 +22,11 @@ import static org.junit.Assert.assertTrue;
 public class ClassBuilderProcessorTest {
 
     private static Compilation compile(JavaFileObject... sources) {
+        // Force the legacy sibling-emitter path so these tests continue to
+        // exercise the <TypeName>Builder.java generation until Phase 6
+        // retires it. The AST-mutation path has its own test suite.
         return Compiler.javac()
-            .withProcessors(new ClassBuilderProcessor())
+            .withProcessors(new ClassBuilderProcessor(false))
             .compile(sources);
     }
 

@@ -1,6 +1,7 @@
 package dev.sbs.classbuilder.apt;
 
 import dev.sbs.annotation.AccessLevel;
+import dev.sbs.classbuilder.mutate.BuilderMutator;
 import dev.sbs.classbuilder.mutate.JavacBridge;
 
 import javax.annotation.processing.AbstractProcessor;
@@ -39,14 +40,30 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     private static final String ANNOTATION_FQN = "dev.sbs.annotation.ClassBuilder";
 
     private final AnnotationLookup lookup = new AnnotationLookup();
+    private final boolean mutationEnabled;
     private SourceIntrospector introspector;
     private Optional<JavacBridge> javacBridge = Optional.empty();
+
+    /** Default constructor used by the JSR-269 META-INF/services entry. */
+    public ClassBuilderProcessor() {
+        this(true);
+    }
+
+    /**
+     * Test hook that disables the AST-mutation path. When {@code false} the
+     * processor always emits a sibling {@code <TypeName>Builder.java}, which
+     * keeps the legacy sibling test suite exercisable until Phase 6 retires
+     * the sibling emitter.
+     */
+    public ClassBuilderProcessor(boolean mutationEnabled) {
+        this.mutationEnabled = mutationEnabled;
+    }
 
     @Override
     public synchronized void init(ProcessingEnvironment processingEnv) {
         super.init(processingEnv);
         this.introspector = new SourceIntrospector(processingEnv);
-        this.javacBridge = JavacBridge.of(processingEnv);
+        this.javacBridge = mutationEnabled ? JavacBridge.of(processingEnv) : Optional.empty();
     }
 
     /** Exposed for tests. */
@@ -89,11 +106,25 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     }
 
     private void processClass(TypeElement target, Messager messager) throws IOException {
-        BuilderEmitter.BuilderConfig config = extractConfig(target);
+        BuilderConfig config = extractConfig(target);
         List<FieldSpec> fields = collectFields(target, config);
-        String packageName = packageOf(target);
         boolean isRecord = target.getKind() == ElementKind.RECORD;
 
+        // AST-mutation path: inject a nested Builder class directly into the
+        // target's JCClassDecl. Falls through to sibling emission when the
+        // environment is not javac (no bridge) or the target lacks a source
+        // tree (e.g. elements derived from class files).
+        if (javacBridge.isPresent()) {
+            BuilderMutator mutator = new BuilderMutator(javacBridge.get(), messager);
+            if (mutator.mutate(target, config, fields)) return;
+        }
+
+        emitSiblingBuilder(target, messager, config, fields, isRecord);
+    }
+
+    private void emitSiblingBuilder(TypeElement target, Messager messager, BuilderConfig config,
+                                    List<FieldSpec> fields, boolean isRecord) throws IOException {
+        String packageName = packageOf(target);
         BuilderEmitter emitter = new BuilderEmitter(target, packageName, config, fields, messager, isRecord, BuilderEmitter.TargetKind.CLASS_OR_RECORD);
         String source = emitter.emit();
 
@@ -108,7 +139,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     }
 
     private void processInterface(TypeElement target, Messager messager) throws IOException {
-        BuilderEmitter.BuilderConfig config = extractConfig(target);
+        BuilderConfig config = extractConfig(target);
         List<FieldSpec> fields = collectFieldsFromInterface(target, config);
         String packageName = packageOf(target);
 
@@ -128,7 +159,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         try (Writer w = file.openWriter()) { w.write(source); }
     }
 
-    private List<FieldSpec> collectFieldsFromInterface(TypeElement target, BuilderEmitter.BuilderConfig config) {
+    private List<FieldSpec> collectFieldsFromInterface(TypeElement target, BuilderConfig config) {
         List<FieldSpec> out = new ArrayList<>();
         for (Element enclosed : target.getEnclosedElements()) {
             if (enclosed.getKind() != ElementKind.METHOD) continue;
@@ -146,7 +177,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         return out;
     }
 
-    private BuilderEmitter.BuilderConfig extractConfig(TypeElement target) {
+    private BuilderConfig extractConfig(TypeElement target) {
         String builderName = lookup.stringAttr(target, ANNOTATION_FQN, "builderName", "Builder");
         String builderMethodName = lookup.stringAttr(target, ANNOTATION_FQN, "builderMethodName", "builder");
         String buildMethodName = lookup.stringAttr(target, ANNOTATION_FQN, "buildMethodName", "build");
@@ -161,14 +192,14 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         boolean emitContracts = lookup.booleanAttr(target, ANNOTATION_FQN, "emitContracts", true);
         String factoryMethod = lookup.stringAttr(target, ANNOTATION_FQN, "factoryMethod", "");
         Set<String> excludeSet = new HashSet<>(Arrays.asList(lookup.stringArrayAttr(target, ANNOTATION_FQN, "exclude")));
-        return new BuilderEmitter.BuilderConfig(
+        return new BuilderConfig(
             builderName, builderMethodName, buildMethodName, fromMethodName, toBuilderMethodName,
             methodPrefix, access, generateBuilder, generateFrom, generateMutate, validate,
             emitContracts, factoryMethod, excludeSet
         );
     }
 
-    private List<FieldSpec> collectFields(TypeElement target, BuilderEmitter.BuilderConfig config) {
+    private List<FieldSpec> collectFields(TypeElement target, BuilderConfig config) {
         List<FieldSpec> out = new ArrayList<>();
         for (Element enclosed : target.getEnclosedElements()) {
             if (enclosed.getKind() != ElementKind.FIELD) continue;

@@ -248,7 +248,7 @@ final class BuilderEmitter {
 
     private void emitSingularSetters(FieldSpec f) {
         String whole = methodName(f.name, false);
-        String single = (config.methodPrefix.isEmpty() ? "add" : config.methodPrefix) + capitalise(f.singularName);
+        String single = (config.methodPrefix().isEmpty() ? "add" : config.methodPrefix()) + capitalise(f.singularName);
         String clear = "clear" + capitalise(f.name);
 
         if (f.isMap) {
@@ -329,11 +329,11 @@ final class BuilderEmitter {
     // ------------------------------------------------------------------
 
     private void emitFromMethod() {
-        if (!config.generateFrom) return;
-        if (config.fromMethodName.isEmpty()) return;
+        if (!config.generateFrom()) return;
+        if (config.fromMethodName().isEmpty()) return;
 
         emitContract("_ -> new", true, null);
-        body.append("    ").append(accessKeyword()).append("static @NotNull ").append(builderName).append(' ').append(config.fromMethodName)
+        body.append("    ").append(accessKeyword()).append("static @NotNull ").append(builderName).append(' ').append(config.fromMethodName())
             .append("(@NotNull ").append(targetSimpleName).append(" instance) {\n");
         body.append("        ").append(builderName).append(" b = new ").append(builderName).append("();\n");
         for (FieldSpec f : fields) body.append("        b.").append(f.name).append(" = ").append(readFromInstance(f)).append(";\n");
@@ -366,17 +366,17 @@ final class BuilderEmitter {
 
     private void emitBuildMethod() {
         emitContract("-> new", false, null);
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(targetSimpleName).append(' ').append(config.buildMethodName).append("() {\n");
-        if (config.validate) {
+        body.append("    ").append(accessKeyword()).append("@NotNull ").append(targetSimpleName).append(' ').append(config.buildMethodName()).append("() {\n");
+        if (config.validate()) {
             imports.add("dev.sbs.classbuilder.validate.BuildFlagValidator");
             body.append("        BuildFlagValidator.validate(this);\n");
         }
-        boolean useFactory = !config.factoryMethod.isEmpty();
+        boolean useFactory = !config.factoryMethod().isEmpty();
         String constructorTarget;
         if (targetKind == TargetKind.INTERFACE) {
             constructorTarget = "new " + (interfaceImplName == null ? targetSimpleName + "Impl" : interfaceImplName);
         } else if (useFactory) {
-            constructorTarget = targetSimpleName + "." + config.factoryMethod;
+            constructorTarget = targetSimpleName + "." + config.factoryMethod();
         } else {
             constructorTarget = "new " + targetSimpleName;
         }
@@ -393,7 +393,7 @@ final class BuilderEmitter {
     // ------------------------------------------------------------------
 
     private void emitContract(String value, boolean pure, String mutates) {
-        if (!config.emitContracts) return;
+        if (!config.emitContracts()) return;
         imports.add("dev.sbs.annotation.XContract");
         body.append("    @XContract(");
         boolean first = true;
@@ -404,12 +404,12 @@ final class BuilderEmitter {
     }
 
     private String accessKeyword() {
-        String k = config.access.toKeyword();
+        String k = config.access().toKeyword();
         return k.isEmpty() ? "" : k + " ";
     }
 
     private String methodName(String fieldName, boolean forceBoolean) {
-        String prefix = forceBoolean ? "is" : config.methodPrefix;
+        String prefix = forceBoolean ? "is" : config.methodPrefix();
         if (prefix.isEmpty()) return fieldName;
         return prefix + capitalise(fieldName);
     }
@@ -478,26 +478,5 @@ final class BuilderEmitter {
         sb.append(body);
         return sb.toString();
     }
-
-    // ------------------------------------------------------------------
-    // Config record (constructor args)
-    // ------------------------------------------------------------------
-
-    record BuilderConfig(
-        String builderName,
-        String builderMethodName,
-        String buildMethodName,
-        String fromMethodName,
-        String toBuilderMethodName,
-        String methodPrefix,
-        AccessLevel access,
-        boolean generateBuilder,
-        boolean generateFrom,
-        boolean generateMutate,
-        boolean validate,
-        boolean emitContracts,
-        String factoryMethod,
-        Set<String> excludeSet
-    ) {}
 
 }
