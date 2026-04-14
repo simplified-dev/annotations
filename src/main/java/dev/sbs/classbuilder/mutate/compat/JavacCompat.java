@@ -10,9 +10,10 @@ import com.sun.tools.javac.util.List;
  * by {@link JavacCompatFactory} based on {@link Runtime#version()}.
  *
  * <p>Day-one the interface exposes only the few operations needed by the AST
- * mutation pipeline. New methods are added on demand when a specific JDK
- * actually diverges. Most implementations inherit unchanged from the
- * {@code v17} baseline.
+ * mutation pipeline. Currently every supported JDK (17 through 25) uses the
+ * single {@code v17} baseline because the javac APIs the pipeline touches
+ * have been stable across those versions. The factory stays wired up so a
+ * future divergence is a new subclass + one gate, nothing more.
  *
  * @see JavacCompatFactory
  */

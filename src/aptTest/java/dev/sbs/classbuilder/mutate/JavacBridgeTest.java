@@ -6,9 +6,6 @@ import com.google.testing.compile.JavaFileObjects;
 import dev.sbs.classbuilder.mutate.compat.JavacCompat;
 import dev.sbs.classbuilder.mutate.compat.JavacCompatFactory;
 import dev.sbs.classbuilder.mutate.compat.v17.JavacCompatV17;
-import dev.sbs.classbuilder.mutate.compat.v21.JavacCompatV21;
-import dev.sbs.classbuilder.mutate.compat.v23.JavacCompatV23;
-import dev.sbs.classbuilder.mutate.compat.v25.JavacCompatV25;
 import org.junit.Test;
 
 import javax.annotation.processing.AbstractProcessor;
@@ -57,29 +54,17 @@ public class JavacBridgeTest {
         assertNotNull("compat shim must resolve", b.compat());
     }
 
+    /**
+     * Every currently supported JDK maps to the V17 baseline because nothing
+     * in the pipeline has drifted. When a future divergence lands this test
+     * will be joined by a second assertion on the new shim class.
+     */
     @Test
-    public void compatFactoryPicksExpectedVersion_17() {
-        assertEquals(JavacCompatV17.class, JavacCompatFactory.forFeatureVersion(17).getClass());
-        assertEquals(JavacCompatV17.class, JavacCompatFactory.forFeatureVersion(18).getClass());
-        assertEquals(JavacCompatV17.class, JavacCompatFactory.forFeatureVersion(20).getClass());
-    }
-
-    @Test
-    public void compatFactoryPicksExpectedVersion_21() {
-        assertEquals(JavacCompatV21.class, JavacCompatFactory.forFeatureVersion(21).getClass());
-        assertEquals(JavacCompatV21.class, JavacCompatFactory.forFeatureVersion(22).getClass());
-    }
-
-    @Test
-    public void compatFactoryPicksExpectedVersion_23() {
-        assertEquals(JavacCompatV23.class, JavacCompatFactory.forFeatureVersion(23).getClass());
-        assertEquals(JavacCompatV23.class, JavacCompatFactory.forFeatureVersion(24).getClass());
-    }
-
-    @Test
-    public void compatFactoryPicksExpectedVersion_25() {
-        assertEquals(JavacCompatV25.class, JavacCompatFactory.forFeatureVersion(25).getClass());
-        assertEquals(JavacCompatV25.class, JavacCompatFactory.forFeatureVersion(99).getClass());
+    public void compatFactoryReturnsV17BaselineForAllSupportedVersions() {
+        for (int feature : new int[]{17, 18, 20, 21, 22, 23, 24, 25, 99}) {
+            assertEquals("feature " + feature + " must resolve to the V17 baseline",
+                JavacCompatV17.class, JavacCompatFactory.forFeatureVersion(feature).getClass());
+        }
     }
 
     @Test

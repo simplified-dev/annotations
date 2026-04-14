@@ -6,8 +6,9 @@ import com.sun.tools.javac.util.List;
 import dev.sbs.classbuilder.mutate.compat.JavacCompat;
 
 /**
- * Baseline compatibility implementation covering JDK 17 through 20. Higher
- * versions extend this class and override only what actually diverges.
+ * Baseline compatibility implementation covering every JDK currently
+ * supported (17 through 25). Future divergence is absorbed by adding a new
+ * subclass that overrides only what drifts; the baseline stays put.
  */
 public class JavacCompatV17 implements JavacCompat {
 

@@ -1,14 +1,17 @@
 package dev.sbs.classbuilder.mutate.compat;
 
 import dev.sbs.classbuilder.mutate.compat.v17.JavacCompatV17;
-import dev.sbs.classbuilder.mutate.compat.v21.JavacCompatV21;
-import dev.sbs.classbuilder.mutate.compat.v23.JavacCompatV23;
-import dev.sbs.classbuilder.mutate.compat.v25.JavacCompatV25;
 
 /**
- * Selects a {@link JavacCompat} implementation matching the current JDK's
- * feature version. New JDK support is a two-line change: add a new subclass
- * under {@code compat/v<N>/}, then add one conditional here.
+ * Resolves a {@link JavacCompat} implementation for the running JDK.
+ *
+ * <p>Every currently supported JDK (17 through 25) uses the
+ * {@link JavacCompatV17} baseline - every javac internal the mutation
+ * pipeline touches has been stable across those versions. The factory
+ * therefore returns the baseline unconditionally. It exists as the single
+ * point that handles shim selection, so when a future JDK forces a
+ * divergence the fix is a new subclass plus a version gate here - no
+ * caller change required.
  *
  * <p>Version-gated static dispatch, deliberately not {@link java.util.ServiceLoader} -
  * fewer moving parts, no META-INF plumbing, no classloader surprises when
@@ -33,13 +36,12 @@ public final class JavacCompatFactory {
      * out so tests can assert dispatch behaviour without needing to actually
      * run under the corresponding JDK.
      *
-     * @param feature JDK feature version (e.g. 17, 21, 25)
+     * @param feature JDK feature version (e.g. 17, 21, 25); currently unused
+     *                but retained so a future version gate can be added here
+     *                without touching callers
      * @return a shim tuned for that feature level; never null
      */
     public static JavacCompat forFeatureVersion(int feature) {
-        if (feature >= 25) return new JavacCompatV25();
-        if (feature >= 23) return new JavacCompatV23();
-        if (feature >= 21) return new JavacCompatV21();
         return new JavacCompatV17();
     }
 
