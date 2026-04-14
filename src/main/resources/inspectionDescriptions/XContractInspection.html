@@ -1,0 +1,89 @@
+<html lang="en">
+<body>
+<p>
+    Reports syntax errors and semantic mistakes in <code>@XContract</code> annotation values and attributes.
+</p>
+<!-- tooltip end -->
+<p>
+    <code>@XContract</code> is a drop-in replacement for JetBrains'
+    <code>@Contract</code> with a richer grammar. The plugin synthesises an
+    equivalent <code>@Contract</code> for IntelliJ's data-flow analysis, so
+    a single <code>@XContract</code> is enough - you do not need to declare
+    both.
+</p>
+<p>
+    The annotation's <code>value</code> is a semicolon-separated list of clauses of the form
+    <code>(condition) -&gt; return</code>. Each clause describes what a method returns or throws given
+    that its arguments satisfy the condition. The empty form <code>()</code> acts as an unconditional fallback.
+</p>
+<h3>Condition grammar</h3>
+<pre><code>OrExpr      := AndExpr ('||' AndExpr)*
+AndExpr     := Term ('&amp;&amp;' Term)*
+Term        := '(' OrExpr ')'                      // grouping
+             | Value 'instanceof' TypeName         // type check
+             | Value CompOp (Value CompOp)* Value  // chained comparison
+             | '!' Value                           // boolean negation
+             | Value                               // bare boolean
+CompOp      := '&lt;' | '&gt;' | '&lt;=' | '&gt;=' | '==' | '!='
+Value       := ('param'N | Name | 'this') ('.' SpecialField)*
+             | 'null' | 'true' | 'false' | integer
+SpecialField:= 'size()' | 'length()' | 'length' | 'empty()'
+TypeName    := Ident ('.' Ident)*
+</code></pre>
+<h3>Return values</h3>
+<p>
+    <code>true</code>, <code>false</code>, <code>null</code>, <code>!null</code>, <code>fail</code>,
+    <code>this</code>, <code>new</code>, <code>param</code><em>N</em>, a named-parameter reference,
+    an integer constant, or <code>throws</code> <em>TypeName</em>.
+</p>
+<h3>Attributes</h3>
+<ul>
+    <li><code>value</code> - the contract clauses described above.</li>
+    <li><code>pure</code> - declares the method has no observable side effects.</li>
+    <li><code>mutates</code> - comma-separated list of <code>this</code>, <code>io</code>, or <code>param</code><em>N</em>.</li>
+</ul>
+<h3>Examples</h3>
+<pre><code>// Named parameter reference
+@XContract("(index &lt; 0) -> fail")
+char charAt(int index) { ... }
+
+// Logical OR
+@XContract("(param1 == null || param2 == null) -> fail")
+void requireBoth(Object a, Object b) { ... }
+
+// Grouping
+@XContract("((param1 == null) &amp;&amp; (param2 &gt; 0)) -> fail")
+void reject(Object a, int b) { ... }
+
+// Boolean constant
+@XContract("(flag == false) -> fail")
+void requireTrue(boolean flag) { ... }
+
+// Pure + mutates
+@XContract(value = "() -> this", mutates = "this")
+StringBuilder append(String s) { ... }
+
+// instanceof check
+@XContract("(param1 instanceof Number) -> true; () -> false")
+boolean isNumeric(Object value) { ... }
+
+// Typed throws
+@XContract("(param1 == null) -> throws IllegalArgumentException")
+void requireNonNull(Object value) { ... }
+
+// Chained range comparison
+@XContract("(0 &lt;= index &lt; this.size()) -> !null")
+Object at(int index) { ... }
+
+// Named-parameter return
+@XContract("(param1 == null) -> defaultValue; () -> param1")
+&lt;T&gt; T orElse(T value, T defaultValue) { ... }
+</code></pre>
+<h3>Settings</h3>
+<ul>
+    <li><b>Warn when an override weakens the super method's contract</b> - toggles the inheritance check.</li>
+    <li><b>Highlight for contract inheritance violations</b> - severity used for pure-downgrade and mutates-superset warnings.
+        Independent from the main inspection severity (which applies to syntax errors and undefined references).</li>
+</ul>
+</body>
+</html>

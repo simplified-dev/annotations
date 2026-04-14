@@ -1,0 +1,47 @@
+<html lang="en">
+<body>
+<p>
+    Warns at call sites whose literal arguments deterministically trigger a
+    <code>fail</code> or <code>throws</code> clause in the target method's
+    <code>@XContract</code>.
+</p>
+<!-- tooltip end -->
+<p>
+    This inspection is complementary to <i>XContract</i> (which validates the contract syntax
+    on the method's declaration). It walks every method call and constructor call, resolves
+    the target, and checks each clause whose return is <code>fail</code> or <code>throws</code>:
+    if the condition is provably true given the call's constant arguments, the call is flagged.
+</p>
+<h3>Examples</h3>
+<pre><code>// Declaration
+@XContract("(param1 &lt; 0) -> fail; (param1 &gt;= this.length()) -> fail")
+char charAt(int index) { ... }
+
+// Warned - literal -1 satisfies (param1 &lt; 0)
+s.charAt(-1);
+
+// Not warned - argument is a runtime value
+s.charAt(i);
+</code></pre>
+<h3>What is checked</h3>
+<ul>
+    <li>Null-literal arguments against <code>== null</code> / <code>!= null</code>.</li>
+    <li>Integer literals against comparisons (<code>&lt;</code>, <code>&gt;</code>, <code>==</code>, etc.).</li>
+    <li>Boolean literals against <code>==</code> and <code>!=</code>.</li>
+    <li><code>&amp;&amp;</code>, <code>||</code>, <code>!</code> combinations of the above.</li>
+    <li>Both <code>paramN</code> and named-parameter references.</li>
+</ul>
+<h3>What is conservatively skipped</h3>
+<p>
+    Clauses using <code>this</code>, field access (<code>.length()</code>, <code>.size()</code>,
+    <code>.empty()</code>), <code>instanceof</code>, or non-literal arguments never produce
+    a warning even when they would violate the contract at runtime.
+</p>
+<h3>Settings</h3>
+<ul>
+    <li><b>Warn on 'fail' clause violations</b> - toggles checks against clauses returning <code>fail</code>.</li>
+    <li><b>Warn on 'throws' clause violations</b> - toggles checks against clauses returning <code>throws TypeName</code>.</li>
+    <li><b>Highlight for confirmed call-site violations</b> - severity used when a clause is proven to fire. Default is "Server Problem" (generic error-or-warning) since this is a strong diagnostic.</li>
+</ul>
+</body>
+</html>
