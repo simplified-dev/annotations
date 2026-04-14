@@ -14,10 +14,39 @@
          Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-description -->
     <description><![CDATA[
     <p>
-      Two static-analysis annotations for Java - <b>@ResourcePath</b> and <b>@XContract</b> -
-      each backed by IDE inspections. No runtime code is generated, and no bytecode is rewritten;
-      everything runs in the editor.
+      Three annotation families for Java with companion IDE tooling:
+      <b>@ResourcePath</b> (static resource-path validation), <b>@XContract</b>
+      (superset of JetBrains <code>@Contract</code>), and <b>@ClassBuilder</b>
+      (Lombok-<code>@Builder</code> superset with annotation-processor code generation).
     </p>
+
+    <h3>@ClassBuilder</h3>
+    <ul>
+      <li>Annotation processor generates a sibling <code>&lt;TypeName&gt;Builder.java</code>
+          for every class, record, or interface annotated with <code>@ClassBuilder</code>.
+          Interfaces also get a matching <code>&lt;Name&gt;Impl</code> concrete class.</li>
+      <li>Full Lombok <code>@Builder</code> parity: configurable method names
+          (<code>builderMethodName</code>, <code>buildMethodName</code>,
+          <code>fromMethodName</code>, <code>toBuilderMethodName</code>),
+          method prefix, access level, custom factory method, exclusions.</li>
+      <li>Setter-shape extras that Lombok doesn't cover: dual
+          <code>Optional&lt;T&gt;</code> setters, zero-arg + typed boolean pairs
+          with <code>@Negate</code>, <code>@PrintFormat</code> string overloads
+          via <code>@Formattable</code>, <code>@Singular</code> add/put/varargs/clear
+          for collections and maps, defensive-copy <code>from(T)</code>, and a
+          <code>mutate()</code> instance shorthand.</li>
+      <li><b>@BuildFlag runtime validator</b> enforces <code>nonNull</code> /
+          <code>notEmpty</code> / <code>group</code> mutual-requirement / regex
+          <code>pattern</code> / length <code>limit</code> in the generated
+          <code>build()</code>. Zero external dependencies.</li>
+      <li><b>@XContract</b> annotations are emitted on every generated method
+          so IntelliJ data-flow analysis understands fresh-object and
+          this-return shapes.</li>
+      <li>IDE inspections: <b>Bootstrap-methods missing</b> (ERROR-level) with
+          a quick-fix that inserts <code>builder()</code> / <code>from(T)</code>
+          / <code>mutate()</code> all at once; <b>Field annotation misuse</b>
+          catches mistakes like <code>@Formattable</code> on a non-String field.</li>
+    </ul>
 
     <h3>@ResourcePath</h3>
     <ul>

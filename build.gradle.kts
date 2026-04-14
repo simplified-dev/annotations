@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "dev.sbs"
-version = "1.0.5"
+version = "1.1.0"
 
 repositories {
     mavenCentral()
@@ -38,13 +38,23 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h3>1.1.0</h3>
             <ul>
-              <li><b>New @XContract annotation</b> - superset of JetBrains @Contract with relational comparisons, &amp;&amp;/|| grouping, named-parameter references, instanceof checks, typed throws returns, chained comparisons, and full pure/mutates support. A synthetic @Contract is inferred so IntelliJ data-flow works from a single annotation.</li>
-              <li><b>New XContract Call-Site inspection</b> - flags calls whose literal arguments deterministically trigger a fail or throws clause.</li>
-              <li><b>New ResourcePath Base-Prefix Usage inspection</b> - warns when a @ResourcePath(base="X") parameter is passed raw into a resource-loading call, with a quick-fix that prepends X/. Also flags base mismatches across call boundaries.</li>
+              <li><b>New @ClassBuilder annotation</b> - generates a sibling <code>&lt;TypeName&gt;Builder.java</code> via a JSR 269 annotation processor. Supports classes, records, and interfaces (interfaces also get a matching <code>&lt;Name&gt;Impl</code>). Full Lombok <code>@Builder</code> parity plus opinionated extras: configurable method prefix, <code>builderName</code>/<code>builderMethodName</code>/<code>buildMethodName</code>/<code>fromMethodName</code>/<code>toBuilderMethodName</code>, generated <code>from(T)</code> + <code>mutate()</code>, and emitted <code>@XContract</code> on every setter so IDE data-flow understands fresh-object and this-return shapes.</li>
+              <li><b>New field-level companions</b> - <code>@Singular</code> (collection/map add/put/varargs/clear), <code>@Negate</code> (paired inverse boolean setters), <code>@Formattable</code> (<code>@PrintFormat</code> overloads with null-tolerant variants for Optional&lt;String&gt; fields), <code>@BuilderDefault</code>, <code>@BuilderIgnore</code>, <code>@ObtainVia</code>.</li>
+              <li><b>New @BuildFlag runtime validator</b> - enforces <code>nonNull</code>, <code>notEmpty</code>, <code>group</code> mutual-requirement, regex <code>pattern</code>, and length/size <code>limit</code> constraints in the generated <code>build()</code>. Zero external dependencies.</li>
+              <li><b>New ClassBuilder bootstrap inspection</b> - ERROR-severity check that the three bootstrap methods (<code>builder()</code> / <code>from(T)</code> / <code>mutate()</code>) are materialised on the annotated class, with a quick-fix that inserts them all at once with matching <code>@XContract</code> annotations.</li>
+              <li><b>New ClassBuilder field inspection</b> - flags misuse of the companion annotations (e.g. <code>@Formattable</code> on a non-String field) at source-edit time.</li>
+            </ul>
+
+            <h3>1.0.5</h3>
+            <ul>
+              <li><b>@XContract annotation</b> - superset of JetBrains @Contract with relational comparisons, &amp;&amp;/|| grouping, named-parameter references, instanceof checks, typed throws returns, chained comparisons, and full pure/mutates support. A synthetic @Contract is inferred so IntelliJ data-flow works from a single annotation.</li>
+              <li><b>XContract Call-Site inspection</b> - flags calls whose literal arguments deterministically trigger a fail or throws clause.</li>
+              <li><b>ResourcePath Base-Prefix Usage inspection</b> - warns when a @ResourcePath(base="X") parameter is passed raw into a resource-loading call, with a quick-fix that prepends X/. Also flags base mismatches across call boundaries.</li>
               <li><b>ResourcePath freeze fix</b> - removed the project-wide ReferencesSearch that locked up the IDE on large utility files.</li>
               <li><b>Modernised PSI listener</b> - narrowed to annotation events only; replaced deprecated DaemonCodeAnalyzer.restart(PsiFile).</li>
-              <li><b>New settings</b> - additional resource-root paths, glob-based file exclusions, split severity dropdowns, inheritance and mutates checks.</li>
+              <li><b>Settings</b> - additional resource-root paths, glob-based file exclusions, split severity dropdowns, inheritance and mutates checks.</li>
             </ul>
         """.trimIndent()
     }
@@ -230,7 +240,7 @@ publishing {
 
             pom {
                 name.set("Simplified Annotations")
-                description.set("This plugin evaluates string expressions marked with the @ResourcePath annotation to check if resource files exist.")
+                description.set("Java annotations with companion IDE tooling: @ResourcePath (static resource-path validation), @XContract (superset of @Contract), and @ClassBuilder (annotation-processor builder generation with richer setter shapes than Lombok).")
                 url.set("https://github.com/SkyBlock-Simplified/" + project.name.lowercase())
                 artifactId = project.name.lowercase()
                 version = project.version.toString()
