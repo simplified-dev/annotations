@@ -147,6 +147,10 @@
                 groupName="Simplified Annotations"
         />
         <inferredAnnotationProvider implementation="dev.sbs.xcontract.XContractInferredAnnotationProvider"/>
+        <lang.psiAugmentProvider implementation="dev.sbs.classbuilder.editor.ClassBuilderAugmentProvider"/>
+        <codeInsight.lineMarkerProvider
+                language="JAVA"
+                implementationClass="dev.sbs.classbuilder.editor.ClassBuilderLineMarkerProvider"/>
         <postStartupActivity implementation="dev.sbs.resourcepath.ResourcePathStartupActivity"/>
     </extensions>
 </idea-plugin>
