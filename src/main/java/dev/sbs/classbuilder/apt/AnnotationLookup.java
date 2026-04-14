@@ -9,37 +9,37 @@ import java.util.Map;
 /**
  * Read-only helper for pulling attribute values off {@link AnnotationMirror}s.
  */
-final class AnnotationLookup {
+public final class AnnotationLookup {
 
-    boolean hasAnnotation(Element element, String annotationFqn) {
+    public boolean hasAnnotation(Element element, String annotationFqn) {
         return findMirror(element, annotationFqn) != null;
     }
 
-    AnnotationMirror findMirror(Element element, String annotationFqn) {
+    public AnnotationMirror findMirror(Element element, String annotationFqn) {
         for (AnnotationMirror m : element.getAnnotationMirrors()) {
             if (m.getAnnotationType().toString().equals(annotationFqn)) return m;
         }
         return null;
     }
 
-    String stringAttr(Element element, String annotationFqn, String attr, String fallback) {
+    public String stringAttr(Element element, String annotationFqn, String attr, String fallback) {
         Object raw = attrValue(element, annotationFqn, attr);
         return raw == null ? fallback : String.valueOf(raw);
     }
 
-    boolean booleanAttr(Element element, String annotationFqn, String attr, boolean fallback) {
+    public boolean booleanAttr(Element element, String annotationFqn, String attr, boolean fallback) {
         Object raw = attrValue(element, annotationFqn, attr);
         if (raw instanceof Boolean b) return b;
         return fallback;
     }
 
-    int intAttr(Element element, String annotationFqn, String attr, int fallback) {
+    public int intAttr(Element element, String annotationFqn, String attr, int fallback) {
         Object raw = attrValue(element, annotationFqn, attr);
         if (raw instanceof Integer i) return i;
         return fallback;
     }
 
-    String[] stringArrayAttr(Element element, String annotationFqn, String attr) {
+    public String[] stringArrayAttr(Element element, String annotationFqn, String attr) {
         Object raw = attrValue(element, annotationFqn, attr);
         if (raw == null) return new String[0];
         if (!(raw instanceof java.util.List<?> list)) return new String[0];

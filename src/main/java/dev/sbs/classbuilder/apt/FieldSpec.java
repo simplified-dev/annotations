@@ -112,7 +112,7 @@ public final class FieldSpec {
      * accessors (the annotations target fields only), so no {@link SourceIntrospector}
      * is threaded through this path.
      */
-    static FieldSpec fromInterfaceAccessor(ExecutableElement method, AnnotationLookup lookup) {
+    public static FieldSpec fromInterfaceAccessor(ExecutableElement method, AnnotationLookup lookup) {
         Builder b = new Builder();
         b.element = null;
         b.name = method.getSimpleName().toString();
@@ -170,7 +170,7 @@ public final class FieldSpec {
         }
     }
 
-    static FieldSpec from(VariableElement element, AnnotationLookup lookup, SourceIntrospector introspector) {
+    public static FieldSpec from(VariableElement element, AnnotationLookup lookup, SourceIntrospector introspector) {
         Builder b = new Builder();
         b.element = element;
         b.name = element.getSimpleName().toString();

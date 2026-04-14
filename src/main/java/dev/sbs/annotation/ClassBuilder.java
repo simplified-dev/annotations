@@ -151,6 +151,15 @@ public @interface ClassBuilder {
     boolean generateMutate() default true;
 
     /**
+     * Whether the annotation processor should inject a protected copy
+     * constructor ({@code protected T(Builder<?, ?> b)}) used by the injected
+     * self-typed builder hierarchy on abstract targets. Concrete targets
+     * outside a SuperBuilder chain ignore this attribute. Set to {@code false}
+     * when hand-writing a copy constructor with custom coercion logic.
+     */
+    boolean generateCopyConstructor() default true;
+
+    /**
      * Whether the generated {@code build()} method should call
      * {@code BuildFlagValidator.validate(this)} before invoking the
      * constructor or factory.

@@ -19,6 +19,7 @@ public record BuilderConfig(
     boolean generateBuilder,
     boolean generateFrom,
     boolean generateMutate,
+    boolean generateCopyConstructor,
     boolean validate,
     boolean emitContracts,
     String factoryMethod,

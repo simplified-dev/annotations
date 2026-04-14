@@ -188,14 +188,15 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         boolean generateBuilder = lookup.booleanAttr(target, ANNOTATION_FQN, "generateBuilder", true);
         boolean generateFrom = lookup.booleanAttr(target, ANNOTATION_FQN, "generateFrom", true);
         boolean generateMutate = lookup.booleanAttr(target, ANNOTATION_FQN, "generateMutate", true);
+        boolean generateCopyConstructor = lookup.booleanAttr(target, ANNOTATION_FQN, "generateCopyConstructor", true);
         boolean validate = lookup.booleanAttr(target, ANNOTATION_FQN, "validate", true);
         boolean emitContracts = lookup.booleanAttr(target, ANNOTATION_FQN, "emitContracts", true);
         String factoryMethod = lookup.stringAttr(target, ANNOTATION_FQN, "factoryMethod", "");
         Set<String> excludeSet = new HashSet<>(Arrays.asList(lookup.stringArrayAttr(target, ANNOTATION_FQN, "exclude")));
         return new BuilderConfig(
             builderName, builderMethodName, buildMethodName, fromMethodName, toBuilderMethodName,
-            methodPrefix, access, generateBuilder, generateFrom, generateMutate, validate,
-            emitContracts, factoryMethod, excludeSet
+            methodPrefix, access, generateBuilder, generateFrom, generateMutate,
+            generateCopyConstructor, validate, emitContracts, factoryMethod, excludeSet
         );
     }
 

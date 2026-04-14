@@ -1,12 +1,20 @@
 package dev.sbs.classbuilder.mutate;
 
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
+import dev.sbs.classbuilder.apt.AnnotationLookup;
 import dev.sbs.classbuilder.apt.BuilderConfig;
 import dev.sbs.classbuilder.apt.FieldSpec;
 
 import javax.annotation.processing.Messager;
+import javax.lang.model.element.Element;
+import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.TypeMirror;
 import javax.tools.Diagnostic;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -45,6 +53,19 @@ public final class BuilderMutator {
         // messages on synthesised members point at the @ClassBuilder declaration.
         bridge.treeMaker().at(target.pos);
 
+        boolean isAbstract = targetElement.getModifiers().contains(Modifier.ABSTRACT);
+        String annotatedSuper = findAnnotatedDirectSuperSimpleName(targetElement);
+
+        if (isAbstract || annotatedSuper != null) {
+            // For SuperBuilder subclasses, the bootstrap from(T) must populate
+            // inherited fields too - private fields on the parent Builder are
+            // not accessible from the subclass, so we route through the
+            // inherited public setters using the full chain of fields.
+            List<FieldSpec> chainFields = isAbstract ? fields : collectChainFields(targetElement, fields);
+            new SuperBuilderMutator(ctx, messager, annotatedSuper, chainFields).mutate();
+            return true;
+        }
+
         if (hasExistingNested(target, ctx.builderName())) {
             messager.printMessage(Diagnostic.Kind.NOTE,
                 "@ClassBuilder skipped injection: class " + ctx.targetSimpleName()
@@ -66,6 +87,63 @@ public final class BuilderMutator {
             if (def instanceof JCClassDecl c && c.name.toString().equals(nestedName)) return true;
         }
         return false;
+    }
+
+    /**
+     * Returns the simple name of the direct superclass when it also carries
+     * {@code @ClassBuilder}; {@code null} otherwise. Matches Lombok's policy
+     * of checking only the immediate superclass - skipping annotation between
+     * two annotated ancestors still lets inherited builder setters flow
+     * through, but the generated Builder extends only the nearest annotated
+     * parent's Builder.
+     */
+    /**
+     * Collects this type's fields plus every ancestor's fields up to and
+     * including the nearest ancestor carrying {@code @ClassBuilder}. Fields
+     * discovered higher in the chain come FIRST so generated
+     * {@code from(T)} populates parent slots before child slots, matching
+     * the invocation order of inherited setters.
+     */
+    private List<FieldSpec> collectChainFields(TypeElement start, List<FieldSpec> ownFields) {
+        List<FieldSpec> ancestors = new ArrayList<>();
+        TypeMirror superMirror = start.getSuperclass();
+        AnnotationLookup lookup = new AnnotationLookup();
+        while (superMirror instanceof DeclaredType dt) {
+            Element se = dt.asElement();
+            if (!(se instanceof TypeElement superType)) break;
+            if ("java.lang.Object".equals(superType.getQualifiedName().toString())) break;
+            // Collect this ancestor's own fields.
+            for (Element enc : superType.getEnclosedElements()) {
+                if (enc.getKind() != ElementKind.FIELD) continue;
+                if (enc.getModifiers().contains(Modifier.STATIC)) continue;
+                if (enc.getModifiers().contains(Modifier.TRANSIENT)) continue;
+                FieldSpec spec = FieldSpec.from((VariableElement) enc, lookup, null);
+                if (spec.ignored) continue;
+                ancestors.add(spec);
+            }
+            if (lookup.hasAnnotation(superType, "dev.sbs.annotation.ClassBuilder")) break;
+            superMirror = superType.getSuperclass();
+        }
+        // Walk collected ancestor tail-first to get top-down field order.
+        List<FieldSpec> out = new ArrayList<>(ancestors.size() + ownFields.size());
+        out.addAll(ancestors);
+        out.addAll(ownFields);
+        return out;
+    }
+
+    private static String findAnnotatedDirectSuperSimpleName(TypeElement target) {
+        TypeMirror superMirror = target.getSuperclass();
+        if (!(superMirror instanceof DeclaredType dt)) return null;
+        Element superElement = dt.asElement();
+        if (!(superElement instanceof TypeElement superType)) return null;
+        String superQn = superType.getQualifiedName().toString();
+        if ("java.lang.Object".equals(superQn)) return null;
+        for (var m : superType.getAnnotationMirrors()) {
+            if (m.getAnnotationType().toString().equals("dev.sbs.annotation.ClassBuilder")) {
+                return superType.getSimpleName().toString();
+            }
+        }
+        return null;
     }
 
 }

@@ -18,6 +18,7 @@ import dev.sbs.classbuilder.apt.FieldSpec;
 import javax.annotation.processing.Messager;
 import javax.lang.model.element.ElementKind;
 import javax.tools.Diagnostic;
+import java.util.Collection;
 
 /**
  * Injects the three bootstrap methods onto the target type:
@@ -41,13 +42,26 @@ final class BootstrapMethodFactory {
     private final Names names;
     private final Messager messager;
     private final boolean isRecord;
+    private final Collection<FieldSpec> fromFields;
 
     BootstrapMethodFactory(MutationContext ctx, Messager messager) {
+        this(ctx, messager, ctx.fields());
+    }
+
+    /**
+     * @param fromFields the fields to populate in {@code from(T)}. For
+     *        SuperBuilder subclasses this includes inherited fields so the
+     *        subclass's {@code from()} reads the full state, not only its own
+     *        slice. For standalone classes this is the same as
+     *        {@link MutationContext#fields()}.
+     */
+    BootstrapMethodFactory(MutationContext ctx, Messager messager, Collection<FieldSpec> fromFields) {
         this.ctx = ctx;
         this.make = ctx.make();
         this.names = ctx.names();
         this.messager = messager;
         this.isRecord = ctx.targetElement().getKind() == ElementKind.RECORD;
+        this.fromFields = fromFields;
     }
 
     /** Appends whichever bootstrap methods are missing from the target. */
@@ -136,13 +150,15 @@ final class BootstrapMethodFactory {
             builderType,
             make.NewClass(null, List.nil(), make.Ident(names.fromString(ctx.builderName())), List.nil(), null)
         ));
-        // b.field = <read from instance>;
-        for (FieldSpec f : ctx.fields()) {
-            JCExpression assign = make.Assign(
-                make.Select(make.Ident(names.fromString("b")), names.fromString(f.name)),
-                readFromInstance(f)
-            );
-            body.append(make.Exec(assign));
+        // Use the builder's public setters so the statement works identically
+        // on standalone concrete classes AND on SuperBuilder subclasses whose
+        // parent fields are inaccessible via direct field access.
+        for (FieldSpec f : fromFields) {
+            body.append(make.Exec(make.Apply(
+                List.nil(),
+                make.Select(make.Ident(names.fromString("b")), names.fromString(setterName(f))),
+                List.of(readFromInstance(f))
+            )));
         }
         body.append(make.Return(make.Ident(names.fromString("b"))));
 
@@ -245,6 +261,17 @@ final class BootstrapMethodFactory {
         );
         AstMarkers.markGenerated(method);
         return method;
+    }
+
+    /**
+     * Resolves the setter method name for a field using the same rules as the
+     * mutation-side {@link FieldMutators#setters}: {@code isX} for booleans,
+     * {@code <prefix>X} otherwise.
+     */
+    private String setterName(FieldSpec f) {
+        String prefix = f.isBoolean ? "is" : ctx.config().methodPrefix();
+        if (prefix.isEmpty()) return f.name;
+        return prefix + capitalise(f.name);
     }
 
     private static String capitalise(String s) {
