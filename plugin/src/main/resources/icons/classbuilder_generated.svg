@@ -11,7 +11,7 @@
   For dark-theme IDE compatibility, ship a companion *_dark.svg
   swapping #2C2C2C for a lighter gray.
 -->
-<svg xmlns="http://www.w3.org/2000/svg" height="20px" width="20px" viewBox="0 -960 960 960">
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="144 -864 720 720">
   <!-- shaft -->
   <path fill="#2C2C2C"
         d="M 504.23571,-453.97048 222.16819,-171.90296 172.90297,-221.16818 454.97049,-503.2357"/>
