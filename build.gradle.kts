@@ -208,10 +208,31 @@ tasks.named("check") { dependsOn(aptTest) }
 // custom file walking required.
 // ----------------------------------------------------------------------------
 
+// Gradle Module Metadata attaches the java component's apiElements and
+// runtimeElements variants, which the IntelliJ Platform Plugin backs with
+// the un-instrumented -base jar. Disabling the .module file strips that
+// reference so only the explicit artifacts below reach Maven Central.
+tasks.withType<GenerateModuleMetadata>().configureEach {
+    enabled = false
+}
+
 publishing {
     publications {
         create<MavenPublication>("release") {
-            from(components["java"])
+            // Explicit artifacts rather than from(components["java"]) - the
+            // IntelliJ Platform Plugin registers a "base" classifier variant
+            // (pre-instrumentation jar) on the java component which leaks
+            // into the Central bundle as an unwanted -base.jar. The project
+            // has no runtime dependencies so skipping components["java"]
+            // doesn't lose dependency metadata from the POM.
+            //
+            // composedJar (not jar) is the main artifact - the plugin's jar
+            // task output gets redirected to an empty stub when buildSearch-
+            // ableOptions is enabled, whereas composedJar always contains
+            // the full instrumented-classes + plugin.xml archive.
+            artifact(tasks.named("composedJar"))
+            artifact(tasks.named("sourcesJar"))
+            artifact(tasks.named("javadocJar"))
             artifactId = pluginArtifactId
 
             pom {
