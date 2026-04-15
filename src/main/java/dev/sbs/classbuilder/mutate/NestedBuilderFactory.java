@@ -26,12 +26,14 @@ final class NestedBuilderFactory {
     private final TreeMaker make;
     private final Names names;
     private final FieldMutators fieldMutators;
+    private final ContractAnnotations contracts;
 
     NestedBuilderFactory(MutationContext ctx) {
         this.ctx = ctx;
         this.make = ctx.make();
         this.names = ctx.names();
         this.fieldMutators = new FieldMutators(ctx);
+        this.contracts = new ContractAnnotations(ctx);
     }
 
     JCClassDecl build() {
@@ -107,8 +109,10 @@ final class NestedBuilderFactory {
 
         JCBlock block = make.Block(0, body.toList());
         JCExpression returnType = make.Ident(names.fromString(ctx.targetSimpleName()));
+        // build() always returns a fresh target instance; "-> new" without
+        // mutates or pure matches BuilderEmitter.emitBuildMethod.
         JCMethodDecl method = make.MethodDef(
-            make.Modifiers(Flags.PUBLIC),
+            make.Modifiers(Flags.PUBLIC, contracts.newReturnNullary()),
             names.fromString(ctx.config().buildMethodName()),
             returnType,
             List.nil(),

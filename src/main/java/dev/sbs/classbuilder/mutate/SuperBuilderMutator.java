@@ -48,6 +48,7 @@ final class SuperBuilderMutator {
     private final Messager messager;
     private final String annotatedSuperSimpleName; // null when root of chain
     private final Collection<FieldSpec> chainFields;
+    private final ContractAnnotations contracts;
 
     SuperBuilderMutator(MutationContext ctx, Messager messager, String annotatedSuperSimpleName,
                         Collection<FieldSpec> chainFields) {
@@ -57,6 +58,7 @@ final class SuperBuilderMutator {
         this.messager = messager;
         this.annotatedSuperSimpleName = annotatedSuperSimpleName;
         this.chainFields = chainFields;
+        this.contracts = new ContractAnnotations(ctx);
     }
 
     void mutate() {
@@ -118,11 +120,12 @@ final class SuperBuilderMutator {
         for (FieldSpec f : ctx.fields()) {
             for (JCMethodDecl s : self.setters(f)) defs.append(s);
         }
-        // protected abstract B self();
-        defs.append(abstractMethod(Flags.PROTECTED, "self", identType("B"), List.nil()));
-        // public abstract T build();
+        // protected abstract B self(); - returns this under self-typed generics.
+        defs.append(abstractMethod(Flags.PROTECTED, "self", identType("B"), List.nil(),
+            contracts.thisReturnNullary()));
+        // public abstract T build(); - each concrete subclass produces a fresh T.
         defs.append(abstractMethod(Flags.PUBLIC, ctx.config().buildMethodName(),
-            identType("T"), List.nil()));
+            identType("T"), List.nil(), contracts.newReturnNullary()));
 
         JCClassDecl nested = make.ClassDef(
             make.Modifiers(ctx.accessFlag() | Flags.STATIC | Flags.ABSTRACT),
@@ -159,7 +162,8 @@ final class SuperBuilderMutator {
 
         // @Override protected Builder self() { return this; }
         defs.append(concreteMethod(Flags.PROTECTED, "self", identType(ctx.builderName()),
-            List.nil(), List.of(make.Return(make.Ident(names._this)))));
+            List.nil(), List.of(make.Return(make.Ident(names._this))),
+            contracts.thisReturnNullary()));
 
         // @Override public Target build() { return new Target(this); }
         JCStatement buildReturn = make.Return(make.NewClass(
@@ -171,7 +175,8 @@ final class SuperBuilderMutator {
         defs.append(concreteMethod(Flags.PUBLIC, ctx.config().buildMethodName(),
             make.Ident(names.fromString(ctx.targetSimpleName())),
             List.nil(),
-            List.of(buildReturn)));
+            List.of(buildReturn),
+            contracts.newReturnNullary()));
 
         // extends Super.Builder<Target, Builder>
         JCExpression extendsExpr = make.TypeApply(
@@ -261,9 +266,10 @@ final class SuperBuilderMutator {
     }
 
     private JCMethodDecl abstractMethod(long flags, String name, JCExpression returnType,
-                                        List<JCVariableDecl> params) {
+                                        List<JCVariableDecl> params,
+                                        List<com.sun.tools.javac.tree.JCTree.JCAnnotation> annotations) {
         JCMethodDecl m = make.MethodDef(
-            make.Modifiers(flags | Flags.ABSTRACT),
+            make.Modifiers(flags | Flags.ABSTRACT, annotations),
             names.fromString(name),
             returnType,
             List.nil(),
@@ -277,10 +283,11 @@ final class SuperBuilderMutator {
     }
 
     private JCMethodDecl concreteMethod(long flags, String name, JCExpression returnType,
-                                        List<JCVariableDecl> params, List<JCStatement> body) {
+                                        List<JCVariableDecl> params, List<JCStatement> body,
+                                        List<com.sun.tools.javac.tree.JCTree.JCAnnotation> annotations) {
         JCBlock block = make.Block(0, body);
         JCMethodDecl m = make.MethodDef(
-            make.Modifiers(flags),
+            make.Modifiers(flags, annotations),
             names.fromString(name),
             returnType,
             List.nil(),

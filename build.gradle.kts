@@ -172,6 +172,18 @@ configurations {
     named("aptTestRuntimeOnly") { extendsFrom(configurations.testRuntimeOnly.get()) }
 }
 
+// aptTest-only deps: declared here because the source set's configurations
+// only exist after sourceSets { create("aptTest") { ... } } above.
+// ASM inspects class-file-retention @XContract annotations on generated
+// builder methods - reflection can't see them, so we parse the class-file
+// bytes directly.
+dependencies {
+    // 9.8+ is needed to parse class-file version 69 (JDK 25). Older ASM
+    // throws "Unsupported class file major version 69" on classes compiled
+    // by the JDK-25 aptTest cross-sweep.
+    "aptTestImplementation"("org.ow2.asm:asm:9.8")
+}
+
 val aptTest by tasks.registering(Test::class) {
     description = "Runs annotation-processor tests outside the IntelliJ test framework."
     group = "verification"

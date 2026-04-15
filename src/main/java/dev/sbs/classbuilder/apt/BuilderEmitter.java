@@ -373,7 +373,13 @@ final class BuilderEmitter {
         }
         boolean useFactory = !config.factoryMethod().isEmpty();
         String constructorTarget;
-        if (targetKind == TargetKind.INTERFACE) {
+        if (targetKind == TargetKind.INTERFACE && useFactory) {
+            // generateImpl=false path (and any interface target that routes
+            // construction through a static factory). factoryMethod must
+            // return the interface type; the processor can't statically
+            // verify this, so it's documented in ClassBuilder's Javadoc.
+            constructorTarget = targetSimpleName + "." + config.factoryMethod();
+        } else if (targetKind == TargetKind.INTERFACE) {
             constructorTarget = "new " + (interfaceImplName == null ? targetSimpleName + "Impl" : interfaceImplName);
         } else if (useFactory) {
             constructorTarget = targetSimpleName + "." + config.factoryMethod();

@@ -111,19 +111,35 @@ public class ClassBuilderProcessor extends AbstractProcessor {
 
     private void processInterface(TypeElement target, Messager messager) throws IOException {
         BuilderConfig config = extractConfig(target);
+
+        // generateImpl=false means the user takes responsibility for producing
+        // the instance build() constructs. That only works if factoryMethod is
+        // set so build() has something concrete to call; otherwise the
+        // generator has no way to fulfil its contract.
+        if (!config.generateImpl() && config.factoryMethod().isEmpty()) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@ClassBuilder(generateImpl = false) on an interface requires factoryMethod "
+                    + "to be set - build() needs an explicit factory to call when no <Name>Impl is generated.",
+                target);
+            return;
+        }
+
         List<FieldSpec> fields = collectFieldsFromInterface(target, config);
         String packageName = packageOf(target);
 
-        // Impl class first
         String implName = target.getSimpleName().toString() + "Impl";
-        String implSource = InterfaceImplEmitter.emit(target, packageName, implName, fields);
-        String implQn = packageName.isEmpty() ? implName : packageName + "." + implName;
-        JavaFileObject implFile = processingEnv.getFiler().createSourceFile(implQn, target);
-        try (Writer w = implFile.openWriter()) { w.write(implSource); }
+        if (config.generateImpl()) {
+            // Impl class first
+            String implSource = InterfaceImplEmitter.emit(target, packageName, implName, fields);
+            String implQn = packageName.isEmpty() ? implName : packageName + "." + implName;
+            JavaFileObject implFile = processingEnv.getFiler().createSourceFile(implQn, target);
+            try (Writer w = implFile.openWriter()) { w.write(implSource); }
+        }
 
-        // Builder second - build() returns the interface, new impl instance
+        // Builder second - build() returns the interface, populated via Impl
+        // constructor or (when generateImpl=false) the configured factoryMethod.
         BuilderEmitter emitter = new BuilderEmitter(target, packageName, config, fields, messager, false, BuilderEmitter.TargetKind.INTERFACE);
-        emitter.setInterfaceImplName(implName);
+        if (config.generateImpl()) emitter.setInterfaceImplName(implName);
         String source = emitter.emit();
         String qualifiedName = packageName.isEmpty() ? emitter.builderClassName() : packageName + "." + emitter.builderClassName();
         JavaFileObject file = processingEnv.getFiler().createSourceFile(qualifiedName, target);
@@ -160,6 +176,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         boolean generateFrom = lookup.booleanAttr(target, ANNOTATION_FQN, "generateFrom", true);
         boolean generateMutate = lookup.booleanAttr(target, ANNOTATION_FQN, "generateMutate", true);
         boolean generateCopyConstructor = lookup.booleanAttr(target, ANNOTATION_FQN, "generateCopyConstructor", true);
+        boolean generateImpl = lookup.booleanAttr(target, ANNOTATION_FQN, "generateImpl", true);
         boolean validate = lookup.booleanAttr(target, ANNOTATION_FQN, "validate", true);
         boolean emitContracts = lookup.booleanAttr(target, ANNOTATION_FQN, "emitContracts", true);
         String factoryMethod = lookup.stringAttr(target, ANNOTATION_FQN, "factoryMethod", "");
@@ -167,7 +184,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         return new BuilderConfig(
             builderName, builderMethodName, buildMethodName, fromMethodName, toBuilderMethodName,
             methodPrefix, access, generateBuilder, generateFrom, generateMutate,
-            generateCopyConstructor, validate, emitContracts, factoryMethod, excludeSet
+            generateCopyConstructor, generateImpl, validate, emitContracts, factoryMethod, excludeSet
         );
     }
 

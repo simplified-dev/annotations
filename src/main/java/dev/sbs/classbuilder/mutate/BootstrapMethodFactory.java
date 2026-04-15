@@ -43,6 +43,7 @@ final class BootstrapMethodFactory {
     private final Messager messager;
     private final boolean isRecord;
     private final Collection<FieldSpec> fromFields;
+    private final ContractAnnotations contracts;
 
     BootstrapMethodFactory(MutationContext ctx, Messager messager) {
         this(ctx, messager, ctx.fields());
@@ -62,6 +63,7 @@ final class BootstrapMethodFactory {
         this.messager = messager;
         this.isRecord = ctx.targetElement().getKind() == ElementKind.RECORD;
         this.fromFields = fromFields;
+        this.contracts = new ContractAnnotations(ctx);
     }
 
     /** Appends whichever bootstrap methods are missing from the target. */
@@ -120,8 +122,9 @@ final class BootstrapMethodFactory {
         JCExpression newBuilder = make.NewClass(null, List.nil(), builderType, List.nil(), null);
         JCBlock body = make.Block(0, List.of(make.Return(newBuilder)));
 
+        // builder() constructs a fresh Builder; "-> new" mirrors build().
         JCMethodDecl method = make.MethodDef(
-            make.Modifiers(ctx.accessFlag() | Flags.STATIC),
+            make.Modifiers(ctx.accessFlag() | Flags.STATIC, contracts.newReturnNullary()),
             names.fromString(ctx.config().builderMethodName()),
             make.Ident(names.fromString(ctx.builderName())),
             List.nil(),
@@ -168,8 +171,10 @@ final class BootstrapMethodFactory {
         }
         body.append(make.Return(make.Ident(names.fromString("b"))));
 
+        // from(T) reads the target instance without mutating it; "_ -> new"
+        // with pure=true matches BuilderEmitter.emitFromMethod.
         JCMethodDecl method = make.MethodDef(
-            make.Modifiers(ctx.accessFlag() | Flags.STATIC),
+            make.Modifiers(ctx.accessFlag() | Flags.STATIC, contracts.newReturnPureUnary()),
             names.fromString(ctx.config().fromMethodName()),
             builderType,
             List.nil(),
@@ -254,7 +259,10 @@ final class BootstrapMethodFactory {
         );
         JCBlock body = make.Block(0, List.of(make.Return(fromCall)));
 
-        JCModifiers mods = make.Modifiers(ctx.accessFlag());
+        // mutate() reads this implicitly and returns a fresh Builder; "-> new"
+        // captures the fresh-return shape without pure (the implicit this
+        // read is treated like a parameterless factory from a caller POV).
+        JCModifiers mods = make.Modifiers(ctx.accessFlag(), contracts.newReturnNullary());
         JCMethodDecl method = make.MethodDef(
             mods,
             names.fromString(ctx.config().toBuilderMethodName()),

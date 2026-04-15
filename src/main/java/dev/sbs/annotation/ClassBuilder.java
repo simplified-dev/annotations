@@ -174,9 +174,16 @@ public @interface ClassBuilder {
     boolean emitContracts() default true;
 
     /**
-     * For {@code interface} and {@code abstract class} targets only: whether
-     * to generate a concrete {@code <TypeName>Impl} that the builder's
-     * {@code build()} returns. Ignored for concrete class and record targets.
+     * For {@code interface} targets only: whether to generate a concrete
+     * {@code <TypeName>Impl} that the builder's {@code build()} returns.
+     * Ignored for concrete class, record, and abstract-class targets.
+     *
+     * <p>When set to {@code false}, {@link #factoryMethod()} must also be
+     * set; {@code build()} then delegates to that static factory instead of
+     * {@code new <TypeName>Impl(...)}. The factory's return type must be the
+     * interface type (compiler-enforced at the call site, not at annotation-
+     * processing time). Setting both to empty on an interface target is a
+     * compile error.
      */
     boolean generateImpl() default true;
 

@@ -39,12 +39,14 @@ final class SelfTypedSetters {
     private final TreeMaker make;
     private final Names names;
     private final JavacTypeFactory types;
+    private final ContractAnnotations contracts;
 
     SelfTypedSetters(MutationContext ctx) {
         this.ctx = ctx;
         this.make = ctx.make();
         this.names = ctx.names();
         this.types = ctx.types();
+        this.contracts = new ContractAnnotations(ctx);
     }
 
     /** Mirrors {@link FieldMutators#setters} but always with {@code return self();}. */
@@ -433,8 +435,16 @@ final class SelfTypedSetters {
     private JCMethodDecl method(String methodName, List<JCVariableDecl> params, List<JCStatement> body) {
         JCBlock block = make.Block(0, body);
         JCExpression returnType = make.Ident(names.fromString("B"));
+        // Contract mirrors FieldMutators: every setter returns this via
+        // self() and mutates the builder. Arity picks the left-hand side.
+        List<JCAnnotation> contract = switch (params.size()) {
+            case 0 -> contracts.thisReturnNullary();
+            case 1 -> contracts.thisReturnUnary();
+            case 2 -> contracts.thisReturnBinary();
+            default -> List.nil();
+        };
         JCMethodDecl m = make.MethodDef(
-            make.Modifiers(Flags.PUBLIC),
+            make.Modifiers(Flags.PUBLIC, contract),
             names.fromString(methodName),
             returnType,
             List.nil(),

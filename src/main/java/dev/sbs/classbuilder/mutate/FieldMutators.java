@@ -39,12 +39,14 @@ final class FieldMutators {
     private final TreeMaker make;
     private final Names names;
     private final JavacTypeFactory types;
+    private final ContractAnnotations contracts;
 
     FieldMutators(MutationContext ctx) {
         this.ctx = ctx;
         this.make = ctx.make();
         this.names = ctx.names();
         this.types = ctx.types();
+        this.contracts = new ContractAnnotations(ctx);
     }
 
     /** Returns every setter the field should emit on the nested Builder. */
@@ -487,16 +489,35 @@ final class FieldMutators {
     /**
      * Core method-declaration builder. Public modifier; return type is the
      * enclosing nested Builder's simple name so inherited this-chaining works
-     * without qualification.
+     * without qualification. The attached {@code @XContract} (when
+     * {@code emitContracts = true}) is chosen by parameter arity: every
+     * setter shape here returns {@code this} and mutates the builder.
      */
     private JCMethodDecl methodDefRaw(String methodName, List<JCVariableDecl> params, List<JCStatement> body) {
-        JCModifiers mods = make.Modifiers(Flags.PUBLIC);
+        JCModifiers mods = make.Modifiers(Flags.PUBLIC, thisReturnContract(params.size()));
         Name name = names.fromString(methodName);
         JCExpression returnType = make.Ident(names.fromString(ctx.builderName()));
         JCBlock block = make.Block(0, body);
         JCMethodDecl method = make.MethodDef(mods, name, returnType, List.nil(), params, List.nil(), block, null);
         AstMarkers.markGenerated(method);
         return method;
+    }
+
+    /**
+     * Picks the right {@code @XContract} flavour by parameter count. All
+     * setters here return {@code this} and mutate the builder - only the
+     * left-hand side of the contract ({@code "_"}, {@code "_, _"}, or nothing)
+     * varies with arity. Arities > 2 fall back to no contract rather than
+     * guessing at a shape that hasn't been established by the existing
+     * emitter vocabulary.
+     */
+    private List<com.sun.tools.javac.tree.JCTree.JCAnnotation> thisReturnContract(int arity) {
+        return switch (arity) {
+            case 0 -> contracts.thisReturnNullary();
+            case 1 -> contracts.thisReturnUnary();
+            case 2 -> contracts.thisReturnBinary();
+            default -> List.nil();
+        };
     }
 
     private String methodName(String fieldName, boolean forceBoolean) {
