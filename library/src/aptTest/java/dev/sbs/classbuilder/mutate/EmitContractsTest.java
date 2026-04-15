@@ -115,18 +115,18 @@ public class EmitContractsTest {
     }
 
     @Test
-    public void singularSetters_carryExpectedContracts() throws Exception {
+    public void collectorSetters_carryExpectedContracts() throws Exception {
         // Covers the add/put/clear family that has a mix of arities.
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.Bag",
             "package demo;",
             "import dev.sbs.annotation.ClassBuilder;",
-            "import dev.sbs.annotation.Singular;",
+            "import dev.sbs.annotation.Collector;",
             "import java.util.List;",
             "import java.util.Map;",
             "@ClassBuilder(validate = false)",
             "public class Bag {",
-            "    @Singular List<String> tags;",
-            "    @Singular(\"entry\") Map<String, Integer> entries;",
+            "    @Collector(singular = true, clearable = true) List<String> tags;",
+            "    @Collector(singularMethodName = \"entry\", singular = true, clearable = true) Map<String, Integer> entries;",
             "    public Bag(List<String> tags, Map<String, Integer> entries) {",
             "        this.tags = tags; this.entries = entries;",
             "    }",

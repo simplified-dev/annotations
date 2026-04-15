@@ -8,7 +8,7 @@
 // should still be duplicated for locality, unless it grows past ~30 lines.
 
 plugins {
-    id("org.jetbrains.intellij.platform") version "2.6.0" apply false
+    id("org.jetbrains.intellij.platform") version "2.14.0" apply false
     id("org.jetbrains.changelog") version "2.2.1" apply false
 }
 

@@ -48,14 +48,19 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
             package dev.sbs.annotation;
             import java.lang.annotation.*;
             @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
-            public @interface Formattable { boolean nullable() default false; }
+            public @interface Formattable { }
             """);
-        myFixture.addFileToProject("dev/sbs/annotation/Singular.java",
+        myFixture.addFileToProject("dev/sbs/annotation/Collector.java",
             """
             package dev.sbs.annotation;
             import java.lang.annotation.*;
             @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
-            public @interface Singular { String value() default ""; }
+            public @interface Collector {
+                String singularMethodName() default "";
+                boolean singular() default false;
+                boolean clearable() default false;
+                boolean compute() default false;
+            }
             """);
     }
 
@@ -121,6 +126,166 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
         assertEquals(0, shape.findMethodsByName("builder", false).length);
         assertEquals(0, shape.findMethodsByName("from", false).length);
         assertEquals(0, shape.findMethodsByName("mutate", false).length);
+    }
+
+    /**
+     * Mirrors what users actually see when typing {@code Target.builder().<caret>}:
+     * the IDE's completion engine, not just {@code findMethodsByName}. If this
+     * passes but the live IDE shows nothing, the bug is in plugin.xml wiring
+     * or daemon state, not in the augment provider.
+     */
+    public void testCompletion_setterMethodsVisibleAfterBuilderCall() {
+        myFixture.configureByText("Doc.java",
+            """
+            import dev.sbs.annotation.ClassBuilder;
+            @ClassBuilder
+            public class Doc {
+                String title;
+                int pages;
+
+                public static void main(String[] args) {
+                    Doc.builder().<caret>;
+                }
+            }
+            """);
+        myFixture.completeBasic();
+        java.util.List<String> lookup = myFixture.getLookupElementStrings();
+        assertNotNull("completion popup must populate", lookup);
+        assertTrue("withTitle should show up: actual=" + lookup, lookup.contains("withTitle"));
+        assertTrue("withPages should show up: actual=" + lookup, lookup.contains("withPages"));
+        assertTrue("build should show up: actual=" + lookup, lookup.contains("build"));
+    }
+
+    /**
+     * Direct check of the {@code GeneratedBuilderClass.getMethods()} override
+     * used by the Lombok-style lazy materialisation pattern. If this returns
+     * empty, the augment-provider re-entry chain is broken.
+     */
+    public void testGetMethods_routesThroughAugmentProvider() {
+        PsiFile file = myFixture.configureByText("Page.java",
+            """
+            import dev.sbs.annotation.ClassBuilder;
+            @ClassBuilder
+            public class Page { String title; }
+            """);
+        PsiClass page = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+        PsiClass synthBuilder = page.getInnerClasses()[0];
+        PsiMethod[] methods = synthBuilder.getMethods();
+        assertTrue("getMethods() must return setters via augment provider, got " + methods.length,
+            methods.length >= 2);  // withTitle + build, at minimum
+    }
+
+    /**
+     * Same-file repro mirroring what the user types: in-class call to
+     * builder().withX(...).build(). User reports "cannot access T.Builder.X"
+     * for setters but build() works. Highlighter must not produce any
+     * "Cannot access" errors on the synth Builder or its members.
+     *
+     * <p>Uses primitive int instead of String so the mock JDK's missing
+     * java.lang.String doesn't pollute the assertion with unrelated errors.
+     */
+    public void testSetterInvocation_passesHighlighter_sameFile() {
+        myFixture.configureByText("Doc.java",
+            """
+            import dev.sbs.annotation.ClassBuilder;
+            @ClassBuilder
+            public class Doc {
+                int rank;
+                public static Doc make() {
+                    return Doc.builder().withRank(7).build();
+                }
+            }
+            """);
+        java.util.List<com.intellij.codeInsight.daemon.impl.HighlightInfo> highlights =
+            myFixture.doHighlighting();
+        for (com.intellij.codeInsight.daemon.impl.HighlightInfo info : highlights) {
+            String desc = info.getDescription();
+            if (desc != null && desc.contains("Cannot access")) {
+                fail("synth Builder/setter should be accessible, got: " + desc);
+            }
+        }
+    }
+
+    /**
+     * Cross-package variant - exercises {@link ClassBuilderElementFinder}'s
+     * bridge from {@link com.intellij.psi.JavaPsiFacade#findClass} to the
+     * augmented inner class. Without that finder the highlighter calls
+     * {@code findClass("a.Doc.Builder", scope)} which returns null (augment
+     * providers don't participate in the global class index), and reports
+     * "Cannot access a.Doc.Builder" on every method-chain entry.
+     */
+    public void testSetterInvocation_passesHighlighter_crossPackage() {
+        myFixture.addFileToProject("a/Doc.java",
+            """
+            package a;
+            import dev.sbs.annotation.ClassBuilder;
+            @ClassBuilder
+            public class Doc {
+                int rank;
+            }
+            """);
+        myFixture.configureByText("Caller.java",
+            """
+            import a.Doc;
+            public class Caller {
+                public static Doc make() {
+                    return Doc.builder().withRank(7).build();
+                }
+            }
+            """);
+        java.util.List<com.intellij.codeInsight.daemon.impl.HighlightInfo> highlights =
+            myFixture.doHighlighting();
+        for (com.intellij.codeInsight.daemon.impl.HighlightInfo info : highlights) {
+            String desc = info.getDescription();
+            if (desc != null && desc.contains("Cannot access")) {
+                fail("cross-package synth Builder must be accessible, got: " + desc);
+            }
+        }
+    }
+
+    /** The synth Builder class itself must report PUBLIC + STATIC. */
+    public void testBuilderClass_isPublicStatic() {
+        myFixture.configureByText("Doc.java",
+            """
+            package a;
+            import dev.sbs.annotation.ClassBuilder;
+            @ClassBuilder public class Doc { String title; }
+            """);
+        PsiClass target = ((com.intellij.psi.PsiJavaFile) myFixture.getFile()).getClasses()[0];
+        PsiClass builder = target.getInnerClasses()[0];
+
+        assertTrue("Builder must be PUBLIC",
+            builder.hasModifierProperty(PsiModifier.PUBLIC));
+        assertTrue("Builder must be STATIC",
+            builder.hasModifierProperty(PsiModifier.STATIC));
+        assertNotNull("Builder modifier list must exist",
+            builder.getModifierList());
+        assertTrue("modifier list must directly report PUBLIC",
+            builder.getModifierList().hasModifierProperty(PsiModifier.PUBLIC));
+    }
+
+    public void testSetters_publicAndAccessibleFromCallSite() {
+        myFixture.configureByText("Caller.java",
+            """
+            import dev.sbs.annotation.ClassBuilder;
+            @ClassBuilder
+            public class Caller {
+                String title;
+                int rank;
+            }
+            """);
+        com.intellij.psi.PsiClass target =
+            ((com.intellij.psi.PsiJavaFile) myFixture.getFile()).getClasses()[0];
+        com.intellij.psi.PsiClass builder = target.getInnerClasses()[0];
+
+        for (PsiMethod m : builder.getMethods()) {
+            assertTrue(m.getName() + " must be PUBLIC",
+                m.hasModifierProperty(PsiModifier.PUBLIC));
+            com.intellij.psi.PsiClass containing = m.getContainingClass();
+            assertNotNull(m.getName() + " must have a containing class", containing);
+            assertSame(m.getName() + " must report synth Builder as containing class",
+                builder, containing);
+        }
     }
 
     public void testNestedBuilderClassSynthesized() {
@@ -289,57 +454,83 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
             withLabels[0].getParameterList().getParameter(0).isVarArgs());
     }
 
-    /** {@code @Singular} on a list produces varargs-replace / iterable-replace / add / clear. */
-    public void testSingularListSetters() {
+    /**
+     * Bare {@code @Collector} on a list: only varargs + iterable (no singular
+     * add / clear since those are opt-in via attributes).
+     */
+    public void testCollectorList_bulkOnlyByDefault() {
         PsiClass builder = builderFor("Cart",
             """
             import dev.sbs.annotation.ClassBuilder;
-            import dev.sbs.annotation.Singular;
+            import dev.sbs.annotation.Collector;
             import java.util.List;
             @ClassBuilder
             public class Cart {
-                @Singular List<String> items;
+                @Collector List<String> items;
             }
             """);
         PsiMethod[] withItems = builder.findMethodsByName("withItems", false);
         assertEquals("varargs-replace + iterable-replace", 2, withItems.length);
-        // With the default "with" prefix the singular add becomes withItem,
-        // matching what BuilderEmitter / FieldMutators emit.
-        assertEquals("add single",
-            1, builder.findMethodsByName("withItem", false).length);
-        assertEquals("clear",
-            1, builder.findMethodsByName("clearItems", false).length);
+        assertEquals("no singular add without @Collector(singular=true)",
+            0, builder.findMethodsByName("withItem", false).length);
+        assertEquals("no clear without @Collector(clearable=true)",
+            0, builder.findMethodsByName("clearItems", false).length);
     }
 
-    /** {@code @Singular} on a map produces replace / put / clear. */
-    public void testSingularMapSetters() {
+    /**
+     * {@code @Collector(singular, clearable)} on a list adds the single-
+     * element setter and clear method to the bulk overloads.
+     */
+    public void testCollectorList_singularAndClearableOptIn() {
+        PsiClass builder = builderFor("Cart",
+            """
+            import dev.sbs.annotation.ClassBuilder;
+            import dev.sbs.annotation.Collector;
+            import java.util.List;
+            @ClassBuilder
+            public class Cart {
+                @Collector(singular = true, clearable = true) List<String> items;
+            }
+            """);
+        assertEquals("varargs + iterable", 2, builder.findMethodsByName("withItems", false).length);
+        assertEquals("add single", 1, builder.findMethodsByName("withItem", false).length);
+        assertEquals("clear", 1, builder.findMethodsByName("clearItems", false).length);
+    }
+
+    /**
+     * {@code @Collector} on a map with all opt-ins: replace + put + clear +
+     * putIfAbsent.
+     */
+    public void testCollectorMap_fullOptIn() {
         PsiClass builder = builderFor("Bag",
             """
             import dev.sbs.annotation.ClassBuilder;
-            import dev.sbs.annotation.Singular;
+            import dev.sbs.annotation.Collector;
             import java.util.Map;
             @ClassBuilder
             public class Bag {
-                @Singular Map<String, Integer> counts;
+                @Collector(singular = true, clearable = true, compute = true) Map<String, Integer> counts;
             }
             """);
         assertEquals("replace", 1, builder.findMethodsByName("withCounts", false).length);
-        assertEquals("put",
-            1, builder.findMethodsByName("putCount", false).length);
-        assertEquals("clear",
-            1, builder.findMethodsByName("clearCounts", false).length);
+        assertEquals("put", 1, builder.findMethodsByName("putCount", false).length);
+        assertEquals("putIfAbsent", 1, builder.findMethodsByName("putCountIfAbsent", false).length);
+        assertEquals("clear", 1, builder.findMethodsByName("clearCounts", false).length);
     }
 
-    /** {@code @Singular("flavor")} lets the caller override the derived singular name. */
-    public void testSingularCustomName() {
+    /**
+     * {@code @Collector(singularMethodName = "flavor")} overrides the derived
+     * singular name on the single-element setter.
+     */
+    public void testCollectorCustomSingularName() {
         PsiClass builder = builderFor("Shop",
             """
             import dev.sbs.annotation.ClassBuilder;
-            import dev.sbs.annotation.Singular;
+            import dev.sbs.annotation.Collector;
             import java.util.List;
             @ClassBuilder
             public class Shop {
-                @Singular("flavor") List<String> flavors;
+                @Collector(singular = true, singularMethodName = "flavor") List<String> flavors;
             }
             """);
         // Default "with" prefix + explicit singular "flavor" -> withFlavor.

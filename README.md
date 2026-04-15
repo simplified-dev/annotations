@@ -12,7 +12,7 @@ Three Java annotations with matching IntelliJ IDEA tooling:
 - **`@ClassBuilder`** - generates a `public static class Builder` via javac
   AST mutation, covering classes, records, and interfaces. Full Lombok
   `@Builder` parity plus richer setter shapes (boolean pair + `@Negate`
-  inverse, `Optional` dual, `@Singular` add/put/clear, `@Formattable`
+  inverse, `Optional` dual, `@Collector` bulk + opt-in add/put/clear, `@Formattable`
   `@PrintFormat` overload) and a runtime `@BuildFlag` validator.
 
 Published to:
@@ -197,7 +197,7 @@ import java.util.Optional;
 @ClassBuilder
 public class Pizza {
     @BuildFlag(nonNull = true) String name;
-    @Singular List<String> toppings;
+    @Collector(singular = true, clearable = true) List<String> toppings;
     @Formattable Optional<String> description;
     @Negate("vegetarian") boolean containsMeat;
 }

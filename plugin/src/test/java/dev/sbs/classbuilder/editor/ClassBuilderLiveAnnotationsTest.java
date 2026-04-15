@@ -54,7 +54,7 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
             package dev.sbs.annotation;
             import java.lang.annotation.*;
             @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
-            public @interface Formattable { boolean nullable() default false; }
+            public @interface Formattable { }
             """);
         myFixture.addFileToProject("dev/sbs/annotation/BuildFlag.java",
             """
@@ -87,11 +87,124 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
         PsiParameter fmt = formattable.getParameterList().getParameter(0);
         PsiParameter args = formattable.getParameterList().getParameter(1);
 
-        assertNotNull(fmt.getModifierList().findAnnotation(PRINT_FORMAT_FQN));
-        assertNotNull("format param @NotNull (non-formattable-nullable, no @BuildFlag)",
+        assertNotNull("format param must carry @PrintFormat",
+            fmt.getModifierList().findAnnotation(PRINT_FORMAT_FQN));
+        // Neither @NotNull nor @Nullable on the field -> neutral default on
+        // the format param. The synth shouldn't impose a nullability the user
+        // didn't ask for.
+        assertNull("format param must NOT default to @NotNull when field has neither annotation",
             fmt.getModifierList().findAnnotation(NOT_NULL_FQN));
+        assertNull("format param must NOT default to @Nullable when field has neither annotation",
+            fmt.getModifierList().findAnnotation(NULLABLE_FQN));
         assertTrue("args is varargs", args.isVarArgs());
         assertNotNull("args @Nullable", args.getModifierList().findAnnotation(NULLABLE_FQN));
+    }
+
+    /**
+     * Brief-hover tooltip renders each parameter through
+     * {@code JavaDocInfoGenerator.generateType(..., annotated=true)} which
+     * reads TYPE-use annotations, not the parameter's modifier list. A synth
+     * param with {@code @NotNull} only on the modifier list will have correct
+     * null-flow analysis but blank brief hover. Verify the type carries the
+     * same annotation too.
+     */
+    public void testNotNullField_annotationAttachesToTypeUse() {
+        PsiClass builder = builderFor("Doc",
+            """
+            import dev.sbs.annotation.ClassBuilder;
+            import org.jetbrains.annotations.NotNull;
+            @ClassBuilder
+            public class Doc { @NotNull String title; }
+            """);
+
+        myFixture.addFileToProject("org/jetbrains/annotations/NotNull.java",
+            """
+            package org.jetbrains.annotations;
+            import java.lang.annotation.*;
+            @Target({ElementType.TYPE_USE, ElementType.PARAMETER, ElementType.FIELD, ElementType.METHOD})
+            @Retention(RetentionPolicy.CLASS)
+            public @interface NotNull {}
+            """);
+
+        PsiMethod setter = builder.findMethodsByName("withTitle", false)[0];
+        PsiParameter title = setter.getParameterList().getParameter(0);
+        com.intellij.psi.PsiAnnotation[] typeAnnotations = title.getType().getAnnotations();
+        boolean hasNotNull = false;
+        for (com.intellij.psi.PsiAnnotation a : typeAnnotations) {
+            if (NOT_NULL_FQN.equals(a.getQualifiedName())) { hasNotNull = true; break; }
+        }
+        assertTrue("@NotNull must be attached to the parameter's TYPE (type-use), got "
+                + typeAnnotations.length + " type annotations",
+            hasNotNull);
+    }
+
+    /**
+     * Multi-vararg invocation must resolve against the synth formattable setter.
+     * Regression test for the bug where the varargs param was constructed with
+     * raw {@code Object} type instead of {@code PsiEllipsisType} wrapping
+     * {@code Object[]} - a call with 2+ trailing args then either failed to
+     * resolve or bound to the wrong method.
+     */
+    public void testStringFormattable_varargsAcceptsMultipleArgs() {
+        myFixture.configureByText("Greeting.java",
+            """
+            import dev.sbs.annotation.ClassBuilder;
+            import dev.sbs.annotation.Formattable;
+            @ClassBuilder
+            public class Greeting {
+                @Formattable String message;
+            }
+            """);
+        com.intellij.psi.PsiClass target =
+            ((com.intellij.psi.PsiJavaFile) myFixture.getFile()).getClasses()[0];
+        com.intellij.psi.PsiClass builder = target.getInnerClasses()[0];
+        com.intellij.psi.PsiMethod formattable = null;
+        for (com.intellij.psi.PsiMethod m : builder.findMethodsByName("withMessage", false)) {
+            if (m.getParameterList().getParametersCount() == 2) { formattable = m; break; }
+        }
+        assertNotNull("formattable overload must exist", formattable);
+        com.intellij.psi.PsiParameter args = formattable.getParameterList().getParameter(1);
+        assertTrue("args must be isVarArgs()", args.isVarArgs());
+        assertTrue("args type must be PsiEllipsisType, got "
+                + args.getType().getClass().getSimpleName() + " (" + args.getType().getCanonicalText() + ")",
+            args.getType() instanceof com.intellij.psi.PsiEllipsisType);
+    }
+
+    /**
+     * Direct check that the platform's printf inspection fires on synth
+     * formattable setters - mirrors what the user actually sees. Catches
+     * regressions where {@code @PrintFormat} is attached to the parameter
+     * but isn't surfaced in a way that {@link com.intellij.psi.PsiParameter#getAnnotation}
+     * (or {@code AnnotationUtil}) can find.
+     */
+    public void testStringFormattable_propagatesToPrintFormatLookup() {
+        myFixture.configureByText("Greeting.java",
+            """
+            import dev.sbs.annotation.ClassBuilder;
+            import dev.sbs.annotation.Formattable;
+            @ClassBuilder
+            public class Greeting {
+                @Formattable String message;
+            }
+            """);
+        com.intellij.psi.PsiClass target =
+            ((com.intellij.psi.PsiJavaFile) myFixture.getFile()).getClasses()[0];
+        com.intellij.psi.PsiClass builder = target.getInnerClasses()[0];
+        com.intellij.psi.PsiMethod formattable = null;
+        for (com.intellij.psi.PsiMethod m : builder.findMethodsByName("withMessage", false)) {
+            if (m.getParameterList().getParametersCount() == 2) { formattable = m; break; }
+        }
+        assertNotNull("formattable overload must exist", formattable);
+        com.intellij.psi.PsiParameter fmt = formattable.getParameterList().getParameter(0);
+
+        // Three lookup paths the platform's printf inspection might use - all
+        // must surface our @PrintFormat.
+        assertNotNull("getModifierList().findAnnotation must return @PrintFormat",
+            fmt.getModifierList().findAnnotation(PRINT_FORMAT_FQN));
+        assertNotNull("PsiParameter.getAnnotation must return @PrintFormat",
+            fmt.getAnnotation(PRINT_FORMAT_FQN));
+        assertNotNull("AnnotationUtil.findAnnotation must return @PrintFormat",
+            com.intellij.codeInsight.AnnotationUtil.findAnnotation(fmt, PRINT_FORMAT_FQN));
     }
 
     /** {@code Optional<String>} {@code @Formattable} always has a {@code @Nullable} format arg. */
@@ -112,6 +225,38 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
         assertNotNull(fmt.getModifierList().findAnnotation(PRINT_FORMAT_FQN));
         assertNotNull("format always @Nullable for Optional<String>",
             fmt.getModifierList().findAnnotation(NULLABLE_FQN));
+    }
+
+    /**
+     * A field-level {@code @NotNull} must propagate to the generated setter's
+     * parameter - including the formattable overload's format-string arg.
+     */
+    public void testNotNullField_propagatesToPlainAndFormattableSetters() {
+        myFixture.addFileToProject("org/jetbrains/annotations/NotNull.java",
+            """
+            package org.jetbrains.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS)
+            @Target({ElementType.FIELD, ElementType.PARAMETER, ElementType.METHOD})
+            public @interface NotNull {}
+            """);
+        PsiClass builder = builderFor("Greeting",
+            """
+            import dev.sbs.annotation.ClassBuilder;
+            import dev.sbs.annotation.Formattable;
+            import org.jetbrains.annotations.NotNull;
+            @ClassBuilder
+            public class Greeting {
+                @Formattable @NotNull String message;
+            }
+            """);
+
+        for (PsiMethod m : builder.findMethodsByName("withMessage", false)) {
+            PsiParameter first = m.getParameterList().getParameter(0);
+            assertNotNull(m.getParameterList().getParametersCount() + "-arg setter first param must be @NotNull: "
+                    + first.getType().getPresentableText(),
+                first.getModifierList().findAnnotation(NOT_NULL_FQN));
+        }
     }
 
     /** {@code @BuildFlag(nonNull = true)} pushes {@code @NotNull} onto the primary setter param. */

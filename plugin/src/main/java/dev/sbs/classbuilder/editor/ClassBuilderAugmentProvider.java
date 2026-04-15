@@ -69,6 +69,18 @@ public final class ClassBuilderAugmentProvider extends PsiAugmentProvider {
                                                                      @NotNull Class<Psi> type,
                                                                      @Nullable String nameHint) {
         if (!(element instanceof PsiClass target)) return Collections.emptyList();
+
+        // Lombok-pattern second pass: when the IDE asks for the methods of
+        // our synth Builder class, materialise the setters + build() now.
+        // GeneratedBuilderClass.getMethods() routes through here too, so
+        // there is exactly one source of truth for the inner class's members.
+        if (target instanceof GeneratedBuilderClass synthBuilder
+            && PsiMethod.class.isAssignableFrom(type)) {
+            @SuppressWarnings("unchecked")
+            List<Psi> methods = (List<Psi>) cachedSynthBuilderMethods(synthBuilder);
+            return methods;
+        }
+
         if (findClassBuilderAnnotation(target) == null) return Collections.emptyList();
         if (IN_PROGRESS.get().contains(target)) return Collections.emptyList();
 
@@ -86,6 +98,33 @@ public final class ClassBuilderAugmentProvider extends PsiAugmentProvider {
             return classes;
         }
         return Collections.emptyList();
+    }
+
+    /**
+     * Materialises the setters + {@code build()} for a synth Builder class.
+     * Cached on the synth class itself (keyed to
+     * {@link PsiModificationTracker#MODIFICATION_COUNT}) so repeated augment
+     * queries within the same PSI revision don't re-walk every field.
+     */
+    private static List<PsiMethod> cachedSynthBuilderMethods(GeneratedBuilderClass synthBuilder) {
+        return CachedValuesManager.getCachedValue(synthBuilder, () -> {
+            PsiClass parentTarget = synthBuilder.getContainingClass();
+            if (parentTarget == null) {
+                return CachedValueProvider.Result.create(Collections.<PsiMethod>emptyList(),
+                    PsiModificationTracker.MODIFICATION_COUNT);
+            }
+            PsiAnnotation cb = findClassBuilderAnnotation(parentTarget);
+            if (cb == null) {
+                return CachedValueProvider.Result.create(Collections.<PsiMethod>emptyList(),
+                    PsiModificationTracker.MODIFICATION_COUNT);
+            }
+            GeneratedMemberFactory.EditorBuilderConfig config =
+                GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(cb);
+            List<PsiMethod> methods = GeneratedMemberFactory.synthesizeBuilderMethods(
+                parentTarget, config, synthBuilder);
+            return CachedValueProvider.Result.create(methods,
+                PsiModificationTracker.MODIFICATION_COUNT);
+        });
     }
 
     private static List<PsiMethod> cachedMethods(PsiClass target) {
@@ -111,15 +150,19 @@ public final class ClassBuilderAugmentProvider extends PsiAugmentProvider {
             }
             // Skip when the target already declares a nested class with the
             // configured Builder name - the user's hand-written version wins.
-            // Walk PSI children directly rather than calling getInnerClasses(),
-            // which would re-enter this augment provider and recurse.
+            // Use the stub-based getOwnInnerClasses() instead of getChildren()
+            // or getInnerClasses(): getChildren() forces full AST load (illegal
+            // for files that aren't open in the editor - throws during cross-
+            // file highlighting); getInnerClasses() is augment-aware and would
+            // recurse back into this provider.
             GeneratedMemberFactory.EditorBuilderConfig config =
                 GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(resolved);
-            for (PsiElement child : target.getChildren()) {
-                if (child instanceof PsiClass nested
-                    && config.builderName().equals(nested.getName())) {
-                    return CachedValueProvider.Result.create(Collections.<PsiClass>emptyList(),
-                        PsiModificationTracker.MODIFICATION_COUNT);
+            if (target instanceof com.intellij.psi.impl.source.PsiExtensibleClass extensible) {
+                for (PsiClass nested : extensible.getOwnInnerClasses()) {
+                    if (config.builderName().equals(nested.getName())) {
+                        return CachedValueProvider.Result.create(Collections.<PsiClass>emptyList(),
+                            PsiModificationTracker.MODIFICATION_COUNT);
+                    }
                 }
             }
             SynthesizedMembers members = synthesizeOrReuse(target, resolved);
@@ -152,7 +195,7 @@ public final class ClassBuilderAugmentProvider extends PsiAugmentProvider {
         IN_PROGRESS.get().add(target);
         try {
             PsiClass builderClass = GeneratedMemberFactory.synthesizeBuilderClass(target, config);
-            List<PsiMethod> bootstrap = GeneratedMemberFactory.bootstrapMethods(target, config);
+            List<PsiMethod> bootstrap = GeneratedMemberFactory.bootstrapMethods(target, config, builderClass);
             SynthesizedMembers fresh = new SynthesizedMembers(config, bootstrap, builderClass);
             target.putUserData(SYNTHESIZED, fresh);
             return fresh;

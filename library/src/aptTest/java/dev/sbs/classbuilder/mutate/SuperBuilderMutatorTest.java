@@ -186,20 +186,20 @@ public class SuperBuilderMutatorTest {
     // ------------------------------------------------------------------
 
     /**
-     * {@code @Singular} on an abstract parent: child inherits the full
+     * {@code @Collector} on an abstract parent: child inherits the full
      * varargs-replace + iterable-replace + add + clear family with the
      * concrete child Builder threaded through self-typed returns.
      */
     @Test
-    public void singularOnAbstractParent_inheritedThroughChild() throws Exception {
+    public void collectorOnAbstractParent_inheritedThroughChild() throws Exception {
         JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Page",
             "package demo;",
             "import dev.sbs.annotation.ClassBuilder;",
-            "import dev.sbs.annotation.Singular;",
+            "import dev.sbs.annotation.Collector;",
             "import java.util.List;",
             "@ClassBuilder(validate = false)",
             "public abstract class Page {",
-            "    @Singular List<String> tags;",
+            "    @Collector(singular = true, clearable = true) List<String> tags;",
             "    public List<String> getTags() { return tags; }",
             "}");
         JavaFileObject child = JavaFileObjects.forSourceLines("demo.HomePage",
@@ -241,17 +241,17 @@ public class SuperBuilderMutatorTest {
         assertTrue(((List<?>) pageCls.getMethod("getTags").invoke(homeBuilder.getMethod("build").invoke(b3))).isEmpty());
     }
 
-    /** {@code @Singular} on a Map field placed on the abstract parent. */
+    /** {@code @Collector} on a Map field placed on the abstract parent. */
     @Test
-    public void singularMapOnAbstractParent_putAndClear() throws Exception {
+    public void collectorMapOnAbstractParent_putAndClear() throws Exception {
         JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Doc",
             "package demo;",
             "import dev.sbs.annotation.ClassBuilder;",
-            "import dev.sbs.annotation.Singular;",
+            "import dev.sbs.annotation.Collector;",
             "import java.util.Map;",
             "@ClassBuilder(validate = false)",
             "public abstract class Doc {",
-            "    @Singular(\"meta\") Map<String, String> metas;",
+            "    @Collector(singularMethodName = \"meta\", singular = true, clearable = true) Map<String, String> metas;",
             "    public Map<String, String> getMetas() { return metas; }",
             "}");
         JavaFileObject child = JavaFileObjects.forSourceLines("demo.Article",

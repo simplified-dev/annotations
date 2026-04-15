@@ -1,8 +1,10 @@
 package dev.sbs.classbuilder.editor;
 
+import com.intellij.codeInsight.NullableNotNullManager;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationMemberValue;
 import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiDocCommentOwner;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiModifier;
@@ -19,18 +21,17 @@ import java.util.Set;
  * the {@link PsiFieldShape} list the augment provider uses to synthesise
  * setters. Honours {@code @BuilderIgnore} and the annotation's
  * {@code exclude} attribute, and reads companion annotations
- * ({@code @Singular}, {@code @Negate}, {@code @Formattable},
+ * ({@code @Collector}, {@code @Negate}, {@code @Formattable},
  * {@code @Nullable}) so the synthesised shape matrix lines up with what
  * the APT mutator emits.
  */
 final class PsiFieldShapeExtractor {
 
     private static final String BUILDER_IGNORE_FQN = ClassBuilderConstants.BUILDER_IGNORE_FQN;
-    private static final String SINGULAR_FQN = ClassBuilderConstants.SINGULAR_FQN;
+    private static final String COLLECTOR_FQN = ClassBuilderConstants.COLLECTOR_FQN;
     private static final String NEGATE_FQN = ClassBuilderConstants.NEGATE_FQN;
     private static final String FORMATTABLE_FQN = ClassBuilderConstants.FORMATTABLE_FQN;
     private static final String BUILD_FLAG_FQN = ClassBuilderConstants.BUILD_FLAG_FQN;
-    private static final String NULLABLE_FQN = "org.jetbrains.annotations.Nullable";
 
     private PsiFieldShapeExtractor() {
     }
@@ -70,13 +71,15 @@ final class PsiFieldShapeExtractor {
      */
     private static PsiFieldShape buildShape(PsiModifierListOwner owner, String name, com.intellij.psi.PsiType type) {
         PsiFieldShape.Builder b = PsiFieldShape.classify(name, type);
-        b.nullable = hasAnnotation(owner, NULLABLE_FQN);
+        if (owner instanceof PsiDocCommentOwner docOwner) b.docSource = docOwner;
+        // Use NullableNotNullManager so every configured nullability
+        // annotation flavour (JetBrains / javax / Checker Framework / etc.)
+        // propagates, not only @org.jetbrains.annotations.Nullable.
+        NullableNotNullManager nnm = NullableNotNullManager.getInstance(owner.getProject());
+        b.nullable = nnm.isNullable(owner, false);
+        b.notNull = nnm.isNotNull(owner, false);
 
-        PsiAnnotation formattable = findAnnotation(owner, FORMATTABLE_FQN);
-        if (formattable != null) {
-            b.formattable = true;
-            b.formattableNullable = booleanAttr(formattable, "nullable", false);
-        }
+        b.formattable = hasAnnotation(owner, FORMATTABLE_FQN);
 
         PsiAnnotation negate = findAnnotation(owner, NEGATE_FQN);
         if (negate != null) {
@@ -84,10 +87,14 @@ final class PsiFieldShapeExtractor {
             if (!v.isEmpty()) b.negateName = v;
         }
 
-        PsiAnnotation singular = findAnnotation(owner, SINGULAR_FQN);
-        if (singular != null) {
-            String v = stringAttr(singular, "value", "");
-            b.singularName = v.isEmpty() ? defaultSingular(name) : v;
+        PsiAnnotation collector = findAnnotation(owner, COLLECTOR_FQN);
+        if (collector != null) {
+            b.collector = true;
+            b.singular = booleanAttr(collector, "singular", false);
+            b.clearable = booleanAttr(collector, "clearable", false);
+            b.compute = booleanAttr(collector, "compute", false);
+            String methodName = stringAttr(collector, "singularMethodName", "");
+            b.singularName = methodName.isEmpty() ? defaultSingular(name) : methodName;
         }
 
         PsiAnnotation buildFlag = findAnnotation(owner, BUILD_FLAG_FQN);

@@ -32,7 +32,8 @@
       <li>Setter-shape extras that Lombok doesn't cover: dual
           <code>Optional&lt;T&gt;</code> setters, zero-arg + typed boolean pairs
           with <code>@Negate</code>, <code>@PrintFormat</code> string overloads
-          via <code>@Formattable</code>, <code>@Singular</code> add/put/varargs/clear
+          via <code>@Formattable</code>, <code>@Collector</code> varargs / iterable bulk
+          overloads with opt-in single-element add/put, clear, and lazy put-if-absent
           for collections and maps, defensive-copy <code>from(T)</code>, and a
           <code>mutate()</code> instance shorthand.</li>
       <li><b>@BuilderDefault</b> copies the field's declared initializer into
@@ -149,6 +150,7 @@
         <lang.inferredAnnotationProvider implementation="dev.sbs.xcontract.XContractInferredAnnotationProvider"/>
         <lang.inferredAnnotationProvider implementation="dev.sbs.classbuilder.editor.ClassBuilderInferredAnnotationProvider"/>
         <lang.psiAugmentProvider implementation="dev.sbs.classbuilder.editor.ClassBuilderAugmentProvider"/>
+        <java.elementFinder implementation="dev.sbs.classbuilder.editor.ClassBuilderElementFinder" order="last"/>
         <codeInsight.lineMarkerProvider
                 language="JAVA"
                 implementationClass="dev.sbs.classbuilder.editor.ClassBuilderLineMarkerProvider"/>

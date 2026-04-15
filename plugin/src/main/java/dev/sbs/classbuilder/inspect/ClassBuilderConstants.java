@@ -21,7 +21,7 @@ public final class ClassBuilderConstants {
 
     public static final @NotNull String BUILD_FLAG_FQN = "dev.sbs.annotation.BuildFlag";
     public static final @NotNull String BUILD_FLAG_SHORT_NAME = "BuildFlag";
-    public static final @NotNull String SINGULAR_FQN = "dev.sbs.annotation.Singular";
+    public static final @NotNull String COLLECTOR_FQN = "dev.sbs.annotation.Collector";
     public static final @NotNull String NEGATE_FQN = "dev.sbs.annotation.Negate";
     public static final @NotNull String FORMATTABLE_FQN = "dev.sbs.annotation.Formattable";
     public static final @NotNull String BUILDER_DEFAULT_FQN = "dev.sbs.annotation.BuilderDefault";
@@ -36,7 +36,7 @@ public final class ClassBuilderConstants {
     public static final @NotNull Set<String> TRACKED_ANNOTATION_FQNS = Set.of(
         ANNOTATION_FQN,
         BUILD_FLAG_FQN,
-        SINGULAR_FQN,
+        COLLECTOR_FQN,
         NEGATE_FQN,
         FORMATTABLE_FQN,
         BUILDER_DEFAULT_FQN,
@@ -53,7 +53,7 @@ public final class ClassBuilderConstants {
     public static final @NotNull Set<String> TRACKED_ANNOTATION_SHORT_NAMES = Set.of(
         ANNOTATION_SHORT_NAME,
         BUILD_FLAG_SHORT_NAME,
-        "Singular",
+        "Collector",
         "Negate",
         "Formattable",
         "BuilderDefault",

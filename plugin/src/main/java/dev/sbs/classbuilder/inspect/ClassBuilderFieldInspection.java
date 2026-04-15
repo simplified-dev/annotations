@@ -21,7 +21,7 @@ import org.jetbrains.annotations.NotNull;
  * <ul>
  *   <li>{@code @Formattable} on a non-String / non-Optional&lt;String&gt; field</li>
  *   <li>{@code @Negate} on a non-{@code boolean} field</li>
- *   <li>{@code @Singular} on a non-{@link java.util.Collection Collection} or
+ *   <li>{@code @Collector} on a non-{@link java.util.Collection Collection} or
  *       non-{@link java.util.Map Map} field</li>
  *   <li>{@code @BuildFlag(pattern = ...)} on a non-{@link CharSequence} field</li>
  *   <li>{@code @BuildFlag(limit = N)} on a type where the limit is not meaningful</li>
@@ -31,7 +31,7 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
 
     private static final String FORMATTABLE_FQN = "dev.sbs.annotation.Formattable";
     private static final String NEGATE_FQN = "dev.sbs.annotation.Negate";
-    private static final String SINGULAR_FQN = "dev.sbs.annotation.Singular";
+    private static final String COLLECTOR_FQN = "dev.sbs.annotation.Collector";
     private static final String BUILD_FLAG_FQN = "dev.sbs.annotation.BuildFlag";
 
     @Override
@@ -56,10 +56,10 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
                         ProblemHighlightType.GENERIC_ERROR);
                 }
 
-                PsiAnnotation singular = field.getAnnotation(SINGULAR_FQN);
-                if (singular != null && !isCollectionOrMap(type)) {
-                    holder.registerProblem(singular,
-                        "@Singular requires a Collection, List, Set, or Map field",
+                PsiAnnotation collector = field.getAnnotation(COLLECTOR_FQN);
+                if (collector != null && !isCollectionOrMap(type)) {
+                    holder.registerProblem(collector,
+                        "@Collector requires a Collection, List, Set, or Map field",
                         ProblemHighlightType.GENERIC_ERROR);
                 }
 

@@ -35,7 +35,9 @@ import java.lang.annotation.Target;
  * <h2>Per-field customisation</h2>
  * <ul>
  *   <li>{@link BuildFlag} - declare runtime constraints ({@code nonNull}, {@code notEmpty}, groups, regex, length)</li>
- *   <li>{@link Singular} - emit {@code addX} / {@code putX} / varargs / {@code Iterable} / {@code clearX} setters for collections</li>
+ *   <li>{@link Collector} - emit varargs / {@code Iterable} bulk setters on
+ *       collection and map fields, with opt-in single-element add/put,
+ *       {@code clearX}, and lazy {@code putXIfAbsent} overloads</li>
  *   <li>{@link Negate} - emit an inverse boolean setter on a {@code boolean} field</li>
  *   <li>{@link Formattable} - emit a {@code @PrintFormat} string overload</li>
  *   <li>{@link BuilderDefault} - carry the field's initialiser into the builder as its starting value</li>
@@ -79,7 +81,7 @@ import java.lang.annotation.Target;
  * </code></pre>
  *
  * @see BuildFlag
- * @see Singular
+ * @see Collector
  * @see Negate
  * @see Formattable
  * @see BuilderDefault

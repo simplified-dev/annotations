@@ -2,23 +2,12 @@ package dev.sbs.annotation;
 
 import org.junit.Test;
 
-import java.lang.annotation.Annotation;
-import java.lang.annotation.ElementType;
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
-import java.lang.annotation.Target;
+import java.lang.annotation.*;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.*;
 
 /**
  * Compile-time contract tests for the builder annotation surface. Does two jobs:
@@ -32,8 +21,27 @@ public class AnnotationSurfaceTest {
     // Retention / Target metadata
     // ------------------------------------------------------------------
 
+    /**
+     * Testing 123
+     */
+    @Formattable
+    private String test = "";
+
+    /**
+     * Boolean test
+     */
+    @Negate("notAbcd")
+    private boolean abcd;
+
+    private List<String> list;
+
     @Test
     public void classBuilder_metadata() {
+        //builder().build();
+        /*builder().withTest("");
+        builder().isNotAbcd();
+        builder();
+        builder().withTest(null, "123", "abc").build();*/
         assertRetention(ClassBuilder.class, RetentionPolicy.CLASS);
         assertTargets(ClassBuilder.class, ElementType.TYPE, ElementType.CONSTRUCTOR, ElementType.METHOD);
     }
@@ -45,9 +53,9 @@ public class AnnotationSurfaceTest {
     }
 
     @Test
-    public void singular_metadata() {
-        assertRetention(Singular.class, RetentionPolicy.CLASS);
-        assertTargets(Singular.class, ElementType.FIELD);
+    public void collector_metadata() {
+        assertRetention(Collector.class, RetentionPolicy.CLASS);
+        assertTargets(Collector.class, ElementType.FIELD);
     }
 
     @Test
@@ -113,18 +121,16 @@ public class AnnotationSurfaceTest {
     }
 
     @Test
-    public void singular_default() {
-        assertDefault(Singular.class, "value", "");
+    public void collector_defaults() {
+        assertDefault(Collector.class, "singularMethodName", "");
+        assertDefault(Collector.class, "singular", false);
+        assertDefault(Collector.class, "clearable", false);
+        assertDefault(Collector.class, "compute", false);
     }
 
     @Test
     public void negate_noDefault() throws Exception {
         assertEquals(null, Negate.class.getMethod("value").getDefaultValue());
-    }
-
-    @Test
-    public void formattable_default() {
-        assertDefault(Formattable.class, "nullable", false);
     }
 
     @Test
@@ -168,11 +174,10 @@ public class AnnotationSurfaceTest {
 
     static final class FixtureOnFields {
         @BuildFlag(nonNull = true, notEmpty = true, limit = 10, pattern = "[a-z]+", group = {"g"}) String a;
-        @Singular List<String> bs;
-        @Singular("entry") Map<String, String> cs;
+        @Collector(singular = true, clearable = true) List<String> bs;
+        @Collector(singularMethodName = "entry", singular = true) Map<String, String> cs;
         @Negate("disabled") boolean enabled;
         @Formattable String text;
-        @Formattable(nullable = true) String nullableText;
         @BuilderDefault String defaulted = "x";
         @BuilderIgnore String ignored;
         @ObtainVia(method = "getCustomAccess") String custom;

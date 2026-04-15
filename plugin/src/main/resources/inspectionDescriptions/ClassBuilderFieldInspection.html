@@ -9,9 +9,12 @@ Flags misuse of the per-field companion annotations that travel with
       <code>@PrintFormat</code> overload setter.</li>
   <li><code>@Negate</code> must apply to a primitive <code>boolean</code>
       field - emits an inverse setter pair.</li>
-  <li><code>@Singular</code> must apply to a <code>Collection</code>,
+  <li><code>@Collector</code> must apply to a <code>Collection</code>,
       <code>List</code>, <code>Set</code>, <code>Iterable</code>, or
-      <code>Map</code> field - emits add/put/varargs/clear setters.</li>
+      <code>Map</code> field - emits varargs / <code>Iterable</code> bulk
+      setters, with opt-in single-element <code>addX</code> /
+      <code>putX</code>, <code>clearX</code>, and
+      <code>putXIfAbsent</code> (maps only).</li>
   <li><code>@BuildFlag(pattern = ...)</code> is only meaningful on
       <code>CharSequence</code> or <code>Optional&lt;String&gt;</code>
       fields - the validator cannot check a regex against other types.</li>

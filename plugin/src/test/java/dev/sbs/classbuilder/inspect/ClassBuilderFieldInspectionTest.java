@@ -29,7 +29,7 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
             package dev.sbs.annotation;
             import java.lang.annotation.*;
             @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
-            public @interface Formattable { boolean nullable() default false; }
+            public @interface Formattable { }
             """);
         myFixture.addFileToProject("dev/sbs/annotation/Negate.java",
             """
@@ -38,12 +38,17 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
             @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
             public @interface Negate { String value(); }
             """);
-        myFixture.addFileToProject("dev/sbs/annotation/Singular.java",
+        myFixture.addFileToProject("dev/sbs/annotation/Collector.java",
             """
             package dev.sbs.annotation;
             import java.lang.annotation.*;
             @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
-            public @interface Singular { String value() default ""; }
+            public @interface Collector {
+                String singularMethodName() default "";
+                boolean singular() default false;
+                boolean clearable() default false;
+                boolean compute() default false;
+            }
             """);
         myFixture.addFileToProject("dev/sbs/annotation/BuildFlag.java",
             """
@@ -90,15 +95,15 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
         assertFalse(hasErrorContaining("@Negate"));
     }
 
-    public void testSingularOnNonCollection_flagged() {
+    public void testCollectorOnNonCollection_flagged() {
         myFixture.configureByText("Foo.java",
             """
-            import dev.sbs.annotation.Singular;
+            import dev.sbs.annotation.Collector;
             public class Foo {
-                @Singular int count;
+                @Collector int count;
             }
             """);
-        assertTrue(hasErrorContaining("@Singular requires"));
+        assertTrue(hasErrorContaining("@Collector requires"));
     }
 
     public void testBuildFlagLimitOnIntField_warned() {

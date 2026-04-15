@@ -54,9 +54,12 @@ public final class FieldSpec {
 
     // Companion annotations
     public final boolean formattable;
-    public final boolean formattableNullable;
     public final String negateName;                 // null if no @Negate
-    public final String singularName;               // null if no @Singular; filled from @Singular.value or defaulted
+    public final boolean collector;                 // @Collector present - enables varargs + iterable for list/set, gates extras
+    public final boolean singular;                  // @Collector(singular = true) - single-element add/put setter
+    public final String singularName;               // derived from @Collector.singularMethodName or field-name inflection; null if no @Collector
+    public final boolean clearable;                 // @Collector(clearable = true) - clear() method
+    public final boolean compute;                   // @Collector(compute = true) - maps only, putIfAbsent(K, Supplier<V>)
     public final boolean ignored;                   // @BuilderIgnore or listed in @ClassBuilder.exclude
     public final boolean builderDefault;
     public final String sourceInitializer;          // copied source text of the field's declared initializer
@@ -85,9 +88,12 @@ public final class FieldSpec {
         this.mapKey = b.mapKey;
         this.mapValue = b.mapValue;
         this.formattable = b.formattable;
-        this.formattableNullable = b.formattableNullable;
         this.negateName = b.negateName;
+        this.collector = b.collector;
+        this.singular = b.singular;
         this.singularName = b.singularName;
+        this.clearable = b.clearable;
+        this.compute = b.compute;
         this.ignored = b.ignored;
         this.builderDefault = b.builderDefault;
         this.sourceInitializer = b.sourceInitializer;
@@ -124,11 +130,13 @@ public final class FieldSpec {
         classifyType(b);
 
         b.formattable = lookup.hasAnnotation(method, "dev.sbs.annotation.Formattable");
-        b.formattableNullable = b.formattable
-            && lookup.booleanAttr(method, "dev.sbs.annotation.Formattable", "nullable", false);
         b.negateName = lookup.stringAttr(method, "dev.sbs.annotation.Negate", "value", null);
-        if (lookup.hasAnnotation(method, "dev.sbs.annotation.Singular")) {
-            String v = lookup.stringAttr(method, "dev.sbs.annotation.Singular", "value", "");
+        if (lookup.hasAnnotation(method, "dev.sbs.annotation.Collector")) {
+            b.collector = true;
+            b.singular = lookup.booleanAttr(method, "dev.sbs.annotation.Collector", "singular", false);
+            b.clearable = lookup.booleanAttr(method, "dev.sbs.annotation.Collector", "clearable", false);
+            b.compute = lookup.booleanAttr(method, "dev.sbs.annotation.Collector", "compute", false);
+            String v = lookup.stringAttr(method, "dev.sbs.annotation.Collector", "singularMethodName", "");
             b.singularName = v.isEmpty() ? defaultSingular(b.name) : v;
         }
         b.ignored = lookup.hasAnnotation(method, "dev.sbs.annotation.BuilderIgnore");
@@ -215,11 +223,13 @@ public final class FieldSpec {
 
         // Companion annotations
         b.formattable = lookup.hasAnnotation(element, "dev.sbs.annotation.Formattable");
-        b.formattableNullable = b.formattable
-            && lookup.booleanAttr(element, "dev.sbs.annotation.Formattable", "nullable", false);
         b.negateName = lookup.stringAttr(element, "dev.sbs.annotation.Negate", "value", null);
-        if (lookup.hasAnnotation(element, "dev.sbs.annotation.Singular")) {
-            String v = lookup.stringAttr(element, "dev.sbs.annotation.Singular", "value", "");
+        if (lookup.hasAnnotation(element, "dev.sbs.annotation.Collector")) {
+            b.collector = true;
+            b.singular = lookup.booleanAttr(element, "dev.sbs.annotation.Collector", "singular", false);
+            b.clearable = lookup.booleanAttr(element, "dev.sbs.annotation.Collector", "clearable", false);
+            b.compute = lookup.booleanAttr(element, "dev.sbs.annotation.Collector", "compute", false);
+            String v = lookup.stringAttr(element, "dev.sbs.annotation.Collector", "singularMethodName", "");
             b.singularName = v.isEmpty() ? defaultSingular(b.name) : v;
         }
         b.ignored = lookup.hasAnnotation(element, "dev.sbs.annotation.BuilderIgnore");
@@ -265,8 +275,9 @@ public final class FieldSpec {
         String optionalInner;
         boolean isListLike, isSet, isMap;
         String collectionElement, mapKey, mapValue;
-        boolean formattable, formattableNullable;
+        boolean formattable;
         String negateName;
+        boolean collector, singular, clearable, compute;
         String singularName;
         boolean ignored, builderDefault;
         String sourceInitializer;

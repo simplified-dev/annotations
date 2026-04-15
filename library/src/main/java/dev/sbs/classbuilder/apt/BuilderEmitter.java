@@ -141,8 +141,8 @@ final class BuilderEmitter {
             emitOptionalSetters(f);
             return;
         }
-        if ((f.isListLike || f.isMap) && f.singularName != null) {
-            emitSingularSetters(f);
+        if ((f.isListLike || f.isMap) && f.collector) {
+            emitCollectorSetters(f);
             return;
         }
         if (f.isArray) {
@@ -171,7 +171,7 @@ final class BuilderEmitter {
 
     private void emitFormattableOverload(FieldSpec f) {
         imports.add("org.intellij.lang.annotations.PrintFormat");
-        boolean nullable = f.formattableNullable || f.nullable;
+        boolean nullable = f.nullable;
         emitContract("_, _ -> this", false, "this");
         body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ')
             .append(methodName(f.name, false))
@@ -246,9 +246,8 @@ final class BuilderEmitter {
         }
     }
 
-    private void emitSingularSetters(FieldSpec f) {
+    private void emitCollectorSetters(FieldSpec f) {
         String whole = methodName(f.name, false);
-        String single = (config.methodPrefix().isEmpty() ? "add" : config.methodPrefix()) + capitalise(f.singularName);
         String clear = "clear" + capitalise(f.name);
 
         if (f.isMap) {
@@ -257,26 +256,38 @@ final class BuilderEmitter {
             String k = typeName(f.mapKey);
             String v = typeName(f.mapValue);
 
-            // whole: withFoo(Map<K,V>) - replace
+            // whole: withFoo(Map<K,V>) - replace (always)
             emitContract("_ -> this", false, "this");
             body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(whole)
                 .append("(@NotNull Map<").append(k).append(", ").append(v).append("> ").append(f.name).append(") {\n");
             body.append("        this.").append(f.name).append(" = new LinkedHashMap<>(").append(f.name).append(");\n");
             body.append("        return this;\n    }\n\n");
 
-            // single: putEntry(K, V)
-            String putName = "put" + capitalise(f.singularName);
-            emitContract("_, _ -> this", false, "this");
-            body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(putName)
-                .append("(@NotNull ").append(k).append(" key, ").append(v).append(" value) {\n");
-            body.append("        this.").append(f.name).append(".put(key, value);\n");
-            body.append("        return this;\n    }\n\n");
+            if (f.singular) {
+                String putName = "put" + capitalise(f.singularName);
+                emitContract("_, _ -> this", false, "this");
+                body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(putName)
+                    .append("(@NotNull ").append(k).append(" key, ").append(v).append(" value) {\n");
+                body.append("        this.").append(f.name).append(".put(key, value);\n");
+                body.append("        return this;\n    }\n\n");
+            }
 
-            // clear
-            emitContract("-> this", false, "this");
-            body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(clear).append("() {\n");
-            body.append("        this.").append(f.name).append(".clear();\n");
-            body.append("        return this;\n    }\n\n");
+            if (f.compute) {
+                imports.add("java.util.function.Supplier");
+                String putName = "put" + capitalise(f.singularName) + "IfAbsent";
+                emitContract("_, _ -> this", false, "this");
+                body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(putName)
+                    .append("(@NotNull ").append(k).append(" key, @NotNull Supplier<").append(v).append("> valueSupplier) {\n");
+                body.append("        if (!this.").append(f.name).append(".containsKey(key)) this.").append(f.name).append(".put(key, valueSupplier.get());\n");
+                body.append("        return this;\n    }\n\n");
+            }
+
+            if (f.clearable) {
+                emitContract("-> this", false, "this");
+                body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(clear).append("() {\n");
+                body.append("        this.").append(f.name).append(".clear();\n");
+                body.append("        return this;\n    }\n\n");
+            }
             return;
         }
 
@@ -284,7 +295,7 @@ final class BuilderEmitter {
         String container = f.isSet ? "LinkedHashSet" : "ArrayList";
         imports.add(f.isSet ? "java.util.LinkedHashSet" : "java.util.ArrayList");
 
-        // varargs replace
+        // varargs replace (always)
         emitContract("_ -> this", false, "this");
         body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(whole)
             .append("(@NotNull ").append(elem).append("... ").append(f.name).append(") {\n");
@@ -292,7 +303,7 @@ final class BuilderEmitter {
         body.append("        for (").append(elem).append(" e : ").append(f.name).append(") this.").append(f.name).append(".add(e);\n");
         body.append("        return this;\n    }\n\n");
 
-        // Iterable replace
+        // Iterable replace (always)
         emitContract("_ -> this", false, "this");
         body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(whole)
             .append("(@NotNull Iterable<").append(elem).append("> ").append(f.name).append(") {\n");
@@ -300,18 +311,21 @@ final class BuilderEmitter {
         body.append("        ").append(f.name).append(".forEach(this.").append(f.name).append("::add);\n");
         body.append("        return this;\n    }\n\n");
 
-        // addEntry
-        emitContract("_ -> this", false, "this");
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(single)
-            .append("(@NotNull ").append(elem).append(' ').append(f.singularName).append(") {\n");
-        body.append("        this.").append(f.name).append(".add(").append(f.singularName).append(");\n");
-        body.append("        return this;\n    }\n\n");
+        if (f.singular) {
+            String single = (config.methodPrefix().isEmpty() ? "add" : config.methodPrefix()) + capitalise(f.singularName);
+            emitContract("_ -> this", false, "this");
+            body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(single)
+                .append("(@NotNull ").append(elem).append(' ').append(f.singularName).append(") {\n");
+            body.append("        this.").append(f.name).append(".add(").append(f.singularName).append(");\n");
+            body.append("        return this;\n    }\n\n");
+        }
 
-        // clear
-        emitContract("-> this", false, "this");
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(clear).append("() {\n");
-        body.append("        this.").append(f.name).append(".clear();\n");
-        body.append("        return this;\n    }\n\n");
+        if (f.clearable) {
+            emitContract("-> this", false, "this");
+            body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(clear).append("() {\n");
+            body.append("        this.").append(f.name).append(".clear();\n");
+            body.append("        return this;\n    }\n\n");
+        }
     }
 
     private void emitArraySetter(FieldSpec f) {

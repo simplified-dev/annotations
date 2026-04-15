@@ -28,8 +28,9 @@ import dev.sbs.classbuilder.apt.FieldSpec;
  *       {@code @Formattable} {@code @PrintFormat} overload when the inner
  *       type is {@code String}),</li>
  *   <li>{@code String} {@code @Formattable} {@code @PrintFormat} overload,</li>
- *   <li>{@code @Singular} collection or map: replace + per-element add/put
- *       + clear,</li>
+ *   <li>{@code @Collector} collection or map: bulk varargs / iterable
+ *       replace plus opt-in single-element add/put, clear, and (maps only)
+ *       {@code putIfAbsent(K, Supplier<V>)},</li>
  *   <li>array varargs.</li>
  * </ul>
  */
@@ -67,17 +68,18 @@ final class FieldMutators {
             }
         } else if (field.isArray) {
             out.append(arrayVarargs(field));
-        } else if ((field.isListLike || field.isMap) && field.singularName != null) {
-            // @Singular: replace + per-element add/put + clear.
+        } else if ((field.isListLike || field.isMap) && field.collector) {
+            // @Collector: bulk overloads always; add/put/clear/compute opt-in.
             if (field.isMap) {
                 out.append(singularMapReplace(field));
-                out.append(singularMapPut(field));
+                if (field.singular) out.append(singularMapPut(field));
+                if (field.compute) out.append(singularMapPutIfAbsent(field));
             } else {
                 out.append(singularCollectionVarargsReplace(field));
                 out.append(singularCollectionIterableReplace(field));
-                out.append(singularCollectionAdd(field));
+                if (field.singular) out.append(singularCollectionAdd(field));
             }
-            out.append(singularClear(field));
+            if (field.clearable) out.append(singularClear(field));
         } else if (field.isString && field.formattable) {
             out.append(plainSetter(field));
             out.append(stringFormattable(field));
@@ -203,13 +205,13 @@ final class FieldMutators {
 
     /**
      * {@code Builder withName(@PrintFormat String name, Object... args)} that
-     * stores {@code String.format(name, args)}. When the field or the
-     * {@code @Formattable.nullable} attribute is set, routes through
-     * {@code Strings.formatNullable} so a null format string survives.
+     * stores {@code String.format(name, args)}. When the field is
+     * {@code @Nullable}, routes through {@code Strings.formatNullable} so a
+     * null format string survives.
      */
     private JCMethodDecl stringFormattable(FieldSpec field) {
         String setterName = methodName(field.name, false);
-        boolean nullable = field.formattableNullable || field.nullable;
+        boolean nullable = field.nullable;
         JCExpression stringType = types.qualIdent("java.lang.String");
         JCVariableDecl formatParam = annotatedParam(
             field.name, stringType,
@@ -290,12 +292,12 @@ final class FieldMutators {
     }
 
     // ------------------------------------------------------------------
-    // @Singular shapes
+    // @Collector shapes
     // ------------------------------------------------------------------
 
     /**
      * {@code Builder withEntries(T... entries)} that resets the underlying
-     * collection and copies every element. Used for List/Set @Singular fields.
+     * collection and copies every element. Used for List/Set @Collector fields.
      */
     private JCMethodDecl singularCollectionVarargsReplace(FieldSpec field) {
         String setterName = methodName(field.name, false);
@@ -421,6 +423,45 @@ final class FieldMutators {
         ));
         return methodDefRaw(putName, List.of(keyParam, valueParam),
             List.of(put, returnThis()));
+    }
+
+    /**
+     * {@code Builder putEntryIfAbsent(K key, Supplier<V> valueSupplier)} -
+     * puts only when the key is not already present, calling the supplier
+     * lazily for the value. Gated on {@code @Collector(compute = true)}.
+     */
+    private JCMethodDecl singularMapPutIfAbsent(FieldSpec field) {
+        String putName = "put" + capitalise(field.singularName) + "IfAbsent";
+        JCExpression keyType = types.parseType(field.mapKey);
+        JCExpression supplierType = make.TypeApply(
+            types.qualIdent("java.util.function.Supplier"),
+            List.of(types.parseType(field.mapValue))
+        );
+        JCVariableDecl keyParam = param("key", keyType);
+        JCVariableDecl supplierParam = param("valueSupplier", supplierType);
+        // if (!this.field.containsKey(key)) this.field.put(key, valueSupplier.get());
+        JCExpression fieldRef = make.Select(make.Ident(names._this), names.fromString(field.name));
+        JCExpression containsKey = make.Apply(
+            List.nil(),
+            make.Select(fieldRef, names.fromString("containsKey")),
+            List.of(make.Ident(names.fromString("key")))
+        );
+        JCExpression negated = make.Unary(com.sun.tools.javac.tree.JCTree.Tag.NOT, containsKey);
+        JCExpression supplierGet = make.Apply(
+            List.nil(),
+            make.Select(make.Ident(names.fromString("valueSupplier")), names.fromString("get")),
+            List.nil()
+        );
+        JCExpression putCall = make.Apply(
+            List.nil(),
+            make.Select(
+                make.Select(make.Ident(names._this), names.fromString(field.name)),
+                names.fromString("put")),
+            List.of(make.Ident(names.fromString("key")), supplierGet)
+        );
+        JCStatement guardedPut = make.If(negated, make.Exec(putCall), null);
+        return methodDefRaw(putName, List.of(keyParam, supplierParam),
+            List.of(guardedPut, returnThis()));
     }
 
     /** {@code Builder clearEntries()} that empties the underlying collection or map. */

@@ -27,8 +27,14 @@ dependencies {
     implementation(project(":library"))
 
     intellijPlatform {
-        create("IC", "2023.2")
+        create("IC", "2023.3")
         testFramework(TestFrameworkType.Platform)
+        // Since IC 2023.3, UsefulTestCase's static initializer references
+        // com.intellij.testFramework.common.TestEnvironmentKt, which ships in
+        // the IDE's bundled lib/testFramework.jar rather than the Maven
+        // test-framework artifact. Pull the bundled jar explicitly; without
+        // it every test fails to initialize with NoClassDefFoundError.
+        testFramework(TestFrameworkType.Bundled)
         // Adds LightJavaCodeInsightFixtureTestCase + JAVA_NN project descriptors
         // (mock JDK), needed by AnnotationTest / ClassBuilder*Test for proper
         // String/Object resolution during inspection highlighting.
@@ -82,16 +88,21 @@ intellijPlatform {
             }
         }
     }
-    buildSearchableOptions = true
+    // Task requires a running IDE (233+) since IntelliJ Platform Gradle Plugin
+    // 2.14.0, but we still compile against 232. Disabling skips the marketplace-
+    // settings pre-index step; plugin still loads fine in 2023.2+ consumers.
+    buildSearchableOptions = false
 
     // Plugin Verifier: catches API breakage across IDE versions before users
     // hit it. Pinned to explicit released builds rather than recommended()
     // because the latter pulls in unreleased EAP IDEs that fail to download.
     pluginVerification {
         ides {
-            ide(IntelliJPlatformType.IntellijIdeaCommunity, "2023.2")
-            ide(IntelliJPlatformType.IntellijIdeaCommunity, "2024.3")
-            ide(IntelliJPlatformType.IntellijIdeaCommunity, "2025.2")
+            // Community distribution was retired after 2024.3; 2025.3+ ships
+            // only the unified IntellijIdea type (Community + Ultimate merged).
+            create(IntelliJPlatformType.IntellijIdeaCommunity, "2023.3")
+            create(IntelliJPlatformType.IntellijIdeaCommunity, "2024.3")
+            create(IntelliJPlatformType.IntellijIdea, "2025.3")
         }
     }
 }
@@ -107,3 +118,4 @@ changelog {
     groups.set(listOf("Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"))
     keepUnreleasedSection.set(true)
 }
+

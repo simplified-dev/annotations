@@ -21,7 +21,7 @@ import java.util.List;
  * Shows a gutter icon next to every {@code @ClassBuilder} annotation so it
  * is immediately discoverable that the class has synthesis active. Keeps
  * scope narrow for v1 - future iterations can extend markers to individual
- * field-level companions (e.g. {@code @Singular}).
+ * field-level companions (e.g. {@code @Collector}).
  *
  * <p>The icon lives at {@code /icons/classbuilder_generated.svg}; replacing
  * that file is the only step needed to swap the art.
