@@ -49,7 +49,9 @@ final class NestedBuilderFactory {
         // build()
         defs.append(buildMethod());
 
-        JCModifiers mods = make.Modifiers(Flags.PUBLIC | Flags.STATIC);
+        // Builder class visibility follows @ClassBuilder.access; always STATIC
+        // because nested builders must not capture an enclosing this.
+        JCModifiers mods = make.Modifiers(ctx.accessFlag() | Flags.STATIC);
         JCClassDecl nested = make.ClassDef(
             mods,
             names.fromString(ctx.builderName()),

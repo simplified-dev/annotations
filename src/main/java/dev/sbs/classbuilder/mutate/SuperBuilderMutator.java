@@ -125,7 +125,7 @@ final class SuperBuilderMutator {
             identType("T"), List.nil()));
 
         JCClassDecl nested = make.ClassDef(
-            make.Modifiers(Flags.PUBLIC | Flags.STATIC | Flags.ABSTRACT),
+            make.Modifiers(ctx.accessFlag() | Flags.STATIC | Flags.ABSTRACT),
             names.fromString(ctx.builderName()),
             selfTypedTypeParameters(),
             null,
@@ -186,7 +186,7 @@ final class SuperBuilderMutator {
         );
 
         JCClassDecl nested = make.ClassDef(
-            make.Modifiers(Flags.PUBLIC | Flags.STATIC),
+            make.Modifiers(ctx.accessFlag() | Flags.STATIC),
             names.fromString(ctx.builderName()),
             List.nil(),
             extendsExpr,
@@ -227,7 +227,7 @@ final class SuperBuilderMutator {
         );
 
         JCClassDecl nested = make.ClassDef(
-            make.Modifiers(Flags.PUBLIC | Flags.STATIC | Flags.ABSTRACT),
+            make.Modifiers(ctx.accessFlag() | Flags.STATIC | Flags.ABSTRACT),
             names.fromString(ctx.builderName()),
             selfTypedTypeParameters(),
             extendsExpr,

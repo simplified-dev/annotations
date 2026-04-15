@@ -1,8 +1,10 @@
 package dev.sbs.classbuilder.mutate;
 
+import com.sun.tools.javac.code.Flags;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import com.sun.tools.javac.tree.TreeMaker;
 import com.sun.tools.javac.util.Names;
+import dev.sbs.annotation.AccessLevel;
 import dev.sbs.classbuilder.apt.BuilderConfig;
 import dev.sbs.classbuilder.apt.FieldSpec;
 
@@ -50,5 +52,25 @@ public final class MutationContext {
     public List<FieldSpec> fields() { return fields; }
     public String targetSimpleName() { return targetSimpleName; }
     public String builderName() { return builderName; }
+
+    /**
+     * Translates the resolved {@link AccessLevel} into the javac modifier
+     * bit-field used on generated {@link JCClassDecl} and method modifiers.
+     * {@link AccessLevel#PACKAGE} maps to {@code 0} (no modifier keyword,
+     * which is how javac represents package-private).
+     */
+    public long accessFlag() {
+        return accessFlagFor(config.access());
+    }
+
+    /** Static variant so call sites without a context can reuse the mapping. */
+    public static long accessFlagFor(AccessLevel access) {
+        return switch (access) {
+            case PUBLIC -> Flags.PUBLIC;
+            case PROTECTED -> Flags.PROTECTED;
+            case PRIVATE -> Flags.PRIVATE;
+            case PACKAGE -> 0L;
+        };
+    }
 
 }

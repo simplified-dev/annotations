@@ -57,11 +57,17 @@ final class GeneratedMemberFactory {
         PsiClassType builderType = (PsiClassType) elements.createTypeFromText(builderFqn, target);
         PsiClassType targetType = elements.createType(target);
 
-        PsiMethod builderMethod = buildStaticNoArg(psiManager, target, config.builderMethodName(), builderType);
-        PsiMethod fromMethod = buildStaticOneArg(psiManager, target, config.fromMethodName(), builderType, targetType, "instance");
-        PsiMethod mutateMethod = buildInstanceNoArg(psiManager, target, config.toBuilderMethodName(), builderType);
-
-        return List.of(builderMethod, fromMethod, mutateMethod);
+        List<PsiMethod> out = new ArrayList<>(3);
+        if (config.generateBuilder() && !config.builderMethodName().isEmpty()) {
+            out.add(buildStaticNoArg(psiManager, target, config.builderMethodName(), builderType, config.access()));
+        }
+        if (config.generateFrom() && !config.fromMethodName().isEmpty()) {
+            out.add(buildStaticOneArg(psiManager, target, config.fromMethodName(), builderType, targetType, "instance", config.access()));
+        }
+        if (config.generateMutate() && !config.toBuilderMethodName().isEmpty()) {
+            out.add(buildInstanceNoArg(psiManager, target, config.toBuilderMethodName(), builderType, config.access()));
+        }
+        return out;
     }
 
     private static String builderTypeFqn(PsiClass target, EditorBuilderConfig config) {
@@ -71,12 +77,12 @@ final class GeneratedMemberFactory {
     }
 
     private static PsiMethod buildStaticNoArg(PsiManager manager, PsiClass target,
-                                              String name, PsiType returnType) {
+                                              String name, PsiType returnType, String access) {
         LightMethodBuilder m = new LightMethodBuilder(manager, name)
             .setMethodReturnType(returnType)
-            .addModifier(PsiModifier.PUBLIC)
             .addModifier(PsiModifier.STATIC)
             .setContainingClass(target);
+        applyAccess(m, access);
         GeneratedMemberMarker.mark(m);
         m.setNavigationElement(target);
         return m;
@@ -84,27 +90,36 @@ final class GeneratedMemberFactory {
 
     private static PsiMethod buildStaticOneArg(PsiManager manager, PsiClass target,
                                                String name, PsiType returnType,
-                                               PsiType paramType, String paramName) {
+                                               PsiType paramType, String paramName, String access) {
         LightMethodBuilder m = new LightMethodBuilder(manager, name)
             .setMethodReturnType(returnType)
             .addParameter(paramName, paramType)
-            .addModifier(PsiModifier.PUBLIC)
             .addModifier(PsiModifier.STATIC)
             .setContainingClass(target);
+        applyAccess(m, access);
         GeneratedMemberMarker.mark(m);
         m.setNavigationElement(target);
         return m;
     }
 
     private static PsiMethod buildInstanceNoArg(PsiManager manager, PsiClass target,
-                                                String name, PsiType returnType) {
+                                                String name, PsiType returnType, String access) {
         LightMethodBuilder m = new LightMethodBuilder(manager, name)
             .setMethodReturnType(returnType)
-            .addModifier(PsiModifier.PUBLIC)
             .setContainingClass(target);
+        applyAccess(m, access);
         GeneratedMemberMarker.mark(m);
         m.setNavigationElement(target);
         return m;
+    }
+
+    /**
+     * Adds the PUBLIC/PROTECTED/PRIVATE modifier to a light-method builder when
+     * the access level requires one; PACKAGE-private is represented by the
+     * absence of any of those three modifiers.
+     */
+    private static void applyAccess(LightMethodBuilder m, String access) {
+        if (!access.isEmpty()) m.addModifier(access);
     }
 
     /**
@@ -119,7 +134,7 @@ final class GeneratedMemberFactory {
         PsiElementFactory elements = JavaPsiFacade.getElementFactory(project);
 
         LightPsiClassBuilder builder = new LightPsiClassBuilder(target, config.builderName());
-        builder.getModifierList().addModifier(PsiModifier.PUBLIC);
+        if (!config.access().isEmpty()) builder.getModifierList().addModifier(config.access());
         builder.getModifierList().addModifier(PsiModifier.STATIC);
         builder.setContainingClass(target);
         builder.setNavigationElement(target);
@@ -150,8 +165,9 @@ final class GeneratedMemberFactory {
         }
         for (PsiMethod setter : setters) builder.addMethod(setter);
 
-        // build()
-        LightMethodBuilder build = new LightMethodBuilder(psiManager, "build")
+        // build() - always public (access attribute governs the enclosing
+        // builder class + bootstraps, not the terminal build method).
+        LightMethodBuilder build = new LightMethodBuilder(psiManager, config.buildMethodName())
             .setMethodReturnType(targetType)
             .addModifier(PsiModifier.PUBLIC)
             .setContainingClass(builder);
@@ -389,24 +405,42 @@ final class GeneratedMemberFactory {
 
     /**
      * Resolved builder configuration from the editor's PSI view of the
-     * annotation. Kept small - the augment provider only needs the names.
+     * annotation. Carries every attribute the synthesiser needs to match the
+     * AST-mutation output, so the two pipelines stay aligned.
+     *
+     * <p>{@code access} holds the PSI modifier keyword ({@code "public"},
+     * {@code "protected"}, {@code "private"}, or {@code ""} for package-
+     * private) so call sites can pass it straight into
+     * {@code LightMethodBuilder.addModifier} without a second translation.
      */
     record EditorBuilderConfig(String builderName, String builderMethodName,
-                               String fromMethodName, String toBuilderMethodName,
-                               String methodPrefix) {
+                               String buildMethodName, String fromMethodName,
+                               String toBuilderMethodName, String methodPrefix,
+                               String access, boolean generateBuilder,
+                               boolean generateFrom, boolean generateMutate) {
         static EditorBuilderConfig fromAnnotation(PsiAnnotation annotation) {
             String builderName = ClassBuilderConstants.stringAttr(annotation,
                 ClassBuilderConstants.ATTR_BUILDER_NAME, ClassBuilderConstants.DEFAULT_BUILDER_NAME);
             String builderMethodName = ClassBuilderConstants.stringAttr(annotation,
                 ClassBuilderConstants.ATTR_BUILDER_METHOD_NAME, ClassBuilderConstants.DEFAULT_BUILDER_METHOD);
+            String buildMethodName = ClassBuilderConstants.stringAttr(annotation,
+                ClassBuilderConstants.ATTR_BUILD_METHOD_NAME, ClassBuilderConstants.DEFAULT_BUILD_METHOD);
             String fromMethodName = ClassBuilderConstants.stringAttr(annotation,
                 ClassBuilderConstants.ATTR_FROM_METHOD_NAME, ClassBuilderConstants.DEFAULT_FROM_METHOD);
             String toBuilderMethodName = ClassBuilderConstants.stringAttr(annotation,
                 ClassBuilderConstants.ATTR_TO_BUILDER_METHOD_NAME, ClassBuilderConstants.DEFAULT_TO_BUILDER_METHOD);
             String methodPrefix = ClassBuilderConstants.stringAttr(annotation,
                 ClassBuilderConstants.ATTR_METHOD_PREFIX, ClassBuilderConstants.DEFAULT_METHOD_PREFIX);
-            return new EditorBuilderConfig(builderName, builderMethodName, fromMethodName,
-                toBuilderMethodName, methodPrefix);
+            String access = ClassBuilderConstants.accessKeyword(annotation);
+            boolean generateBuilder = ClassBuilderConstants.booleanAttr(annotation,
+                ClassBuilderConstants.ATTR_GENERATE_BUILDER, true);
+            boolean generateFrom = ClassBuilderConstants.booleanAttr(annotation,
+                ClassBuilderConstants.ATTR_GENERATE_FROM, true);
+            boolean generateMutate = ClassBuilderConstants.booleanAttr(annotation,
+                ClassBuilderConstants.ATTR_GENERATE_MUTATE, true);
+            return new EditorBuilderConfig(builderName, builderMethodName, buildMethodName,
+                fromMethodName, toBuilderMethodName, methodPrefix, access,
+                generateBuilder, generateFrom, generateMutate);
         }
     }
 

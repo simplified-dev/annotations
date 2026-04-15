@@ -19,6 +19,7 @@ public final class ClassBuilderConstants {
 
     public static final @NotNull String ATTR_BUILDER_NAME = "builderName";
     public static final @NotNull String ATTR_BUILDER_METHOD_NAME = "builderMethodName";
+    public static final @NotNull String ATTR_BUILD_METHOD_NAME = "buildMethodName";
     public static final @NotNull String ATTR_FROM_METHOD_NAME = "fromMethodName";
     public static final @NotNull String ATTR_TO_BUILDER_METHOD_NAME = "toBuilderMethodName";
     public static final @NotNull String ATTR_METHOD_PREFIX = "methodPrefix";
@@ -29,6 +30,7 @@ public final class ClassBuilderConstants {
 
     public static final @NotNull String DEFAULT_BUILDER_NAME = "Builder";
     public static final @NotNull String DEFAULT_BUILDER_METHOD = "builder";
+    public static final @NotNull String DEFAULT_BUILD_METHOD = "build";
     public static final @NotNull String DEFAULT_FROM_METHOD = "from";
     public static final @NotNull String DEFAULT_TO_BUILDER_METHOD = "mutate";
     public static final @NotNull String DEFAULT_METHOD_PREFIX = "with";

@@ -67,13 +67,19 @@ final class BootstrapMethodFactory {
     /** Appends whichever bootstrap methods are missing from the target. */
     void appendAll() {
         JCClassDecl target = ctx.target();
-        String builderMethod = ctx.config().builderMethodName();
-        String fromMethod = ctx.config().fromMethodName();
-        String mutateMethod = ctx.config().toBuilderMethodName();
+        var config = ctx.config();
+        String builderMethod = config.builderMethodName();
+        String fromMethod = config.fromMethodName();
+        String mutateMethod = config.toBuilderMethodName();
 
-        if (!builderMethod.isEmpty()) appendIfAbsent(target, builderMethod, 0, this::builderFactory);
-        if (!fromMethod.isEmpty()) appendIfAbsent(target, fromMethod, 1, this::fromFactory);
-        if (!mutateMethod.isEmpty()) appendIfAbsent(target, mutateMethod, 0, this::mutateMethod);
+        // Each bootstrap honours BOTH its opt-out gate and name non-emptiness.
+        // An empty name is treated as "don't emit" per the annotation Javadoc.
+        if (config.generateBuilder() && !builderMethod.isEmpty())
+            appendIfAbsent(target, builderMethod, 0, this::builderFactory);
+        if (config.generateFrom() && !fromMethod.isEmpty())
+            appendIfAbsent(target, fromMethod, 1, this::fromFactory);
+        if (config.generateMutate() && !mutateMethod.isEmpty())
+            appendIfAbsent(target, mutateMethod, 0, this::mutateMethod);
     }
 
     /**
@@ -115,7 +121,7 @@ final class BootstrapMethodFactory {
         JCBlock body = make.Block(0, List.of(make.Return(newBuilder)));
 
         JCMethodDecl method = make.MethodDef(
-            make.Modifiers(Flags.PUBLIC | Flags.STATIC),
+            make.Modifiers(ctx.accessFlag() | Flags.STATIC),
             names.fromString(ctx.config().builderMethodName()),
             make.Ident(names.fromString(ctx.builderName())),
             List.nil(),
@@ -163,7 +169,7 @@ final class BootstrapMethodFactory {
         body.append(make.Return(make.Ident(names.fromString("b"))));
 
         JCMethodDecl method = make.MethodDef(
-            make.Modifiers(Flags.PUBLIC | Flags.STATIC),
+            make.Modifiers(ctx.accessFlag() | Flags.STATIC),
             names.fromString(ctx.config().fromMethodName()),
             builderType,
             List.nil(),
@@ -248,7 +254,7 @@ final class BootstrapMethodFactory {
         );
         JCBlock body = make.Block(0, List.of(make.Return(fromCall)));
 
-        JCModifiers mods = make.Modifiers(Flags.PUBLIC);
+        JCModifiers mods = make.Modifiers(ctx.accessFlag());
         JCMethodDecl method = make.MethodDef(
             mods,
             names.fromString(ctx.config().toBuilderMethodName()),

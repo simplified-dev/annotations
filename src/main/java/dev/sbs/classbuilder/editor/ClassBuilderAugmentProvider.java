@@ -1,5 +1,6 @@
 package dev.sbs.classbuilder.editor;
 
+import com.intellij.openapi.util.Key;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElement;
@@ -16,6 +17,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -41,6 +43,26 @@ public final class ClassBuilderAugmentProvider extends PsiAugmentProvider {
      */
     private static final ThreadLocal<Set<PsiClass>> IN_PROGRESS =
         ThreadLocal.withInitial(HashSet::new);
+
+    /**
+     * Memoises per-target synthesised members. {@link CachedValuesManager}
+     * periodically re-runs producers and requires the results be equal across
+     * invocations ({@link com.intellij.util.IdempotenceChecker}). Building a
+     * fresh {@code LightPsiClassBuilder} / {@code LightMethodBuilder} on each
+     * call yields new-identity instances that fail that check, so we keep one
+     * cached pair on the target's user data keyed by the resolved
+     * {@link GeneratedMemberFactory.EditorBuilderConfig}. When the annotation
+     * changes, the config differs, and the lambda synthesises fresh members
+     * (and replaces the cache). When the producer is re-invoked for the same
+     * config, it returns the already-stored instances - idempotent.
+     */
+    private static final Key<SynthesizedMembers> SYNTHESIZED =
+        Key.create("dev.sbs.classbuilder.synthesized");
+
+    private record SynthesizedMembers(GeneratedMemberFactory.EditorBuilderConfig config,
+                                      List<PsiMethod> bootstrapMethods,
+                                      PsiClass builderClass) {
+    }
 
     @Override
     protected @NotNull <Psi extends PsiElement> List<Psi> getAugments(@NotNull PsiElement element,
@@ -73,10 +95,9 @@ public final class ClassBuilderAugmentProvider extends PsiAugmentProvider {
                 return CachedValueProvider.Result.create(Collections.<PsiMethod>emptyList(),
                     PsiModificationTracker.MODIFICATION_COUNT);
             }
-            GeneratedMemberFactory.EditorBuilderConfig config =
-                GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(resolved);
+            SynthesizedMembers members = synthesizeOrReuse(target, resolved);
             return CachedValueProvider.Result.create(
-                GeneratedMemberFactory.bootstrapMethods(target, config),
+                members.bootstrapMethods(),
                 PsiModificationTracker.MODIFICATION_COUNT);
         });
     }
@@ -101,21 +122,43 @@ public final class ClassBuilderAugmentProvider extends PsiAugmentProvider {
                         PsiModificationTracker.MODIFICATION_COUNT);
                 }
             }
-            // Wrap the synthesis in the recursion guard. Synthesising the
-            // Builder eagerly resolves the self-reference type, which re-enters
-            // getAugments() for the same target via the inner-class lookup;
-            // the guard ensures the inner call returns empty rather than
-            // looping until stack overflow.
-            IN_PROGRESS.get().add(target);
-            try {
-                PsiClass synthetic = GeneratedMemberFactory.synthesizeBuilderClass(target, config);
-                return CachedValueProvider.Result.create(
-                    List.of(synthetic),
-                    PsiModificationTracker.MODIFICATION_COUNT);
-            } finally {
-                IN_PROGRESS.get().remove(target);
-            }
+            SynthesizedMembers members = synthesizeOrReuse(target, resolved);
+            return CachedValueProvider.Result.create(
+                List.of(members.builderClass()),
+                PsiModificationTracker.MODIFICATION_COUNT);
         });
+    }
+
+    /**
+     * Returns cached {@link SynthesizedMembers} when the stored config matches
+     * the current annotation, otherwise re-synthesises and replaces the cache.
+     * Pairs with {@link #SYNTHESIZED} to defeat
+     * {@link com.intellij.util.IdempotenceChecker} re-invocation failures:
+     * whoever wins the synthesis race stores its result under the key, and
+     * subsequent calls (including the checker's rerun) retrieve the same
+     * {@link PsiClass} / {@link PsiMethod} instances.
+     */
+    private static SynthesizedMembers synthesizeOrReuse(PsiClass target, PsiAnnotation resolved) {
+        GeneratedMemberFactory.EditorBuilderConfig config =
+            GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(resolved);
+        SynthesizedMembers cached = target.getUserData(SYNTHESIZED);
+        if (cached != null && Objects.equals(cached.config(), config)) {
+            return cached;
+        }
+        // Wrap synthesis in the recursion guard. Eagerly resolving the self-
+        // reference type re-enters getAugments() for the same target via the
+        // inner-class lookup; the guard ensures the inner call returns empty
+        // rather than looping until stack overflow.
+        IN_PROGRESS.get().add(target);
+        try {
+            PsiClass builderClass = GeneratedMemberFactory.synthesizeBuilderClass(target, config);
+            List<PsiMethod> bootstrap = GeneratedMemberFactory.bootstrapMethods(target, config);
+            SynthesizedMembers fresh = new SynthesizedMembers(config, bootstrap, builderClass);
+            target.putUserData(SYNTHESIZED, fresh);
+            return fresh;
+        } finally {
+            IN_PROGRESS.get().remove(target);
+        }
     }
 
     private static PsiAnnotation findClassBuilderAnnotation(PsiClass target) {
