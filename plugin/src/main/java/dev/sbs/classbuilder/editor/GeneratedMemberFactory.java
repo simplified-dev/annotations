@@ -16,6 +16,7 @@ import com.intellij.psi.PsiManager;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiType;
+import com.intellij.psi.PsiTypes;
 import com.intellij.psi.TypeAnnotationProvider;
 import com.intellij.psi.impl.light.LightMethodBuilder;
 import com.intellij.psi.impl.light.LightModifierList;
@@ -392,7 +393,7 @@ final class GeneratedMemberFactory {
 
     private static PsiMethod arrayVarargs(SetterCtx ctx, PsiFieldShape field) {
         // fall back to plain setter if the component type is unknown
-        PsiType component = field.arrayComponent != null ? field.arrayComponent : PsiType.NULL;
+        PsiType component = field.arrayComponent != null ? field.arrayComponent : PsiTypes.nullType();
         LightMethodBuilder m = newSetter(ctx, field, methodName(ctx, field.name, false));
         m.addParameter(buildParam(m, field.name, component, true, primaryNullability(field)));
         return m;
@@ -404,7 +405,7 @@ final class GeneratedMemberFactory {
 
     private static PsiMethod booleanTyped(SetterCtx ctx, PsiFieldShape field, String methodBase) {
         LightMethodBuilder m = newSetter(ctx, field, "is" + capitalise(methodBase));
-        m.addParameter(buildParam(m, methodBase, PsiType.BOOLEAN, false));
+        m.addParameter(buildParam(m, methodBase, PsiTypes.booleanType(), false));
         return m;
     }
 

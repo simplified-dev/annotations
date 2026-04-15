@@ -4,6 +4,7 @@ import com.intellij.psi.PsiArrayType;
 import com.intellij.psi.PsiClassType;
 import com.intellij.psi.PsiDocCommentOwner;
 import com.intellij.psi.PsiType;
+import com.intellij.psi.PsiTypes;
 import org.jetbrains.annotations.Nullable;
 
 /**
@@ -116,7 +117,7 @@ public final class PsiFieldShape {
         Builder b = new Builder();
         b.name = name;
         b.type = type;
-        b.isBoolean = PsiType.BOOLEAN.equals(type);
+        b.isBoolean = PsiTypes.booleanType().equals(type);
 
         if (type instanceof PsiArrayType array) {
             b.isArray = true;

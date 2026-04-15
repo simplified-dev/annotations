@@ -1,6 +1,5 @@
 package dev.sbs.classbuilder.editor;
 
-import com.intellij.codeInsight.daemon.DaemonCodeAnalyzer;
 import com.intellij.openapi.components.Service;
 import com.intellij.openapi.project.Project;
 import com.intellij.psi.PsiAnnotation;
@@ -12,6 +11,7 @@ import com.intellij.psi.PsiTreeChangeAdapter;
 import com.intellij.psi.PsiTreeChangeEvent;
 import com.intellij.util.messages.MessageBusConnection;
 import dev.sbs.classbuilder.inspect.ClassBuilderConstants;
+import dev.sbs.util.DaemonRestart;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -70,7 +70,7 @@ final class ClassBuilderChangeService {
                 PsiFile file = annotation.getContainingFile();
                 if (file == null || !file.isValid()) return;
 
-                DaemonCodeAnalyzer.getInstance(project).restart();
+                DaemonRestart.restart(project, file, "ClassBuilder annotation changed");
             }
         };
     }
