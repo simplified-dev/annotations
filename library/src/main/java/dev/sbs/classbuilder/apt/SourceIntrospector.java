@@ -19,7 +19,7 @@ import java.util.Set;
  * Reads source-level information that is not surfaced by the {@link javax.lang.model}
  * API, via the javac-specific {@link Trees} bridge.
  *
- * <p>Used to resolve the declared initializer of a {@code @BuilderDefault} field
+ * <p>Used to resolve the declared initializer of a {@code @BuildRule(retainInit = true)} field
  * so the generated builder can reproduce it. Also harvests type references from
  * that initializer so the builder can import them alongside.
  *

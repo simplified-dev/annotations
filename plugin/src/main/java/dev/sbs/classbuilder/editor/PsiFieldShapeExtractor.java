@@ -19,7 +19,7 @@ import java.util.Set;
 /**
  * Walks a {@code @ClassBuilder}-annotated PsiClass (or a record) and derives
  * the {@link PsiFieldShape} list the augment provider uses to synthesise
- * setters. Honours {@code @BuilderIgnore} and the annotation's
+ * setters. Honours {@code @BuildRule(ignore)} and the annotation's
  * {@code exclude} attribute, and reads companion annotations
  * ({@code @Collector}, {@code @Negate}, {@code @Formattable},
  * {@code @Nullable}) so the synthesised shape matrix lines up with what
@@ -27,11 +27,10 @@ import java.util.Set;
  */
 final class PsiFieldShapeExtractor {
 
-    private static final String BUILDER_IGNORE_FQN = ClassBuilderConstants.BUILDER_IGNORE_FQN;
+    private static final String BUILD_RULE_FQN = ClassBuilderConstants.BUILD_RULE_FQN;
     private static final String COLLECTOR_FQN = ClassBuilderConstants.COLLECTOR_FQN;
     private static final String NEGATE_FQN = ClassBuilderConstants.NEGATE_FQN;
     private static final String FORMATTABLE_FQN = ClassBuilderConstants.FORMATTABLE_FQN;
-    private static final String BUILD_FLAG_FQN = ClassBuilderConstants.BUILD_FLAG_FQN;
 
     private PsiFieldShapeExtractor() {
     }
@@ -46,7 +45,7 @@ final class PsiFieldShapeExtractor {
             if (field.hasModifierProperty(PsiModifier.STATIC)) continue;
             if (field.hasModifierProperty(PsiModifier.TRANSIENT)) continue;
             if (excluded.contains(field.getName())) continue;
-            if (hasAnnotation(field, BUILDER_IGNORE_FQN)) continue;
+            if (isIgnored(field)) continue;
             out.add(buildShape(field, field.getName(), field.getType()));
         }
         return out;
@@ -58,10 +57,16 @@ final class PsiFieldShapeExtractor {
         for (PsiRecordComponent c : record.getRecordComponents()) {
             String name = c.getName();
             if (excluded.contains(name)) continue;
-            if (hasAnnotation(c, BUILDER_IGNORE_FQN)) continue;
+            if (isIgnored(c)) continue;
             out.add(buildShape(c, name, c.getType()));
         }
         return out;
+    }
+
+    /** True when the owner carries {@code @BuildRule(ignore = true)}. */
+    private static boolean isIgnored(PsiModifierListOwner owner) {
+        PsiAnnotation rule = findAnnotation(owner, BUILD_RULE_FQN);
+        return rule != null && booleanAttr(rule, "ignore", false);
     }
 
     /**
@@ -97,8 +102,16 @@ final class PsiFieldShapeExtractor {
             b.singularName = methodName.isEmpty() ? defaultSingular(name) : methodName;
         }
 
-        PsiAnnotation buildFlag = findAnnotation(owner, BUILD_FLAG_FQN);
-        if (buildFlag != null) b.nonNullByBuildFlag = booleanAttr(buildFlag, "nonNull", false);
+        // @BuildRule.flag().nonNull() - PsiAnnotation.findAttributeValue
+        // returns a PsiAnnotation for nested-annotation attributes; read
+        // its own attribute via the same booleanAttr helper.
+        PsiAnnotation rule = findAnnotation(owner, BUILD_RULE_FQN);
+        if (rule != null) {
+            PsiAnnotationMemberValue flagValue = rule.findAttributeValue("flag");
+            if (flagValue instanceof PsiAnnotation flag) {
+                b.nonNullByBuildFlag = booleanAttr(flag, "nonNull", false);
+            }
+        }
         return b.build();
     }
 

@@ -47,9 +47,17 @@ public class AnnotationSurfaceTest {
     }
 
     @Test
+    public void buildRule_metadata() {
+        assertRetention(BuildRule.class, RetentionPolicy.RUNTIME);
+        assertTargets(BuildRule.class, ElementType.FIELD);
+    }
+
+    @Test
     public void buildFlag_metadata() {
+        // BuildFlag is nested-only (@Target({})) but stays RUNTIME-retained so
+        // BuildFlagValidator can read it reflectively via BuildRule.flag().
         assertRetention(BuildFlag.class, RetentionPolicy.RUNTIME);
-        assertTargets(BuildFlag.class, ElementType.FIELD);
+        assertTargets(BuildFlag.class /* no targets - nested-only */);
     }
 
     @Test
@@ -71,21 +79,11 @@ public class AnnotationSurfaceTest {
     }
 
     @Test
-    public void builderDefault_metadata() {
-        assertRetention(BuilderDefault.class, RetentionPolicy.CLASS);
-        assertTargets(BuilderDefault.class, ElementType.FIELD);
-    }
-
-    @Test
-    public void builderIgnore_metadata() {
-        assertRetention(BuilderIgnore.class, RetentionPolicy.CLASS);
-        assertTargets(BuilderIgnore.class, ElementType.FIELD);
-    }
-
-    @Test
     public void obtainVia_metadata() {
+        // ObtainVia is nested-only (@Target({})). Retention stays CLASS but
+        // effective retention when nested inside @BuildRule is RUNTIME.
         assertRetention(ObtainVia.class, RetentionPolicy.CLASS);
-        assertTargets(ObtainVia.class, ElementType.FIELD);
+        assertTargets(ObtainVia.class /* no targets - nested-only */);
     }
 
     // ------------------------------------------------------------------
@@ -109,6 +107,24 @@ public class AnnotationSurfaceTest {
         assertDefault(ClassBuilder.class, "generateImpl", true);
         assertDefault(ClassBuilder.class, "factoryMethod", "");
         assertArrayEquals(new String[0], (String[]) ClassBuilder.class.getMethod("exclude").getDefaultValue());
+    }
+
+    @Test
+    public void buildRule_defaults() throws Exception {
+        assertDefault(BuildRule.class, "retainInit", false);
+        assertDefault(BuildRule.class, "ignore", false);
+        BuildFlag flagDefault = (BuildFlag) BuildRule.class.getMethod("flag").getDefaultValue();
+        assertNotNull(flagDefault);
+        assertFalse(flagDefault.nonNull());
+        assertFalse(flagDefault.notEmpty());
+        assertEquals("", flagDefault.pattern());
+        assertEquals(-1, flagDefault.limit());
+        assertArrayEquals(new String[0], flagDefault.group());
+        ObtainVia viaDefault = (ObtainVia) BuildRule.class.getMethod("obtainVia").getDefaultValue();
+        assertNotNull(viaDefault);
+        assertEquals("", viaDefault.method());
+        assertEquals("", viaDefault.field());
+        assertFalse(viaDefault.isStatic());
     }
 
     @Test
@@ -173,29 +189,39 @@ public class AnnotationSurfaceTest {
     }
 
     static final class FixtureOnFields {
-        @BuildFlag(nonNull = true, notEmpty = true, limit = 10, pattern = "[a-z]+", group = {"g"}) String a;
+        @BuildRule(flag = @BuildFlag(nonNull = true, notEmpty = true, limit = 10, pattern = "[a-z]+", group = {"g"})) String a;
         @Collector(singular = true, clearable = true) List<String> bs;
         @Collector(singularMethodName = "entry", singular = true) Map<String, String> cs;
         @Negate("disabled") boolean enabled;
         @Formattable String text;
-        @BuilderDefault String defaulted = "x";
-        @BuilderIgnore String ignored;
-        @ObtainVia(method = "getCustomAccess") String custom;
-        @ObtainVia(field = "other") String redirect;
-        @ObtainVia(method = "stat", isStatic = true) String staticCall;
+        @BuildRule(retainInit = true) String defaulted = "x";
+        @BuildRule(ignore = true) String ignored;
+        @BuildRule(obtainVia = @ObtainVia(method = "getCustomAccess")) String custom;
+        @BuildRule(obtainVia = @ObtainVia(field = "other")) String redirect;
+        @BuildRule(obtainVia = @ObtainVia(method = "stat", isStatic = true)) String staticCall;
         @SuppressWarnings("unused") Optional<String> optionalString;
     }
 
     @Test
-    public void buildFlag_visibleAtRuntime_onField() throws Exception {
+    public void buildRule_flag_visibleAtRuntime_onField() throws Exception {
         Field a = FixtureOnFields.class.getDeclaredField("a");
-        BuildFlag flag = a.getAnnotation(BuildFlag.class);
-        assertNotNull("BuildFlag is RUNTIME-retained and should be readable", flag);
+        BuildRule rule = a.getAnnotation(BuildRule.class);
+        assertNotNull("BuildRule is RUNTIME-retained and should be readable", rule);
+        BuildFlag flag = rule.flag();
+        assertNotNull("BuildFlag nested in BuildRule should be readable", flag);
         assertTrue(flag.nonNull());
         assertTrue(flag.notEmpty());
         assertEquals(10, flag.limit());
         assertEquals("[a-z]+", flag.pattern());
         assertArrayEquals(new String[] {"g"}, flag.group());
+    }
+
+    @Test
+    public void buildRule_obtainVia_visibleAtRuntime_onField() throws Exception {
+        Field custom = FixtureOnFields.class.getDeclaredField("custom");
+        BuildRule rule = custom.getAnnotation(BuildRule.class);
+        assertNotNull(rule);
+        assertEquals("getCustomAccess", rule.obtainVia().method());
     }
 
     @Test
@@ -205,18 +231,12 @@ public class AnnotationSurfaceTest {
         assertEquals(0, annotationsByName(FixtureOnClass.class.getAnnotations(), "ClassBuilder"));
         for (Field f : FixtureOnFields.class.getDeclaredFields()) {
             Annotation[] annos = f.getAnnotations();
-            assertEquals("Singular should be invisible at runtime on " + f.getName(),
-                0, annotationsByName(annos, "Singular"));
+            assertEquals("Collector should be invisible at runtime on " + f.getName(),
+                0, annotationsByName(annos, "Collector"));
             assertEquals("Negate should be invisible at runtime on " + f.getName(),
                 0, annotationsByName(annos, "Negate"));
             assertEquals("Formattable should be invisible at runtime on " + f.getName(),
                 0, annotationsByName(annos, "Formattable"));
-            assertEquals("BuilderDefault should be invisible at runtime on " + f.getName(),
-                0, annotationsByName(annos, "BuilderDefault"));
-            assertEquals("BuilderIgnore should be invisible at runtime on " + f.getName(),
-                0, annotationsByName(annos, "BuilderIgnore"));
-            assertEquals("ObtainVia should be invisible at runtime on " + f.getName(),
-                0, annotationsByName(annos, "ObtainVia"));
         }
     }
 

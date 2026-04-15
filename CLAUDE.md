@@ -8,7 +8,7 @@ This is an **IntelliJ IDEA plugin + Maven Central annotation library** that prov
 
 - `@ResourcePath` - evaluates string expressions at annotated sites and verifies the referenced resource files exist in the project's source/resource roots. Pure inspection, no code generation.
 - `@XContract` - a superset of JetBrains `@Contract` with a richer grammar (relational comparisons, `&&`/`||` with grouping, field access, named-parameter references, integer/boolean constants). The plugin synthesises an equivalent `@Contract` via an `InferredAnnotationProvider` so IntelliJ's data-flow analysis works from a single annotation.
-- `@ClassBuilder` - generates a sibling `<TypeName>Builder.java` via a JSR 269 annotation processor. Supports classes, records, and interfaces. Setter shapes cover Optional dual setters, boolean zero-arg + typed pairs with optional negation, String `@PrintFormat` overloads, `@Collector` varargs/iterable bulk overloads with opt-in single-element add/put, clear, and lazy put-if-absent for maps, and configurable method naming. `@BuildFlag` runtime validator enforces nonNull/notEmpty/group/pattern/limit in the generated `build()`. Every generated method carries a matching `@XContract` so IDE data-flow sees fresh-object and this-return shapes.
+- `@ClassBuilder` - generates a sibling `<TypeName>Builder.java` via a JSR 269 annotation processor. Supports classes, records, and interfaces. Setter shapes cover Optional dual setters, boolean zero-arg + typed pairs with optional negation, String `@PrintFormat` overloads, `@Collector` varargs/iterable bulk overloads with opt-in single-element add/put, clear, and lazy put-if-absent for maps, and configurable method naming. `@BuildRule(flag = @BuildFlag(...))` runtime validator enforces nonNull/notEmpty/group/pattern/limit in the generated `build()`. Every generated method carries a matching `@XContract` so IDE data-flow sees fresh-object and this-return shapes.
 
 Published to:
 - JetBrains Marketplace: plugin ID `dev.sbs.simplified-annotations` (from `:plugin` module)
@@ -75,8 +75,10 @@ via `allprojects { }`. Everything else lives in the subprojects' own build scrip
 - `ResourcePath.java` — `@Retention(CLASS)` annotation targeting fields, parameters, and methods. Has an optional `base` attribute that prefixes the resolved path.
 - `XContract.java` — `@Retention(CLASS)` annotation targeting methods and constructors. Attributes: `value` (semicolon-separated clauses), `pure`, `mutates` (comma-separated `this`/`io`/`paramN`). Full grammar is on the annotation's Javadoc.
 - `ClassBuilder.java` — `@Retention(CLASS)` annotation targeting types/constructors/methods. Drives the builder processor. Full Lombok `@Builder` parity (`builderName`, `builderMethodName`, `buildMethodName`, `fromMethodName`, `toBuilderMethodName`, `methodPrefix`, `access`, `validate`, `emitContracts`, `factoryMethod`, `exclude`, `generate*` toggles).
-- `BuildFlag.java` — `@Retention(RUNTIME)` because the validator reflects. Ported from `dev.simplified.reflection.builder.BuildFlag`.
-- `Collector.java`, `Negate.java`, `Formattable.java`, `BuilderDefault.java`, `BuilderIgnore.java`, `ObtainVia.java` — field-level `@Retention(CLASS)` companions.
+- `BuildRule.java` — `@Retention(RUNTIME)` parent for generic field rules: `retainInit` (copy declared initializer into builder), `ignore` (exclude field), nested `flag = @BuildFlag(...)` (runtime validation), nested `obtainVia = @ObtainVia(...)` (redirect `from(T)` accessor). RUNTIME so `BuildFlagValidator` can read nested `@BuildFlag` reflectively.
+- `BuildFlag.java` — `@Retention(RUNTIME)`, `@Target({})` (nested-only). Used as `@BuildRule(flag = @BuildFlag(...))`.
+- `ObtainVia.java` — `@Retention(CLASS)`, `@Target({})` (nested-only). Used as `@BuildRule(obtainVia = @ObtainVia(...))`.
+- `Collector.java`, `Negate.java`, `Formattable.java` — field-level `@Retention(CLASS)` type-specific companions (collection/map, boolean, String).
 - `AccessLevel.java` — enum with `toKeyword()`.
 
 ### Package layout

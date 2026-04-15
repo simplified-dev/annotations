@@ -86,7 +86,7 @@ final class BuilderEmitter {
         for (FieldSpec f : fields) {
             if (f.builderDefault && f.sourceInitializer == null && f.element != null) {
                 messager.printMessage(Diagnostic.Kind.ERROR,
-                    "@BuilderDefault requires the field to have an initializer expression",
+                    "@BuildRule(retainInit = true) requires the field to have an initializer expression",
                     f.element
                 );
             }

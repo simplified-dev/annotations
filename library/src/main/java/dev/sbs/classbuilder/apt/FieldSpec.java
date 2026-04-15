@@ -1,5 +1,6 @@
 package dev.sbs.classbuilder.apt;
 
+import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.ArrayType;
@@ -12,7 +13,7 @@ import java.util.Set;
 
 /**
  * Intermediate representation of a single field on a {@code @ClassBuilder}-annotated class.
- * All classification the emitter needs happens once in {@link #from(VariableElement, AnnotationLookup)},
+ * All classification the emitter needs happens once in {@link #from(VariableElement, AnnotationLookup, SourceIntrospector)},
  * so the emitter only reads already-resolved properties.
  */
 public final class FieldSpec {
@@ -60,7 +61,7 @@ public final class FieldSpec {
     public final String singularName;               // derived from @Collector.singularMethodName or field-name inflection; null if no @Collector
     public final boolean clearable;                 // @Collector(clearable = true) - clear() method
     public final boolean compute;                   // @Collector(compute = true) - maps only, putIfAbsent(K, Supplier<V>)
-    public final boolean ignored;                   // @BuilderIgnore or listed in @ClassBuilder.exclude
+    public final boolean ignored;                   // @BuildRule(ignore = true) or listed in @ClassBuilder.exclude
     public final boolean builderDefault;
     public final String sourceInitializer;          // copied source text of the field's declared initializer
     public final Set<String> initializerImports;    // type FQNs referenced by sourceInitializer
@@ -114,9 +115,10 @@ public final class FieldSpec {
      * retained (the underlying element is a method), so {@link #element} is null
      * and callers that need source reporting should fall back to the type element.
      *
-     * <p>{@code @BuilderDefault} / {@code @ObtainVia} do not apply to interface
-     * accessors (the annotations target fields only), so no {@link SourceIntrospector}
-     * is threaded through this path.
+     * <p>{@code @BuildRule(retainInit)} and {@code @BuildRule(obtainVia)} do
+     * not apply to interface accessors (the annotations target fields only),
+     * so no {@link SourceIntrospector} is threaded through this path - only
+     * {@code ignore} is honoured here.
      */
     public static FieldSpec fromInterfaceAccessor(ExecutableElement method, AnnotationLookup lookup) {
         Builder b = new Builder();
@@ -139,7 +141,10 @@ public final class FieldSpec {
             String v = lookup.stringAttr(method, "dev.sbs.annotation.Collector", "singularMethodName", "");
             b.singularName = v.isEmpty() ? defaultSingular(b.name) : v;
         }
-        b.ignored = lookup.hasAnnotation(method, "dev.sbs.annotation.BuilderIgnore");
+        AnnotationMirror rule = lookup.findMirror(method, "dev.sbs.annotation.BuildRule");
+        if (rule != null) {
+            b.ignored = lookup.booleanAttr(rule, "ignore", false);
+        }
 
         return new FieldSpec(b);
     }
@@ -232,21 +237,29 @@ public final class FieldSpec {
             String v = lookup.stringAttr(element, "dev.sbs.annotation.Collector", "singularMethodName", "");
             b.singularName = v.isEmpty() ? defaultSingular(b.name) : v;
         }
-        b.ignored = lookup.hasAnnotation(element, "dev.sbs.annotation.BuilderIgnore");
-        b.builderDefault = lookup.hasAnnotation(element, "dev.sbs.annotation.BuilderDefault");
-        if (b.builderDefault && introspector != null) {
-            SourceIntrospector.InitializerInfo info = introspector.readFieldInitializer(element);
-            if (info != null) {
-                b.sourceInitializer = info.text();
-                b.initializerImports = new LinkedHashSet<>(info.typeImports());
+        // @BuildRule is the single entry point for retainInit / ignore /
+        // flag / obtainVia. flag() lives in the class-file bytecode too but
+        // is only read at runtime by BuildFlagValidator - APT doesn't
+        // decompose its nested attributes.
+        AnnotationMirror rule = lookup.findMirror(element, "dev.sbs.annotation.BuildRule");
+        if (rule != null) {
+            b.ignored = lookup.booleanAttr(rule, "ignore", false);
+            b.builderDefault = lookup.booleanAttr(rule, "retainInit", false);
+            if (b.builderDefault && introspector != null) {
+                SourceIntrospector.InitializerInfo info = introspector.readFieldInitializer(element);
+                if (info != null) {
+                    b.sourceInitializer = info.text();
+                    b.initializerImports = new LinkedHashSet<>(info.typeImports());
+                }
             }
-        }
-        if (lookup.hasAnnotation(element, "dev.sbs.annotation.ObtainVia")) {
-            b.obtainViaMethod = lookup.stringAttr(element, "dev.sbs.annotation.ObtainVia", "method", "");
-            b.obtainViaField = lookup.stringAttr(element, "dev.sbs.annotation.ObtainVia", "field", "");
-            b.obtainViaStatic = lookup.booleanAttr(element, "dev.sbs.annotation.ObtainVia", "isStatic", false);
-            if (b.obtainViaMethod.isEmpty()) b.obtainViaMethod = null;
-            if (b.obtainViaField.isEmpty()) b.obtainViaField = null;
+            AnnotationMirror via = lookup.nestedAnnotationValue(rule, "obtainVia");
+            if (via != null) {
+                String m = lookup.stringAttr(via, "method", "");
+                String f = lookup.stringAttr(via, "field", "");
+                b.obtainViaMethod = m.isEmpty() ? null : m;
+                b.obtainViaField = f.isEmpty() ? null : f;
+                b.obtainViaStatic = lookup.booleanAttr(via, "isStatic", false);
+            }
         }
 
         return new FieldSpec(b);

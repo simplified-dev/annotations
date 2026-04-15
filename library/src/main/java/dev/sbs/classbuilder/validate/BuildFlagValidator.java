@@ -1,6 +1,7 @@
 package dev.sbs.classbuilder.validate;
 
 import dev.sbs.annotation.BuildFlag;
+import dev.sbs.annotation.BuildRule;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -18,13 +19,15 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
- * Runtime helper that scans an object's fields for {@link BuildFlag} annotations
- * and enforces their constraints. Invoked from the generated {@code build()}
- * method of every {@code @ClassBuilder}-annotated type.
+ * Runtime helper that scans an object's fields for
+ * {@link BuildRule @BuildRule(flag = @BuildFlag(...))} annotations and
+ * enforces the nested flag's constraints. Invoked from the generated
+ * {@code build()} method of every {@code @ClassBuilder}-annotated type.
  *
- * <p>The list of annotated fields per class is cached on first invocation, so
- * subsequent calls for the same type skip all reflective discovery and only
- * read field values.
+ * <p>The list of flagged fields per class is cached on first invocation,
+ * so subsequent calls for the same type skip all reflective discovery and
+ * only read field values. Fields with a no-op flag (every attribute at its
+ * default) are elided at cache-build time and never checked.
  */
 public final class BuildFlagValidator {
 
@@ -104,8 +107,10 @@ public final class BuildFlagValidator {
         List<FlaggedField> out = new ArrayList<>();
         for (Class<?> c = cls; c != null && c != Object.class; c = c.getSuperclass()) {
             for (Field field : c.getDeclaredFields()) {
-                BuildFlag flag = field.getAnnotation(BuildFlag.class);
-                if (flag == null) continue;
+                BuildRule rule = field.getAnnotation(BuildRule.class);
+                if (rule == null) continue;
+                BuildFlag flag = rule.flag();
+                if (!hasAnyConstraint(flag)) continue;
                 try {
                     field.setAccessible(true);
                 } catch (RuntimeException ignored) {
@@ -115,6 +120,19 @@ public final class BuildFlagValidator {
             }
         }
         return List.copyOf(out);
+    }
+
+    /**
+     * True iff the flag carries at least one meaningful constraint. A flag
+     * with every attribute at its default value is a no-op and filtered out
+     * at scan time, so the hot loop in {@link #validate} never touches it.
+     */
+    private static boolean hasAnyConstraint(@NotNull BuildFlag flag) {
+        return flag.nonNull()
+            || flag.notEmpty()
+            || !flag.pattern().isEmpty()
+            || flag.limit() >= 0
+            || flag.group().length > 0;
     }
 
     private static @Nullable Object readValue(@NotNull Field field, @NotNull Object target) {

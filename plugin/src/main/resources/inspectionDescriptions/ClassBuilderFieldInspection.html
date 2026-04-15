@@ -15,14 +15,15 @@ Flags misuse of the per-field companion annotations that travel with
       setters, with opt-in single-element <code>addX</code> /
       <code>putX</code>, <code>clearX</code>, and
       <code>putXIfAbsent</code> (maps only).</li>
-  <li><code>@BuildFlag(pattern = ...)</code> is only meaningful on
-      <code>CharSequence</code> or <code>Optional&lt;String&gt;</code>
-      fields - the validator cannot check a regex against other types.</li>
-  <li><code>@BuildFlag(limit = N)</code> is only meaningful on
-      <code>CharSequence</code>, <code>Collection</code>, <code>Map</code>,
-      object arrays, or <code>Optional</code> of <code>String</code> /
-      <code>Number</code> - the validator has no notion of size on
-      other types.</li>
+  <li><code>@BuildRule(flag = @BuildFlag(pattern = ...))</code> is only
+      meaningful on <code>CharSequence</code> or
+      <code>Optional&lt;String&gt;</code> fields - the validator cannot
+      check a regex against other types.</li>
+  <li><code>@BuildRule(flag = @BuildFlag(limit = N))</code> is only
+      meaningful on <code>CharSequence</code>, <code>Collection</code>,
+      <code>Map</code>, object arrays, or <code>Optional</code> of
+      <code>String</code> / <code>Number</code> - the validator has no
+      notion of size on other types.</li>
 </ul>
 
 <!-- tooltip end -->

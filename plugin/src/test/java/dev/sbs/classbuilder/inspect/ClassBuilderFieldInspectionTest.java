@@ -54,11 +54,34 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
             """
             package dev.sbs.annotation;
             import java.lang.annotation.*;
-            @Retention(RetentionPolicy.RUNTIME) @Target(ElementType.FIELD)
+            @Retention(RetentionPolicy.RUNTIME) @Target({})
             public @interface BuildFlag {
                 boolean nonNull() default false;
                 String pattern() default "";
                 int limit() default -1;
+            }
+            """);
+        myFixture.addFileToProject("dev/sbs/annotation/ObtainVia.java",
+            """
+            package dev.sbs.annotation;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target({})
+            public @interface ObtainVia {
+                String method() default "";
+                String field() default "";
+                boolean isStatic() default false;
+            }
+            """);
+        myFixture.addFileToProject("dev/sbs/annotation/BuildRule.java",
+            """
+            package dev.sbs.annotation;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.RUNTIME) @Target(ElementType.FIELD)
+            public @interface BuildRule {
+                boolean retainInit() default false;
+                boolean ignore() default false;
+                BuildFlag flag() default @BuildFlag;
+                ObtainVia obtainVia() default @ObtainVia;
             }
             """);
     }
@@ -106,25 +129,39 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
         assertTrue(hasErrorContaining("@Collector requires"));
     }
 
-    public void testBuildFlagLimitOnIntField_warned() {
+    public void testBuildRuleFlagLimitOnIntField_warned() {
         myFixture.configureByText("Foo.java",
             """
             import dev.sbs.annotation.BuildFlag;
+            import dev.sbs.annotation.BuildRule;
             public class Foo {
-                @BuildFlag(limit = 10) int count;
+                @BuildRule(flag = @BuildFlag(limit = 10)) int count;
             }
             """);
-        assertTrue(hasErrorContaining("@BuildFlag(limit"));
+        assertTrue(hasErrorContaining("@BuildRule(flag = @BuildFlag(limit"));
     }
 
-    public void testBuildFlagLimit_notApplicableToAllTypes() {
+    public void testBuildRuleFlagLimit_notApplicableToAllTypes() {
         myFixture.configureByText("Foo.java",
             """
             import dev.sbs.annotation.BuildFlag;
+            import dev.sbs.annotation.BuildRule;
             public class Foo {
-                @BuildFlag(limit = 10) boolean flag;
+                @BuildRule(flag = @BuildFlag(limit = 10)) boolean flag;
             }
             """);
-        assertTrue(hasErrorContaining("@BuildFlag(limit"));
+        assertTrue(hasErrorContaining("@BuildRule(flag = @BuildFlag(limit"));
+    }
+
+    public void testBuildRuleFlagPattern_warnedOnIntField() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.sbs.annotation.BuildFlag;
+            import dev.sbs.annotation.BuildRule;
+            public class Foo {
+                @BuildRule(flag = @BuildFlag(pattern = "[a-z]+")) int count;
+            }
+            """);
+        assertTrue(hasErrorContaining("@BuildRule(flag = @BuildFlag(pattern"));
     }
 }

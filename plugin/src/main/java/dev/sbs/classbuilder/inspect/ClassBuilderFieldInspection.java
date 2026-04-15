@@ -5,6 +5,7 @@ import com.intellij.codeInspection.ProblemHighlightType;
 import com.intellij.codeInspection.ProblemsHolder;
 import com.intellij.psi.JavaElementVisitor;
 import com.intellij.psi.PsiAnnotation;
+import com.intellij.psi.PsiAnnotationMemberValue;
 import com.intellij.psi.PsiClassType;
 import com.intellij.psi.PsiElementVisitor;
 import com.intellij.psi.PsiField;
@@ -13,6 +14,7 @@ import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypes;
 import com.intellij.psi.util.InheritanceUtil;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Flags misuse of companion field annotations on a {@code @ClassBuilder}
@@ -23,8 +25,10 @@ import org.jetbrains.annotations.NotNull;
  *   <li>{@code @Negate} on a non-{@code boolean} field</li>
  *   <li>{@code @Collector} on a non-{@link java.util.Collection Collection} or
  *       non-{@link java.util.Map Map} field</li>
- *   <li>{@code @BuildFlag(pattern = ...)} on a non-{@link CharSequence} field</li>
- *   <li>{@code @BuildFlag(limit = N)} on a type where the limit is not meaningful</li>
+ *   <li>{@code @BuildRule(flag = @BuildFlag(pattern = ...))} on a
+ *       non-{@link CharSequence} field</li>
+ *   <li>{@code @BuildRule(flag = @BuildFlag(limit = N))} on a type where the
+ *       limit is not meaningful</li>
  * </ul>
  */
 public class ClassBuilderFieldInspection extends LocalInspectionTool {
@@ -32,7 +36,7 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
     private static final String FORMATTABLE_FQN = "dev.sbs.annotation.Formattable";
     private static final String NEGATE_FQN = "dev.sbs.annotation.Negate";
     private static final String COLLECTOR_FQN = "dev.sbs.annotation.Collector";
-    private static final String BUILD_FLAG_FQN = "dev.sbs.annotation.BuildFlag";
+    private static final String BUILD_RULE_FQN = "dev.sbs.annotation.BuildRule";
 
     @Override
     public @NotNull PsiElementVisitor buildVisitor(@NotNull ProblemsHolder holder, boolean isOnTheFly) {
@@ -63,24 +67,37 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
                         ProblemHighlightType.GENERIC_ERROR);
                 }
 
-                PsiAnnotation buildFlag = field.getAnnotation(BUILD_FLAG_FQN);
-                if (buildFlag != null) {
-                    if (ClassBuilderConstants.stringAttr(buildFlag, "pattern", "").isEmpty() == false
-                            && !isCharSequenceLike(type)) {
-                        holder.registerProblem(buildFlag,
-                            "@BuildFlag(pattern = ...) only applies to CharSequence or Optional<String> fields",
-                            ProblemHighlightType.WARNING);
-                    }
-                    int limit = intAttr(buildFlag, "limit");
-                    if (limit >= 0 && !isLimitable(type)) {
-                        holder.registerProblem(buildFlag,
-                            "@BuildFlag(limit = ...) only applies to CharSequence, Collection, Map, array, "
-                                + "or Optional<String>/Optional<Number> fields",
-                            ProblemHighlightType.WARNING);
+                PsiAnnotation rule = field.getAnnotation(BUILD_RULE_FQN);
+                if (rule != null) {
+                    PsiAnnotation flag = nestedAnnotationAttr(rule, "flag");
+                    if (flag != null) {
+                        if (!ClassBuilderConstants.stringAttr(flag, "pattern", "").isEmpty()
+                                && !isCharSequenceLike(type)) {
+                            holder.registerProblem(flag,
+                                "@BuildRule(flag = @BuildFlag(pattern = ...)) only applies to CharSequence or Optional<String> fields",
+                                ProblemHighlightType.WARNING);
+                        }
+                        int limit = intAttr(flag, "limit");
+                        if (limit >= 0 && !isLimitable(type)) {
+                            holder.registerProblem(flag,
+                                "@BuildRule(flag = @BuildFlag(limit = ...)) only applies to CharSequence, Collection, Map, array, "
+                                    + "or Optional<String>/Optional<Number> fields",
+                                ProblemHighlightType.WARNING);
+                        }
                     }
                 }
             }
         };
+    }
+
+    /**
+     * Reads a nested-annotation attribute. {@code PsiAnnotation.findAttributeValue}
+     * returns a {@code PsiAnnotation} when the attribute's type is another
+     * annotation; any other shape (missing, default) returns {@code null}.
+     */
+    private static @Nullable PsiAnnotation nestedAnnotationAttr(@NotNull PsiAnnotation parent, @NotNull String attr) {
+        PsiAnnotationMemberValue value = parent.findAttributeValue(attr);
+        return value instanceof PsiAnnotation nested ? nested : null;
     }
 
     private static boolean isStringLike(@NotNull PsiType type) {

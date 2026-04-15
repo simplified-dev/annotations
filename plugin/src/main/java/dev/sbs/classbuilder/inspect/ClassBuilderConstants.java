@@ -19,14 +19,13 @@ public final class ClassBuilderConstants {
     public static final @NotNull String ANNOTATION_SHORT_NAME = "ClassBuilder";
     public static final @NotNull String XCONTRACT_FQN = "dev.sbs.annotation.XContract";
 
+    public static final @NotNull String BUILD_RULE_FQN = "dev.sbs.annotation.BuildRule";
+    public static final @NotNull String BUILD_RULE_SHORT_NAME = "BuildRule";
     public static final @NotNull String BUILD_FLAG_FQN = "dev.sbs.annotation.BuildFlag";
-    public static final @NotNull String BUILD_FLAG_SHORT_NAME = "BuildFlag";
+    public static final @NotNull String OBTAIN_VIA_FQN = "dev.sbs.annotation.ObtainVia";
     public static final @NotNull String COLLECTOR_FQN = "dev.sbs.annotation.Collector";
     public static final @NotNull String NEGATE_FQN = "dev.sbs.annotation.Negate";
     public static final @NotNull String FORMATTABLE_FQN = "dev.sbs.annotation.Formattable";
-    public static final @NotNull String BUILDER_DEFAULT_FQN = "dev.sbs.annotation.BuilderDefault";
-    public static final @NotNull String BUILDER_IGNORE_FQN = "dev.sbs.annotation.BuilderIgnore";
-    public static final @NotNull String OBTAIN_VIA_FQN = "dev.sbs.annotation.ObtainVia";
 
     /**
      * FQNs of every annotation whose PSI changes should invalidate the editor-
@@ -35,13 +34,10 @@ public final class ClassBuilderConstants {
      */
     public static final @NotNull Set<String> TRACKED_ANNOTATION_FQNS = Set.of(
         ANNOTATION_FQN,
-        BUILD_FLAG_FQN,
+        BUILD_RULE_FQN,
         COLLECTOR_FQN,
         NEGATE_FQN,
-        FORMATTABLE_FQN,
-        BUILDER_DEFAULT_FQN,
-        BUILDER_IGNORE_FQN,
-        OBTAIN_VIA_FQN
+        FORMATTABLE_FQN
     );
 
     /**
@@ -52,13 +48,10 @@ public final class ClassBuilderConstants {
      */
     public static final @NotNull Set<String> TRACKED_ANNOTATION_SHORT_NAMES = Set.of(
         ANNOTATION_SHORT_NAME,
-        BUILD_FLAG_SHORT_NAME,
+        BUILD_RULE_SHORT_NAME,
         "Collector",
         "Negate",
-        "Formattable",
-        "BuilderDefault",
-        "BuilderIgnore",
-        "ObtainVia"
+        "Formattable"
     );
 
     public static final @NotNull String ATTR_BUILDER_NAME = "builderName";

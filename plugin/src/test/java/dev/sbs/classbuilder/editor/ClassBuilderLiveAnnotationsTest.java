@@ -60,9 +60,32 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
             """
             package dev.sbs.annotation;
             import java.lang.annotation.*;
-            @Retention(RetentionPolicy.RUNTIME) @Target(ElementType.FIELD)
+            @Retention(RetentionPolicy.RUNTIME) @Target({})
             public @interface BuildFlag {
                 boolean nonNull() default false;
+            }
+            """);
+        myFixture.addFileToProject("dev/sbs/annotation/ObtainVia.java",
+            """
+            package dev.sbs.annotation;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target({})
+            public @interface ObtainVia {
+                String method() default "";
+                String field() default "";
+                boolean isStatic() default false;
+            }
+            """);
+        myFixture.addFileToProject("dev/sbs/annotation/BuildRule.java",
+            """
+            package dev.sbs.annotation;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.RUNTIME) @Target(ElementType.FIELD)
+            public @interface BuildRule {
+                boolean retainInit() default false;
+                boolean ignore() default false;
+                BuildFlag flag() default @BuildFlag;
+                ObtainVia obtainVia() default @ObtainVia;
             }
             """);
     }
@@ -259,21 +282,22 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
         }
     }
 
-    /** {@code @BuildFlag(nonNull = true)} pushes {@code @NotNull} onto the primary setter param. */
-    public void testBuildFlagNonNull_forcesNotNullOnPlainSetter() {
+    /** {@code @BuildRule(flag = @BuildFlag(nonNull = true))} pushes {@code @NotNull} onto the primary setter param. */
+    public void testBuildRule_flagNonNull_forcesNotNullOnPlainSetter() {
         PsiClass builder = builderFor("Widget",
             """
             import dev.sbs.annotation.ClassBuilder;
             import dev.sbs.annotation.BuildFlag;
+            import dev.sbs.annotation.BuildRule;
             @ClassBuilder
             public class Widget {
-                @BuildFlag(nonNull = true) String name;
+                @BuildRule(flag = @BuildFlag(nonNull = true)) String name;
             }
             """);
 
         PsiMethod setter = builder.findMethodsByName("withName", false)[0];
         PsiParameter name = setter.getParameterList().getParameter(0);
-        assertNotNull("@BuildFlag(nonNull) forces @NotNull",
+        assertNotNull("@BuildRule(flag = @BuildFlag(nonNull)) forces @NotNull",
             name.getModifierList().findAnnotation(NOT_NULL_FQN));
     }
 

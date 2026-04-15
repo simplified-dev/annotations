@@ -36,17 +36,20 @@
           overloads with opt-in single-element add/put, clear, and lazy put-if-absent
           for collections and maps, defensive-copy <code>from(T)</code>, and a
           <code>mutate()</code> instance shorthand.</li>
-      <li><b>@BuilderDefault</b> copies the field's declared initializer into
+      <li><b>@BuildRule</b> collects generic field rules in one place:
+          <code>retainInit</code> copies the field's declared initializer into
           the builder so unset fields start at the intended value
           (<code>UUID.randomUUID()</code>, sensible strings, pre-populated
-          collections) instead of the JVM default.
-          <b>@ObtainVia</b> redirects <code>from(T)</code> to a non-standard
-          accessor - an instance method, a static helper, or a different field
-          - when the target type doesn't expose a matching getter.</li>
-      <li><b>@BuildFlag runtime validator</b> enforces <code>nonNull</code> /
-          <code>notEmpty</code> / <code>group</code> mutual-requirement / regex
-          <code>pattern</code> / length <code>limit</code> in the generated
-          <code>build()</code>. Zero external dependencies.</li>
+          collections) instead of the JVM default; <code>ignore</code> excludes
+          a single field; nested <code>@ObtainVia</code> redirects
+          <code>from(T)</code> to a non-standard accessor - an instance method,
+          a static helper, or a different field - when the target type doesn't
+          expose a matching getter.</li>
+      <li><b>@BuildRule(flag = @BuildFlag(...)) runtime validator</b> enforces
+          <code>nonNull</code> / <code>notEmpty</code> / <code>group</code>
+          mutual-requirement / regex <code>pattern</code> / length
+          <code>limit</code> in the generated <code>build()</code>. Zero
+          external dependencies.</li>
       <li><b>@XContract</b> annotations are emitted on every generated method
           so IntelliJ data-flow analysis understands fresh-object and
           this-return shapes.</li>

@@ -34,15 +34,16 @@ import java.lang.annotation.Target;
  *
  * <h2>Per-field customisation</h2>
  * <ul>
- *   <li>{@link BuildFlag} - declare runtime constraints ({@code nonNull}, {@code notEmpty}, groups, regex, length)</li>
+ *   <li>{@link BuildRule} - parent for generic field rules: {@code retainInit}
+ *       (carry the field's initialiser into the builder), {@code ignore}
+ *       (exclude a single field), nested {@link BuildFlag} for runtime
+ *       constraints, nested {@link ObtainVia} to override how
+ *       {@code from}/{@code mutate} reads the field</li>
  *   <li>{@link Collector} - emit varargs / {@code Iterable} bulk setters on
  *       collection and map fields, with opt-in single-element add/put,
  *       {@code clearX}, and lazy {@code putXIfAbsent} overloads</li>
  *   <li>{@link Negate} - emit an inverse boolean setter on a {@code boolean} field</li>
  *   <li>{@link Formattable} - emit a {@code @PrintFormat} string overload</li>
- *   <li>{@link BuilderDefault} - carry the field's initialiser into the builder as its starting value</li>
- *   <li>{@link BuilderIgnore} - exclude a single field from the builder</li>
- *   <li>{@link ObtainVia} - override how {@code from}/{@code mutate} reads the field from an existing instance</li>
  * </ul>
  *
  * <h2>Examples</h2>
@@ -56,12 +57,12 @@ import java.lang.annotation.Target;
  *
  * // Record with a required field
  * &#64;ClassBuilder
- * public record User(&#64;BuildFlag(nonNull = true, notEmpty = true) String name, int age) { }
+ * public record User(&#64;BuildRule(flag = &#64;BuildFlag(nonNull = true, notEmpty = true)) String name, int age) { }
  *
  * // Interface - plugin generates ShapeImpl + ShapeBuilder
  * &#64;ClassBuilder(generateImpl = true)
  * public interface Shape {
- *     &#64;BuildFlag(nonNull = true) String name();
+ *     &#64;BuildRule(flag = &#64;BuildFlag(nonNull = true)) String name();
  * }
  *
  * // Builder on a static factory method
@@ -80,12 +81,11 @@ import java.lang.annotation.Target;
  * public final class Config { ... }
  * </code></pre>
  *
+ * @see BuildRule
  * @see BuildFlag
  * @see Collector
  * @see Negate
  * @see Formattable
- * @see BuilderDefault
- * @see BuilderIgnore
  * @see ObtainVia
  */
 @Retention(RetentionPolicy.CLASS)
@@ -200,7 +200,7 @@ public @interface ClassBuilder {
     /**
      * Field names to exclude from the builder, in addition to the fields
      * always excluded ({@code static}, {@code transient}, and fields marked
-     * with {@link BuilderIgnore}).
+     * with {@link BuildRule#ignore()}).
      */
     @NotNull String[] exclude() default { };
 

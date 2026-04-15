@@ -13,7 +13,7 @@ Three Java annotations with matching IntelliJ IDEA tooling:
   AST mutation, covering classes, records, and interfaces. Full Lombok
   `@Builder` parity plus richer setter shapes (boolean pair + `@Negate`
   inverse, `Optional` dual, `@Collector` bulk + opt-in add/put/clear, `@Formattable`
-  `@PrintFormat` overload) and a runtime `@BuildFlag` validator.
+  `@PrintFormat` overload) and a runtime `@BuildRule(flag = @BuildFlag(...))` validator.
 
 Published to:
 
@@ -196,7 +196,7 @@ import java.util.Optional;
 
 @ClassBuilder
 public class Pizza {
-    @BuildFlag(nonNull = true) String name;
+    @BuildRule(flag = @BuildFlag(nonNull = true)) String name;
     @Collector(singular = true, clearable = true) List<String> toppings;
     @Formattable Optional<String> description;
     @Negate("vegetarian") boolean containsMeat;
@@ -205,7 +205,7 @@ public class Pizza {
 
 Generates a `Pizza.Builder` with:
 
-- `withName(String)`, chained `@BuildFlag` enforcement at `build()` time
+- `withName(String)`, chained `@BuildRule(flag = @BuildFlag(...))` enforcement at `build()` time
 - `withToppings(String...)`, `withToppings(Iterable<String>)`,
   `withTopping(String)`, `clearToppings()`
 - `withDescription(String)`, `withDescription(Optional<String>)`,
