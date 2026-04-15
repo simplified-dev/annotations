@@ -11,29 +11,62 @@ This is an **IntelliJ IDEA plugin + Maven Central annotation library** that prov
 - `@ClassBuilder` - generates a sibling `<TypeName>Builder.java` via a JSR 269 annotation processor. Supports classes, records, and interfaces. Setter shapes cover Optional dual setters, boolean zero-arg + typed pairs with optional negation, String `@PrintFormat` overloads, `@Singular` collection/map add/put/varargs/clear, and configurable method naming. `@BuildFlag` runtime validator enforces nonNull/notEmpty/group/pattern/limit in the generated `build()`. Every generated method carries a matching `@XContract` so IDE data-flow sees fresh-object and this-return shapes.
 
 Published to:
-- JetBrains Marketplace: plugin ID `dev.sbs.simplified-annotations`
-- Maven Central: group `dev.sbs`, artifact `simplified-annotations`
+- JetBrains Marketplace: plugin ID `dev.sbs.simplified-annotations` (from `:plugin` module)
+- Maven Central: group `dev.sbs`, artifact `simplified-annotations` (from `:library` module)
+
+## Module layout
+
+Two-module Gradle build. The split falls on the IntelliJ-platform boundary -
+library has zero IntelliJ classpath references and ships standalone to Maven;
+plugin depends on library and adds the IDE tooling.
+
+- `:library` - Maven-publishable. Contains `dev.sbs.annotation` (the annotations),
+  `dev.sbs.classbuilder.apt` (JSR 269 processor), `dev.sbs.classbuilder.mutate`
+  (javac AST mutation + compat), `dev.sbs.classbuilder.validate` (runtime validator),
+  `META-INF/services/javax.annotation.processing.Processor`. The `aptTest` source
+  set and the plain-JUnit tests for `validate/` live here.
+- `:plugin` - JetBrains Marketplace. Contains `dev.sbs.classbuilder.editor` (PSI
+  augmentation + line marker + icon provider), `dev.sbs.classbuilder.inspect`
+  (field inspection + shared constants), `dev.sbs.contract` (contract DSL parser,
+  only consumed by xcontract), `dev.sbs.xcontract` (@XContract inspections +
+  inferred annotation provider), `dev.sbs.resourcepath` (@ResourcePath inspections),
+  `META-INF/plugin.xml`, icons, inspection descriptions. Depends on `:library`
+  via `implementation(project(":library"))`; the library jar is bundled under
+  `lib/` in the plugin distribution zip.
+
+Root `build.gradle.kts` is minimal - plugin versions + shared `group` / `version`
+via `allprojects { }`. Everything else lives in the subprojects' own build scripts.
 
 ## Commands
 
 ```bash
-# Build the plugin JAR
+# Compile both modules
 ./gradlew build
 
-# Launch a sandboxed IDE instance with the plugin loaded (for manual testing)
-./gradlew runIde
+# Launch a sandboxed IDE instance with the plugin loaded
+./gradlew :plugin:runIde
 
-# Run tests
+# Run all tests (library unit + aptTest + plugin fixture tests)
 ./gradlew test
 
-# Run a single test class
-./gradlew test --tests "dev.sbs.AnnotationTest"
+# Library-only suites
+./gradlew :library:test              # ~55 plain-JUnit tests
+./gradlew :library:aptTest           # ~39 compile-testing-backed APT tests
 
-# Build the distributable plugin zip
-./gradlew buildPlugin
+# Cross-JDK aptTest sweep
+./gradlew :library:aptTest -PaptTestJdk=17
+./gradlew :library:aptTest -PaptTestJdk=25
 
-# Build + sign + checksum + zip for Maven Central upload
-./gradlew publishAndPackage
+# Plugin-only
+./gradlew :plugin:test               # ~107 IntelliJ-fixture tests
+./gradlew :plugin:verifyPlugin       # verifier against IC 2023.2 / 2024.3 / 2025.2
+./gradlew :plugin:buildPlugin        # -> plugin/build/distributions/Simplified-Annotations-<ver>.zip
+
+# Library publishing
+./gradlew :library:publishToMavenLocal
+./gradlew :library:publishReleasePublicationToCentralStagingRepository -PsignArtifacts=true
+./gradlew :library:centralBundle     # -> library/build/distributions/*-bundle.zip
+./gradlew :library:publishAndPackage # publishToMavenLocal + centralBundle
 ```
 
 ## Architecture
