@@ -44,6 +44,14 @@ public final class PsiFieldShape {
     public final String negateName;
     public final String singularName;
 
+    /**
+     * True when the field carries {@code @BuildFlag(nonNull = true)}. Drives the
+     * editor-side emission of {@code @NotNull} on the matching setter parameter
+     * so IntelliJ's null-flow analysis flags {@code null} arguments immediately,
+     * without waiting for a build round.
+     */
+    public final boolean nonNullByBuildFlag;
+
     PsiFieldShape(Builder b) {
         this.name = b.name;
         this.type = b.type;
@@ -65,6 +73,7 @@ public final class PsiFieldShape {
         this.formattableNullable = b.formattableNullable;
         this.negateName = b.negateName;
         this.singularName = b.singularName;
+        this.nonNullByBuildFlag = b.nonNullByBuildFlag;
     }
 
     /** Classifies a {@link PsiType} into the shape fields used for setter dispatch. */
@@ -167,6 +176,7 @@ public final class PsiFieldShape {
         boolean nullable, formattable, formattableNullable;
         String negateName;
         String singularName;
+        boolean nonNullByBuildFlag;
 
         PsiFieldShape build() {
             return new PsiFieldShape(this);

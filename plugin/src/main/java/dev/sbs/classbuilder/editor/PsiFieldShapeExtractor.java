@@ -25,10 +25,11 @@ import java.util.Set;
  */
 final class PsiFieldShapeExtractor {
 
-    private static final String BUILDER_IGNORE_FQN = "dev.sbs.annotation.BuilderIgnore";
-    private static final String SINGULAR_FQN = "dev.sbs.annotation.Singular";
-    private static final String NEGATE_FQN = "dev.sbs.annotation.Negate";
-    private static final String FORMATTABLE_FQN = "dev.sbs.annotation.Formattable";
+    private static final String BUILDER_IGNORE_FQN = ClassBuilderConstants.BUILDER_IGNORE_FQN;
+    private static final String SINGULAR_FQN = ClassBuilderConstants.SINGULAR_FQN;
+    private static final String NEGATE_FQN = ClassBuilderConstants.NEGATE_FQN;
+    private static final String FORMATTABLE_FQN = ClassBuilderConstants.FORMATTABLE_FQN;
+    private static final String BUILD_FLAG_FQN = ClassBuilderConstants.BUILD_FLAG_FQN;
     private static final String NULLABLE_FQN = "org.jetbrains.annotations.Nullable";
 
     private PsiFieldShapeExtractor() {
@@ -88,6 +89,9 @@ final class PsiFieldShapeExtractor {
             String v = stringAttr(singular, "value", "");
             b.singularName = v.isEmpty() ? defaultSingular(name) : v;
         }
+
+        PsiAnnotation buildFlag = findAnnotation(owner, BUILD_FLAG_FQN);
+        if (buildFlag != null) b.nonNullByBuildFlag = booleanAttr(buildFlag, "nonNull", false);
         return b.build();
     }
 

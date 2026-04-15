@@ -1,5 +1,6 @@
 package dev.sbs.classbuilder.editor;
 
+import com.intellij.lang.java.JavaLanguage;
 import com.intellij.openapi.project.Project;
 import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiAnnotation;
@@ -7,6 +8,7 @@ import com.intellij.psi.PsiAnnotationMemberValue;
 import com.intellij.psi.PsiArrayInitializerMemberValue;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiClassType;
+import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiElementFactory;
 import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiManager;
@@ -14,7 +16,11 @@ import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.impl.light.LightMethodBuilder;
+import com.intellij.psi.impl.light.LightModifierList;
+import com.intellij.psi.impl.light.LightParameter;
 import com.intellij.psi.impl.light.LightPsiClassBuilder;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import dev.sbs.classbuilder.inspect.ClassBuilderConstants;
 
 import java.util.ArrayList;
@@ -38,12 +44,23 @@ import java.util.Set;
  * {@code @Negate} inverse pair, {@code Optional} nullable-raw/wrapped pair
  * plus optional {@code @Formattable} overload, {@code @Singular}
  * collection/map add/put/clear, array varargs, String {@code @Formattable}
- * overload. Parameter-level annotations (e.g. {@code @PrintFormat}) are not
- * surfaced at the editor layer - they flow through from the compiled class
- * file after the first javac round, at which point real-source inspections
- * pick them up.
+ * overload.
+ *
+ * <p>Parameter-level annotations are emitted inline during synthesis through
+ * {@link #buildParam}: {@code @PrintFormat} on String format args,
+ * {@code @Nullable} on {@code Object... args} varargs, and
+ * {@code @Nullable} / {@code @NotNull} on primary setter params driven by the
+ * field's companion annotations (including {@code @BuildFlag(nonNull)}). Only
+ * no-attribute annotations can ride on a {@code LightModifierList}; attribute-
+ * bearing annotations ({@code @XContract}, {@code @Contract}) are delivered at
+ * query time by
+ * {@link ClassBuilderInferredAnnotationProvider}.
  */
 final class GeneratedMemberFactory {
+
+    private static final String PRINT_FORMAT_FQN = "org.intellij.lang.annotations.PrintFormat";
+    private static final String NULLABLE_FQN = "org.jetbrains.annotations.Nullable";
+    private static final String NOT_NULL_FQN = "org.jetbrains.annotations.NotNull";
 
     private GeneratedMemberFactory() {
     }
@@ -93,13 +110,84 @@ final class GeneratedMemberFactory {
                                                PsiType paramType, String paramName, String access) {
         LightMethodBuilder m = new LightMethodBuilder(manager, name)
             .setMethodReturnType(returnType)
-            .addParameter(paramName, paramType)
+            .addParameter(buildParam(target, paramName, paramType, false, NOT_NULL_FQN))
             .addModifier(PsiModifier.STATIC)
             .setContainingClass(target);
         applyAccess(m, access);
         GeneratedMemberMarker.mark(m);
         m.setNavigationElement(target);
         return m;
+    }
+
+    /**
+     * Builds a {@link LightParameter} carrying the given annotation FQNs on its
+     * modifier list. Platform's {@link LightModifierList#addAnnotation(String)}
+     * throws {@link com.intellij.util.IncorrectOperationException}, so this
+     * helper hands the parameter a custom modifier list ({@link AnnotatedLightModifierList})
+     * that stores pre-built {@link PsiAnnotation}s from
+     * {@link PsiElementFactory#createAnnotationFromText}. Only FQN-only
+     * (no-attribute) annotations are passed through this path; attribute-
+     * bearing annotations ({@code @XContract} / {@code @Contract}) are
+     * delivered at query time by
+     * {@link ClassBuilderInferredAnnotationProvider}.
+     */
+    private static LightParameter buildParam(PsiElement context, String name, PsiType type,
+                                             boolean varargs, String... annotationFqns) {
+        PsiManager manager = context.getManager();
+        AnnotatedLightModifierList modifiers = new AnnotatedLightModifierList(manager);
+        if (annotationFqns.length > 0) {
+            PsiElementFactory factory = JavaPsiFacade.getElementFactory(context.getProject());
+            for (String fqn : annotationFqns) {
+                try {
+                    modifiers.add(factory.createAnnotationFromText("@" + fqn, context));
+                } catch (Exception ignored) {
+                    // Unresolvable FQN in this project's classpath - skip silently
+                    // rather than break synthesis.
+                }
+            }
+        }
+        return new LightParameter(name, type, context, JavaLanguage.INSTANCE, modifiers, varargs);
+    }
+
+    /**
+     * {@link LightModifierList} subclass whose {@link #getAnnotations()} and
+     * {@link #findAnnotation(String)} surface a caller-populated list. The
+     * platform's default implementation returns an empty annotation array and
+     * throws on {@code addAnnotation(String)}; this subclass lets us ride
+     * pre-built annotations (from {@code createAnnotationFromText}) so
+     * IntelliJ inspections that walk {@code getModifierList().getAnnotations()}
+     * (printf, nullability, etc.) see them.
+     */
+    private static final class AnnotatedLightModifierList extends LightModifierList {
+
+        private final java.util.List<PsiAnnotation> annotations = new ArrayList<>(2);
+
+        AnnotatedLightModifierList(PsiManager manager) {
+            super(manager);
+        }
+
+        void add(PsiAnnotation annotation) {
+            annotations.add(annotation);
+        }
+
+        @Override
+        public @NotNull PsiAnnotation[] getAnnotations() {
+            return annotations.toArray(PsiAnnotation.EMPTY_ARRAY);
+        }
+
+        @Override
+        public @Nullable PsiAnnotation findAnnotation(@NotNull String qualifiedName) {
+            for (PsiAnnotation a : annotations) {
+                if (qualifiedName.equals(a.getQualifiedName())) return a;
+            }
+            return null;
+        }
+
+        @Override
+        public boolean hasAnnotation(@NotNull String qualifiedName) {
+            return findAnnotation(qualifiedName) != null;
+        }
+
     }
 
     private static PsiMethod buildInstanceNoArg(PsiManager manager, PsiClass target,
@@ -228,14 +316,14 @@ final class GeneratedMemberFactory {
 
     private static PsiMethod plainSetter(SetterCtx ctx, PsiFieldShape field) {
         return newSetter(ctx, methodName(ctx, field.name, false))
-            .addParameter(field.name, field.type);
+            .addParameter(buildParam(ctx.target, field.name, field.type, false, primaryNullability(field)));
     }
 
     private static PsiMethod arrayVarargs(SetterCtx ctx, PsiFieldShape field) {
         // fall back to plain setter if the component type is unknown
         PsiType component = field.arrayComponent != null ? field.arrayComponent : PsiType.NULL;
         return newSetter(ctx, methodName(ctx, field.name, false))
-            .addParameter(field.name, component, true);
+            .addParameter(buildParam(ctx.target, field.name, component, true, primaryNullability(field)));
     }
 
     private static PsiMethod booleanZeroArg(SetterCtx ctx, PsiFieldShape field, String methodBase, boolean inverse) {
@@ -244,7 +332,7 @@ final class GeneratedMemberFactory {
 
     private static PsiMethod booleanTyped(SetterCtx ctx, PsiFieldShape field, String methodBase) {
         return newSetter(ctx, "is" + capitalise(methodBase))
-            .addParameter(methodBase, PsiType.BOOLEAN);
+            .addParameter(buildParam(ctx.target, methodBase, PsiType.BOOLEAN, false));
     }
 
     // ------------------------------------------------------------------
@@ -256,36 +344,45 @@ final class GeneratedMemberFactory {
         PsiType inner = field.optionalInner != null
             ? field.optionalInner
             : ctx.elements.createTypeFromText("java.lang.Object", ctx.target);
+        // Raw overload wraps via Optional.ofNullable - null is explicitly allowed
+        // regardless of whether the field carries @BuildFlag(nonNull).
         return newSetter(ctx, methodName(ctx, field.name, false))
-            .addParameter(field.name, inner);
+            .addParameter(buildParam(ctx.target, field.name, inner, false, NULLABLE_FQN));
     }
 
     /** {@code Builder withX(Optional<T> x)} - wrapped overload for an Optional field. */
     private static PsiMethod optionalWrapped(SetterCtx ctx, PsiFieldShape field) {
         return newSetter(ctx, methodName(ctx, field.name, false))
-            .addParameter(field.name, field.type);
+            .addParameter(buildParam(ctx.target, field.name, field.type, false, NOT_NULL_FQN));
     }
 
     // ------------------------------------------------------------------
     // @Formattable shapes
     // ------------------------------------------------------------------
 
-    /** {@code Builder withName(String format, Object... args)} - String @Formattable. */
+    /** {@code Builder withName(@PrintFormat String format, Object... args)} - String @Formattable. */
     private static PsiMethod stringFormattable(SetterCtx ctx, PsiFieldShape field) {
         PsiType stringType = ctx.elements.createTypeFromText("java.lang.String", ctx.target);
         PsiType objectType = ctx.elements.createTypeFromText("java.lang.Object", ctx.target);
+        // Mirrors library FieldMutators.stringFormattable: @PrintFormat on the format
+        // arg, nullable when the field or @Formattable.nullable is set, otherwise
+        // @NotNull; varargs always @Nullable.
+        boolean formatNullable = (field.formattableNullable || field.nullable) && !field.nonNullByBuildFlag;
+        String formatNullability = formatNullable ? NULLABLE_FQN : NOT_NULL_FQN;
         return newSetter(ctx, methodName(ctx, field.name, false))
-            .addParameter(field.name, stringType)
-            .addParameter("args", objectType, true);
+            .addParameter(buildParam(ctx.target, field.name, stringType, false, PRINT_FORMAT_FQN, formatNullability))
+            .addParameter(buildParam(ctx.target, "args", objectType, true, NULLABLE_FQN));
     }
 
-    /** {@code Builder withDescription(String format, Object... args)} - Optional<String> @Formattable. */
+    /** {@code Builder withDescription(@PrintFormat @Nullable String format, Object... args)} - Optional<String> @Formattable. */
     private static PsiMethod optionalFormattable(SetterCtx ctx, PsiFieldShape field) {
         PsiType stringType = ctx.elements.createTypeFromText("java.lang.String", ctx.target);
         PsiType objectType = ctx.elements.createTypeFromText("java.lang.Object", ctx.target);
+        // Mirrors library FieldMutators.optionalFormattable: format is always
+        // @Nullable because the runtime routes through Strings.formatNullable.
         return newSetter(ctx, methodName(ctx, field.name, false))
-            .addParameter(field.name, stringType)
-            .addParameter("args", objectType, true);
+            .addParameter(buildParam(ctx.target, field.name, stringType, false, PRINT_FORMAT_FQN, NULLABLE_FQN))
+            .addParameter(buildParam(ctx.target, "args", objectType, true, NULLABLE_FQN));
     }
 
     // ------------------------------------------------------------------
@@ -298,7 +395,7 @@ final class GeneratedMemberFactory {
             ? field.collectionElement
             : ctx.elements.createTypeFromText("java.lang.Object", ctx.target);
         return newSetter(ctx, methodName(ctx, field.name, false))
-            .addParameter(field.name, element, true);
+            .addParameter(buildParam(ctx.target, field.name, element, true, primaryNullability(field)));
     }
 
     /** {@code Builder withEntries(Iterable<T> entries)} - replace-collection iterable form. */
@@ -309,7 +406,7 @@ final class GeneratedMemberFactory {
         PsiType iterableType = ctx.elements.createTypeFromText(
             "java.lang.Iterable<" + elementText + ">", ctx.target);
         return newSetter(ctx, methodName(ctx, field.name, false))
-            .addParameter(field.name, iterableType);
+            .addParameter(buildParam(ctx.target, field.name, iterableType, false, primaryNullability(field)));
     }
 
     /** {@code Builder addEntry(T entry)} - append one element to the existing collection. */
@@ -320,13 +417,13 @@ final class GeneratedMemberFactory {
             ? field.collectionElement
             : ctx.elements.createTypeFromText("java.lang.Object", ctx.target);
         return newSetter(ctx, name)
-            .addParameter(field.singularName, element);
+            .addParameter(buildParam(ctx.target, field.singularName, element, false, primaryNullability(field)));
     }
 
     /** {@code Builder withEntries(Map<K, V> entries)} - replace with fresh LinkedHashMap. */
     private static PsiMethod singularMapReplace(SetterCtx ctx, PsiFieldShape field) {
         return newSetter(ctx, methodName(ctx, field.name, false))
-            .addParameter(field.name, field.type);
+            .addParameter(buildParam(ctx.target, field.name, field.type, false, primaryNullability(field)));
     }
 
     /** {@code Builder putEntry(K key, V value)} - put a single entry into the existing map. */
@@ -339,8 +436,8 @@ final class GeneratedMemberFactory {
             ? field.mapValue
             : ctx.elements.createTypeFromText("java.lang.Object", ctx.target);
         return newSetter(ctx, name)
-            .addParameter("key", keyType)
-            .addParameter("value", valueType);
+            .addParameter(buildParam(ctx.target, "key", keyType, false, primaryNullability(field)))
+            .addParameter(buildParam(ctx.target, "value", valueType, false, primaryNullability(field)));
     }
 
     /** {@code Builder clearEntries()} - empties the underlying collection or map. */
@@ -367,6 +464,20 @@ final class GeneratedMemberFactory {
         GeneratedMemberMarker.mark(m);
         m.setNavigationElement(ctx.target);
         return m;
+    }
+
+    /**
+     * Returns the nullability FQN the primary setter parameter should carry for
+     * a non-formattable field. Mirrors the library-side decision: {@code @NotNull}
+     * when the field has {@code @BuildFlag(nonNull=true)}, {@code @Nullable} when
+     * the field carries {@code @Nullable} directly, otherwise no annotation - the
+     * default varargs-friendly shape. Returns an empty array when no annotation
+     * applies, which {@link #buildParam} accepts as a no-op.
+     */
+    private static String[] primaryNullability(PsiFieldShape field) {
+        if (field.nonNullByBuildFlag) return new String[] {NOT_NULL_FQN};
+        if (field.nullable) return new String[] {NULLABLE_FQN};
+        return new String[0];
     }
 
     private static String methodName(SetterCtx ctx, String fieldName, boolean forceBoolean) {

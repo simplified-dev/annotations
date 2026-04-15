@@ -146,12 +146,14 @@
                 displayName="@ClassBuilder field annotation misuse"
                 groupName="Simplified Annotations"
         />
-        <inferredAnnotationProvider implementation="dev.sbs.xcontract.XContractInferredAnnotationProvider"/>
+        <lang.inferredAnnotationProvider implementation="dev.sbs.xcontract.XContractInferredAnnotationProvider"/>
+        <lang.inferredAnnotationProvider implementation="dev.sbs.classbuilder.editor.ClassBuilderInferredAnnotationProvider"/>
         <lang.psiAugmentProvider implementation="dev.sbs.classbuilder.editor.ClassBuilderAugmentProvider"/>
         <codeInsight.lineMarkerProvider
                 language="JAVA"
                 implementationClass="dev.sbs.classbuilder.editor.ClassBuilderLineMarkerProvider"/>
         <iconProvider implementation="dev.sbs.classbuilder.editor.ClassBuilderIconProvider"/>
         <postStartupActivity implementation="dev.sbs.resourcepath.ResourcePathStartupActivity"/>
+        <postStartupActivity implementation="dev.sbs.classbuilder.editor.ClassBuilderStartupActivity"/>
     </extensions>
 </idea-plugin>

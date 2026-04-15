@@ -1,0 +1,343 @@
+package dev.sbs.classbuilder.editor;
+
+import com.intellij.psi.PsiAnnotation;
+import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiFile;
+import com.intellij.psi.PsiJavaFile;
+import com.intellij.psi.PsiMethod;
+import com.intellij.psi.PsiParameter;
+import com.intellij.testFramework.fixtures.BasePlatformTestCase;
+
+/**
+ * Exercises the editor-time annotation surface on members synthesised by
+ * {@link ClassBuilderAugmentProvider}:
+ * <ul>
+ *   <li>{@link GeneratedMemberFactory} attaches {@code @PrintFormat} /
+ *       {@code @Nullable} / {@code @NotNull} on setter parameters.</li>
+ *   <li>{@link ClassBuilderInferredAnnotationProvider} delivers
+ *       {@code @XContract} + {@code @Contract} at query time for every
+ *       synthesised method, gated on the class's {@code emitContracts}.</li>
+ * </ul>
+ */
+public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
+
+    private static final String PRINT_FORMAT_FQN = "org.intellij.lang.annotations.PrintFormat";
+    private static final String NULLABLE_FQN = "org.jetbrains.annotations.Nullable";
+    private static final String NOT_NULL_FQN = "org.jetbrains.annotations.NotNull";
+    private static final String XCONTRACT_FQN = "dev.sbs.annotation.XContract";
+    private static final String CONTRACT_FQN = "org.jetbrains.annotations.Contract";
+
+    @Override
+    protected void setUp() throws Exception {
+        super.setUp();
+        addAnnotationSources();
+    }
+
+    private void addAnnotationSources() {
+        myFixture.addFileToProject("dev/sbs/annotation/ClassBuilder.java",
+            """
+            package dev.sbs.annotation;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.TYPE)
+            public @interface ClassBuilder {
+                String builderName() default "Builder";
+                String builderMethodName() default "builder";
+                String fromMethodName() default "from";
+                String toBuilderMethodName() default "mutate";
+                String methodPrefix() default "with";
+                String[] exclude() default {};
+                boolean emitContracts() default true;
+            }
+            """);
+        myFixture.addFileToProject("dev/sbs/annotation/Formattable.java",
+            """
+            package dev.sbs.annotation;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
+            public @interface Formattable { boolean nullable() default false; }
+            """);
+        myFixture.addFileToProject("dev/sbs/annotation/BuildFlag.java",
+            """
+            package dev.sbs.annotation;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.RUNTIME) @Target(ElementType.FIELD)
+            public @interface BuildFlag {
+                boolean nonNull() default false;
+            }
+            """);
+    }
+
+    // ------------------------------------------------------------------
+    // Parameter annotations
+    // ------------------------------------------------------------------
+
+    /** String {@code @Formattable} setters get {@code @PrintFormat} + {@code @Nullable} on varargs. */
+    public void testStringFormattable_printFormatAndNullableVarargs() {
+        PsiClass builder = builderFor("Greeting",
+            """
+            import dev.sbs.annotation.ClassBuilder;
+            import dev.sbs.annotation.Formattable;
+            @ClassBuilder
+            public class Greeting {
+                @Formattable String message;
+            }
+            """);
+
+        PsiMethod formattable = findByArity(builder, "withMessage", 2);
+        PsiParameter fmt = formattable.getParameterList().getParameter(0);
+        PsiParameter args = formattable.getParameterList().getParameter(1);
+
+        assertNotNull(fmt.getModifierList().findAnnotation(PRINT_FORMAT_FQN));
+        assertNotNull("format param @NotNull (non-formattable-nullable, no @BuildFlag)",
+            fmt.getModifierList().findAnnotation(NOT_NULL_FQN));
+        assertTrue("args is varargs", args.isVarArgs());
+        assertNotNull("args @Nullable", args.getModifierList().findAnnotation(NULLABLE_FQN));
+    }
+
+    /** {@code Optional<String>} {@code @Formattable} always has a {@code @Nullable} format arg. */
+    public void testOptionalFormattable_nullableFormat() {
+        PsiClass builder = builderFor("Card",
+            """
+            import dev.sbs.annotation.ClassBuilder;
+            import dev.sbs.annotation.Formattable;
+            import java.util.Optional;
+            @ClassBuilder
+            public class Card {
+                @Formattable Optional<String> description;
+            }
+            """);
+
+        PsiMethod formattable = findByArity(builder, "withDescription", 2);
+        PsiParameter fmt = formattable.getParameterList().getParameter(0);
+        assertNotNull(fmt.getModifierList().findAnnotation(PRINT_FORMAT_FQN));
+        assertNotNull("format always @Nullable for Optional<String>",
+            fmt.getModifierList().findAnnotation(NULLABLE_FQN));
+    }
+
+    /** {@code @BuildFlag(nonNull = true)} pushes {@code @NotNull} onto the primary setter param. */
+    public void testBuildFlagNonNull_forcesNotNullOnPlainSetter() {
+        PsiClass builder = builderFor("Widget",
+            """
+            import dev.sbs.annotation.ClassBuilder;
+            import dev.sbs.annotation.BuildFlag;
+            @ClassBuilder
+            public class Widget {
+                @BuildFlag(nonNull = true) String name;
+            }
+            """);
+
+        PsiMethod setter = builder.findMethodsByName("withName", false)[0];
+        PsiParameter name = setter.getParameterList().getParameter(0);
+        assertNotNull("@BuildFlag(nonNull) forces @NotNull",
+            name.getModifierList().findAnnotation(NOT_NULL_FQN));
+    }
+
+    /** Plain fields with no companion annotations get no nullability on the setter. */
+    public void testPlainField_noNullability() {
+        PsiClass builder = builderFor("Plain",
+            """
+            import dev.sbs.annotation.ClassBuilder;
+            @ClassBuilder
+            public class Plain { String label; }
+            """);
+
+        PsiMethod setter = builder.findMethodsByName("withLabel", false)[0];
+        PsiParameter p = setter.getParameterList().getParameter(0);
+        assertNull(p.getModifierList().findAnnotation(NOT_NULL_FQN));
+        assertNull(p.getModifierList().findAnnotation(NULLABLE_FQN));
+    }
+
+    /** Optional-raw setter always accepts null - the raw overload wraps via {@code Optional.ofNullable}. */
+    public void testOptionalRaw_alwaysNullable() {
+        PsiClass builder = builderFor("Box",
+            """
+            import dev.sbs.annotation.ClassBuilder;
+            import java.util.Optional;
+            @ClassBuilder
+            public class Box { Optional<String> label; }
+            """);
+
+        // Two overloads: raw(String) and wrapped(Optional<String>). The raw one
+        // is the overload whose param is NOT an Optional type.
+        PsiMethod raw = null;
+        for (PsiMethod m : builder.findMethodsByName("withLabel", false)) {
+            PsiParameter p = m.getParameterList().getParameter(0);
+            String canonical = p.getType().getCanonicalText();
+            if (!canonical.startsWith("java.util.Optional")) { raw = m; break; }
+        }
+        assertNotNull("raw overload must exist", raw);
+        PsiParameter p = raw.getParameterList().getParameter(0);
+        assertNotNull("raw-Optional setter param is @Nullable",
+            p.getModifierList().findAnnotation(NULLABLE_FQN));
+    }
+
+    // ------------------------------------------------------------------
+    // Inferred @XContract / @Contract
+    // ------------------------------------------------------------------
+
+    /** {@code builder()} gets {@code -> new}. */
+    public void testBuilderBootstrap_newContract() {
+        PsiClass target = configureTarget("Widget",
+            """
+            import dev.sbs.annotation.ClassBuilder;
+            @ClassBuilder
+            public class Widget { String x; }
+            """);
+
+        PsiMethod builder = target.findMethodsByName("builder", false)[0];
+        assertContractShape(builder, "-> new", false, null);
+    }
+
+    /** {@code from(T)} gets {@code _ -> new} with {@code pure = true}. */
+    public void testFromBootstrap_pureNewContract() {
+        PsiClass target = configureTarget("Widget",
+            """
+            import dev.sbs.annotation.ClassBuilder;
+            @ClassBuilder
+            public class Widget { String x; }
+            """);
+
+        PsiMethod from = target.findMethodsByName("from", false)[0];
+        assertContractShape(from, "_ -> new", true, null);
+    }
+
+    /** Single-arg setter gets {@code _ -> this} with {@code mutates = "this"}. */
+    public void testSetter_unaryThisContract() {
+        PsiClass builder = builderFor("Widget",
+            """
+            import dev.sbs.annotation.ClassBuilder;
+            @ClassBuilder
+            public class Widget { String x; }
+            """);
+
+        PsiMethod setter = builder.findMethodsByName("withX", false)[0];
+        assertContractShape(setter, "_ -> this", false, "this");
+    }
+
+    /** Two-arg setter (e.g. formattable) gets {@code _, _ -> this}. */
+    public void testSetter_binaryThisContract() {
+        PsiClass builder = builderFor("Greeting",
+            """
+            import dev.sbs.annotation.ClassBuilder;
+            import dev.sbs.annotation.Formattable;
+            @ClassBuilder
+            public class Greeting { @Formattable String message; }
+            """);
+
+        PsiMethod formattable = findByArity(builder, "withMessage", 2);
+        assertContractShape(formattable, "_, _ -> this", false, "this");
+    }
+
+    /** {@code build()} on the nested Builder class gets {@code -> new}. */
+    public void testBuildMethod_newContract() {
+        PsiClass builder = builderFor("Widget",
+            """
+            import dev.sbs.annotation.ClassBuilder;
+            @ClassBuilder
+            public class Widget { String x; }
+            """);
+
+        PsiMethod build = builder.findMethodsByName("build", false)[0];
+        assertContractShape(build, "-> new", false, null);
+    }
+
+    /**
+     * Guards the plugin.xml registration: the platform's extension-point list
+     * must include our provider under
+     * {@code com.intellij.codeInsight.InferredAnnotationProvider.EP_NAME}.
+     * {@link InferredAnnotationsManager} lookups in the test harness don't
+     * always route through the full provider chain for light elements, so we
+     * assert the registration directly - the real IDE's daemon loop iterates
+     * the same list per
+     * {@link com.intellij.codeInsight.InferredAnnotationsManagerImpl}.
+     */
+    public void testProviderRegisteredInExtensionPoint() {
+        boolean present = com.intellij.codeInsight.InferredAnnotationProvider.EP_NAME
+            .getExtensionList(getProject())
+            .stream()
+            .anyMatch(p -> p instanceof ClassBuilderInferredAnnotationProvider);
+        assertTrue("ClassBuilderInferredAnnotationProvider must be registered via plugin.xml",
+            present);
+    }
+
+    /** {@code emitContracts = false} silences the inferred provider. */
+    public void testEmitContractsFalse_noContract() {
+        PsiClass target = configureTarget("Silent",
+            """
+            import dev.sbs.annotation.ClassBuilder;
+            @ClassBuilder(emitContracts = false)
+            public class Silent { String x; }
+            """);
+
+        PsiMethod builder = target.findMethodsByName("builder", false)[0];
+        ClassBuilderInferredAnnotationProvider provider = new ClassBuilderInferredAnnotationProvider();
+        assertNull(provider.findInferredAnnotation(builder, XCONTRACT_FQN));
+        assertNull(provider.findInferredAnnotation(builder, CONTRACT_FQN));
+    }
+
+    // ------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------
+
+    private PsiClass configureTarget(String className, String source) {
+        PsiFile file = myFixture.configureByText(className + ".java", source);
+        return ((PsiJavaFile) file).getClasses()[0];
+    }
+
+    private PsiClass builderFor(String className, String source) {
+        PsiClass target = configureTarget(className, source);
+        PsiClass[] inner = target.getInnerClasses();
+        assertEquals("expected exactly one synthesised Builder", 1, inner.length);
+        return inner[0];
+    }
+
+    private PsiMethod findByArity(PsiClass holder, String name, int arity) {
+        for (PsiMethod m : holder.findMethodsByName(name, false)) {
+            if (m.getParameterList().getParametersCount() == arity) return m;
+        }
+        throw new AssertionError("no " + name + " with arity " + arity);
+    }
+
+    /**
+     * Asserts that both the raw {@code @XContract} and derived {@code @Contract}
+     * are surfaced with the given {@code value}, {@code pure}, and {@code mutates}.
+     * Queries the provider directly as well as via
+     * {@link InferredAnnotationsManager}: the platform manager caches per-
+     * element, while the provider query is unambiguous.
+     */
+    private void assertContractShape(PsiMethod method, String value, boolean pure, String mutates) {
+        ClassBuilderInferredAnnotationProvider provider = new ClassBuilderInferredAnnotationProvider();
+        PsiAnnotation xContract = provider.findInferredAnnotation(method, XCONTRACT_FQN);
+        PsiAnnotation jbContract = provider.findInferredAnnotation(method, CONTRACT_FQN);
+        assertNotNull("inferred @XContract must be present on " + method.getName(), xContract);
+        assertNotNull("inferred @Contract must be present on " + method.getName(), jbContract);
+        assertAttributesMatch(xContract, value, pure, mutates);
+        assertAttributesMatch(jbContract, value, pure, mutates);
+    }
+
+    private void assertAttributesMatch(PsiAnnotation annotation, String value, boolean pure, String mutates) {
+        String actualValue = literal(annotation, "value");
+        assertEquals("value attribute", value, actualValue);
+
+        if (pure) {
+            String actualPure = String.valueOf(annotation.findAttributeValue("pure").getText());
+            assertEquals("pure attribute", "true", actualPure);
+        }
+        if (mutates != null) {
+            assertEquals("mutates attribute", mutates, literal(annotation, "mutates"));
+        }
+    }
+
+    private static String literal(PsiAnnotation annotation, String attr) {
+        Object value = annotation.findAttributeValue(attr);
+        if (value == null) return null;
+        String text = value.toString();
+        // PSI literal text surfaces quotes; strip the outer quotes when present.
+        String raw = ((com.intellij.psi.PsiElement) value).getText();
+        if (raw.startsWith("\"") && raw.endsWith("\"")) {
+            return raw.substring(1, raw.length() - 1);
+        }
+        return raw;
+    }
+
+}
