@@ -381,10 +381,6 @@ final class BuilderEmitter {
     private void emitBuildMethod() {
         emitContract("-> new", false, null);
         body.append("    ").append(accessKeyword()).append("@NotNull ").append(targetSimpleName).append(' ').append(config.buildMethodName()).append("() {\n");
-        if (config.validate()) {
-            imports.add("dev.sbs.classbuilder.validate.BuildFlagValidator");
-            body.append("        BuildFlagValidator.validate(this);\n");
-        }
         boolean useFactory = !config.factoryMethod().isEmpty();
         String constructorTarget;
         if (targetKind == TargetKind.INTERFACE && useFactory) {
@@ -400,12 +396,26 @@ final class BuilderEmitter {
         } else {
             constructorTarget = "new " + targetSimpleName;
         }
-        body.append("        return ").append(constructorTarget).append('(');
+        // Validator reads @BuildRule annotations off the constructed target,
+        // not the Builder (whose fields are synthesised without annotations),
+        // so we capture the new instance first, validate, then return.
+        boolean emitValidation = config.validate();
+        if (emitValidation) {
+            imports.add("dev.sbs.classbuilder.validate.BuildFlagValidator");
+            body.append("        final ").append(targetSimpleName).append(" $result = ").append(constructorTarget).append('(');
+        } else {
+            body.append("        return ").append(constructorTarget).append('(');
+        }
         for (int i = 0; i < fields.size(); i++) {
             if (i > 0) body.append(", ");
             body.append(fields.get(i).name);
         }
-        body.append(");\n    }\n\n");
+        body.append(");\n");
+        if (emitValidation) {
+            body.append("        BuildFlagValidator.validate($result);\n");
+            body.append("        return $result;\n");
+        }
+        body.append("    }\n\n");
     }
 
     // ------------------------------------------------------------------

@@ -75,6 +75,11 @@ public final class BuilderMutator {
             return true;
         }
 
+        // $default$<fieldName>() providers for @BuildRule(retainInit) fields.
+        // Must run before the nested Builder is built so FieldMutators'
+        // Target.$default$<name>() references resolve at javac attribution.
+        new RetainedInitFactory(ctx).appendAll();
+
         JCClassDecl nested = new NestedBuilderFactory(ctx).build();
         bridge.compat().appendDef(target, nested);
 

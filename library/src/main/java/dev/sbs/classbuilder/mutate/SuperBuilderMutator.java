@@ -75,6 +75,13 @@ final class SuperBuilderMutator {
             return;
         }
 
+        // $default$<fieldName>() providers for this target's retainInit fields
+        // land on the target itself (not on the nested Builder), so inherited
+        // chain fields keep their providers on their respective declaring
+        // classes. FieldMutators.defaultInitializer references them by
+        // ctx.targetSimpleName() - always the field's own class.
+        new RetainedInitFactory(ctx).appendAll();
+
         JCClassDecl nested;
         if (annotatedSuperSimpleName == null) {
             // Abstract root

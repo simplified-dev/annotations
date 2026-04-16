@@ -61,9 +61,20 @@ public @interface BuildRule {
 
     /**
      * When {@code true}, the generated builder starts this field at its
-     * declared initializer value (e.g. {@code UUID.randomUUID()},
-     * {@code List.of(...)}) rather than the JVM default. The field must have
-     * an initializer expression; validating otherwise produces an APT error.
+     * declared initializer value rather than the JVM default. The field must
+     * have an initializer expression.
+     *
+     * <p>The initializer is evaluated <b>fresh per builder instance</b>: a
+     * {@code UUID.randomUUID()} default produces a new UUID for each builder,
+     * and a {@code new ArrayList<>()} default produces a fresh mutable list.
+     * Under the hood the APT injects a package-private static
+     * {@code $default$<fieldName>()} method carrying the source expression
+     * and the generated Builder's field default calls that method.
+     *
+     * <p>Any Java expression that compiles in the target class's scope works
+     * - method calls, constructor invocations, factory methods, field
+     * accesses - as long as every identifier it references would resolve
+     * from the original field declaration.
      */
     boolean retainInit() default false;
 

@@ -50,6 +50,7 @@ final class FieldMutators {
         this.contracts = new ContractAnnotations(ctx);
     }
 
+
     /** Returns every setter the field should emit on the nested Builder. */
     List<JCMethodDecl> setters(FieldSpec field) {
         ListBuffer<JCMethodDecl> out = new ListBuffer<>();
@@ -107,6 +108,24 @@ final class FieldMutators {
     }
 
     private JCExpression defaultInitializer(FieldSpec field) {
+        // @BuildRule(retainInit = true): the Builder's field default is a
+        // call to the synthesised Target.$default$<fieldName>() static method.
+        // That method (injected by RetainedInitFactory) contains the original
+        // declared initializer expression inside a normal method body, so
+        // javac's flow analyser handles it correctly. Embedding the expression
+        // directly in this field init was attempted and causes position-
+        // bookkeeping crashes in Flow$AssignAnalyzer.
+        if (field.builderDefault && field.sourceInitializer != null
+                && !field.sourceInitializer.isEmpty()) {
+            return make.Apply(
+                List.nil(),
+                make.Select(
+                    make.Ident(names.fromString(ctx.targetSimpleName())),
+                    names.fromString(RetainedInitFactory.providerName(field.name))
+                ),
+                List.nil()
+            );
+        }
         if (field.isOptional) {
             return make.Apply(
                 List.nil(),

@@ -65,6 +65,11 @@ public final class FieldSpec {
     public final boolean builderDefault;
     public final String sourceInitializer;          // copied source text of the field's declared initializer
     public final Set<String> initializerImports;    // type FQNs referenced by sourceInitializer
+    // The javac parse-time tree for the initializer (a JCExpression at
+    // runtime). Typed as com.sun.source.tree.Tree so this class stays javac-
+    // internal-free. AST-mutation consumers cast + deep-clone with symbols
+    // reset before embedding in a synthesised method body.
+    public final com.sun.source.tree.Tree sourceInitializerTree;
     public final String obtainViaMethod;            // null if none
     public final String obtainViaField;
     public final boolean obtainViaStatic;
@@ -99,6 +104,7 @@ public final class FieldSpec {
         this.builderDefault = b.builderDefault;
         this.sourceInitializer = b.sourceInitializer;
         this.initializerImports = b.initializerImports == null ? Set.of() : b.initializerImports;
+        this.sourceInitializerTree = b.sourceInitializerTree;
         this.obtainViaMethod = b.obtainViaMethod;
         this.obtainViaField = b.obtainViaField;
         this.obtainViaStatic = b.obtainViaStatic;
@@ -250,6 +256,7 @@ public final class FieldSpec {
                 if (info != null) {
                     b.sourceInitializer = info.text();
                     b.initializerImports = new LinkedHashSet<>(info.typeImports());
+                    b.sourceInitializerTree = info.tree();
                 }
             }
             AnnotationMirror via = lookup.nestedAnnotationValue(rule, "obtainVia");
@@ -295,6 +302,7 @@ public final class FieldSpec {
         boolean ignored, builderDefault;
         String sourceInitializer;
         Set<String> initializerImports;
+        com.sun.source.tree.Tree sourceInitializerTree;
         String obtainViaMethod, obtainViaField;
         boolean obtainViaStatic;
     }

@@ -67,23 +67,18 @@ final class NestedBuilderFactory {
     }
 
     /**
-     * Emits {@code public Target build() { (validate?) return new Target(f1, f2, ...); }}.
+     * Emits {@code public Target build() { Target t = new Target(f1, f2, ...);
+     * (validate?) BuildFlagValidator.validate(t); return t; }}.
      * Honours {@link dev.sbs.classbuilder.apt.BuilderConfig#validate()} and
      * {@link dev.sbs.classbuilder.apt.BuilderConfig#factoryMethod()}.
+     *
+     * <p>Validation runs against the constructed target, not the Builder,
+     * because {@code @BuildRule} annotations live on the target class's
+     * fields. The Builder's own fields are synthesised and unannotated, so
+     * validating {@code this} was a no-op prior to this change.
      */
     private JCMethodDecl buildMethod() {
         ListBuffer<JCStatement> body = new ListBuffer<>();
-
-        if (ctx.config().validate()) {
-            body.append(make.Exec(make.Apply(
-                List.nil(),
-                make.Select(
-                    ctx.types().qualIdent("dev.sbs.classbuilder.validate.BuildFlagValidator"),
-                    names.fromString("validate")
-                ),
-                List.of(make.Ident(names._this))
-            )));
-        }
 
         ListBuffer<JCExpression> args = new ListBuffer<>();
         for (FieldSpec f : ctx.fields()) args.append(make.Ident(names.fromString(f.name)));
@@ -105,7 +100,29 @@ final class NestedBuilderFactory {
                 null
             );
         }
-        body.append(make.Return(instantiation));
+
+        if (ctx.config().validate()) {
+            // Target t = new Target(...); BuildFlagValidator.validate(t); return t;
+            JCExpression targetType = make.Ident(names.fromString(ctx.targetSimpleName()));
+            JCVariableDecl targetVar = make.VarDef(
+                make.Modifiers(Flags.FINAL),
+                names.fromString("$result"),
+                targetType,
+                instantiation
+            );
+            body.append(targetVar);
+            body.append(make.Exec(make.Apply(
+                List.nil(),
+                make.Select(
+                    ctx.types().qualIdent("dev.sbs.classbuilder.validate.BuildFlagValidator"),
+                    names.fromString("validate")
+                ),
+                List.of(make.Ident(names.fromString("$result")))
+            )));
+            body.append(make.Return(make.Ident(names.fromString("$result"))));
+        } else {
+            body.append(make.Return(instantiation));
+        }
 
         JCBlock block = make.Block(0, body.toList());
         JCExpression returnType = make.Ident(names.fromString(ctx.targetSimpleName()));

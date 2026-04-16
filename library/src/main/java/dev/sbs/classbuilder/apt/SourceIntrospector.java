@@ -46,9 +46,12 @@ final class SourceIntrospector {
     }
 
     /**
-     * Returns the declared initializer of the given field and the set of type
-     * FQNs referenced by that initializer. Returns {@code null} if the field
-     * has no initializer or if Trees is unavailable.
+     * Returns the declared initializer of the given field: source text, type
+     * references, and the javac tree node itself. AST-mutation consumers use
+     * the tree (cast to {@code JCExpression}, deep-cloned with symbols reset)
+     * to embed the initializer in a synthesised {@code $default$<name>()}
+     * method body. Returns {@code null} if the field has no initializer or
+     * if Trees is unavailable.
      */
     InitializerInfo readFieldInitializer(VariableElement element) {
         if (trees == null) return null;
@@ -65,11 +68,16 @@ final class SourceIntrospector {
         if (initializerPath != null) {
             new TypeRefCollector(trees, imports).scan(initializerPath, null);
         }
-        return new InitializerInfo(initializer.toString(), imports);
+        return new InitializerInfo(initializer.toString(), imports, initializer);
     }
 
-    /** Source text of the initializer plus any type references it contains. */
-    record InitializerInfo(String text, Set<String> typeImports) { }
+    /**
+     * Source text, referenced type FQNs, and the javac tree node for the
+     * initializer. {@code tree} is typed as {@link Tree} so the apt package
+     * stays free of javac-internal imports; the mutate package casts to
+     * {@code JCExpression} when embedding.
+     */
+    public record InitializerInfo(String text, Set<String> typeImports, Tree tree) { }
 
     /**
      * Walks an expression tree and records every identifier that resolves to a
@@ -88,7 +96,19 @@ final class SourceIntrospector {
 
         @Override
         public Void visitIdentifier(IdentifierTree node, Void unused) {
-            Element resolved = trees.getElement(getCurrentPath());
+            // trees.getElement forces attribution of the enclosing class.
+            // Mid-round (our APT is still processing earlier @ClassBuilder
+            // targets in the same compilation unit), attribution can hit
+            // half-populated method symbols and throw NPE. A missed import
+            // here only affects the sibling-emitter source text, not the
+            // AST path - javac resolves identifiers there against the
+            // original source's imports regardless of this scan's outcome.
+            Element resolved;
+            try {
+                resolved = trees.getElement(getCurrentPath());
+            } catch (RuntimeException ignored) {
+                return super.visitIdentifier(node, unused);
+            }
             if (resolved instanceof TypeElement type) {
                 out.add(type.getQualifiedName().toString());
             }

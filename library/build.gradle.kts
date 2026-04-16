@@ -63,6 +63,7 @@ val javacCompileExports = listOf(
     "--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
     "--add-exports=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED",
     "--add-exports=jdk.compiler/com.sun.tools.javac.model=ALL-UNNAMED",
+    "--add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED",
     "--add-exports=jdk.compiler/com.sun.tools.javac.processing=ALL-UNNAMED",
     "--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED",
     "--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED"
@@ -71,8 +72,7 @@ val javacCompileExports = listOf(
 val javacRuntimeExports = javacCompileExports + listOf(
     "--add-exports=jdk.compiler/com.sun.tools.javac.comp=ALL-UNNAMED",
     "--add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED",
-    "--add-exports=jdk.compiler/com.sun.tools.javac.main=ALL-UNNAMED",
-    "--add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED"
+    "--add-exports=jdk.compiler/com.sun.tools.javac.main=ALL-UNNAMED"
 )
 
 tasks.withType<JavaCompile>().configureEach {
@@ -152,6 +152,71 @@ idea {
         testSources.from(sourceSets["aptTest"].java.srcDirs)
         testResources.from(sourceSets["aptTest"].resources.srcDirs)
     }
+}
+
+// ----------------------------------------------------------------------------
+// showcase source set + runnable jar + integration test wiring
+//
+// The showcase source set is a consumer-style fixture: @ClassBuilder types
+// annotated with every runtime-observable configuration, plus a main() that
+// exercises the generated builders. Packaged as a standalone runnable jar
+// and exercised by BuildRuleShowcaseIntegrationTest in src/test.
+//
+// CRITICAL: the showcase jar is INTERNAL verification only. It is never
+// added to the "release" maven publication, and its output directory is
+// build/showcase/ rather than build/libs/ so the central-staging bundle
+// and any "take everything in build/libs" wiring physically cannot see it.
+// ----------------------------------------------------------------------------
+
+sourceSets {
+    create("showcase") {
+        java.srcDir("src/showcase/java")
+        compileClasspath += sourceSets.main.get().output
+        runtimeClasspath += output + compileClasspath
+    }
+}
+
+configurations {
+    named("showcaseImplementation") { extendsFrom(configurations.implementation.get()) }
+    named("showcaseRuntimeOnly")    { extendsFrom(configurations.runtimeOnly.get()) }
+}
+
+tasks.named<JavaCompile>("compileShowcaseJava") {
+    // The APT runs ClassBuilderProcessor inside javac, which reaches into
+    // com.sun.tools.javac internals. compilerArgs' --add-exports only
+    // land on javac's command line, not on the JVM running it - so the
+    // reflective unwrap in JavacBridge hits IllegalAccessError unless we
+    // fork the compile JVM with the exports applied as real JVM args.
+    options.annotationProcessorPath = files(sourceSets.main.get().output) +
+        configurations.compileClasspath.get()
+    options.isFork = true
+    options.forkOptions.jvmArgs = javacCompileExports
+}
+
+val showcaseJar by tasks.registering(Jar::class) {
+    group = "verification"
+    description = "Packages the @ClassBuilder runtime showcase as a standalone runnable jar."
+    archiveClassifier.set("showcase")
+    destinationDirectory.set(layout.buildDirectory.dir("showcase"))
+    dependsOn(tasks.named("compileShowcaseJava"))
+    from(sourceSets["showcase"].output)
+    from(sourceSets.main.get().output)
+    manifest {
+        attributes("Main-Class" to "dev.sbs.classbuilder.showcase.BuildRuleShowcase")
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+tasks.test {
+    dependsOn(showcaseJar)
+    systemProperty(
+        "showcase.jar",
+        showcaseJar.flatMap { it.archiveFile }.get().asFile.absolutePath
+    )
+    systemProperty(
+        "showcase.output.dir",
+        layout.buildDirectory.dir("showcase-output").get().asFile.absolutePath
+    )
 }
 
 // ----------------------------------------------------------------------------
