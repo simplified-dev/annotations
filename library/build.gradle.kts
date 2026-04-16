@@ -182,15 +182,12 @@ configurations {
 }
 
 tasks.named<JavaCompile>("compileShowcaseJava") {
-    // The APT runs ClassBuilderProcessor inside javac, which reaches into
-    // com.sun.tools.javac internals. compilerArgs' --add-exports only
-    // land on javac's command line, not on the JVM running it - so the
-    // reflective unwrap in JavacBridge hits IllegalAccessError unless we
-    // fork the compile JVM with the exports applied as real JVM args.
+    // The APT's static initializer opens jdk.compiler/com.sun.tools.javac.*
+    // automatically via the JavacAccess bootstrap, so no --add-exports fork
+    // args are needed for consumer builds. Just point the processor path at
+    // the library output so ClassBuilderProcessor's service file is found.
     options.annotationProcessorPath = files(sourceSets.main.get().output) +
         configurations.compileClasspath.get()
-    options.isFork = true
-    options.forkOptions.jvmArgs = javacCompileExports
 }
 
 val showcaseJar by tasks.registering(Jar::class) {

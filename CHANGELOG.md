@@ -4,17 +4,27 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.2.0]
+
+### Added
+
+- **Automatic `--add-exports` module opening** - the annotation processor opens `jdk.compiler/com.sun.tools.javac.*` packages at load time via a `sun.misc.Unsafe` + `MethodHandles.Lookup.IMPL_LOOKUP` bootstrap (same technique Lombok uses). Consumers no longer need to pass `--add-exports` flags in their build configuration. Version-gated via `JavacAccess` / `JavacAccessFactory` / `JavacAccessV17` mirroring the existing `JavacCompat` design so future JDK hardening is absorbed by a new shim subclass + one gate.
+- **End-to-end `@ClassBuilder` runtime showcase** - new `library/src/showcase/` source set packaged as a standalone runnable jar that exercises every runtime-observable configuration of `@ClassBuilder` + companions (`@BuildRule`, `@BuildFlag`, `@ObtainVia`, `@Collector`, `@Negate`, `@Formattable`) against real APT-generated builders. A new parameterised JUnit test in `:library:test` execs the jar in a fresh JVM and surfaces one Gradle test row per CASE (43 rows), with a sibling coverage-drift assertion. The showcase artifact lives in `build/showcase/` and is deliberately excluded from the Maven Central publication.
 
 ### Changed
 
 - **Merged generic field-level annotations into `@BuildRule`** - `@BuilderDefault`, `@BuilderIgnore`, `@BuildFlag`, and `@ObtainVia` collapse into a single parent `@BuildRule(retainInit = ..., ignore = ..., flag = @BuildFlag(...), obtainVia = @ObtainVia(...))`. `@BuildFlag` and `@ObtainVia` become nested-only (`@Target({})`); `@BuildRule` is `@Retention(RUNTIME)` so `BuildFlagValidator` continues to reflectively read the nested `@BuildFlag`. Type-specific companions (`@Negate`, `@Formattable`, `@Collector`) stay standalone. Pre-release, no deprecation aliases - consumers migrate via find-and-replace.
 
+### Fixed
+
+- **`@BuildRule(flag = @BuildFlag(...))` runtime validation now actually fires on AST-mutated targets.** The generated `build()` method previously called `BuildFlagValidator.validate(this)` against the Builder, whose synthesised fields carry no annotations - so every `nonNull` / `notEmpty` / `pattern` / `limit` / `group` constraint silently no-op'd on classes and records. `build()` now constructs the target first, validates it, then returns. Same fix mirrored in the sibling-emitter path used for interface targets. Surfaced by the new showcase harness.
+- **`@BuildRule(retainInit = true)` is now honoured on the AST-mutation path** (classes and records). Previously only the sibling-emitter path used for interface targets supported it. Implemented via a private static `$default$<fieldName>()` provider injected onto the target class - the provider holds a deep-cloned copy of the original initializer expression with `sym` / `type` / `pos` pointers reset so javac re-attributes it inside the method body's scope, and the generated Builder's field default becomes a static call to that provider. Supports arbitrary expressions (`UUID.randomUUID()`, `new ArrayList<>()`, `List.of(...)`, ternaries, field accesses, etc.) and evaluates them fresh on every `build()` invocation.
+
 ### Removed
 
 - **`@BuilderDefault` and `@BuilderIgnore`** - replaced by `@BuildRule(retainInit = true)` and `@BuildRule(ignore = true)` respectively.
 
-## [1.2.0]
+## [1.1.5]
 
 ### Added
 

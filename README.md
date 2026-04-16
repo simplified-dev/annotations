@@ -67,76 +67,15 @@ configuration.
 
 ## `@ClassBuilder` consumer setup
 
-`@ClassBuilder` uses an annotation processor that injects the nested
-`Builder` class directly into the annotated type via javac AST mutation.
-That pipeline reaches into `com.sun.tools.javac.*` internals, which the
-JDK module system hides by default. Every consumer build must open those
-packages to the unnamed module at compile time.
-
 > **javac-only.** The AST-mutation pipeline does not run on ecj (Eclipse's
 > compiler). Projects that compile with ecj cannot use `@ClassBuilder`.
 > `@ResourcePath` and `@XContract` have no compiler dependency and work
 > on any build.
 
-### Gradle (Kotlin DSL)
-
-```kotlin
-tasks.withType<JavaCompile>().configureEach {
-    options.compilerArgs.addAll(listOf(
-        "--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
-        "--add-exports=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED",
-        "--add-exports=jdk.compiler/com.sun.tools.javac.model=ALL-UNNAMED",
-        "--add-exports=jdk.compiler/com.sun.tools.javac.processing=ALL-UNNAMED",
-        "--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED",
-        "--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED"
-    ))
-}
-```
-
-### Gradle (Groovy DSL)
-
-```groovy
-tasks.withType(JavaCompile).configureEach {
-    options.compilerArgs += [
-        '--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED',
-        '--add-exports=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED',
-        '--add-exports=jdk.compiler/com.sun.tools.javac.model=ALL-UNNAMED',
-        '--add-exports=jdk.compiler/com.sun.tools.javac.processing=ALL-UNNAMED',
-        '--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED',
-        '--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED'
-    ]
-}
-```
-
-### Maven
-
-```xml
-<plugin>
-    <groupId>org.apache.maven.plugins</groupId>
-    <artifactId>maven-compiler-plugin</artifactId>
-    <configuration>
-        <compilerArgs>
-            <arg>--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED</arg>
-            <arg>--add-exports=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED</arg>
-            <arg>--add-exports=jdk.compiler/com.sun.tools.javac.model=ALL-UNNAMED</arg>
-            <arg>--add-exports=jdk.compiler/com.sun.tools.javac.processing=ALL-UNNAMED</arg>
-            <arg>--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED</arg>
-            <arg>--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED</arg>
-        </compilerArgs>
-    </configuration>
-</plugin>
-```
-
-### Without these flags
-
-The build fails at the first `@ClassBuilder` with a message along the
-lines of:
-
-```
-error: package com.sun.tools.javac.tree is not visible
-  (package com.sun.tools.javac.tree is declared in module jdk.compiler,
-   which does not export it to the unnamed module)
-```
+**No `--add-exports` configuration required.** The annotation processor
+opens `jdk.compiler/com.sun.tools.javac.*` automatically at load time
+(same technique Lombok uses) so consumer builds work with a plain
+`annotationProcessor` dependency - no JVM flags, no forked compiler.
 
 ### Supported JDKs
 
@@ -193,9 +132,11 @@ enforced by this plugin's own inspections.
 import dev.sbs.annotation.*;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 @ClassBuilder
 public class Pizza {
+    @BuildRule(retainInit = true) UUID id = UUID.randomUUID();
     @BuildRule(flag = @BuildFlag(nonNull = true)) String name;
     @Collector(singular = true, clearable = true) List<String> toppings;
     @Formattable Optional<String> description;
@@ -205,6 +146,8 @@ public class Pizza {
 
 Generates a `Pizza.Builder` with:
 
+- `withId(UUID)`, defaulting to a fresh `UUID.randomUUID()` evaluated on
+  every `build()` (carried forward from the field initializer)
 - `withName(String)`, chained `@BuildRule(flag = @BuildFlag(...))` enforcement at `build()` time
 - `withToppings(String...)`, `withToppings(Iterable<String>)`,
   `withTopping(String)`, `clearToppings()`
@@ -216,6 +159,12 @@ Generates a `Pizza.Builder` with:
 
 Plus bootstrap methods on `Pizza` itself: `static Pizza.Builder builder()`,
 `static Pizza.Builder from(Pizza)`, and `Pizza.Builder mutate()`.
+
+`@BuildRule(retainInit = true)` evaluates the field initializer fresh per
+builder instance - `UUID.randomUUID()` produces a new UUID each time,
+`new ArrayList<>()` produces a fresh list. Any expression valid in the
+target class's scope is supported (constructor calls, factory methods,
+static method invocations, ternaries, etc.).
 
 For abstract classes, `@ClassBuilder` produces a self-typed
 `Builder<T, B>` that concrete subclasses inherit with

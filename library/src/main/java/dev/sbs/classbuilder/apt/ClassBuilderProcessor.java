@@ -3,6 +3,7 @@ package dev.sbs.classbuilder.apt;
 import dev.sbs.annotation.AccessLevel;
 import dev.sbs.classbuilder.mutate.BuilderMutator;
 import dev.sbs.classbuilder.mutate.JavacBridge;
+import dev.sbs.classbuilder.mutate.compat.JavacAccessFactory;
 
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.Messager;
@@ -36,6 +37,19 @@ import java.util.Set;
 @SupportedAnnotationTypes("dev.sbs.annotation.ClassBuilder")
 @SupportedSourceVersion(SourceVersion.RELEASE_17)
 public class ClassBuilderProcessor extends AbstractProcessor {
+
+    static {
+        // Open jdk.compiler/com.sun.tools.javac.* to the unnamed module
+        // BEFORE the JVM has a chance to link any field type that imports
+        // those packages. The static initializer runs on class load, before
+        // instance creation or init() invocation, which means JavacBridge
+        // and the rest of the mutate package can subsequently be linked
+        // without IllegalAccessError - and consumers do not need to
+        // configure --add-exports themselves. JavacAccess holds zero
+        // javac-internal references so loading it does not trigger the
+        // very access check we are trying to avoid.
+        JavacAccessFactory.forRuntime().open();
+    }
 
     private static final String ANNOTATION_FQN = "dev.sbs.annotation.ClassBuilder";
 
