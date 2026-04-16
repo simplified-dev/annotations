@@ -127,7 +127,7 @@ public @interface ClassBuilder {
      * The setter method prefix. Booleans always use {@code "is"} unless this
      * attribute is set to a non-default value.
      */
-    @NotNull String methodPrefix() default "with";
+    @NotNull String methodPrefix() default "";
 
     /**
      * The access level of the generated bootstrap methods and the generated

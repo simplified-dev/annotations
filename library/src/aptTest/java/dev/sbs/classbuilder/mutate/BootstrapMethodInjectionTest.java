@@ -92,8 +92,8 @@ public class BootstrapMethodInjectionTest {
         assertEquals(builder, b.getClass());
 
         // Build an instance
-        builder.getMethod("withLabel", String.class).invoke(b, "first");
-        builder.getMethod("withCount", int.class).invoke(b, 7);
+        builder.getMethod("label", String.class).invoke(b, "first");
+        builder.getMethod("count", int.class).invoke(b, 7);
         Object first = builder.getMethod("build").invoke(b);
 
         // from(T) reads every field
@@ -105,7 +105,7 @@ public class BootstrapMethodInjectionTest {
         // mutate() on the instance produces a builder pre-populated with its state
         Method mutate = widget.getMethod("mutate");
         Object b3 = mutate.invoke(first);
-        builder.getMethod("withCount", int.class).invoke(b3, 99);
+        builder.getMethod("count", int.class).invoke(b3, 99);
         Object third = builder.getMethod("build").invoke(b3);
         assertEquals("first", widget.getMethod("getLabel").invoke(third));
         assertEquals(99, widget.getMethod("getCount").invoke(third));
@@ -130,8 +130,8 @@ public class BootstrapMethodInjectionTest {
         Class<?> builder = nested(coord, "Builder");
 
         Object b = coord.getMethod("builder").invoke(null);
-        builder.getMethod("withX", int.class).invoke(b, 10);
-        builder.getMethod("withY", int.class).invoke(b, 20);
+        builder.getMethod("x", int.class).invoke(b, 10);
+        builder.getMethod("y", int.class).invoke(b, 20);
         Object c1 = builder.getMethod("build").invoke(b);
 
         Object b2 = coord.getMethod("from", coord).invoke(null, c1);
@@ -155,7 +155,7 @@ public class BootstrapMethodInjectionTest {
             "    public Manual(String x) { this.x = x; }",
             "    public String getX() { return x; }",
             "    public static Builder builder() {",
-            "        return new Builder().withX(\"user\");",
+            "        return new Builder().x(\"user\");",
             "    }",
             "}");
         Compilation c = compile(src);
@@ -192,7 +192,7 @@ public class BootstrapMethodInjectionTest {
 
         Object b = named.getMethod("make").invoke(null);
         Class<?> builder = b.getClass();
-        builder.getMethod("withLabel", String.class).invoke(b, "hello");
+        builder.getMethod("label", String.class).invoke(b, "hello");
         Object inst = builder.getMethod("build").invoke(b);
 
         Object b2 = named.getMethod("of", named).invoke(null, inst);

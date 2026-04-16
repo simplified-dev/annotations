@@ -1,5 +1,6 @@
 package dev.sbs.classbuilder.editor;
 
+import com.intellij.codeInsight.InferredAnnotationsManager;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiFile;
@@ -44,7 +45,7 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
                 String builderMethodName() default "builder";
                 String fromMethodName() default "from";
                 String toBuilderMethodName() default "mutate";
-                String methodPrefix() default "with";
+                String methodPrefix() default "";
                 String[] exclude() default {};
                 boolean emitContracts() default true;
             }
@@ -106,7 +107,7 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
             }
             """);
 
-        PsiMethod formattable = findByArity(builder, "withMessage", 2);
+        PsiMethod formattable = findByArity(builder, "message", 2);
         PsiParameter fmt = formattable.getParameterList().getParameter(0);
         PsiParameter args = formattable.getParameterList().getParameter(1);
 
@@ -149,7 +150,7 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
             public @interface NotNull {}
             """);
 
-        PsiMethod setter = builder.findMethodsByName("withTitle", false)[0];
+        PsiMethod setter = builder.findMethodsByName("title", false)[0];
         PsiParameter title = setter.getParameterList().getParameter(0);
         com.intellij.psi.PsiAnnotation[] typeAnnotations = title.getType().getAnnotations();
         boolean hasNotNull = false;
@@ -182,7 +183,7 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
             ((com.intellij.psi.PsiJavaFile) myFixture.getFile()).getClasses()[0];
         com.intellij.psi.PsiClass builder = target.getInnerClasses()[0];
         com.intellij.psi.PsiMethod formattable = null;
-        for (com.intellij.psi.PsiMethod m : builder.findMethodsByName("withMessage", false)) {
+        for (com.intellij.psi.PsiMethod m : builder.findMethodsByName("message", false)) {
             if (m.getParameterList().getParametersCount() == 2) { formattable = m; break; }
         }
         assertNotNull("formattable overload must exist", formattable);
@@ -214,7 +215,7 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
             ((com.intellij.psi.PsiJavaFile) myFixture.getFile()).getClasses()[0];
         com.intellij.psi.PsiClass builder = target.getInnerClasses()[0];
         com.intellij.psi.PsiMethod formattable = null;
-        for (com.intellij.psi.PsiMethod m : builder.findMethodsByName("withMessage", false)) {
+        for (com.intellij.psi.PsiMethod m : builder.findMethodsByName("message", false)) {
             if (m.getParameterList().getParametersCount() == 2) { formattable = m; break; }
         }
         assertNotNull("formattable overload must exist", formattable);
@@ -243,7 +244,7 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
             }
             """);
 
-        PsiMethod formattable = findByArity(builder, "withDescription", 2);
+        PsiMethod formattable = findByArity(builder, "description", 2);
         PsiParameter fmt = formattable.getParameterList().getParameter(0);
         assertNotNull(fmt.getModifierList().findAnnotation(PRINT_FORMAT_FQN));
         assertNotNull("format always @Nullable for Optional<String>",
@@ -274,7 +275,7 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
             }
             """);
 
-        for (PsiMethod m : builder.findMethodsByName("withMessage", false)) {
+        for (PsiMethod m : builder.findMethodsByName("message", false)) {
             PsiParameter first = m.getParameterList().getParameter(0);
             assertNotNull(m.getParameterList().getParametersCount() + "-arg setter first param must be @NotNull: "
                     + first.getType().getPresentableText(),
@@ -295,7 +296,7 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
             }
             """);
 
-        PsiMethod setter = builder.findMethodsByName("withName", false)[0];
+        PsiMethod setter = builder.findMethodsByName("name", false)[0];
         PsiParameter name = setter.getParameterList().getParameter(0);
         assertNotNull("@BuildRule(flag = @BuildFlag(nonNull)) forces @NotNull",
             name.getModifierList().findAnnotation(NOT_NULL_FQN));
@@ -310,7 +311,7 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
             public class Plain { String label; }
             """);
 
-        PsiMethod setter = builder.findMethodsByName("withLabel", false)[0];
+        PsiMethod setter = builder.findMethodsByName("label", false)[0];
         PsiParameter p = setter.getParameterList().getParameter(0);
         assertNull(p.getModifierList().findAnnotation(NOT_NULL_FQN));
         assertNull(p.getModifierList().findAnnotation(NULLABLE_FQN));
@@ -329,7 +330,7 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
         // Two overloads: raw(String) and wrapped(Optional<String>). The raw one
         // is the overload whose param is NOT an Optional type.
         PsiMethod raw = null;
-        for (PsiMethod m : builder.findMethodsByName("withLabel", false)) {
+        for (PsiMethod m : builder.findMethodsByName("label", false)) {
             PsiParameter p = m.getParameterList().getParameter(0);
             String canonical = p.getType().getCanonicalText();
             if (!canonical.startsWith("java.util.Optional")) { raw = m; break; }
@@ -379,7 +380,7 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
             public class Widget { String x; }
             """);
 
-        PsiMethod setter = builder.findMethodsByName("withX", false)[0];
+        PsiMethod setter = builder.findMethodsByName("x", false)[0];
         assertContractShape(setter, "_ -> this", false, "this");
     }
 
@@ -393,7 +394,7 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
             public class Greeting { @Formattable String message; }
             """);
 
-        PsiMethod formattable = findByArity(builder, "withMessage", 2);
+        PsiMethod formattable = findByArity(builder, "message", 2);
         assertContractShape(formattable, "_, _ -> this", false, "this");
     }
 

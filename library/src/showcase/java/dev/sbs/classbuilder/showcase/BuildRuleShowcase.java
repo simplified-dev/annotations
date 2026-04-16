@@ -329,20 +329,20 @@ public final class BuildRuleShowcase {
         // --- @ClassBuilder base ------------------------------------------
 
         report.expect("classBuilder.plain")
-            .run(() -> Plain.builder().withName("alice").withAge(30).build())
+            .run(() -> Plain.builder().name("alice").age(30).build())
             .asSuccess();
 
         report.expect("classBuilder.plain.from")
             .run(() -> {
-                Plain source = Plain.builder().withName("source").withAge(42).build();
+                Plain source = Plain.builder().name("source").age(42).build();
                 return Plain.from(source).build();
             })
             .asSuccess("round-tripped name/age");
 
         report.expect("classBuilder.plain.mutate")
             .run(() -> {
-                Plain source = Plain.builder().withName("a").withAge(1).build();
-                return source.mutate().withAge(2).build();
+                Plain source = Plain.builder().name("a").age(1).build();
+                return source.mutate().age(2).build();
             })
             .asSuccess("mutate() returned new instance with age=2");
 
@@ -357,14 +357,14 @@ public final class BuildRuleShowcase {
         report.expect("classBuilder.exclude")
             .runVoid(() -> {
                 for (Method m : Excluded.Builder.class.getDeclaredMethods()) {
-                    if (m.getName().equals("withSecret"))
-                        throw new AssertionError("'secret' field was excluded but withSecret setter exists");
+                    if (m.getName().equals("secret"))
+                        throw new AssertionError("'secret' field was excluded but secret setter exists");
                 }
-                Excluded built = Excluded.builder().withVisible("v").build();
+                Excluded built = Excluded.builder().visible("v").build();
                 if (!"default-secret".equals(built.getSecret()))
                     throw new AssertionError("excluded field lost its default initializer");
             })
-            .asSuccess("no withSecret on Builder; default initializer preserved");
+            .asSuccess("no secret on Builder; default initializer preserved");
 
         report.expect("classBuilder.access.package")
             .runVoid(() -> {
@@ -441,7 +441,7 @@ public final class BuildRuleShowcase {
 
         report.expect("buildRule.retainInit.override")
             .runVoid(() -> {
-                RetainedInit built = RetainedInit.builder().withGreeting("explicit").build();
+                RetainedInit built = RetainedInit.builder().greeting("explicit").build();
                 if (!"explicit".equals(built.getGreeting()))
                     throw new AssertionError("expected explicit override, got " + built.getGreeting());
             })
@@ -450,14 +450,14 @@ public final class BuildRuleShowcase {
         report.expect("buildRule.ignore")
             .runVoid(() -> {
                 for (Method m : IgnoredField.Builder.class.getDeclaredMethods()) {
-                    if (m.getName().equals("withHidden"))
-                        throw new AssertionError("ignored field leaked as withHidden setter");
+                    if (m.getName().equals("hidden"))
+                        throw new AssertionError("ignored field leaked as hidden setter");
                 }
-                IgnoredField built = IgnoredField.builder().withVisible("v").build();
+                IgnoredField built = IgnoredField.builder().visible("v").build();
                 if (!"hidden-default".equals(built.getHidden()))
                     throw new AssertionError("ignored field lost its default initializer");
             })
-            .asSuccess("no withHidden on Builder; default initializer preserved");
+            .asSuccess("no hidden on Builder; default initializer preserved");
 
         // --- @BuildRule.flag = @BuildFlag --------------------------------
 
@@ -467,20 +467,20 @@ public final class BuildRuleShowcase {
             .messageEquals("Field 'name' in 'NullRequired' is required and is null/empty");
 
         report.expect("buildFlag.nonNull.value")
-            .run(() -> NullRequired.builder().withName("ok").build())
+            .run(() -> NullRequired.builder().name("ok").build())
             .asSuccess("built NullRequired with name=ok");
 
         report.expect("buildFlag.notEmpty.string.empty")
-            .runExpectingThrow(() -> EmptyStringRequired.builder().withS("").build())
+            .runExpectingThrow(() -> EmptyStringRequired.builder().s("").build())
             .asFailure(BuilderValidationException.class)
             .messageEquals("Field 's' in 'EmptyStringRequired' is required and is null/empty");
 
         report.expect("buildFlag.notEmpty.string.value")
-            .run(() -> EmptyStringRequired.builder().withS("x").build())
+            .run(() -> EmptyStringRequired.builder().s("x").build())
             .asSuccess("built with non-empty string");
 
         report.expect("buildFlag.notEmpty.optional.empty")
-            .runExpectingThrow(() -> EmptyOptionalRequired.builder().withOpt(Optional.empty()).build())
+            .runExpectingThrow(() -> EmptyOptionalRequired.builder().opt(Optional.empty()).build())
             .asFailure(BuilderValidationException.class)
             .messageContains("'opt'");
 
@@ -500,11 +500,11 @@ public final class BuildRuleShowcase {
             .messageContains("'arr'");
 
         report.expect("buildFlag.pattern.match")
-            .run(() -> PatternConstrained.builder().withIdent("hello").build())
+            .run(() -> PatternConstrained.builder().ident("hello").build())
             .asSuccess("pattern matched");
 
         report.expect("buildFlag.pattern.mismatch")
-            .runExpectingThrow(() -> PatternConstrained.builder().withIdent("Has Spaces").build())
+            .runExpectingThrow(() -> PatternConstrained.builder().ident("Has Spaces").build())
             .asFailure(BuilderValidationException.class)
             .messageEquals("Field 'ident' in 'PatternConstrained' does not match pattern '[a-z]+' (value: 'Has Spaces')");
 
@@ -513,21 +513,21 @@ public final class BuildRuleShowcase {
             .asSuccess("null value bypasses pattern check");
 
         report.expect("buildFlag.limit.string.under")
-            .run(() -> LimitedString.builder().withText("abc").build())
+            .run(() -> LimitedString.builder().text("abc").build())
             .asSuccess("under limit");
 
         report.expect("buildFlag.limit.string.over")
-            .runExpectingThrow(() -> LimitedString.builder().withText("toolong").build())
+            .runExpectingThrow(() -> LimitedString.builder().text("toolong").build())
             .asFailure(BuilderValidationException.class)
             .messageEquals("Field 'text' in 'LimitedString' has length 7, exceeds limit of 5");
 
         report.expect("buildFlag.limit.collection.over")
-            .runExpectingThrow(() -> LimitedCollection.builder().withTags(List.of("a", "b", "c")).build())
+            .runExpectingThrow(() -> LimitedCollection.builder().tags(List.of("a", "b", "c")).build())
             .asFailure(BuilderValidationException.class)
             .messageContains("exceeds limit of 2");
 
         report.expect("buildFlag.limit.optionalNumber.over")
-            .runExpectingThrow(() -> LimitedOptionalNumber.builder().withAmount(Optional.of(500)).build())
+            .runExpectingThrow(() -> LimitedOptionalNumber.builder().amount(Optional.of(500)).build())
             .asFailure(BuilderValidationException.class)
             .messageContains("exceeds limit of 100");
 
@@ -537,14 +537,14 @@ public final class BuildRuleShowcase {
             .messageContains("Field group 'face'");
 
         report.expect("buildFlag.group.onePresent")
-            .run(() -> FaceGroup.builder().withLabel("OK").build())
+            .run(() -> FaceGroup.builder().label("OK").build())
             .asSuccess("one group member satisfied");
 
         // --- @BuildRule.obtainVia ----------------------------------------
 
         report.expect("obtainVia.method")
             .runVoid(() -> {
-                ViaMethod source = ViaMethod.builder().withCustom("raw-value").build();
+                ViaMethod source = ViaMethod.builder().custom("raw-value").build();
                 ViaMethod copy = ViaMethod.from(source).build();
                 if (!"method-derived-raw-value".equals(copy.getCustom()))
                     throw new AssertionError("expected method-derived accessor, got " + copy.getCustom());
@@ -553,7 +553,7 @@ public final class BuildRuleShowcase {
 
         report.expect("obtainVia.field")
             .runVoid(() -> {
-                ViaField source = ViaField.builder().withAlias("ignored").build();
+                ViaField source = ViaField.builder().alias("ignored").build();
                 ViaField copy = ViaField.from(source).build();
                 if (!"from-real-field".equals(copy.getAlias()))
                     throw new AssertionError("expected real-field read, got " + copy.getAlias());
@@ -562,7 +562,7 @@ public final class BuildRuleShowcase {
 
         report.expect("obtainVia.isStatic")
             .runVoid(() -> {
-                ViaStatic source = ViaStatic.builder().withValue("ignored").build();
+                ViaStatic source = ViaStatic.builder().value("ignored").build();
                 ViaStatic copy = ViaStatic.from(source).build();
                 if (!"static-helper-result".equals(copy.getValue()))
                     throw new AssertionError("expected static-helper-result, got " + copy.getValue());
@@ -573,7 +573,7 @@ public final class BuildRuleShowcase {
 
         report.expect("collector.list.bulk")
             .runVoid(() -> {
-                CollectorList built = CollectorList.builder().withItems("a", "b", "c").build();
+                CollectorList built = CollectorList.builder().items("a", "b", "c").build();
                 if (built.getItems().size() != 3)
                     throw new AssertionError("expected 3 items, got " + built.getItems());
             })
@@ -582,8 +582,8 @@ public final class BuildRuleShowcase {
         report.expect("collector.list.singular")
             .runVoid(() -> {
                 CollectorList built = CollectorList.builder()
-                    .withItem("x")
-                    .withItem("y")
+                    .addItem("x")
+                    .addItem("y")
                     .build();
                 if (built.getItems().size() != 2)
                     throw new AssertionError("expected 2 items via singular add, got " + built.getItems());
@@ -593,7 +593,7 @@ public final class BuildRuleShowcase {
         report.expect("collector.list.clearable")
             .runVoid(() -> {
                 CollectorList built = CollectorList.builder()
-                    .withItems("a", "b", "c")
+                    .items("a", "b", "c")
                     .clearItems()
                     .build();
                 if (!built.getItems().isEmpty())
@@ -658,7 +658,7 @@ public final class BuildRuleShowcase {
         report.expect("formattable.string")
             .runVoid(() -> {
                 FormattedString built = FormattedString.builder()
-                    .withMessage("%s: %d", "n", 42)
+                    .message("%s: %d", "n", 42)
                     .build();
                 if (!"n: 42".equals(built.getMessage()))
                     throw new AssertionError("expected 'n: 42', got " + built.getMessage());

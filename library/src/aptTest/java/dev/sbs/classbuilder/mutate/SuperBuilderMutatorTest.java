@@ -106,9 +106,9 @@ public class SuperBuilderMutatorTest {
 
         // Round-trip via child bootstrap
         Object b = treeCls.getMethod("builder").invoke(null);
-        // withTitle is inherited from parent's Builder; on the concrete subclass
+        // title is inherited from parent's Builder; on the concrete subclass
         // instance the return type is still child's Builder by self-typing.
-        Object afterTitle = childBuilder.getMethod("withTitle", String.class).invoke(b, "Intro");
+        Object afterTitle = childBuilder.getMethod("title", String.class).invoke(b, "Intro");
 
         // Inherited setter invoked on the concrete subclass sets the
         // parent-level private field; verify directly via reflection since
@@ -118,7 +118,7 @@ public class SuperBuilderMutatorTest {
         assertEquals("Intro", titleField.get(b));
         assertEquals("self-typed return must remain the concrete builder",
             childBuilder, afterTitle.getClass());
-        childBuilder.getMethod("withDepth", int.class).invoke(b, 3);
+        childBuilder.getMethod("depth", int.class).invoke(b, 3);
         Object built = childBuilder.getMethod("build").invoke(b);
 
         assertNotNull(built);
@@ -170,8 +170,8 @@ public class SuperBuilderMutatorTest {
         Class<?> leafBuilder = nested(leafCls, "Builder");
 
         Object b = leafCls.getMethod("builder").invoke(null);
-        leafBuilder.getMethod("withName", String.class).invoke(b, "hello");
-        leafBuilder.getMethod("withCount", int.class).invoke(b, 2);
+        leafBuilder.getMethod("name", String.class).invoke(b, "hello");
+        leafBuilder.getMethod("count", int.class).invoke(b, 2);
         Object built = leafBuilder.getMethod("build").invoke(b);
         assertEquals("hello!", baseCls.getMethod("getName").invoke(built));
         assertEquals(2, leafCls.getMethod("getCount").invoke(built));
@@ -218,25 +218,25 @@ public class SuperBuilderMutatorTest {
         Class<?> homeCls = Class.forName("demo.HomePage", true, cl);
         Class<?> homeBuilder = nested(homeCls, "Builder");
 
-        // varargs-replace, then withTag (singular add via inherited setter)
+        // varargs-replace, then addTag (singular add via inherited setter)
         Object b = homeCls.getMethod("builder").invoke(null);
-        Object after = homeBuilder.getMethod("withTags", String[].class)
+        Object after = homeBuilder.getMethod("tags", String[].class)
             .invoke(b, (Object) new String[]{"alpha", "beta"});
         assertEquals("self-typed returns must remain the concrete child Builder",
             homeBuilder, after.getClass());
-        homeBuilder.getMethod("withTag", String.class).invoke(b, "gamma");
+        homeBuilder.getMethod("addTag", String.class).invoke(b, "gamma");
         Object built = homeBuilder.getMethod("build").invoke(b);
         assertEquals(List.of("alpha", "beta", "gamma"), pageCls.getMethod("getTags").invoke(built));
 
         // iterable-replace overload exists and works
         Object b2 = homeCls.getMethod("builder").invoke(null);
-        homeBuilder.getMethod("withTags", Iterable.class).invoke(b2, List.of("x", "y"));
+        homeBuilder.getMethod("tags", Iterable.class).invoke(b2, List.of("x", "y"));
         assertEquals(List.of("x", "y"),
             pageCls.getMethod("getTags").invoke(homeBuilder.getMethod("build").invoke(b2)));
 
         // clearTags lives on the parent, callable via the child
         Object b3 = homeCls.getMethod("builder").invoke(null);
-        homeBuilder.getMethod("withTags", String[].class).invoke(b3, (Object) new String[]{"to-clear"});
+        homeBuilder.getMethod("tags", String[].class).invoke(b3, (Object) new String[]{"to-clear"});
         homeBuilder.getMethod("clearTags").invoke(b3);
         assertTrue(((List<?>) pageCls.getMethod("getTags").invoke(homeBuilder.getMethod("build").invoke(b3))).isEmpty());
     }
@@ -365,13 +365,13 @@ public class SuperBuilderMutatorTest {
 
         // Plain inherited setter
         Object b = bannerCls.getMethod("builder").invoke(null);
-        bannerBuilder.getMethod("withMessage", String.class).invoke(b, "hi");
+        bannerBuilder.getMethod("message", String.class).invoke(b, "hi");
         assertEquals("hi",
             noticeCls.getMethod("getMessage").invoke(bannerBuilder.getMethod("build").invoke(b)));
 
         // @PrintFormat overload inherited from parent
         Object b2 = bannerCls.getMethod("builder").invoke(null);
-        Method formatted = bannerBuilder.getMethod("withMessage", String.class, Object[].class);
+        Method formatted = bannerBuilder.getMethod("message", String.class, Object[].class);
         formatted.invoke(b2, "code=%d", new Object[]{42});
         assertEquals("code=42",
             noticeCls.getMethod("getMessage").invoke(bannerBuilder.getMethod("build").invoke(b2)));
@@ -408,7 +408,7 @@ public class SuperBuilderMutatorTest {
 
         // Format-string overload inherited
         Object b = photoCls.getMethod("builder").invoke(null);
-        Method formatted = photoBuilder.getMethod("withCaption", String.class, Object[].class);
+        Method formatted = photoBuilder.getMethod("caption", String.class, Object[].class);
         formatted.invoke(b, "tag=%s", new Object[]{"sunset"});
         Optional<?> got = (Optional<?>) itemCls.getMethod("getCaption")
             .invoke(photoBuilder.getMethod("build").invoke(b));

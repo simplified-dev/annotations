@@ -32,7 +32,7 @@ public class ClassBuilderIconProviderTest extends BasePlatformTestCase {
                 String builderMethodName() default "builder";
                 String fromMethodName() default "from";
                 String toBuilderMethodName() default "mutate";
-                String methodPrefix() default "with";
+                String methodPrefix() default "";
             }
             """);
     }

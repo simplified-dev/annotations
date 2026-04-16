@@ -71,7 +71,7 @@ public final class ClassBuilderConstants {
     public static final @NotNull String DEFAULT_BUILD_METHOD = "build";
     public static final @NotNull String DEFAULT_FROM_METHOD = "from";
     public static final @NotNull String DEFAULT_TO_BUILDER_METHOD = "mutate";
-    public static final @NotNull String DEFAULT_METHOD_PREFIX = "with";
+    public static final @NotNull String DEFAULT_METHOD_PREFIX = "";
 
     private ClassBuilderConstants() {}
 

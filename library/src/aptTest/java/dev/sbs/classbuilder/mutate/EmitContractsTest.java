@@ -74,14 +74,14 @@ public class EmitContractsTest {
         assertContract(pizza, "mutate", "()Ldemo/Pizza$Builder;", "-> new", null, null);
 
         // Nested Builder: one setter per field + build()
-        assertContract(builder, "withName", "(Ljava/lang/String;)Ldemo/Pizza$Builder;",
+        assertContract(builder, "name", "(Ljava/lang/String;)Ldemo/Pizza$Builder;",
             "_ -> this", null, "this");
         // boolean pair: isVegetarian() + isVegetarian(boolean)
         assertContract(builder, "isVegetarian", "()Ldemo/Pizza$Builder;",
             "-> this", null, "this");
         assertContract(builder, "isVegetarian", "(Z)Ldemo/Pizza$Builder;",
             "_ -> this", null, "this");
-        assertContract(builder, "withSlices", "(I)Ldemo/Pizza$Builder;",
+        assertContract(builder, "slices", "(I)Ldemo/Pizza$Builder;",
             "_ -> this", null, "this");
         assertContract(builder, "build", "()Ldemo/Pizza;", "-> new", null, null);
     }
@@ -138,8 +138,8 @@ public class EmitContractsTest {
 
         Map<String, MethodContracts> builder = readMethodContracts(c, "demo.Bag$Builder");
 
-        // withTag / withEntry (single-param add)
-        assertValueOnMethod(builder, "withTag", "_ -> this");
+        // addTag / putEntry (single-param add)
+        assertValueOnMethod(builder, "addTag", "_ -> this");
         // putEntry (key, value) - two params
         assertValueOnMethod(builder, "putEntry", "_, _ -> this");
         // clearTags / clearEntries (no params)

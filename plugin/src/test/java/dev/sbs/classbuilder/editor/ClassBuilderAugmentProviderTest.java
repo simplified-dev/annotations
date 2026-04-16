@@ -32,7 +32,7 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
                 String builderMethodName() default "builder";
                 String fromMethodName() default "from";
                 String toBuilderMethodName() default "mutate";
-                String methodPrefix() default "with";
+                String methodPrefix() default "";
                 String[] exclude() default {};
             }
             """);
@@ -151,8 +151,8 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
         myFixture.completeBasic();
         java.util.List<String> lookup = myFixture.getLookupElementStrings();
         assertNotNull("completion popup must populate", lookup);
-        assertTrue("withTitle should show up: actual=" + lookup, lookup.contains("withTitle"));
-        assertTrue("withPages should show up: actual=" + lookup, lookup.contains("withPages"));
+        assertTrue("withTitle should show up: actual=" + lookup, lookup.contains("title"));
+        assertTrue("withPages should show up: actual=" + lookup, lookup.contains("pages"));
         assertTrue("build should show up: actual=" + lookup, lookup.contains("build"));
     }
 
@@ -192,7 +192,7 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
             public class Doc {
                 int rank;
                 public static Doc make() {
-                    return Doc.builder().withRank(7).build();
+                    return Doc.builder().rank(7).build();
                 }
             }
             """);
@@ -229,7 +229,7 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
             import a.Doc;
             public class Caller {
                 public static Doc make() {
-                    return Doc.builder().withRank(7).build();
+                    return Doc.builder().rank(7).build();
                 }
             }
             """);
@@ -310,8 +310,8 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
         assertTrue("synthesised Builder carries generated marker",
             GeneratedMemberMarker.isGenerated(builder));
 
-        assertEquals(1, builder.findMethodsByName("withLabel", false).length);
-        assertEquals(1, builder.findMethodsByName("withRank", false).length);
+        assertEquals(1, builder.findMethodsByName("label", false).length);
+        assertEquals(1, builder.findMethodsByName("rank", false).length);
         assertEquals(1, builder.findMethodsByName("build", false).length);
     }
 
@@ -397,7 +397,7 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
             @ClassBuilder
             public class Box { Optional<String> label; }
             """);
-        PsiMethod[] withLabel = builder.findMethodsByName("withLabel", false);
+        PsiMethod[] withLabel = builder.findMethodsByName("label", false);
         assertEquals("nullable-raw + wrapped", 2, withLabel.length);
     }
 
@@ -414,7 +414,7 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
             }
             """);
         // raw(String), wrapped(Optional<String>), formattable(String, Object...)
-        assertEquals(3, builder.findMethodsByName("withDescription", false).length);
+        assertEquals(3, builder.findMethodsByName("description", false).length);
     }
 
     /** String {@code @Formattable} adds a {@code (String, Object...)} overload. */
@@ -428,7 +428,7 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
                 @Formattable String message;
             }
             """);
-        PsiMethod[] withMessage = builder.findMethodsByName("withMessage", false);
+        PsiMethod[] withMessage = builder.findMethodsByName("message", false);
         assertEquals("plain + formattable", 2, withMessage.length);
         boolean sawVarargs = false;
         for (PsiMethod m : withMessage) {
@@ -448,10 +448,10 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
             @ClassBuilder
             public class Tags { String[] labels; }
             """);
-        PsiMethod[] withLabels = builder.findMethodsByName("withLabels", false);
-        assertEquals(1, withLabels.length);
+        PsiMethod[] labels = builder.findMethodsByName("labels", false);
+        assertEquals(1, labels.length);
         assertTrue("single-param varargs",
-            withLabels[0].getParameterList().getParameter(0).isVarArgs());
+            labels[0].getParameterList().getParameter(0).isVarArgs());
     }
 
     /**
@@ -469,10 +469,10 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
                 @Collector List<String> items;
             }
             """);
-        PsiMethod[] withItems = builder.findMethodsByName("withItems", false);
+        PsiMethod[] withItems = builder.findMethodsByName("items", false);
         assertEquals("varargs-replace + iterable-replace", 2, withItems.length);
         assertEquals("no singular add without @Collector(singular=true)",
-            0, builder.findMethodsByName("withItem", false).length);
+            0, builder.findMethodsByName("addItem", false).length);
         assertEquals("no clear without @Collector(clearable=true)",
             0, builder.findMethodsByName("clearItems", false).length);
     }
@@ -492,8 +492,8 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
                 @Collector(singular = true, clearable = true) List<String> items;
             }
             """);
-        assertEquals("varargs + iterable", 2, builder.findMethodsByName("withItems", false).length);
-        assertEquals("add single", 1, builder.findMethodsByName("withItem", false).length);
+        assertEquals("varargs + iterable", 2, builder.findMethodsByName("items", false).length);
+        assertEquals("add single", 1, builder.findMethodsByName("addItem", false).length);
         assertEquals("clear", 1, builder.findMethodsByName("clearItems", false).length);
     }
 
@@ -512,7 +512,7 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
                 @Collector(singular = true, clearable = true, compute = true) Map<String, Integer> counts;
             }
             """);
-        assertEquals("replace", 1, builder.findMethodsByName("withCounts", false).length);
+        assertEquals("replace", 1, builder.findMethodsByName("counts", false).length);
         assertEquals("put", 1, builder.findMethodsByName("putCount", false).length);
         assertEquals("putIfAbsent", 1, builder.findMethodsByName("putCountIfAbsent", false).length);
         assertEquals("clear", 1, builder.findMethodsByName("clearCounts", false).length);
@@ -533,11 +533,11 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
                 @Collector(singular = true, singularMethodName = "flavor") List<String> flavors;
             }
             """);
-        // Default "with" prefix + explicit singular "flavor" -> withFlavor.
-        assertEquals(1, builder.findMethodsByName("withFlavor", false).length);
+        // Default empty prefix + explicit singular "flavor" -> addFlavor.
+        assertEquals(1, builder.findMethodsByName("addFlavor", false).length);
         // The varargs-replace on the plural field name is still withFlavors;
         // neither that nor withFlavor collapses to a mistakenly doubled name.
-        assertEquals(0, builder.findMethodsByName("withFlavorss", false).length);
+        assertEquals(0, builder.findMethodsByName("addFlavorss", false).length);
     }
 
     // ------------------------------------------------------------------

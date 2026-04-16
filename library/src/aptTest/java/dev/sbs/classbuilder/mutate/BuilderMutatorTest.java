@@ -99,12 +99,12 @@ public class BuilderMutatorTest {
         Class<?> builder = nested(simple, "Builder");
 
         Object b = builder.getDeclaredConstructor().newInstance();
-        Method withName = builder.getMethod("withName", String.class);
-        Method withCount = builder.getMethod("withCount", int.class);
+        Method nameSetter = builder.getMethod("name", String.class);
+        Method countSetter = builder.getMethod("count", int.class);
         Method build = builder.getMethod("build");
 
-        assertSame("setter must return builder instance", b, withName.invoke(b, "hello"));
-        assertSame("setter must return builder instance", b, withCount.invoke(b, 42));
+        assertSame("setter must return builder instance", b, nameSetter.invoke(b, "hello"));
+        assertSame("setter must return builder instance", b, countSetter.invoke(b, 42));
 
         Object result = build.invoke(b);
         assertNotNull(result);
@@ -177,7 +177,7 @@ public class BuilderMutatorTest {
 
         // Raw nullable path
         Object b = builder.getDeclaredConstructor().newInstance();
-        builder.getMethod("withLabel", String.class).invoke(b, "seeded");
+        builder.getMethod("label", String.class).invoke(b, "seeded");
         Object result = builder.getMethod("build").invoke(b);
         Optional<?> label = (Optional<?>) opt.getMethod("getLabel").invoke(result);
         assertTrue(label.isPresent());
@@ -209,8 +209,8 @@ public class BuilderMutatorTest {
         Class<?> builder = nested(point, "Builder");
 
         Object b = builder.getDeclaredConstructor().newInstance();
-        builder.getMethod("withX", int.class).invoke(b, 3);
-        builder.getMethod("withY", int.class).invoke(b, 4);
+        builder.getMethod("x", int.class).invoke(b, 3);
+        builder.getMethod("y", int.class).invoke(b, 4);
         Object result = builder.getMethod("build").invoke(b);
 
         assertEquals(3, point.getMethod("x").invoke(result));
@@ -233,7 +233,7 @@ public class BuilderMutatorTest {
             "    public String getNote() { return note; }",
             "    public static class Builder {",
             "        private String note;",
-            "        public Builder withNote(String n) { this.note = n; return this; }",
+            "        public Builder note(String n) { this.note = n; return this; }",
             "        public HandRolled build() { return new HandRolled(note); }",
             "    }",
             "}");
@@ -276,11 +276,11 @@ public class BuilderMutatorTest {
         Class<?> innerBuilder = nested(inner, "Builder");
 
         Object ob = outerBuilder.getDeclaredConstructor().newInstance();
-        outerBuilder.getMethod("withOuterField", String.class).invoke(ob, "out");
+        outerBuilder.getMethod("outerField", String.class).invoke(ob, "out");
         assertEquals("out", outer.getMethod("getOuterField").invoke(outerBuilder.getMethod("build").invoke(ob)));
 
         Object ib = innerBuilder.getDeclaredConstructor().newInstance();
-        innerBuilder.getMethod("withInnerField", int.class).invoke(ib, 7);
+        innerBuilder.getMethod("innerField", int.class).invoke(ib, 7);
         assertEquals(7, inner.getMethod("getInnerField").invoke(innerBuilder.getMethod("build").invoke(ib)));
     }
 

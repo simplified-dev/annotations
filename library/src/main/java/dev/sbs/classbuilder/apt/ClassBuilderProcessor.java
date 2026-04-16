@@ -184,7 +184,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         String buildMethodName = lookup.stringAttr(target, ANNOTATION_FQN, "buildMethodName", "build");
         String fromMethodName = lookup.stringAttr(target, ANNOTATION_FQN, "fromMethodName", "from");
         String toBuilderMethodName = lookup.stringAttr(target, ANNOTATION_FQN, "toBuilderMethodName", "mutate");
-        String methodPrefix = lookup.stringAttr(target, ANNOTATION_FQN, "methodPrefix", "with");
+        String methodPrefix = lookup.stringAttr(target, ANNOTATION_FQN, "methodPrefix", "");
         AccessLevel access = parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, "access", "PUBLIC"));
         boolean generateBuilder = lookup.booleanAttr(target, ANNOTATION_FQN, "generateBuilder", true);
         boolean generateFrom = lookup.booleanAttr(target, ANNOTATION_FQN, "generateFrom", true);

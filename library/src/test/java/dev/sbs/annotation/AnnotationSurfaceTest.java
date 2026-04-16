@@ -97,7 +97,7 @@ public class AnnotationSurfaceTest {
         assertDefault(ClassBuilder.class, "buildMethodName", "build");
         assertDefault(ClassBuilder.class, "fromMethodName", "from");
         assertDefault(ClassBuilder.class, "toBuilderMethodName", "mutate");
-        assertDefault(ClassBuilder.class, "methodPrefix", "with");
+        assertDefault(ClassBuilder.class, "methodPrefix", "");
         assertDefault(ClassBuilder.class, "access", AccessLevel.PUBLIC);
         assertDefault(ClassBuilder.class, "generateBuilder", true);
         assertDefault(ClassBuilder.class, "generateFrom", true);

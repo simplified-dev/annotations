@@ -134,7 +134,7 @@ public class AdvancedSetterShapesTest {
 
         Object b = msg.getMethod("builder").invoke(null);
         // Plain setter unchanged
-        builder.getMethod("withText", String.class).invoke(b, "hello");
+        builder.getMethod("text", String.class).invoke(b, "hello");
         Object plain = builder.getMethod("build").invoke(b);
         assertEquals("hello", msg.getMethod("getText").invoke(plain));
 
@@ -142,7 +142,7 @@ public class AdvancedSetterShapesTest {
         // a trailing Object[] arg matching a varargs parameter: the array is
         // forwarded as the varargs payload directly, no extra wrapping.
         Object b2 = msg.getMethod("builder").invoke(null);
-        Method formatted = builder.getMethod("withText", String.class, Object[].class);
+        Method formatted = builder.getMethod("text", String.class, Object[].class);
         formatted.invoke(b2, "hi %s, %d", new Object[]{"world", 7});
         Object out = builder.getMethod("build").invoke(b2);
         assertEquals("hi world, 7", msg.getMethod("getText").invoke(out));
@@ -173,7 +173,7 @@ public class AdvancedSetterShapesTest {
         Class<?> builder = nested(opt, "Builder");
 
         Object b = opt.getMethod("builder").invoke(null);
-        Method formattedSetter = builder.getMethod("withDescription", String.class, Object[].class);
+        Method formattedSetter = builder.getMethod("description", String.class, Object[].class);
         formattedSetter.invoke(b, "p=%s", new Object[]{"X"});
         Object built = builder.getMethod("build").invoke(b);
         Optional<?> got = (Optional<?>) opt.getMethod("getDescription").invoke(built);
@@ -213,24 +213,24 @@ public class AdvancedSetterShapesTest {
 
         // varargs replace
         Object b = bag.getMethod("builder").invoke(null);
-        builder.getMethod("withTags", String[].class).invoke(b, (Object) new String[]{"a", "b"});
+        builder.getMethod("tags", String[].class).invoke(b, (Object) new String[]{"a", "b"});
         Object built = builder.getMethod("build").invoke(b);
         assertEquals(List.of("a", "b"), bag.getMethod("getTags").invoke(built));
 
         // iterable replace
         Object b2 = bag.getMethod("builder").invoke(null);
-        builder.getMethod("withTags", Iterable.class).invoke(b2, List.of("x", "y", "z"));
+        builder.getMethod("tags", Iterable.class).invoke(b2, List.of("x", "y", "z"));
         assertEquals(List.of("x", "y", "z"), bag.getMethod("getTags").invoke(builder.getMethod("build").invoke(b2)));
 
-        // singular add (default prefix is "with" so name is withTag)
+        // singular add (default prefix is empty so name is addTag)
         Object b3 = bag.getMethod("builder").invoke(null);
-        builder.getMethod("withTags", String[].class).invoke(b3, (Object) new String[]{"first"});
-        builder.getMethod("withTag", String.class).invoke(b3, "second");
+        builder.getMethod("tags", String[].class).invoke(b3, (Object) new String[]{"first"});
+        builder.getMethod("addTag", String.class).invoke(b3, "second");
         assertEquals(List.of("first", "second"), bag.getMethod("getTags").invoke(builder.getMethod("build").invoke(b3)));
 
         // clear
         Object b4 = bag.getMethod("builder").invoke(null);
-        builder.getMethod("withTags", String[].class).invoke(b4, (Object) new String[]{"to-be-cleared"});
+        builder.getMethod("tags", String[].class).invoke(b4, (Object) new String[]{"to-be-cleared"});
         builder.getMethod("clearTags").invoke(b4);
         assertTrue(((List<?>) bag.getMethod("getTags").invoke(builder.getMethod("build").invoke(b4))).isEmpty());
     }
@@ -264,7 +264,7 @@ public class AdvancedSetterShapesTest {
         Map<String, Integer> seed = new LinkedHashMap<>();
         seed.put("a", 1);
         seed.put("b", 2);
-        builder.getMethod("withEntries", Map.class).invoke(b, seed);
+        builder.getMethod("entries", Map.class).invoke(b, seed);
         Map<?, ?> result = (Map<?, ?>) dict.getMethod("getEntries").invoke(builder.getMethod("build").invoke(b));
         assertEquals(seed, result);
 

@@ -58,8 +58,8 @@ public class InterfaceTargetTest {
 
         String builder = generatedSource(c, "demo.ShapeBuilder");
         assertTrue(builder, builder.contains("public class ShapeBuilder"));
-        assertTrue(builder, builder.contains("withSides"));
-        assertTrue(builder, builder.contains("withName"));
+        assertTrue(builder, builder.contains("sides"));
+        assertTrue(builder, builder.contains("name"));
         assertTrue(builder, builder.contains("return new ShapeImpl(sides, name);"));
     }
 
