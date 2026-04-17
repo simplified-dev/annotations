@@ -13,6 +13,6 @@ plugins {
 }
 
 allprojects {
-    group = "dev.sbs"
+    group = "io.github.simplified-dev"
     version = "1.2.0"
 }

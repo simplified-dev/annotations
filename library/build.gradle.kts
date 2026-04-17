@@ -1,5 +1,3 @@
-import org.gradle.external.javadoc.CoreJavadocOptions
-
 plugins {
     `java-library`
     signing
@@ -13,8 +11,8 @@ plugins {
 
 description = "Java annotations with companion IDE tooling: @ResourcePath (static resource-path validation), @XContract (superset of @Contract), and @ClassBuilder (annotation-processor builder generation with richer setter shapes than Lombok)."
 
-val githubOrg = "SkyBlock-Simplified"
-val pluginArtifactId = "simplified-annotations"
+val githubOrg = "simplified-dev"
+val pluginArtifactId = "annotations"
 val githubUrl = "https://github.com/$githubOrg/$pluginArtifactId"
 
 // ----------------------------------------------------------------------------
@@ -248,8 +246,8 @@ publishing {
                 developers {
                     developer {
                         name.set("CraftedFury")
-                        organization.set("SkyBlock Simplified")
-                        organizationUrl.set("https://sbs.dev/")
+                        organization.set("Simplified Dev")
+                        organizationUrl.set("https://github.com/$githubOrg/$pluginArtifactId")
                     }
                 }
 

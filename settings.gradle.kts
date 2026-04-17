@@ -1,3 +1,3 @@
-rootProject.name = "Simplified-Annotations"
+rootProject.name = "annotations"
 
 include("library", "plugin")
