@@ -59,16 +59,18 @@ java {
 // ----------------------------------------------------------------------------
 
 // The default buildPlugin zip derives its name from the subproject
-// ("plugin"), producing plugin-<version>.zip. Override to use the root
-// project name so the final artifact reads "Simplified-Annotations-
-// <version>.zip" and the internal folder matches.
+// ("plugin"), producing plugin-<version>.zip. Override to "Simplified-
+// Annotations" so the final artifact reads "Simplified-Annotations-
+// <version>.zip" and the internal folder matches. Cannot use
+// rootProject.name here since the repo is named "annotations" but the
+// plugin's display name on the marketplace is "Simplified Annotations".
 tasks.named<Zip>("buildPlugin") {
-    archiveBaseName = rootProject.name
+    archiveBaseName = "Simplified-Annotations"
 }
 
 intellijPlatform {
     pluginConfiguration {
-        name = rootProject.name
+        name = "Simplified Annotations"
 
         ideaVersion {
             sinceBuild = "232"

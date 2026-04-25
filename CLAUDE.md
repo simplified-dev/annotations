@@ -11,8 +11,8 @@ This is an **IntelliJ IDEA plugin + Maven Central annotation library** that prov
 - `@ClassBuilder` - generates a sibling `<TypeName>Builder.java` via a JSR 269 annotation processor. Supports classes, records, and interfaces. Setter shapes cover Optional dual setters, boolean zero-arg + typed pairs with optional negation, String `@PrintFormat` overloads, `@Collector` varargs/iterable bulk overloads with opt-in single-element add/put, clear, and lazy put-if-absent for maps, and configurable method naming. `@BuildRule(flag = @BuildFlag(...))` runtime validator enforces nonNull/notEmpty/group/pattern/limit in the generated `build()`. Every generated method carries a matching `@XContract` so IDE data-flow sees fresh-object and this-return shapes.
 
 Published to:
-- JetBrains Marketplace: plugin ID `dev.sbs.simplified-annotations` (from `:plugin` module)
-- Maven Central: group `dev.sbs`, artifact `simplified-annotations` (from `:library` module)
+- JetBrains Marketplace: plugin ID `dev.simplified.simplified-annotations` (from `:plugin` module)
+- Maven Central: group `io.github.simplified-dev`, artifact `annotations` (from `:library` module)
 
 ## Module layout
 
@@ -20,16 +20,16 @@ Two-module Gradle build. The split falls on the IntelliJ-platform boundary -
 library has zero IntelliJ classpath references and ships standalone to Maven;
 plugin depends on library and adds the IDE tooling.
 
-- `:library` - Maven-publishable. Contains `dev.sbs.annotation` (the annotations),
-  `dev.sbs.classbuilder.apt` (JSR 269 processor), `dev.sbs.classbuilder.mutate`
-  (javac AST mutation + compat), `dev.sbs.classbuilder.validate` (runtime validator),
+- `:library` - Maven-publishable. Contains `dev.simplified.annotations` (the annotations),
+  `dev.simplified.classbuilder.apt` (JSR 269 processor), `dev.simplified.classbuilder.mutate`
+  (javac AST mutation + compat), `dev.simplified.classbuilder.validate` (runtime validator),
   `META-INF/services/javax.annotation.processing.Processor`. The `aptTest` source
   set and the plain-JUnit tests for `validate/` live here.
-- `:plugin` - JetBrains Marketplace. Contains `dev.sbs.classbuilder.editor` (PSI
-  augmentation + line marker + icon provider), `dev.sbs.classbuilder.inspect`
-  (field inspection + shared constants), `dev.sbs.contract` (contract DSL parser,
-  only consumed by xcontract), `dev.sbs.xcontract` (@XContract inspections +
-  inferred annotation provider), `dev.sbs.resourcepath` (@ResourcePath inspections),
+- `:plugin` - JetBrains Marketplace. Contains `dev.simplified.classbuilder.editor` (PSI
+  augmentation + line marker + icon provider), `dev.simplified.classbuilder.inspect`
+  (field inspection + shared constants), `dev.simplified.contract` (contract DSL parser,
+  only consumed by xcontract), `dev.simplified.xcontract` (@XContract inspections +
+  inferred annotation provider), `dev.simplified.resourcepath` (@ResourcePath inspections),
   `META-INF/plugin.xml`, icons, inspection descriptions. Depends on `:library`
   via `implementation(project(":library"))`; the library jar is bundled under
   `lib/` in the plugin distribution zip.
@@ -71,7 +71,7 @@ via `allprojects { }`. Everything else lives in the subprojects' own build scrip
 
 ## Architecture
 
-### Annotations (`dev.sbs.annotation`)
+### Annotations (`dev.simplified.annotations`)
 - `ResourcePath.java` — `@Retention(CLASS)` annotation targeting fields, parameters, and methods. Has an optional `base` attribute that prefixes the resolved path.
 - `XContract.java` — `@Retention(CLASS)` annotation targeting methods and constructors. Attributes: `value` (semicolon-separated clauses), `pure`, `mutates` (comma-separated `this`/`io`/`paramN`). Full grammar is on the annotation's Javadoc.
 - `ClassBuilder.java` — `@Retention(CLASS)` annotation targeting types/constructors/methods. Drives the builder processor. Full Lombok `@Builder` parity (`builderName`, `builderMethodName`, `buildMethodName`, `fromMethodName`, `toBuilderMethodName`, `methodPrefix`, `access`, `validate`, `emitContracts`, `factoryMethod`, `exclude`, `generate*` toggles).
@@ -82,16 +82,16 @@ via `allprojects { }`. Everything else lives in the subprojects' own build scrip
 - `AccessLevel.java` — enum with `toKeyword()`.
 
 ### Package layout
-- `dev.sbs.resourcepath` — ResourcePath inspection + visitor + evaluator + change listener + startup activity.
-- `dev.sbs.contract` — **annotation-neutral** contract-DSL grammar infrastructure: `ContractAst`, `ContractLexer`, `ContractParser`, `ContractParseException`. Reusable for any annotation that carries the same contract DSL.
-- `dev.sbs.xcontract` — **specific to the `@XContract` annotation**: `XContractInspection` (declaration-side), `XContractCallInspection` (caller-side), `XContractInferredAnnotationProvider` (bridge to JetBrains `@Contract`), `XContractTranslator` (AST → `@Contract` string).
-- `dev.sbs.classbuilder.apt` — JSR 269 annotation processor: `ClassBuilderProcessor` (entry, registered via `META-INF/services/javax.annotation.processing.Processor`, dispatches class/record targets to the mutator and interface targets to the sibling emitter), `FieldSpec` (per-field IR), `SourceIntrospector` (Trees-API bridge for reading declared initialisers), `AnnotationLookup` (mirror attribute reader), `BuilderConfig` (resolved annotation attributes), `BuilderEmitter` (legacy source generator; now only handles interface targets since classes/records use AST mutation), `InterfaceImplEmitter` (emits the `<Name>Impl` concrete class for interface targets).
-- `dev.sbs.classbuilder.mutate` — javac AST mutation pipeline: `JavacBridge` (reflective gateway to `JavacProcessingEnvironment` internals), `MutationContext`, `BuilderMutator` (concrete/record orchestrator), `SuperBuilderMutator` (abstract-target and concrete-subclass orchestrator with self-typed generics), `NestedBuilderFactory`, `BootstrapMethodFactory`, `CopyConstructorFactory`, `FieldMutators`, `SelfTypedSetters`, `JavacTypeFactory`, `AstMarkers`. `compat/` subpackage carries `JavacCompat` interface + `JavacCompatFactory` (single entry point, ready to version-gate) + `v17/JavacCompatV17` baseline. Every supported JDK (17 through 25) uses the baseline today; a future divergence is absorbed by adding a new `v<N>/JavacCompatV<N>` subclass plus one gate in the factory.
-- `dev.sbs.classbuilder.editor` — IntelliJ editor-side synthesis: `ClassBuilderAugmentProvider` (surfaces bootstrap methods to the PSI layer so autocompletion works before the first javac round), `ClassBuilderLineMarkerProvider` (gutter icon on `@ClassBuilder` annotations), `GeneratedMemberFactory` + `GeneratedMemberMarker` (synthesis helpers and provenance key), `PsiFieldShape` + `PsiFieldShapeExtractor` (PSI analogue of `FieldSpec`).
-- `dev.sbs.classbuilder.validate` — runtime: `BuildFlagValidator` (reflective, per-class cached), `BuilderValidationException`, `Strings.formatNullable` helper.
-- `dev.sbs.classbuilder.inspect` — IDE-side: `ClassBuilderFieldInspection` (flags misuse of companion annotations at source-edit time), `ClassBuilderConstants` (shared FQNs + attribute readers). The bootstrap-methods inspection was retired in 1.2.0 since the methods are now auto-injected.
+- `dev.simplified.resourcepath` — ResourcePath inspection + visitor + evaluator + change listener + startup activity.
+- `dev.simplified.contract` — **annotation-neutral** contract-DSL grammar infrastructure: `ContractAst`, `ContractLexer`, `ContractParser`, `ContractParseException`. Reusable for any annotation that carries the same contract DSL.
+- `dev.simplified.xcontract` — **specific to the `@XContract` annotation**: `XContractInspection` (declaration-side), `XContractCallInspection` (caller-side), `XContractInferredAnnotationProvider` (bridge to JetBrains `@Contract`), `XContractTranslator` (AST → `@Contract` string).
+- `dev.simplified.classbuilder.apt` — JSR 269 annotation processor: `ClassBuilderProcessor` (entry, registered via `META-INF/services/javax.annotation.processing.Processor`, dispatches class/record targets to the mutator and interface targets to the sibling emitter), `FieldSpec` (per-field IR), `SourceIntrospector` (Trees-API bridge for reading declared initialisers), `AnnotationLookup` (mirror attribute reader), `BuilderConfig` (resolved annotation attributes), `BuilderEmitter` (legacy source generator; now only handles interface targets since classes/records use AST mutation), `InterfaceImplEmitter` (emits the `<Name>Impl` concrete class for interface targets).
+- `dev.simplified.classbuilder.mutate` — javac AST mutation pipeline: `JavacBridge` (reflective gateway to `JavacProcessingEnvironment` internals), `MutationContext`, `BuilderMutator` (concrete/record orchestrator), `SuperBuilderMutator` (abstract-target and concrete-subclass orchestrator with self-typed generics), `NestedBuilderFactory`, `BootstrapMethodFactory`, `CopyConstructorFactory`, `FieldMutators`, `SelfTypedSetters`, `JavacTypeFactory`, `AstMarkers`. `compat/` subpackage carries `JavacCompat` interface + `JavacCompatFactory` (single entry point, ready to version-gate) + `v17/JavacCompatV17` baseline. Every supported JDK (17 through 25) uses the baseline today; a future divergence is absorbed by adding a new `v<N>/JavacCompatV<N>` subclass plus one gate in the factory.
+- `dev.simplified.classbuilder.editor` — IntelliJ editor-side synthesis: `ClassBuilderAugmentProvider` (surfaces bootstrap methods to the PSI layer so autocompletion works before the first javac round), `ClassBuilderLineMarkerProvider` (gutter icon on `@ClassBuilder` annotations), `GeneratedMemberFactory` + `GeneratedMemberMarker` (synthesis helpers and provenance key), `PsiFieldShape` + `PsiFieldShapeExtractor` (PSI analogue of `FieldSpec`).
+- `dev.simplified.classbuilder.validate` — runtime: `BuildFlagValidator` (reflective, per-class cached), `BuilderValidationException`, `Strings.formatNullable` helper.
+- `dev.simplified.classbuilder.inspect` — IDE-side: `ClassBuilderFieldInspection` (flags misuse of companion annotations at source-edit time), `ClassBuilderConstants` (shared FQNs + attribute readers). The bootstrap-methods inspection was retired in 1.3.0 since the methods are now auto-injected.
 
-### Inspection (`dev.sbs.inspection`)
+### Inspection (`dev.simplified.inspection`)
 
 **Entry point** — `ResourcePathInspection` (`LocalInspectionTool`):
 - Registered in `plugin.xml` as a Java local inspection, enabled by default at ERROR level.
@@ -126,7 +126,7 @@ via `allprojects { }`. Everything else lives in the subprojects' own build scrip
 **Startup** — `ResourcePathStartupActivity` (`ProjectActivity`):
 - Eagerly initializes `ResourcePathChangeService` so the PSI listener is registered before any editing occurs.
 
-### Extended contract (`dev.sbs.contract` + `dev.sbs.xcontract`)
+### Extended contract (`dev.simplified.contract` + `dev.simplified.xcontract`)
 
 **Parser pipeline** — `ContractLexer` -> `ContractParser` -> `ContractAst`:
 - `ContractLexer` tokenises the contract string and surfaces precise error positions.

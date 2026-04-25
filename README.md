@@ -44,8 +44,8 @@ Three Java annotations with matching IntelliJ IDEA tooling - covering static res
 
 ```kotlin
 dependencies {
-    implementation("dev.sbs:simplified-annotations:1.2.0")
-    annotationProcessor("dev.sbs:simplified-annotations:1.2.0")
+    implementation("io.github.simplified-dev:annotations:2.0.0")
+    annotationProcessor("io.github.simplified-dev:annotations:2.0.0")
 }
 ```
 
@@ -56,8 +56,8 @@ dependencies {
 
 ```groovy
 dependencies {
-    implementation 'dev.sbs:simplified-annotations:1.2.0'
-    annotationProcessor 'dev.sbs:simplified-annotations:1.2.0'
+    implementation 'io.github.simplified-dev:annotations:2.0.0'
+    annotationProcessor 'io.github.simplified-dev:annotations:2.0.0'
 }
 ```
 
@@ -68,9 +68,9 @@ dependencies {
 
 ```xml
 <dependency>
-    <groupId>dev.sbs</groupId>
-    <artifactId>simplified-annotations</artifactId>
-    <version>1.2.0</version>
+    <groupId>io.github.simplified-dev</groupId>
+    <artifactId>annotations</artifactId>
+    <version>2.0.0</version>
 </dependency>
 ```
 
@@ -79,7 +79,7 @@ For annotation-processor registration on Maven, add the same coordinate under `<
 </details>
 
 > [!NOTE]
-> Published to [Maven Central](https://central.sonatype.com/artifact/dev.sbs/simplified-annotations) as `dev.sbs:simplified-annotations` and to [JetBrains Marketplace](https://plugins.jetbrains.com/plugin/27678-simplified-annotations) as plugin ID `dev.sbs.simplified-annotations`.
+> Published to Maven Central as `io.github.simplified-dev:annotations` and to JetBrains Marketplace as plugin ID `dev.simplified.simplified-annotations`.
 
 ### IntelliJ Plugin
 
@@ -99,7 +99,7 @@ The plugin hosts every inspection, quick-fix, gutter marker, and the editor-side
 ### `@ResourcePath`
 
 ```java
-import dev.sbs.annotation.ResourcePath;
+import dev.simplified.annotations.ResourcePath;
 
 public class Assets {
     @ResourcePath
@@ -115,7 +115,7 @@ The inspection reports an error if the resolved path does not exist in any sourc
 ### `@XContract`
 
 ```java
-import dev.sbs.annotation.XContract;
+import dev.simplified.annotations.XContract;
 
 @XContract("index >= 0 && index < size -> !null; _ -> fail")
 public Node get(int index) { ... }
@@ -129,7 +129,7 @@ The grammar supports relational comparisons (`<`, `<=`, `==`, `!=`, `>=`, `>`), 
 ### `@ClassBuilder`
 
 ```java
-import dev.sbs.annotation.*;
+import dev.simplified.annotations.*;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -220,7 +220,7 @@ Records, interfaces, and plain classes are all supported. For interfaces, the pr
 
 ## Documentation
 
-Full attribute reference lives on the annotation Javadocs in [`library/src/main/java/dev/sbs/annotation/`](library/src/main/java/dev/sbs/annotation/). Architectural notes for contributors are in [`CLAUDE.md`](CLAUDE.md).
+Full attribute reference lives on the annotation Javadocs in [`library/src/main/java/dev/simplified/annotations/`](library/src/main/java/dev/simplified/annotations/). Architectural notes for contributors are in [`CLAUDE.md`](CLAUDE.md).
 
 ## License
 

@@ -197,7 +197,7 @@ val showcaseJar by tasks.registering(Jar::class) {
     from(sourceSets["showcase"].output)
     from(sourceSets.main.get().output)
     manifest {
-        attributes("Main-Class" to "dev.sbs.classbuilder.showcase.BuildRuleShowcase")
+        attributes("Main-Class" to "dev.simplified.classbuilder.showcase.BuildRuleShowcase")
     }
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }

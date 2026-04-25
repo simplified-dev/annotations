@@ -4,7 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.2.0]
+Versions 1.0.0 through 1.0.5 were published under the legacy plugin ID
+`dev.sbs.simplified-annotations` and Maven coordinate `dev.sbs:simplified-annotations`.
+Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations` /
+`io.github.simplified-dev:annotations`. See the 2.0.0 entry for the rename details.
+
+## [2.0.0]
+
+### Changed
+
+- **Namespace migration** - the `dev.sbs.*` Java packages and the `dev.sbs:simplified-annotations` Maven coordinate are retired. New Maven coordinate is `io.github.simplified-dev:annotations`; the public-API package is now `dev.simplified.annotations.*` (plural). The JetBrains plugin is re-published under ID `dev.simplified.simplified-annotations` with vendor "Simplified Dev". This is source-breaking for Maven consumers - update imports from `dev.sbs.annotation.*` to `dev.simplified.annotations.*`. The legacy `dev.sbs:simplified-annotations` 1.x line on Maven Central and the JetBrains plugin `dev.sbs.simplified-annotations` will receive no further updates; existing installs of the legacy plugin see a one-time redirect notice (1.0.5).
+
+## [1.4.0]
 
 ### Added
 
@@ -24,14 +35,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **`@BuilderDefault` and `@BuilderIgnore`** - replaced by `@BuildRule(retainInit = true)` and `@BuildRule(ignore = true)` respectively.
 
-## [1.1.5]
+## [1.3.0]
 
 ### Added
 
 - **Auto-generated bootstrap methods** - `builder()`, `from(T)`, and `mutate()` are now injected on the annotated type automatically. Hand-written methods with the same name and arity win (skip-on-collision + `Kind.NOTE`). The bootstrap-methods inspection is retired.
 - **SuperBuilder for abstract classes** - `@ClassBuilder` on an abstract class produces a self-typed `Builder<T extends Target, B extends Builder<T, B>>` with abstract `build()` and `self()`. Concrete subclasses carrying `@ClassBuilder` automatically inherit the parent's builder (`class Builder extends Super.Builder<ThisType, ThisType.Builder>`), override `self()` and `build()`, and get a protected copy constructor. Opt out with `generateCopyConstructor = false`.
 - **IDE augmentation** - a new `PsiAugmentProvider` surfaces the injected bootstrap methods to the PSI layer, so autocompletion, goto-symbol, and type resolution all work before the first javac round. A gutter icon (replaceable SVG at `/icons/classbuilder_generated.svg`) marks every `@ClassBuilder` annotation.
-- **Multi-JDK support** - versioned compat layer under `dev.sbs.classbuilder.mutate.compat` with a single `v17` baseline dispatched by `Runtime.version().feature()`. aptTest matrix covers JDK 17, 21, and 25.
+- **Multi-JDK support** - versioned compat layer under `dev.simplified.classbuilder.mutate.compat` with a single `v17` baseline dispatched by `Runtime.version().feature()`. aptTest matrix covers JDK 17, 21, and 25.
 
 ### Changed
 
@@ -39,7 +50,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Consumer requirement** - javac-only (ecj not supported). Consumers' builds need `--add-exports=jdk.compiler/com.sun.tools.javac.*=ALL-UNNAMED` on compile; see `build.gradle.kts` for the full list.
 - **Gradle 9.4.1** - wrapper bumped so JDK 25 is natively supported without toolchain workarounds; unused Kotlin JVM plugin dropped.
 
-## [1.1.0]
+## [1.2.0]
 
 ### Added
 
@@ -51,7 +62,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **New ClassBuilder bootstrap inspection** - ERROR-severity check that the three bootstrap methods (`builder()` / `from(T)` / `mutate()`) are materialised on the annotated class, with a quick-fix that inserts them all at once with matching `@XContract` annotations.
 - **New ClassBuilder field inspection** - flags misuse of the companion annotations (e.g. `@Formattable` on a non-String field) at source-edit time.
 
-## [1.0.5]
+## [1.1.0]
 
 ### Added
 
@@ -67,3 +78,49 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **ResourcePath freeze fix** - removed the project-wide `ReferencesSearch` that locked up the IDE on large utility files.
+
+## [1.0.5]
+
+### Changed
+
+- **Plugin moved** - final release of the legacy `dev.sbs.simplified-annotations` plugin. Description and change-notes replaced with a redirect notice pointing users at *Simplified Annotations* by *Simplified Dev* on the JetBrains Marketplace. No functionality changes; this listing receives no further updates. New installs should use the new plugin ID `dev.simplified.simplified-annotations` (see 2.0.0 above).
+
+## [1.0.4]
+
+### Fixed
+
+- **Heavy lag in 800+ line files** - removed an inspection traversal hot path that locked up the IDE on large utility files.
+
+## [1.0.3]
+
+### Added
+
+- **Inspection settings** - persisted highlight-level and enabled-by-default toggles surfaced through `plugin.xml` defaults; settings now round-trip across IDE restarts.
+- **Startup indexing safety net** - secondary check during startup so literal-string analysis no longer races the indexing phase on cold-open projects.
+
+### Changed
+
+- Inspection enabled by default at ERROR severity.
+- Method-call inspection code consolidated for readability.
+
+## [1.0.2]
+
+### Fixed
+
+- **`IndexNotReadyException` on IDE startup** - inspection no longer attempts PSI resolution before the project index is ready.
+
+## [1.0.1]
+
+### Changed
+
+- **Publishing pipeline cleanup** - publish directory empties on build to prevent stale-artifact hangs; documentation links added.
+
+## [1.0.0]
+
+### Added
+
+- **Initial release** - `@ResourcePath` annotation for fields, parameters, and methods with an optional `base` directory prefix.
+- **Resource Path inspection** - validates that the resolved string expression at every annotated site refers to a file that exists in the project's source/resource roots. Reports a problem at edit time when the file is missing.
+- **String expression evaluator** - resolves literal string values across literals (`ULiteralExpression`), concatenation (`UPolyadicExpression`), final/static/enum field references, local variable declarations, recursive method-call return values, and UAST local variables. Bounded recursion guards against cycles.
+- **Change-tracking listener** - narrow `PsiTreeChangeAdapter` keyed on `@ResourcePath` annotations, requesting `DaemonCodeAnalyzer` re-analysis on add/remove/replace events.
+- **Maven Central + JetBrains Marketplace publication** - dual-target build producing both a publishable jar (`dev.sbs:simplified-annotations`) and a sandboxed plugin distribution (`dev.sbs.simplified-annotations`). Sources jar, javadoc jar, and signed POM included.

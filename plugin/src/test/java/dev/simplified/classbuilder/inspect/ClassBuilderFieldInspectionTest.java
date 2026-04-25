@@ -1,0 +1,167 @@
+package dev.simplified.classbuilder.inspect;
+
+import com.intellij.codeInsight.daemon.impl.HighlightInfo;
+import com.intellij.codeInspection.LocalInspectionTool;
+import com.intellij.lang.annotation.HighlightSeverity;
+import com.intellij.testFramework.fixtures.BasePlatformTestCase;
+
+import java.util.List;
+
+public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
+
+    @Override
+    protected void setUp() throws Exception {
+        super.setUp();
+        myFixture.enableInspections((Class<? extends LocalInspectionTool>) ClassBuilderFieldInspection.class);
+        addAnnotationSources();
+    }
+
+    private void addAnnotationSources() {
+        myFixture.addFileToProject("dev/simplified/annotations/ClassBuilder.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.TYPE)
+            public @interface ClassBuilder { }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/Formattable.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
+            public @interface Formattable { }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/Negate.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
+            public @interface Negate { String value(); }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/Collector.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
+            public @interface Collector {
+                String singularMethodName() default "";
+                boolean singular() default false;
+                boolean clearable() default false;
+                boolean compute() default false;
+            }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/BuildFlag.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.RUNTIME) @Target({})
+            public @interface BuildFlag {
+                boolean nonNull() default false;
+                String pattern() default "";
+                int limit() default -1;
+            }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/ObtainVia.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target({})
+            public @interface ObtainVia {
+                String method() default "";
+                String field() default "";
+                boolean isStatic() default false;
+            }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/BuildRule.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.RUNTIME) @Target(ElementType.FIELD)
+            public @interface BuildRule {
+                boolean retainInit() default false;
+                boolean ignore() default false;
+                BuildFlag flag() default @BuildFlag;
+                ObtainVia obtainVia() default @ObtainVia;
+            }
+            """);
+    }
+
+    private boolean hasErrorContaining(String needle) {
+        List<HighlightInfo> highlights = myFixture.doHighlighting();
+        for (HighlightInfo h : highlights) {
+            if (h.getSeverity() != HighlightSeverity.ERROR && h.getSeverity() != HighlightSeverity.WARNING) continue;
+            String desc = h.getDescription();
+            if (desc != null && desc.contains(needle)) return true;
+        }
+        return false;
+    }
+
+    public void testNegateOnNonBoolean_flagged() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.Negate;
+            public class Foo {
+                @Negate("other") int count;
+            }
+            """);
+        assertTrue(hasErrorContaining("@Negate requires a boolean field"));
+    }
+
+    public void testNegateOnBoolean_clean() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.Negate;
+            public class Foo {
+                @Negate("enabled") boolean disabled;
+            }
+            """);
+        assertFalse(hasErrorContaining("@Negate"));
+    }
+
+    public void testCollectorOnNonCollection_flagged() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.Collector;
+            public class Foo {
+                @Collector int count;
+            }
+            """);
+        assertTrue(hasErrorContaining("@Collector requires"));
+    }
+
+    public void testBuildRuleFlagLimitOnIntField_warned() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.BuildFlag;
+            import dev.simplified.annotations.BuildRule;
+            public class Foo {
+                @BuildRule(flag = @BuildFlag(limit = 10)) int count;
+            }
+            """);
+        assertTrue(hasErrorContaining("@BuildRule(flag = @BuildFlag(limit"));
+    }
+
+    public void testBuildRuleFlagLimit_notApplicableToAllTypes() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.BuildFlag;
+            import dev.simplified.annotations.BuildRule;
+            public class Foo {
+                @BuildRule(flag = @BuildFlag(limit = 10)) boolean flag;
+            }
+            """);
+        assertTrue(hasErrorContaining("@BuildRule(flag = @BuildFlag(limit"));
+    }
+
+    public void testBuildRuleFlagPattern_warnedOnIntField() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.BuildFlag;
+            import dev.simplified.annotations.BuildRule;
+            public class Foo {
+                @BuildRule(flag = @BuildFlag(pattern = "[a-z]+")) int count;
+            }
+            """);
+        assertTrue(hasErrorContaining("@BuildRule(flag = @BuildFlag(pattern"));
+    }
+}

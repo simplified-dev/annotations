@@ -1,14 +1,14 @@
 <!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
 <idea-plugin>
     <!-- Unique identifier of the plugin. It should be FQN. It cannot be changed between the plugin versions. -->
-    <id>dev.sbs.simplified-annotations</id>
+    <id>dev.simplified.simplified-annotations</id>
 
     <!-- Public plugin name should be written in Title Case.
          Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-name -->
     <name>Simplified Annotations</name>
 
     <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
-    <vendor url="https://sbs.dev/">SkyBlock Simplified</vendor>
+    <vendor url="https://github.com/simplified-dev">Simplified Dev</vendor>
 
     <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
          Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-description -->
@@ -107,7 +107,7 @@
     <extensions defaultExtensionNs="com.intellij">
         <localInspection
                 language="JAVA"
-                implementationClass="dev.sbs.resourcepath.ResourcePathInspection"
+                implementationClass="dev.simplified.resourcepath.ResourcePathInspection"
                 enabledByDefault="true"
                 level="ERROR"
                 shortName="ResourcePathInspection"
@@ -116,7 +116,7 @@
         />
         <localInspection
                 language="JAVA"
-                implementationClass="dev.sbs.resourcepath.ResourcePathUsageInspection"
+                implementationClass="dev.simplified.resourcepath.ResourcePathUsageInspection"
                 enabledByDefault="true"
                 level="WARNING"
                 shortName="ResourcePathUsageInspection"
@@ -125,7 +125,7 @@
         />
         <localInspection
                 language="JAVA"
-                implementationClass="dev.sbs.xcontract.XContractInspection"
+                implementationClass="dev.simplified.xcontract.XContractInspection"
                 enabledByDefault="true"
                 level="ERROR"
                 shortName="XContractInspection"
@@ -134,7 +134,7 @@
         />
         <localInspection
                 language="JAVA"
-                implementationClass="dev.sbs.xcontract.XContractCallInspection"
+                implementationClass="dev.simplified.xcontract.XContractCallInspection"
                 enabledByDefault="true"
                 level="ERROR"
                 shortName="XContractCallInspection"
@@ -143,22 +143,22 @@
         />
         <localInspection
                 language="JAVA"
-                implementationClass="dev.sbs.classbuilder.inspect.ClassBuilderFieldInspection"
+                implementationClass="dev.simplified.classbuilder.inspect.ClassBuilderFieldInspection"
                 enabledByDefault="true"
                 level="WARNING"
                 shortName="ClassBuilderFieldInspection"
                 displayName="@ClassBuilder field annotation misuse"
                 groupName="Simplified Annotations"
         />
-        <lang.inferredAnnotationProvider implementation="dev.sbs.xcontract.XContractInferredAnnotationProvider"/>
-        <lang.inferredAnnotationProvider implementation="dev.sbs.classbuilder.editor.ClassBuilderInferredAnnotationProvider"/>
-        <lang.psiAugmentProvider implementation="dev.sbs.classbuilder.editor.ClassBuilderAugmentProvider"/>
-        <java.elementFinder implementation="dev.sbs.classbuilder.editor.ClassBuilderElementFinder" order="last"/>
+        <lang.inferredAnnotationProvider implementation="dev.simplified.xcontract.XContractInferredAnnotationProvider"/>
+        <lang.inferredAnnotationProvider implementation="dev.simplified.classbuilder.editor.ClassBuilderInferredAnnotationProvider"/>
+        <lang.psiAugmentProvider implementation="dev.simplified.classbuilder.editor.ClassBuilderAugmentProvider"/>
+        <java.elementFinder implementation="dev.simplified.classbuilder.editor.ClassBuilderElementFinder" order="last"/>
         <codeInsight.lineMarkerProvider
                 language="JAVA"
-                implementationClass="dev.sbs.classbuilder.editor.ClassBuilderLineMarkerProvider"/>
-        <iconProvider implementation="dev.sbs.classbuilder.editor.ClassBuilderIconProvider"/>
-        <postStartupActivity implementation="dev.sbs.resourcepath.ResourcePathStartupActivity"/>
-        <postStartupActivity implementation="dev.sbs.classbuilder.editor.ClassBuilderStartupActivity"/>
+                implementationClass="dev.simplified.classbuilder.editor.ClassBuilderLineMarkerProvider"/>
+        <iconProvider implementation="dev.simplified.classbuilder.editor.ClassBuilderIconProvider"/>
+        <postStartupActivity implementation="dev.simplified.resourcepath.ResourcePathStartupActivity"/>
+        <postStartupActivity implementation="dev.simplified.classbuilder.editor.ClassBuilderStartupActivity"/>
     </extensions>
 </idea-plugin>
