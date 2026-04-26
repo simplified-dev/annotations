@@ -134,6 +134,7 @@ import java.lang.annotation.Target;
  * &#64;XContract("(param1 == null) -> defaultValue; () -> param1")
  * &lt;T&gt; T orElse(T value, T defaultValue);
  * </code></pre>
+ * @see <a href="https://youtrack.jetbrains.com/issue/IDEA-207114/Enhance-contract-conditions">Enhance contract conditions</a>
  */
 @Retention(RetentionPolicy.CLASS)
 @Target({ ElementType.METHOD, ElementType.CONSTRUCTOR })
