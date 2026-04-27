@@ -27,7 +27,15 @@ dependencies {
     implementation(project(":library"))
 
     intellijPlatform {
-        create("IC", "2023.3")
+        // Compile + runIde target. Bumped from IC 2023.3 to the unified
+        // IntellijIdea 2025.3 because the older sandbox IDE's Tooling-API
+        // client crashes on Gradle 9 with NoSuchMethodError on the removed
+        // IdeaModule.getTestSourceDirs(). 2025.3 (released after Gradle 9.0)
+        // is Gradle-9-aware. sinceBuild = "232" stays put so marketplace
+        // compatibility floor is unchanged; the Plugin Verifier matrix
+        // (2023.3 / 2024.3 / 2025.3) catches any API drift introduced by
+        // compiling against a newer platform.
+        create(IntelliJPlatformType.IntellijIdea, "2025.3")
         testFramework(TestFrameworkType.Platform)
         // Since IC 2023.3, UsefulTestCase's static initializer references
         // com.intellij.testFramework.common.TestEnvironmentKt, which ships in
