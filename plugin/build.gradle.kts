@@ -68,6 +68,36 @@ tasks.named<Zip>("buildPlugin") {
     archiveBaseName = "Simplified-Annotations"
 }
 
+// ----------------------------------------------------------------------------
+// demo source set
+//
+// Hand-tuned consumer fixture for capturing JetBrains Marketplace screenshots.
+// Mirrors the :library showcase pattern: not published, not on :plugin's main
+// or test classpath, lives at plugin/src/demo/java. Open the plugin/src/demo
+// directory inside the runIde sandbox to capture each shot listed in
+// plugin/src/demo/SCREENSHOTS.md.
+// ----------------------------------------------------------------------------
+
+sourceSets {
+    create("demo") {
+        java.srcDir("src/demo/java")
+        resources.srcDir("src/demo/resources")
+        compileClasspath += sourceSets.main.get().output + configurations.compileClasspath.get()
+        runtimeClasspath += output + compileClasspath
+    }
+}
+
+tasks.named<JavaCompile>("compileDemoJava") {
+    // The library's APT processor opens the jdk.compiler/com.sun.tools.javac.*
+    // packages itself via JavacAccess, so consumer compiles need no fork args.
+    // Mirror :library's compileShowcaseJava wiring: feed the unpacked main
+    // output (classes + META-INF/services) into the processor path so the
+    // ServiceLoader finds ClassBuilderProcessor without rebuilding the jar.
+    val library = project(":library")
+    options.annotationProcessorPath = files(library.sourceSets.main.get().output) +
+        library.configurations.compileClasspath.get()
+}
+
 intellijPlatform {
     pluginConfiguration {
         name = "Simplified Annotations"
