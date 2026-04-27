@@ -18,5 +18,4 @@ public record User(
         @BuildRule(flag = @BuildFlag(nonNull = true, pattern = "^[^@]+@[^@]+\\.[^@]+$")) String email,
         int age,
         boolean verified
-) {
-}
+) { }
