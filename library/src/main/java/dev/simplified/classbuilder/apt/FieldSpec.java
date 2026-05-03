@@ -62,6 +62,7 @@ public final class FieldSpec {
     public final boolean clearable;                 // @Collector(clearable = true) - clear() method
     public final boolean compute;                   // @Collector(compute = true) - maps only, putIfAbsent(K, Supplier<V>)
     public final boolean ignored;                   // @BuildRule(ignore = true) or listed in @ClassBuilder.exclude
+    public final boolean lazy;                       // @Lazy: storage rewritten to Lazy<T>, getter synthesised
     public final boolean builderDefault;
     public final String sourceInitializer;          // copied source text of the field's declared initializer
     public final Set<String> initializerImports;    // type FQNs referenced by sourceInitializer
@@ -101,6 +102,7 @@ public final class FieldSpec {
         this.clearable = b.clearable;
         this.compute = b.compute;
         this.ignored = b.ignored;
+        this.lazy = b.lazy;
         this.builderDefault = b.builderDefault;
         this.sourceInitializer = b.sourceInitializer;
         this.initializerImports = b.initializerImports == null ? Set.of() : b.initializerImports;
@@ -235,6 +237,7 @@ public final class FieldSpec {
         // Companion annotations
         b.formattable = lookup.hasAnnotation(element, "dev.simplified.annotations.Formattable");
         b.negateName = lookup.stringAttr(element, "dev.simplified.annotations.Negate", "value", null);
+        b.lazy = lookup.hasAnnotation(element, "dev.simplified.annotations.Lazy");
         if (lookup.hasAnnotation(element, "dev.simplified.annotations.Collector")) {
             b.collector = true;
             b.singular = lookup.booleanAttr(element, "dev.simplified.annotations.Collector", "singular", false);
@@ -299,7 +302,7 @@ public final class FieldSpec {
         String negateName;
         boolean collector, singular, clearable, compute;
         String singularName;
-        boolean ignored, builderDefault;
+        boolean ignored, lazy, builderDefault;
         String sourceInitializer;
         Set<String> initializerImports;
         com.sun.source.tree.Tree sourceInitializerTree;

@@ -9,6 +9,16 @@ Versions 1.0.0 through 1.0.5 were published under the legacy plugin ID
 Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations` /
 `io.github.simplified-dev:annotations`. See the 2.0.0 entry for the rename details.
 
+## [2.1.0]
+
+### Added
+
+- **`@Lazy` field annotation** - new field-level annotation that defers a field's value computation until first access and caches it thereafter. The annotation processor rewrites the storage from `T` to `Lazy<T>`, wraps the field initializer (when present) as `Lazy.of(() -> <init>)`, marks the field `final`, and synthesises a public memoizing getter (`getFoo()` for object types, `isFoo()` for `Boolean`). Field-level annotations (`@NotNull`, `@Nullable`, `@PrintFormat`, `@Deprecated`, etc.) propagate onto the synthesised getter and its return type using each annotation's declared `@Target`. The `access` attribute selects the getter's access level.
+- **`@Lazy` + `@ClassBuilder` interop** - when the enclosing class carries `@ClassBuilder`, the generated builder receives a dual setter for each lazy field: a value form that wraps as `() -> value` and a `Supplier<T>` form stored verbatim. The target's matching constructor parameter is rewritten from `T` to `Supplier<T>` and the assignment becomes `this.foo = Lazy.of(supplier)`, so values flow from the builder to the target as deferred computations rather than eager values.
+- **`Lazy<T>` runtime** - bundled at `dev.simplified.classbuilder.lazy.Lazy`. Thread-safe DCL memoiser with a sentinel for cached `null`. No external dependencies.
+- **`LazyAugmentProvider`** (IDE) - surfaces the synthesised getter to the PSI layer so autocompletion, goto-symbol, and nullability inspections see `getFoo()` immediately on edit, before the first javac round.
+- **`LazyFieldInspection`** (IDE) - reports `@Lazy` on static fields, record components, primitive (non-`Boolean`) types, fields without an initializer when the enclosing class has no `@ClassBuilder`, and the redundant `@Lazy` + Lombok `@Getter` combination.
+
 ## [2.0.0]
 
 ### Changed

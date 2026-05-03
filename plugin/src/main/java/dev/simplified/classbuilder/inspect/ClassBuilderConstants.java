@@ -26,6 +26,7 @@ public final class ClassBuilderConstants {
     public static final @NotNull String COLLECTOR_FQN = "dev.simplified.annotations.Collector";
     public static final @NotNull String NEGATE_FQN = "dev.simplified.annotations.Negate";
     public static final @NotNull String FORMATTABLE_FQN = "dev.simplified.annotations.Formattable";
+    public static final @NotNull String LAZY_FQN = "dev.simplified.annotations.Lazy";
 
     /**
      * FQNs of every annotation whose PSI changes should invalidate the editor-
@@ -37,7 +38,8 @@ public final class ClassBuilderConstants {
         BUILD_RULE_FQN,
         COLLECTOR_FQN,
         NEGATE_FQN,
-        FORMATTABLE_FQN
+        FORMATTABLE_FQN,
+        LAZY_FQN
     );
 
     /**
@@ -51,7 +53,8 @@ public final class ClassBuilderConstants {
         BUILD_RULE_SHORT_NAME,
         "Collector",
         "Negate",
-        "Formattable"
+        "Formattable",
+        "Lazy"
     );
 
     public static final @NotNull String ATTR_BUILDER_NAME = "builderName";

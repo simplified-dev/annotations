@@ -1,6 +1,6 @@
 # Simplified Annotations
 
-Three Java annotations with matching IntelliJ IDEA tooling - covering static resource-path validation, an extended `@Contract` grammar, and a full-featured builder generator with runtime validation.
+Four Java annotations with matching IntelliJ IDEA tooling - covering static resource-path validation, an extended `@Contract` grammar, a full-featured builder generator with runtime validation, and lazy field memoisation via AST mutation.
 
 > [!IMPORTANT]
 > `@ClassBuilder` uses javac AST mutation and **requires javac** (ecj is not supported). The processor opens `jdk.compiler` internals automatically at load time via `sun.misc.Unsafe` + `MethodHandles.Lookup.IMPL_LOOKUP` (same technique Lombok uses), so **no `--add-exports` flags are needed** in consumer builds. `@ResourcePath` and `@XContract` have no compiler dependency and work on any build.
@@ -16,6 +16,7 @@ Three Java annotations with matching IntelliJ IDEA tooling - covering static res
   - [@ResourcePath](#resourcepath)
   - [@XContract](#xcontract)
   - [@ClassBuilder](#classbuilder)
+  - [@Lazy](#lazy)
 - [Annotation Reference](#annotation-reference)
   - [@ClassBuilder Attributes](#classbuilder-attributes)
   - [@BuildRule Attributes](#buildrule-attributes)
@@ -34,6 +35,7 @@ Three Java annotations with matching IntelliJ IDEA tooling - covering static res
   - `@Formattable` `@PrintFormat` string overload
   - `@BuildRule(retainInit = true)` carries field initializers (`UUID.randomUUID()`, `List.of(...)`, etc.) into the builder as defaults evaluated fresh per `build()`
   - `@BuildRule(flag = @BuildFlag(...))` runtime validator enforcing `nonNull` / `notEmpty` / `group` / `pattern` / `limit` in the generated `build()`
+- **`@Lazy`** - field-level annotation that defers a field's value computation until first access and caches it thereafter. The processor rewrites the storage from `T` to `Lazy<T>`, wraps the initializer as `Lazy.of(() -> <init>)`, and synthesises a memoizing getter. With `@ClassBuilder` the builder gets a dual `field(T)` / `field(Supplier<T>)` setter pair so deferred computations can flow through the builder unchanged.
 
 ## Getting Started
 
@@ -44,8 +46,8 @@ Three Java annotations with matching IntelliJ IDEA tooling - covering static res
 
 ```kotlin
 dependencies {
-    implementation("io.github.simplified-dev:annotations:2.0.0")
-    annotationProcessor("io.github.simplified-dev:annotations:2.0.0")
+    implementation("io.github.simplified-dev:annotations:2.1.0")
+    annotationProcessor("io.github.simplified-dev:annotations:2.1.0")
 }
 ```
 
@@ -56,8 +58,8 @@ dependencies {
 
 ```groovy
 dependencies {
-    implementation 'io.github.simplified-dev:annotations:2.0.0'
-    annotationProcessor 'io.github.simplified-dev:annotations:2.0.0'
+    implementation 'io.github.simplified-dev:annotations:2.1.0'
+    annotationProcessor 'io.github.simplified-dev:annotations:2.1.0'
 }
 ```
 
@@ -70,7 +72,7 @@ dependencies {
 <dependency>
     <groupId>io.github.simplified-dev</groupId>
     <artifactId>annotations</artifactId>
-    <version>2.0.0</version>
+    <version>2.1.0</version>
 </dependency>
 ```
 
@@ -161,6 +163,34 @@ For abstract classes, `@ClassBuilder` produces a self-typed `Builder<T, B>` that
 
 Records, interfaces, and plain classes are all supported. For interfaces, the processor writes a sibling `<Name>Impl.java` in addition to `<Name>Builder.java` since there is no in-source mutation surface on an interface body.
 
+### `@Lazy`
+
+```java
+import dev.simplified.annotations.Lazy;
+
+public class Report {
+    @Lazy
+    private final List<Row> rows = expensiveQuery();
+}
+```
+
+Compiled to:
+
+```java
+private final Lazy<List<Row>> rows = Lazy.of(() -> expensiveQuery());
+
+public List<Row> getRows() {
+    return rows.get();
+}
+```
+
+The supplier runs once on the first `getRows()` call and the result is cached for every subsequent call (thread-safe, double-checked-locking, with a sentinel for cached `null`). Field-level annotations (`@NotNull`, `@Nullable`, `@PrintFormat`, `@Deprecated`, etc.) propagate onto the synthesised getter and its return type using each annotation's declared `@Target`.
+
+When the enclosing class also carries `@ClassBuilder`, the generated builder receives a dual setter: `rows(List<Row>)` wraps the value as `() -> value`, and `rows(Supplier<List<Row>>)` stores the supplier verbatim, so deferred computations flow through the builder without being eagerly invoked.
+
+> [!NOTE]
+> `@Lazy` only supports reference types (use `Boolean` rather than `boolean`), is not allowed on static fields or record components, and standalone use (no `@ClassBuilder`) requires a field initializer.
+
 ## Annotation Reference
 
 ### `@ClassBuilder` Attributes
@@ -217,6 +247,7 @@ Records, interfaces, and plain classes are all supported. For interfaces, the pr
 | `@Collector` | `Collection`, `List`, `Set`, `Map` | Emits varargs + `Iterable` bulk setters; opt-in `singular`, `clearable`, `compute` (maps: `putIfAbsent(K, Supplier<V>)`) |
 | `@Negate("inverse")` | `boolean` | Emits an inverse setter pair (`isInverse()` / `isInverse(boolean)`) alongside the direct pair |
 | `@Formattable` | `String`, `Optional<String>` | Emits a `@PrintFormat` overload (`withField(String fmt, Object... args)`) with null-safe `String.format` |
+| `@Lazy` | any reference-typed field | Rewrites storage to `Lazy<T>`, wraps the initializer as a supplier, and synthesises a memoizing getter; with `@ClassBuilder` adds a dual `field(T)` / `field(Supplier<T>)` setter pair |
 
 ## Documentation
 

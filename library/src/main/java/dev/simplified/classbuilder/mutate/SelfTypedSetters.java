@@ -52,6 +52,11 @@ final class SelfTypedSetters {
     /** Mirrors {@link FieldMutators#setters} but always with {@code return self();}. */
     List<JCMethodDecl> setters(FieldSpec field) {
         ListBuffer<JCMethodDecl> out = new ListBuffer<>();
+        if (field.lazy) {
+            out.append(lazyValueSetter(field));
+            out.append(lazySupplierSetter(field));
+            return out.toList();
+        }
         if (field.isBoolean) {
             out.append(booleanZeroArg(field, field.name, false));
             out.append(booleanTyped(field, field.name, false));
@@ -85,6 +90,34 @@ final class SelfTypedSetters {
             out.append(plainSetter(field));
         }
         return out.toList();
+    }
+
+    // ------------------------------------------------------------------
+    // @Lazy shapes
+    // ------------------------------------------------------------------
+
+    /** {@code B withFoo(T value)} - eager value form, stores {@code () -> value}. */
+    private JCMethodDecl lazyValueSetter(FieldSpec field) {
+        String setterName = methodName(field.name, false);
+        JCExpression valueType = types.parseType(field.typeDisplay);
+        JCVariableDecl p = param(field.name, valueType);
+        JCExpression lambda = make.Lambda(List.nil(), make.Ident(names.fromString(field.name)));
+        JCStatement assign = make.Exec(make.Assign(
+            make.Select(make.Ident(names._this), names.fromString(field.name)),
+            lambda
+        ));
+        return method(setterName, List.of(p), List.of(assign, returnSelf()));
+    }
+
+    /** {@code B withFoo(Supplier<T> supplier)} - true lazy form, stores the supplier. */
+    private JCMethodDecl lazySupplierSetter(FieldSpec field) {
+        String setterName = methodName(field.name, false);
+        JCExpression supplierType = make.TypeApply(
+            types.qualIdent("java.util.function.Supplier"),
+            List.of(types.parseType(field.typeDisplay))
+        );
+        return method(setterName, List.of(param(field.name, supplierType)),
+            assignAndReturnSelf(field.name));
     }
 
     // ------------------------------------------------------------------

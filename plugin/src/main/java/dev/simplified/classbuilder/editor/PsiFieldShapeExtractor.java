@@ -31,6 +31,7 @@ final class PsiFieldShapeExtractor {
     private static final String COLLECTOR_FQN = ClassBuilderConstants.COLLECTOR_FQN;
     private static final String NEGATE_FQN = ClassBuilderConstants.NEGATE_FQN;
     private static final String FORMATTABLE_FQN = ClassBuilderConstants.FORMATTABLE_FQN;
+    private static final String LAZY_FQN = ClassBuilderConstants.LAZY_FQN;
 
     private PsiFieldShapeExtractor() {
     }
@@ -85,6 +86,7 @@ final class PsiFieldShapeExtractor {
         b.notNull = nnm.isNotNull(owner, false);
 
         b.formattable = hasAnnotation(owner, FORMATTABLE_FQN);
+        b.lazy = hasAnnotation(owner, LAZY_FQN);
 
         PsiAnnotation negate = findAnnotation(owner, NEGATE_FQN);
         if (negate != null) {

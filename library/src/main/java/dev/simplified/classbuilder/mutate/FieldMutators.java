@@ -54,6 +54,17 @@ final class FieldMutators {
     /** Returns every setter the field should emit on the nested Builder. */
     List<JCMethodDecl> setters(FieldSpec field) {
         ListBuffer<JCMethodDecl> out = new ListBuffer<>();
+        if (field.lazy) {
+            // @Lazy fields take a dual shape: foo(T value) wraps as a constant
+            // Supplier; foo(Supplier<T>) stores the supplier verbatim. The
+            // builder slot is Supplier<T>, the target field is Lazy<T>, and
+            // the build() copy wraps the Supplier as Lazy.of(supplier) at
+            // construction time (via the constructor-param rewrite in
+            // LazyFieldMutator).
+            out.append(lazyValueSetter(field));
+            out.append(lazySupplierSetter(field));
+            return out.toList();
+        }
         if (field.isBoolean) {
             out.append(booleanZeroArg(field, field.name, false));
             out.append(booleanTyped(field, field.name, false));
@@ -94,11 +105,16 @@ final class FieldMutators {
      * Private-access field declaration on the nested Builder itself, matching
      * the target's type. Collection/Map/Optional types receive the same
      * defensive initialisers the sibling emitter uses so unset slots are
-     * never null.
+     * never null. {@code @Lazy} fields are stored as
+     * {@code Supplier<T>} so callers can opt into eager-from-value or
+     * lazy-from-supplier semantics through the dual setter pair.
      */
     JCVariableDecl fieldDecl(FieldSpec field) {
-        JCExpression fieldType = types.parseType(field.typeDisplay);
-        JCExpression init = defaultInitializer(field);
+        JCExpression fieldType = field.lazy
+            ? make.TypeApply(types.qualIdent("java.util.function.Supplier"),
+                List.of(types.parseType(field.typeDisplay)))
+            : types.parseType(field.typeDisplay);
+        JCExpression init = field.lazy ? null : defaultInitializer(field);
         return make.VarDef(
             make.Modifiers(Flags.PRIVATE),
             names.fromString(field.name),
@@ -148,6 +164,45 @@ final class FieldMutators {
     // ------------------------------------------------------------------
     // Setter shapes
     // ------------------------------------------------------------------
+
+    // ------------------------------------------------------------------
+    // @Lazy shapes
+    // ------------------------------------------------------------------
+
+    /**
+     * {@code Builder withFoo(T value)} - eager value form. Stores
+     * {@code () -> value} in the {@code Supplier<T>} slot so the eventual
+     * {@code Lazy.of(supplier)} on the target side returns the value
+     * immediately on first {@code get()}. Slot is {@code Supplier<T>} so
+     * the synthesized constructor receives a Supplier and wraps as
+     * {@code Lazy.of(supplier)}.
+     */
+    private JCMethodDecl lazyValueSetter(FieldSpec field) {
+        String setterName = methodName(field.name, false);
+        JCExpression valueType = types.parseType(field.typeDisplay);
+        JCVariableDecl p = param(field.name, valueType);
+        // this.<name> = () -> <name>;
+        JCExpression lambda = make.Lambda(List.nil(), make.Ident(names.fromString(field.name)));
+        JCStatement assign = make.Exec(make.Assign(
+            make.Select(make.Ident(names._this), names.fromString(field.name)),
+            lambda
+        ));
+        return methodDefRaw(setterName, List.of(p), List.of(assign, returnThis()));
+    }
+
+    /**
+     * {@code Builder withFoo(Supplier<T> supplier)} - true lazy form.
+     * Stores the supplier verbatim; first call to the target's getter
+     * evaluates the supplier and memoizes the result.
+     */
+    private JCMethodDecl lazySupplierSetter(FieldSpec field) {
+        String setterName = methodName(field.name, false);
+        JCExpression supplierType = make.TypeApply(
+            types.qualIdent("java.util.function.Supplier"),
+            List.of(types.parseType(field.typeDisplay))
+        );
+        return methodDef(setterName, param(field.name, supplierType), assignAndReturnThis(field.name));
+    }
 
     private JCMethodDecl plainSetter(FieldSpec field) {
         String setterName = methodName(field.name, false);

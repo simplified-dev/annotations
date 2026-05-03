@@ -346,6 +346,11 @@ final class GeneratedMemberFactory {
      */
     private static List<PsiMethod> settersFor(SetterCtx ctx, PsiFieldShape field) {
         List<PsiMethod> out = new ArrayList<>();
+        if (field.lazy) {
+            out.add(lazyValueSetter(ctx, field));
+            out.add(lazySupplierSetter(ctx, field));
+            return out;
+        }
         if (field.isBoolean) {
             out.add(booleanZeroArg(ctx, field, field.name, false));
             out.add(booleanTyped(ctx, field, field.name));
@@ -379,6 +384,26 @@ final class GeneratedMemberFactory {
             out.add(plainSetter(ctx, field));
         }
         return out;
+    }
+
+    // ------------------------------------------------------------------
+    // @Lazy shapes
+    // ------------------------------------------------------------------
+
+    /** {@code Builder withFoo(T value)} - eager value form for a @Lazy field. */
+    private static PsiMethod lazyValueSetter(SetterCtx ctx, PsiFieldShape field) {
+        LightMethodBuilder m = newSetter(ctx, field, methodName(ctx, field.name, false));
+        m.addParameter(buildParam(m, field.name, field.type, false, primaryNullability(field)));
+        return m;
+    }
+
+    /** {@code Builder withFoo(Supplier<T> supplier)} - true lazy form for a @Lazy field. */
+    private static PsiMethod lazySupplierSetter(SetterCtx ctx, PsiFieldShape field) {
+        PsiType supplierType = ctx.elements.createTypeFromText(
+            "java.util.function.Supplier<" + field.type.getCanonicalText() + ">", ctx.target);
+        LightMethodBuilder m = newSetter(ctx, field, methodName(ctx, field.name, false));
+        m.addParameter(buildParam(m, field.name, supplierType, false, NOT_NULL_FQN));
+        return m;
     }
 
     // ------------------------------------------------------------------

@@ -53,6 +53,14 @@ public final class BuilderMutator {
         // messages on synthesised members point at the @ClassBuilder declaration.
         bridge.treeMaker().at(target.pos);
 
+        // @Lazy fields: rewrite storage type to Lazy<T>, wrap initialisers,
+        // adjust matching constructor params + assignments, synthesise
+        // memoizing getters. Runs before any other phase (SuperBuilder or
+        // regular) so RetainedInitFactory + FieldMutators see the rewritten
+        // field tree, and so the synthesised getter is in place before the
+        // nested Builder generation considers method-name collisions.
+        new LazyFieldMutator(ctx.bridge(), targetElement, target, fields, true, messager).mutate();
+
         boolean isAbstract = targetElement.getModifiers().contains(Modifier.ABSTRACT);
         String annotatedSuper = findAnnotatedDirectSuperSimpleName(targetElement);
 

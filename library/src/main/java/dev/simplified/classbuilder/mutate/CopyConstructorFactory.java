@@ -88,10 +88,21 @@ final class CopyConstructorFactory {
     }
 
     private JCStatement assignFromBuilder(FieldSpec f) {
-        return make.Exec(make.Assign(
-            make.Select(make.Ident(names._this), names.fromString(f.name)),
-            make.Select(make.Ident(names.fromString("b")), names.fromString(f.name))
-        ));
+        JCExpression lhs = make.Select(make.Ident(names._this), names.fromString(f.name));
+        JCExpression rhs = make.Select(make.Ident(names.fromString("b")), names.fromString(f.name));
+        if (f.lazy) {
+            // Builder slot is Supplier<T>; target field is Lazy<T>. Wrap the
+            // supplier as Lazy.of(...) at copy time so the target stores a
+            // Lazy and the supplier's call is deferred to the first getter
+            // invocation.
+            rhs = make.Apply(
+                List.nil(),
+                make.Select(ctx.types().qualIdent("dev.simplified.classbuilder.lazy.Lazy"),
+                    names.fromString("of")),
+                List.of(rhs)
+            );
+        }
+        return make.Exec(make.Assign(lhs, rhs));
     }
 
     private JCMethodDecl buildCtor(List<JCVariableDecl> params, List<JCStatement> body, long modifiers) {

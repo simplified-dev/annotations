@@ -3,6 +3,7 @@ package dev.simplified.classbuilder.apt;
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.classbuilder.mutate.BuilderMutator;
 import dev.simplified.classbuilder.mutate.JavacBridge;
+import dev.simplified.classbuilder.mutate.LazyFieldMutator;
 import dev.simplified.classbuilder.mutate.compat.JavacAccessFactory;
 
 import javax.annotation.processing.AbstractProcessor;
@@ -34,7 +35,10 @@ import java.util.Set;
  * for each class carrying {@code @ClassBuilder}. Records, interfaces, and
  * abstract-class targets are reserved for a later phase.
  */
-@SupportedAnnotationTypes("dev.simplified.annotations.ClassBuilder")
+@SupportedAnnotationTypes({
+    "dev.simplified.annotations.ClassBuilder",
+    "dev.simplified.annotations.Lazy"
+})
 @SupportedSourceVersion(SourceVersion.RELEASE_17)
 public class ClassBuilderProcessor extends AbstractProcessor {
 
@@ -52,6 +56,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     }
 
     private static final String ANNOTATION_FQN = "dev.simplified.annotations.ClassBuilder";
+    private static final String LAZY_FQN = "dev.simplified.annotations.Lazy";
 
     private final AnnotationLookup lookup = new AnnotationLookup();
     private SourceIntrospector introspector;
@@ -73,27 +78,57 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
         Messager messager = processingEnv.getMessager();
         TypeElement annotationElement = lookupAnnotationElement();
-        if (annotationElement == null) return false;
-        for (Element element : roundEnv.getElementsAnnotatedWith(annotationElement)) {
-            ElementKind kind = element.getKind();
-            if (kind != ElementKind.CLASS && kind != ElementKind.RECORD && kind != ElementKind.INTERFACE) {
-                messager.printMessage(Diagnostic.Kind.WARNING,
-                    "@ClassBuilder on " + kind + " targets is not yet supported - skipping",
-                    element
-                );
-                continue;
-            }
-            try {
-                if (kind == ElementKind.INTERFACE) {
-                    processInterface((TypeElement) element, messager);
-                } else {
-                    processClass((TypeElement) element, messager);
+        Set<TypeElement> classBuilderTargets = new java.util.LinkedHashSet<>();
+        if (annotationElement != null) {
+            for (Element element : roundEnv.getElementsAnnotatedWith(annotationElement)) {
+                ElementKind kind = element.getKind();
+                if (kind != ElementKind.CLASS && kind != ElementKind.RECORD && kind != ElementKind.INTERFACE) {
+                    messager.printMessage(Diagnostic.Kind.WARNING,
+                        "@ClassBuilder on " + kind + " targets is not yet supported - skipping",
+                        element
+                    );
+                    continue;
                 }
-            } catch (Exception e) {
-                messager.printMessage(Diagnostic.Kind.ERROR,
-                    "Failed to generate builder for " + element + ": " + e.getMessage(),
-                    element
-                );
+                TypeElement type = (TypeElement) element;
+                classBuilderTargets.add(type);
+                try {
+                    if (kind == ElementKind.INTERFACE) {
+                        processInterface(type, messager);
+                    } else {
+                        processClass(type, messager);
+                    }
+                } catch (Exception e) {
+                    messager.printMessage(Diagnostic.Kind.ERROR,
+                        "Failed to generate builder for " + element + ": " + e.getMessage(),
+                        element
+                    );
+                }
+            }
+        }
+
+        // Standalone @Lazy: classes with @Lazy fields but no @ClassBuilder.
+        // Dispatch directly to LazyFieldMutator so the field-type rewrite +
+        // getter synthesis still happens.
+        TypeElement lazyAnnotation = processingEnv.getElementUtils().getTypeElement(LAZY_FQN);
+        if (lazyAnnotation != null) {
+            Set<TypeElement> standaloneLazyTargets = new java.util.LinkedHashSet<>();
+            for (Element annotated : roundEnv.getElementsAnnotatedWith(lazyAnnotation)) {
+                if (annotated.getKind() != ElementKind.FIELD) continue;
+                Element enclosing = annotated.getEnclosingElement();
+                if (!(enclosing instanceof TypeElement enclosingType)) continue;
+                if (classBuilderTargets.contains(enclosingType)) continue;
+                if (enclosingType.getKind() == ElementKind.RECORD) continue;
+                if (enclosingType.getKind() != ElementKind.CLASS) continue;
+                standaloneLazyTargets.add(enclosingType);
+            }
+            for (TypeElement type : standaloneLazyTargets) {
+                try {
+                    processStandaloneLazy(type, messager);
+                } catch (Exception e) {
+                    messager.printMessage(Diagnostic.Kind.ERROR,
+                        "Failed to process @Lazy on " + type + ": " + e.getMessage(),
+                        type);
+                }
             }
         }
         return false;
@@ -121,6 +156,52 @@ public class ClassBuilderProcessor extends AbstractProcessor {
                     + "; mutation requires the annotated element to have a source declaration.",
                 target);
         }
+    }
+
+    /**
+     * Processes a class that has {@code @Lazy} fields but no
+     * {@code @ClassBuilder}. Runs {@link LazyFieldMutator} against the
+     * target's AST to rewrite field storage + synthesise getters; nothing
+     * else fires (no nested builder, no bootstraps).
+     */
+    private void processStandaloneLazy(TypeElement target, Messager messager) {
+        if (javacBridge.isEmpty()) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@Lazy requires javac for AST mutation - current environment is not a "
+                    + "JavacProcessingEnvironment. Run your build under OpenJDK javac (no ecj).",
+                target);
+            return;
+        }
+        List<FieldSpec> fields = collectAllFields(target);
+        var classDecl = javacBridge.get().treeOf(target);
+        if (classDecl == null) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@Lazy could not resolve a source tree for " + target
+                    + "; mutation requires the annotated element to have a source declaration.",
+                target);
+            return;
+        }
+        javacBridge.get().treeMaker().at(classDecl.pos);
+        LazyFieldMutator lazyMutator = new LazyFieldMutator(
+            javacBridge.get(), target, classDecl, fields, false, messager);
+        lazyMutator.mutate();
+    }
+
+    /**
+     * Collects every field from the target (including static) without
+     * honouring {@code @ClassBuilder.exclude} or {@code @BuildRule(ignore)}.
+     * Used by {@link #processStandaloneLazy} so {@code @Lazy} fields are
+     * visible regardless of any other builder-targeted filters - including
+     * static ones, which the {@link LazyFieldMutator} needs to see in order
+     * to emit the "not supported" error rather than silently dropping them.
+     */
+    private List<FieldSpec> collectAllFields(TypeElement target) {
+        List<FieldSpec> out = new ArrayList<>();
+        for (Element enclosed : target.getEnclosedElements()) {
+            if (enclosed.getKind() != ElementKind.FIELD) continue;
+            out.add(FieldSpec.from((VariableElement) enclosed, lookup, introspector));
+        }
+        return out;
     }
 
     private void processInterface(TypeElement target, Messager messager) throws IOException {

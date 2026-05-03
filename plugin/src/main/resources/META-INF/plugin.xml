@@ -150,9 +150,19 @@
                 displayName="@ClassBuilder field annotation misuse"
                 groupName="Simplified Annotations"
         />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.classbuilder.inspect.LazyFieldInspection"
+                enabledByDefault="true"
+                level="ERROR"
+                shortName="LazyFieldInspection"
+                displayName="@Lazy field misuse"
+                groupName="Simplified Annotations"
+        />
         <lang.inferredAnnotationProvider implementation="dev.simplified.xcontract.XContractInferredAnnotationProvider"/>
         <lang.inferredAnnotationProvider implementation="dev.simplified.classbuilder.editor.ClassBuilderInferredAnnotationProvider"/>
         <lang.psiAugmentProvider implementation="dev.simplified.classbuilder.editor.ClassBuilderAugmentProvider"/>
+        <lang.psiAugmentProvider implementation="dev.simplified.classbuilder.editor.LazyAugmentProvider"/>
         <java.elementFinder implementation="dev.simplified.classbuilder.editor.ClassBuilderElementFinder" order="last"/>
         <codeInsight.lineMarkerProvider
                 language="JAVA"

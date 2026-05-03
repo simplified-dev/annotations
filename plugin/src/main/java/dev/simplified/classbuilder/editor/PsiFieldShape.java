@@ -77,6 +77,12 @@ public final class PsiFieldShape {
     public final boolean nonNullByBuildFlag;
 
     /**
+     * True when the field carries {@code @Lazy}. Drives the dual-setter shape
+     * (value form + Supplier form) on the synthesised Builder PSI.
+     */
+    public final boolean lazy;
+
+    /**
      * Source element whose Javadoc the generated setter should surface.
      * Typically the backing field or record component. Null when no Javadoc
      * owner is available (e.g. interface accessor extraction paths).
@@ -109,6 +115,7 @@ public final class PsiFieldShape {
         this.clearable = b.clearable;
         this.compute = b.compute;
         this.nonNullByBuildFlag = b.nonNullByBuildFlag;
+        this.lazy = b.lazy;
         this.docSource = b.docSource;
     }
 
@@ -214,6 +221,7 @@ public final class PsiFieldShape {
         boolean collector, singular, clearable, compute;
         String singularName;
         boolean nonNullByBuildFlag;
+        boolean lazy;
         @Nullable PsiDocCommentOwner docSource;
 
         PsiFieldShape build() {
