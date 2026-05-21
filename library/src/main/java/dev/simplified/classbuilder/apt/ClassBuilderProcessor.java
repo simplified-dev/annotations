@@ -1,10 +1,12 @@
 package dev.simplified.classbuilder.apt;
+import dev.simplified.shared.apt.SourceIntrospector;
+import dev.simplified.shared.apt.AnnotationLookup;
 
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.classbuilder.mutate.BuilderMutator;
-import dev.simplified.classbuilder.mutate.JavacBridge;
-import dev.simplified.classbuilder.mutate.LazyFieldMutator;
-import dev.simplified.classbuilder.mutate.compat.JavacAccessFactory;
+import dev.simplified.shared.javac.JavacBridge;
+import dev.simplified.lazy.mutate.LazyFieldMutator;
+import dev.simplified.shared.javac.compat.JavacAccessFactory;
 
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.Messager;

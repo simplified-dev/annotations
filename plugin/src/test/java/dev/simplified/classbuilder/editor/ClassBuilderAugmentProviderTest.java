@@ -1,10 +1,13 @@
 package dev.simplified.classbuilder.editor;
+import dev.simplified.shared.psi.GeneratedMemberMarker;
 
+import com.intellij.openapi.application.AccessToken;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
+import dev.simplified.testutil.JSvgErrorSuppressor;
 
 /**
  * Exercises {@link ClassBuilderAugmentProvider}: a {@code @ClassBuilder}
@@ -14,10 +17,22 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase;
  */
 public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
 
+    private AccessToken jsvgSuppressor;
+
     @Override
     protected void setUp() throws Exception {
         super.setUp();
+        jsvgSuppressor = JSvgErrorSuppressor.install();
         addAnnotationSources();
+    }
+
+    @Override
+    protected void tearDown() throws Exception {
+        try {
+            if (jsvgSuppressor != null) jsvgSuppressor.close();
+        } finally {
+            super.tearDown();
+        }
     }
 
     /** Adds the annotation stubs the tests reference onto the fixture's source path. */

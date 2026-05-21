@@ -152,17 +152,36 @@
         />
         <localInspection
                 language="JAVA"
-                implementationClass="dev.simplified.classbuilder.inspect.LazyFieldInspection"
+                implementationClass="dev.simplified.lazy.inspect.LazyFieldInspection"
                 enabledByDefault="true"
                 level="ERROR"
                 shortName="LazyFieldInspection"
                 displayName="@Lazy field misuse"
                 groupName="Simplified Annotations"
         />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.enumlookup.inspect.EnumLookupInspection"
+                enabledByDefault="true"
+                level="ERROR"
+                shortName="EnumLookupInspection"
+                displayName="@EnumLookup misuse"
+                groupName="Simplified Annotations"
+        />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.enumlookup.inspect.EnumLookupKeyInspection"
+                enabledByDefault="true"
+                level="ERROR"
+                shortName="EnumLookupKeyInspection"
+                displayName="@KeyField duplicate / null key"
+                groupName="Simplified Annotations"
+        />
         <lang.inferredAnnotationProvider implementation="dev.simplified.xcontract.XContractInferredAnnotationProvider"/>
         <lang.inferredAnnotationProvider implementation="dev.simplified.classbuilder.editor.ClassBuilderInferredAnnotationProvider"/>
         <lang.psiAugmentProvider implementation="dev.simplified.classbuilder.editor.ClassBuilderAugmentProvider"/>
-        <lang.psiAugmentProvider implementation="dev.simplified.classbuilder.editor.LazyAugmentProvider"/>
+        <lang.psiAugmentProvider implementation="dev.simplified.lazy.editor.LazyAugmentProvider"/>
+        <lang.psiAugmentProvider implementation="dev.simplified.enumlookup.editor.EnumLookupAugmentProvider"/>
         <java.elementFinder implementation="dev.simplified.classbuilder.editor.ClassBuilderElementFinder" order="last"/>
         <codeInsight.lineMarkerProvider
                 language="JAVA"

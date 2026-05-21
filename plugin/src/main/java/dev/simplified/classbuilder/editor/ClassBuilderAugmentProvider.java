@@ -1,4 +1,5 @@
 package dev.simplified.classbuilder.editor;
+import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
 
 import com.intellij.openapi.util.Key;
 import com.intellij.psi.PsiAnnotation;
@@ -6,7 +7,6 @@ import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
-import com.intellij.psi.augment.PsiAugmentProvider;
 import com.intellij.psi.util.CachedValueProvider;
 import com.intellij.psi.util.CachedValuesManager;
 import com.intellij.psi.util.PsiModificationTracker;
@@ -15,10 +15,8 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * Surfaces the bootstrap methods ({@code builder()}, {@code from(T)},
@@ -32,17 +30,7 @@ import java.util.Set;
  * point the compiled class file makes the injected nested class visible.
  * Expanding to full nested-class synthesis is a planned follow-up.
  */
-public final class ClassBuilderAugmentProvider extends PsiAugmentProvider {
-
-    /**
-     * Tracks targets currently undergoing synthesis on this thread. Editor-time
-     * type creation ({@code createTypeFromText}, {@code createType}) eagerly
-     * resolves nested-class references, which re-enters this provider for the
-     * same target. The guard breaks the cycle by returning empty for the
-     * inner call.
-     */
-    private static final ThreadLocal<Set<PsiClass>> IN_PROGRESS =
-        ThreadLocal.withInitial(HashSet::new);
+public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugmentProvider {
 
     /**
      * Memoises per-target synthesised members. {@link CachedValuesManager}

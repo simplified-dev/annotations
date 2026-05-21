@@ -1,4 +1,7 @@
 package dev.simplified.classbuilder.editor;
+import dev.simplified.shared.psi.DocProxyingLightMethodBuilder;
+import dev.simplified.shared.psi.AnnotatedLightModifierList;
+import dev.simplified.shared.psi.GeneratedMemberMarker;
 
 import com.intellij.lang.java.JavaLanguage;
 import com.intellij.openapi.project.Project;
@@ -193,59 +196,6 @@ final class GeneratedMemberFactory {
         return new LightParameter(name, effectiveType, declarationScope, JavaLanguage.INSTANCE, modifiers, varargs);
     }
 
-    /**
-     * {@link LightModifierList} subclass whose {@link #getAnnotations()} and
-     * {@link #findAnnotation(String)} surface a caller-populated list. The
-     * platform's default implementation returns an empty annotation array and
-     * throws on {@code addAnnotation(String)}; this subclass lets us ride
-     * pre-built annotations (from {@code createAnnotationFromText}) so
-     * IntelliJ inspections that walk {@code getModifierList().getAnnotations()}
-     * (printf, nullability, etc.) see them.
-     *
-     * <p>Mirrors Lombok's {@code LombokLightModifierList}: keyed map keeps
-     * lookups O(1), Language is propagated to the platform base so the
-     * modifier list participates correctly in language-aware checks, and
-     * {@link #addAnnotation(String)} actually creates and stores the
-     * annotation rather than throwing {@code IncorrectOperationException}.
-     */
-    private static final class AnnotatedLightModifierList extends LightModifierList {
-
-        private final java.util.Map<String, PsiAnnotation> annotations = new java.util.LinkedHashMap<>(2);
-
-        AnnotatedLightModifierList(PsiManager manager, com.intellij.lang.Language language) {
-            super(manager, language);
-        }
-
-        void add(String qualifiedName, PsiAnnotation annotation) {
-            annotations.put(qualifiedName, annotation);
-        }
-
-        @Override
-        public @NotNull PsiAnnotation addAnnotation(@NotNull String qualifiedName) {
-            PsiAnnotation annotation = JavaPsiFacade.getElementFactory(getProject())
-                .createAnnotationFromText("@" + qualifiedName, null);
-            annotations.put(qualifiedName, annotation);
-            return annotation;
-        }
-
-        @Override
-        public @NotNull PsiAnnotation[] getAnnotations() {
-            return annotations.isEmpty()
-                ? PsiAnnotation.EMPTY_ARRAY
-                : annotations.values().toArray(PsiAnnotation.EMPTY_ARRAY);
-        }
-
-        @Override
-        public @Nullable PsiAnnotation findAnnotation(@NotNull String qualifiedName) {
-            return annotations.get(qualifiedName);
-        }
-
-        @Override
-        public boolean hasAnnotation(@NotNull String qualifiedName) {
-            return annotations.containsKey(qualifiedName);
-        }
-
-    }
 
     private static PsiMethod buildInstanceNoArg(PsiManager manager, PsiClass target,
                                                 String name, PsiType returnType, String access) {
@@ -586,11 +536,11 @@ final class GeneratedMemberFactory {
      * so Ctrl-click jumps to the right place, and exposes the field's Javadoc
      * as the setter's Javadoc so Ctrl-Q / brief-hover show the field doc on
      * the setter call. Callers chain {@code addParameter} calls then hand
-     * the builder back; {@link GeneratedSetterMethod} doubles as the
+     * the builder back; {@link DocProxyingLightMethodBuilder} doubles as the
      * resulting {@link PsiMethod}.
      */
-    private static GeneratedSetterMethod newSetter(SetterCtx ctx, PsiFieldShape field, String name) {
-        GeneratedSetterMethod m = (GeneratedSetterMethod) new GeneratedSetterMethod(ctx.manager, name)
+    private static DocProxyingLightMethodBuilder newSetter(SetterCtx ctx, PsiFieldShape field, String name) {
+        DocProxyingLightMethodBuilder m = (DocProxyingLightMethodBuilder) new DocProxyingLightMethodBuilder(ctx.manager, name)
             .setMethodReturnType(ctx.selfType)
             .addModifier(PsiModifier.PUBLIC)
             .setContainingClass(ctx.builder);

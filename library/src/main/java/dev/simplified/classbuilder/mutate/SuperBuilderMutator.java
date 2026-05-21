@@ -1,4 +1,8 @@
 package dev.simplified.classbuilder.mutate;
+import dev.simplified.shared.javac.ContractAnnotations;
+import dev.simplified.shared.javac.AstMarkers;
+import dev.simplified.shared.javac.JavacBridge;
+import dev.simplified.shared.javac.JavacTypeFactory;
 
 import com.sun.tools.javac.code.Flags;
 import com.sun.tools.javac.tree.JCTree;
@@ -58,7 +62,7 @@ final class SuperBuilderMutator {
         this.messager = messager;
         this.annotatedSuperSimpleName = annotatedSuperSimpleName;
         this.chainFields = chainFields;
-        this.contracts = new ContractAnnotations(ctx);
+        this.contracts = ctx.contracts();
     }
 
     void mutate() {

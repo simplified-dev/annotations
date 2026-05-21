@@ -12,7 +12,7 @@ import java.lang.annotation.Target;
  * and caches it thereafter.
  *
  * <p>The annotation processor rewrites the annotated field's storage type from
- * {@code T} to {@link dev.simplified.classbuilder.lazy.Lazy Lazy&lt;T&gt;} and
+ * {@code T} to {@link dev.simplified.lazy.Lazy Lazy&lt;T&gt;} and
  * synthesises a public memoizing getter ({@code getFoo()} for object types,
  * {@code isFoo()} for {@code boolean}). The original initializer expression, when
  * present, becomes the supplier body so source-level reads of
@@ -58,7 +58,7 @@ import java.lang.annotation.Target;
  *       body.</li>
  * </ul>
  *
- * @see dev.simplified.classbuilder.lazy.Lazy
+ * @see dev.simplified.lazy.Lazy
  * @see ClassBuilder
  */
 @Retention(RetentionPolicy.CLASS)

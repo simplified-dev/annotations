@@ -1,7 +1,9 @@
 package dev.simplified.classbuilder.mutate;
+import dev.simplified.lazy.mutate.LazyFieldMutator;
+import dev.simplified.shared.javac.JavacBridge;
 
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
-import dev.simplified.classbuilder.apt.AnnotationLookup;
+import dev.simplified.shared.apt.AnnotationLookup;
 import dev.simplified.classbuilder.apt.BuilderConfig;
 import dev.simplified.classbuilder.apt.FieldSpec;
 

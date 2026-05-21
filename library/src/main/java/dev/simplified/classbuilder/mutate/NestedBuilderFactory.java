@@ -1,4 +1,8 @@
 package dev.simplified.classbuilder.mutate;
+import dev.simplified.shared.javac.ContractAnnotations;
+import dev.simplified.shared.javac.AstMarkers;
+import dev.simplified.shared.javac.JavacBridge;
+import dev.simplified.shared.javac.JavacTypeFactory;
 
 import com.sun.tools.javac.code.Flags;
 import com.sun.tools.javac.tree.JCTree;
@@ -33,7 +37,7 @@ final class NestedBuilderFactory {
         this.make = ctx.make();
         this.names = ctx.names();
         this.fieldMutators = new FieldMutators(ctx);
-        this.contracts = new ContractAnnotations(ctx);
+        this.contracts = ctx.contracts();
     }
 
     JCClassDecl build() {

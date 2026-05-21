@@ -1,4 +1,5 @@
 package dev.simplified.classbuilder.editor;
+import dev.simplified.shared.psi.GeneratedMemberMarker;
 
 import com.intellij.codeInsight.InferredAnnotationProvider;
 import com.intellij.psi.JavaPsiFacade;
@@ -29,7 +30,7 @@ import java.util.List;
  * then hands back freshly-built {@link PsiAnnotation}s.
  *
  * <p>Shape matrix, mirroring
- * {@code dev.simplified.classbuilder.mutate.ContractAnnotations}:
+ * {@code dev.simplified.shared.javac.ContractAnnotations}:
  * <ul>
  *   <li>{@code builder()}, {@code mutate()}, {@code build()} - {@code "-> new"}.</li>
  *   <li>{@code from(T)} - {@code "_ -> new"}, {@code pure = true}.</li>

@@ -1,4 +1,8 @@
 package dev.simplified.classbuilder.mutate;
+import dev.simplified.shared.apt.SourceIntrospector;
+import dev.simplified.shared.javac.AstMarkers;
+import dev.simplified.shared.javac.JavacBridge;
+import dev.simplified.shared.javac.JavacTypeFactory;
 
 import com.sun.tools.javac.code.Flags;
 import com.sun.tools.javac.tree.JCTree;
@@ -61,7 +65,7 @@ final class RetainedInitFactory {
 
     /**
      * For every field with {@code @BuildRule(retainInit = true)} whose
-     * initializer tree was captured by {@link dev.simplified.classbuilder.apt.SourceIntrospector},
+     * initializer tree was captured by {@link dev.simplified.shared.apt.SourceIntrospector},
      * appends a provider method to the target class. Fields without a
      * captured tree (text-only, record components, etc.) are skipped - the
      * Builder falls back to its per-type default.

@@ -1,4 +1,5 @@
 package dev.simplified.classbuilder.editor;
+import dev.simplified.shared.psi.GeneratedMemberMarker;
 
 import com.intellij.ide.IconProvider;
 import com.intellij.openapi.util.IconLoader;

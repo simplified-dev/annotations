@@ -1,4 +1,7 @@
 package dev.simplified.classbuilder.mutate;
+import dev.simplified.shared.javac.AstMarkers;
+import dev.simplified.shared.javac.JavacBridge;
+import dev.simplified.shared.javac.JavacTypeFactory;
 
 import com.sun.tools.javac.code.BoundKind;
 import com.sun.tools.javac.code.Flags;
@@ -97,7 +100,7 @@ final class CopyConstructorFactory {
             // invocation.
             rhs = make.Apply(
                 List.nil(),
-                make.Select(ctx.types().qualIdent("dev.simplified.classbuilder.lazy.Lazy"),
+                make.Select(ctx.types().qualIdent("dev.simplified.lazy.Lazy"),
                     names.fromString("of")),
                 List.of(rhs)
             );

@@ -1,4 +1,8 @@
 package dev.simplified.classbuilder.mutate;
+import dev.simplified.shared.javac.ContractAnnotations;
+import dev.simplified.shared.javac.AstMarkers;
+import dev.simplified.shared.javac.JavacBridge;
+import dev.simplified.shared.javac.JavacTypeFactory;
 
 import com.sun.tools.javac.code.Flags;
 import com.sun.tools.javac.tree.JCTree;
@@ -63,7 +67,7 @@ final class BootstrapMethodFactory {
         this.messager = messager;
         this.isRecord = ctx.targetElement().getKind() == ElementKind.RECORD;
         this.fromFields = fromFields;
-        this.contracts = new ContractAnnotations(ctx);
+        this.contracts = ctx.contracts();
     }
 
     /** Appends whichever bootstrap methods are missing from the target. */

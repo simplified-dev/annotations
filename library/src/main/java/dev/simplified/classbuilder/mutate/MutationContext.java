@@ -1,4 +1,7 @@
 package dev.simplified.classbuilder.mutate;
+import dev.simplified.shared.javac.ContractAnnotations;
+import dev.simplified.shared.javac.JavacBridge;
+import dev.simplified.shared.javac.JavacTypeFactory;
 
 import com.sun.tools.javac.code.Flags;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
@@ -26,6 +29,7 @@ public final class MutationContext {
     private final String targetSimpleName;
     private final String builderName;
     private final JavacTypeFactory types;
+    private final ContractAnnotations contracts;
 
     public MutationContext(JavacBridge bridge,
                            TypeElement targetElement,
@@ -40,12 +44,15 @@ public final class MutationContext {
         this.targetSimpleName = targetElement.getSimpleName().toString();
         this.builderName = config.builderName();
         this.types = new JavacTypeFactory(bridge.treeMaker(), bridge.names());
+        this.contracts = new ContractAnnotations(
+            bridge.treeMaker(), bridge.names(), this.types, config.emitContracts());
     }
 
     public JavacBridge bridge() { return bridge; }
     public TreeMaker make() { return bridge.treeMaker(); }
     public Names names() { return bridge.names(); }
     public JavacTypeFactory types() { return types; }
+    public ContractAnnotations contracts() { return contracts; }
     public TypeElement targetElement() { return targetElement; }
     public JCClassDecl target() { return target; }
     public BuilderConfig config() { return config; }

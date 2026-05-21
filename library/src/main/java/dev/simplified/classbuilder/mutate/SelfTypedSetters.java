@@ -1,4 +1,8 @@
 package dev.simplified.classbuilder.mutate;
+import dev.simplified.shared.javac.ContractAnnotations;
+import dev.simplified.shared.javac.AstMarkers;
+import dev.simplified.shared.javac.JavacBridge;
+import dev.simplified.shared.javac.JavacTypeFactory;
 
 import com.sun.tools.javac.code.Flags;
 import com.sun.tools.javac.code.TypeTag;
@@ -46,7 +50,7 @@ final class SelfTypedSetters {
         this.make = ctx.make();
         this.names = ctx.names();
         this.types = ctx.types();
-        this.contracts = new ContractAnnotations(ctx);
+        this.contracts = ctx.contracts();
     }
 
     /** Mirrors {@link FieldMutators#setters} but always with {@code return self();}. */

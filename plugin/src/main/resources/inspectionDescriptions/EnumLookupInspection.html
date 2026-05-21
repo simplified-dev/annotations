@@ -1,0 +1,35 @@
+<html>
+<body>
+Flags misuse of <code>@EnumLookup</code> and its companion
+<code>@KeyField</code>:
+
+<ul>
+  <li><code>@EnumLookup</code> on a non-enum type - the processor cannot
+      generate cached lookups for anything but an <code>enum</code>.</li>
+  <li><code>@KeyField</code> on a <code>static</code> field - keys must
+      live on instance state so each enum constant carries its own
+      value.</li>
+  <li><code>@KeyField</code> on a field whose enclosing type lacks
+      <code>@EnumLookup</code> - the annotation is silently ignored at
+      processing time; this warning surfaces it early.</li>
+  <li><code>@KeyField(strictNullKeys = true)</code> on a primitive-typed
+      field - primitives cannot be null, so the attribute has no effect.</li>
+  <li><code>@KeyField(methodName = ...)</code> whose value is not a valid
+      Java identifier or doesn't start with an uppercase letter - the
+      generated <code>of&lt;Name&gt;</code> / <code>findBy&lt;Name&gt;</code>
+      methods would be unreadable or fail to compile.</li>
+  <li>Two <code>@KeyField</code> annotations producing colliding generated
+      method signatures - one of them must set <code>methodName</code> to
+      disambiguate.</li>
+</ul>
+
+<!-- tooltip end -->
+
+<p>
+This inspection covers annotation-misuse errors only. Strict-key value
+validation (duplicate / null values across constants) lives in the
+separate <code>@KeyField duplicate / null key</code> inspection.
+</p>
+
+</body>
+</html>

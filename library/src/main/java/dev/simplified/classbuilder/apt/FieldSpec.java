@@ -1,4 +1,6 @@
 package dev.simplified.classbuilder.apt;
+import dev.simplified.shared.apt.SourceIntrospector;
+import dev.simplified.shared.apt.AnnotationLookup;
 
 import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.ExecutableElement;
