@@ -130,7 +130,7 @@ final class SelfTypedSetters {
 
     private JCMethodDecl plainSetter(FieldSpec field) {
         JCExpression fieldType = types.parseType(field.typeDisplay);
-        return method(methodName(field.name, false), List.of(param(field.name, fieldType)),
+        return method(methodName(field.name, false), List.of(nullnessParam(field.name, fieldType, field)),
             assignAndReturnSelf(field.name));
     }
 
@@ -494,6 +494,18 @@ final class SelfTypedSetters {
             type,
             null
         );
+    }
+
+    /**
+     * Field-type setter parameter that re-emits the field's own nullness
+     * annotation when it carries one. Mirrors {@link FieldMutators#nullnessParam}
+     * so the SuperBuilder path restores the {@code @NotNull}/{@code @Nullable}
+     * hint {@code parseType} strips out of the field type.
+     */
+    private JCVariableDecl nullnessParam(String name, JCExpression type, FieldSpec field) {
+        if (field.notNull) return annotatedParam(name, type, notNullAnnotation());
+        if (field.nullable) return annotatedParam(name, type, nullableAnnotation());
+        return param(name, type);
     }
 
     private JCAnnotation printFormatAnnotation() {

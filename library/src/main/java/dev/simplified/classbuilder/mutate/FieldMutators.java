@@ -211,7 +211,7 @@ final class FieldMutators {
     private JCMethodDecl plainSetter(FieldSpec field) {
         String setterName = methodName(field.name, false);
         JCExpression fieldType = types.parseType(field.typeDisplay);
-        return methodDef(setterName, param(field.name, fieldType), assignAndReturnThis(field.name));
+        return methodDef(setterName, nullnessParam(field.name, fieldType, field), assignAndReturnThis(field.name));
     }
 
     private JCMethodDecl arrayVarargs(FieldSpec field) {
@@ -583,6 +583,21 @@ final class FieldMutators {
             type,
             null
         );
+    }
+
+    /**
+     * Field-type setter parameter that re-emits the field's own nullness
+     * annotation when it carries one. {@code parseType} strips any type-use
+     * {@code @NotNull}/{@code @Nullable} out of the field type (it would
+     * otherwise corrupt the qualified-name tree), so the hint is re-attached
+     * here as a plain declaration annotation on the parameter - restoring the
+     * IDE null-analysis the field declared. Fields without a nullness
+     * annotation get a bare parameter, exactly as before.
+     */
+    private JCVariableDecl nullnessParam(String name, JCExpression type, FieldSpec field) {
+        if (field.notNull) return annotatedParam(name, type, notNullAnnotation());
+        if (field.nullable) return annotatedParam(name, type, nullableAnnotation());
+        return param(name, type);
     }
 
     private JCAnnotation printFormatAnnotation() {
