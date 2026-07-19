@@ -51,9 +51,19 @@ public final class JavacTypeFactory {
      * Parses a javax.lang.model type display string into a javac type
      * expression. Handles primitives, arrays, and generic type arguments
      * recursively.
+     *
+     * <p>Type-use annotations are stripped first. {@link javax.lang.model}
+     * renders a field whose type carries a {@code TYPE_USE} annotation (e.g.
+     * {@code @NotNull}) into the display string with the annotation spliced
+     * before the simple name - {@code "pkg.@org.jetbrains.annotations.NotNull
+     * Name"}. Feeding that verbatim to {@link #qualIdent} would split on the
+     * dots and treat {@code @org} as a name segment, producing uncompilable
+     * {@code "package pkg.@org.jetbrains.annotations does not exist"} errors.
+     * The generated builder members do not need the type-use annotation, so
+     * it is dropped.
      */
     public JCExpression parseType(String display) {
-        String s = display.trim();
+        String s = stripTypeUseAnnotations(display.trim());
         if (s.endsWith("[]")) {
             return make.TypeArray(parseType(s.substring(0, s.length() - 2)));
         }
@@ -67,6 +77,43 @@ public final class JavacTypeFactory {
         java.util.List<JCExpression> parsed = new ArrayList<>();
         for (String a : splitTopLevel(args)) parsed.add(parseType(a));
         return make.TypeApply(qualIdent(base), List.from(parsed));
+    }
+
+    /**
+     * Removes every {@code @Annotation} token from a type-display string,
+     * including a fully-qualified annotation name and any parenthesised
+     * argument list, plus the whitespace that separates it from the type.
+     * Applied position-independently so it copes with the annotation at the
+     * head ({@code "@NotNull java.lang.String"}), before a simple name
+     * ({@code "java.util.@NotNull Optional<...>"}), or nested inside a type
+     * argument ({@code "List<@NotNull String>"}) - and with however the running
+     * JDK's {@code Type.toString()} chooses to place it.
+     */
+    static String stripTypeUseAnnotations(String display) {
+        if (display.indexOf('@') < 0) return display;
+        StringBuilder out = new StringBuilder(display.length());
+        int i = 0;
+        int n = display.length();
+        while (i < n) {
+            char c = display.charAt(i);
+            if (c != '@') {
+                out.append(c);
+                i++;
+                continue;
+            }
+            i++; // consume '@'
+            while (i < n && (Character.isJavaIdentifierPart(display.charAt(i)) || display.charAt(i) == '.')) i++;
+            if (i < n && display.charAt(i) == '(') {
+                int depth = 0;
+                do {
+                    char d = display.charAt(i++);
+                    if (d == '(') depth++;
+                    else if (d == ')') depth--;
+                } while (i < n && depth > 0);
+            }
+            while (i < n && Character.isWhitespace(display.charAt(i))) i++;
+        }
+        return out.toString();
     }
 
     /** Splits {@code "K, V<A, B>, T"} at top-level commas, preserving nested generics. */
