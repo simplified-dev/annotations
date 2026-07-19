@@ -104,6 +104,16 @@ final class PsiFieldShapeExtractor {
             b.singularName = methodName.isEmpty() ? defaultSingular(name) : methodName;
         }
 
+        // Parity with the APT mutator: a custom (non-java.util) container needs
+        // a field initializer to build fresh instances from. Without one the APT
+        // emits a plain replace setter (and a NOTE), so suppress the @Collector
+        // shape here too rather than advertise bulk methods the build won't
+        // generate. Record components have no field initializer, matching the
+        // APT, which reads the initializer off the backing field.
+        if (b.isCustomContainer && b.collector && !hasFieldInitializer(owner)) {
+            b.collector = false;
+        }
+
         // @BuildRule.flag().nonNull() - PsiAnnotation.findAttributeValue
         // returns a PsiAnnotation for nested-annotation attributes; read
         // its own attribute via the same booleanAttr helper.
@@ -115,6 +125,11 @@ final class PsiFieldShapeExtractor {
             }
         }
         return b.build();
+    }
+
+    /** True when the owner is a field carrying a declared initializer. */
+    private static boolean hasFieldInitializer(PsiModifierListOwner owner) {
+        return owner instanceof PsiField field && field.hasInitializer();
     }
 
     /** True when the element carries the given FQN annotation. */

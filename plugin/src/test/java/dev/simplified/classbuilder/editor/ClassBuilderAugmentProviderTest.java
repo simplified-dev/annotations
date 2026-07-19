@@ -6,8 +6,10 @@ import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
-import com.intellij.testFramework.fixtures.BasePlatformTestCase;
+import com.intellij.testFramework.LightProjectDescriptor;
+import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
 import dev.simplified.testutil.JSvgErrorSuppressor;
+import org.jetbrains.annotations.NotNull;
 
 /**
  * Exercises {@link ClassBuilderAugmentProvider}: a {@code @ClassBuilder}
@@ -15,9 +17,17 @@ import dev.simplified.testutil.JSvgErrorSuppressor;
  * {@code mutate()} methods to the PSI layer, plus a nested {@code Builder}
  * class whose setter matrix mirrors the APT mutator output.
  */
-public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
+public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixtureTestCase {
 
     private AccessToken jsvgSuppressor;
+
+    @Override
+    protected @NotNull LightProjectDescriptor getProjectDescriptor() {
+        // A real JDK so InheritanceUtil resolves custom-collection hierarchies
+        // (Bag extends java.util.List extends Collection) in the supertype walk;
+        // the default mock JDK stubs java.util without those supertype links.
+        return JAVA_17;
+    }
 
     @Override
     protected void setUp() throws Exception {
@@ -555,9 +565,104 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
         assertEquals(0, builder.findMethodsByName("addFlavorss", false).length);
     }
 
+    /**
+     * A project-specific collection type (an interface built via a factory,
+     * the {@code ConcurrentList} shape) recognised by the supertype walk gets
+     * the same {@code @Collector} bulk API in autocomplete as a java.util list.
+     */
+    public void testCustomCollectionCollector_surfacesBulkApi() {
+        addCustomBagSources();
+        PsiClass builder = builderFor("Shelf",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Collector;
+            import demo.Bag;
+            import demo.Bags;
+            @ClassBuilder
+            public class Shelf {
+                @Collector(singular = true, clearable = true) Bag<String> tags = Bags.newBag();
+            }
+            """);
+        assertEquals("varargs + iterable replace on the custom container", 2,
+            builder.findMethodsByName("tags", false).length);
+        assertEquals("singular add", 1, builder.findMethodsByName("addTag", false).length);
+        assertEquals("clear", 1, builder.findMethodsByName("clearTags", false).length);
+    }
+
+    /** Custom map recognised via the supertype walk gets replace + put + clear. */
+    public void testCustomMapCollector_surfacesBulkApi() {
+        addCustomBagSources();
+        PsiClass builder = builderFor("Book",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Collector;
+            import demo.Ledger;
+            import demo.Ledgers;
+            @ClassBuilder
+            public class Book {
+                @Collector(singular = true, clearable = true) Ledger<String, Integer> entries = Ledgers.newLedger();
+            }
+            """);
+        assertEquals("replace", 1, builder.findMethodsByName("entries", false).length);
+        assertEquals("put", 1, builder.findMethodsByName("putEntry", false).length);
+        assertEquals("clear", 1, builder.findMethodsByName("clearEntries", false).length);
+    }
+
+    /**
+     * A custom-container {@code @Collector} field with no initializer can't be
+     * built by the APT (plain replace setter + NOTE), so the augment provider
+     * mirrors that and does not advertise the bulk API.
+     */
+    public void testCustomCollectionCollector_noInitializer_plainSetterOnly() {
+        addCustomBagSources();
+        PsiClass builder = builderFor("Shelf",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Collector;
+            import demo.Bag;
+            @ClassBuilder
+            public class Shelf {
+                @Collector(singular = true, clearable = true) Bag<String> tags;
+            }
+            """);
+        assertEquals("single plain replace setter", 1, builder.findMethodsByName("tags", false).length);
+        assertEquals("no singular add without an initializer",
+            0, builder.findMethodsByName("addTag", false).length);
+        assertEquals("no clear without an initializer",
+            0, builder.findMethodsByName("clearTags", false).length);
+    }
+
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+
+    /** Registers custom interface collection/map types plus their factories. */
+    private void addCustomBagSources() {
+        myFixture.addFileToProject("demo/Bag.java",
+            """
+            package demo;
+            public interface Bag<E> extends java.util.List<E> {}
+            """);
+        myFixture.addFileToProject("demo/Bags.java",
+            """
+            package demo;
+            public final class Bags {
+                public static <E> Bag<E> newBag() { return null; }
+            }
+            """);
+        myFixture.addFileToProject("demo/Ledger.java",
+            """
+            package demo;
+            public interface Ledger<K, V> extends java.util.Map<K, V> {}
+            """);
+        myFixture.addFileToProject("demo/Ledgers.java",
+            """
+            package demo;
+            public final class Ledgers {
+                public static <K, V> Ledger<K, V> newLedger() { return null; }
+            }
+            """);
+    }
 
     /** Shortcut: configure a file, return the synthesised nested Builder PsiClass. */
     private PsiClass builderFor(String className, String source) {
