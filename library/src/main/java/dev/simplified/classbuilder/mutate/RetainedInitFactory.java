@@ -64,16 +64,18 @@ final class RetainedInitFactory {
     }
 
     /**
-     * For every field with {@code @BuildRule(retainInit = true)} whose
-     * initializer tree was captured by {@link dev.simplified.shared.apt.SourceIntrospector},
-     * appends a provider method to the target class. Fields without a
-     * captured tree (text-only, record components, etc.) are skipped - the
-     * Builder falls back to its per-type default.
+     * For every field whose initializer tree was captured by
+     * {@link dev.simplified.shared.apt.SourceIntrospector}, appends a provider
+     * method to the target class. A tree is captured either for
+     * {@code @BuildRule(retainInit = true)} or for a {@code @Collector} on a
+     * custom (non-java.util) container, which needs the field's own factory to
+     * build fresh instances. Fields without a captured tree (text-only, record
+     * components, etc.) are skipped - the Builder falls back to its per-type
+     * default.
      */
     void appendAll() {
         JCClassDecl target = ctx.target();
         for (FieldSpec f : ctx.fields()) {
-            if (!f.builderDefault) continue;
             Object captured = f.sourceInitializerTree;
             if (!(captured instanceof JCExpression original)) continue;
             if (hasExistingProvider(target, providerName(f.name))) continue;

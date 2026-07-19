@@ -201,7 +201,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         List<FieldSpec> out = new ArrayList<>();
         for (Element enclosed : target.getEnclosedElements()) {
             if (enclosed.getKind() != ElementKind.FIELD) continue;
-            out.add(FieldSpec.from((VariableElement) enclosed, lookup, introspector));
+            out.add(FieldSpec.from((VariableElement) enclosed, lookup, introspector, processingEnv.getTypeUtils()));
         }
         return out;
     }
@@ -254,7 +254,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
             if (method.getReturnType().getKind() == javax.lang.model.type.TypeKind.VOID) continue;
             String name = method.getSimpleName().toString();
             if (config.excludeSet().contains(name)) continue;
-            FieldSpec spec = FieldSpec.fromInterfaceAccessor(method, lookup);
+            FieldSpec spec = FieldSpec.fromInterfaceAccessor(method, lookup, processingEnv.getTypeUtils());
             if (spec.ignored) continue;
             out.add(spec);
         }
@@ -293,7 +293,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
             if (enclosed.getModifiers().contains(Modifier.TRANSIENT)) continue;
             String name = enclosed.getSimpleName().toString();
             if (config.excludeSet().contains(name)) continue;
-            FieldSpec spec = FieldSpec.from((VariableElement) enclosed, lookup, introspector);
+            FieldSpec spec = FieldSpec.from((VariableElement) enclosed, lookup, introspector, processingEnv.getTypeUtils());
             if (spec.ignored) continue;
             out.add(spec);
         }

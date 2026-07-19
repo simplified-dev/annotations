@@ -55,6 +55,8 @@ public final class BuilderMutator {
         // messages on synthesised members point at the @ClassBuilder declaration.
         bridge.treeMaker().at(target.pos);
 
+        warnUnbuildableCustomCollectors(targetElement, fields);
+
         // @Lazy fields: rewrite storage type to Lazy<T>, wrap initialisers,
         // adjust matching constructor params + assignments, synthesise
         // memoizing getters. Runs before any other phase (SuperBuilder or
@@ -97,6 +99,26 @@ public final class BuilderMutator {
         return true;
     }
 
+    /**
+     * Emits a {@link Diagnostic.Kind#NOTE} for each {@code @Collector} field
+     * whose type is a custom (non-java.util) container with no declared
+     * initializer. The builder has no way to construct a fresh instance of such
+     * a type, so those fields get a plain replace setter instead of the
+     * {@code @Collector} bulk API - the note tells the author how to enable it.
+     */
+    private void warnUnbuildableCustomCollectors(TypeElement target, List<FieldSpec> fields) {
+        for (FieldSpec f : fields) {
+            boolean noInit = f.sourceInitializer == null || f.sourceInitializer.isEmpty();
+            if (f.collector && f.isCustomContainer && noInit) {
+                messager.printMessage(Diagnostic.Kind.NOTE,
+                    "@ClassBuilder: @Collector on '" + f.name + "' has no field initializer to build "
+                        + "fresh instances of a custom collection type from - using a plain replace "
+                        + "setter. Give the field an initializer to enable the @Collector bulk API.",
+                    target);
+            }
+        }
+    }
+
     private static boolean hasExistingNested(JCClassDecl target, String nestedName) {
         for (var def : target.defs) {
             if (def instanceof JCClassDecl c && c.name.toString().equals(nestedName)) return true;
@@ -132,7 +154,10 @@ public final class BuilderMutator {
                 if (enc.getKind() != ElementKind.FIELD) continue;
                 if (enc.getModifiers().contains(Modifier.STATIC)) continue;
                 if (enc.getModifiers().contains(Modifier.TRANSIENT)) continue;
-                FieldSpec spec = FieldSpec.from((VariableElement) enc, lookup, null);
+                // Inherited fields use the plain classification (no Types walk):
+                // their initializers aren't accessible cross-class, so a custom
+                // container on a parent falls back to a plain setter here.
+                FieldSpec spec = FieldSpec.from((VariableElement) enc, lookup, null, null);
                 if (spec.ignored) continue;
                 ancestors.add(spec);
             }

@@ -77,16 +77,22 @@ final class SelfTypedSetters {
         } else if (field.isArray) {
             out.append(arrayVarargs(field));
         } else if ((field.isListLike || field.isMap) && field.collector) {
-            if (field.isMap) {
-                out.append(singularMapReplace(field));
-                if (field.singular) out.append(singularMapPut(field));
-                if (field.compute) out.append(singularMapPutIfAbsent(field));
+            if (field.isCustomContainer && !hasInit(field)) {
+                // Custom container with @Collector but no captured initializer -
+                // degrade to a plain replace setter (processor emits a NOTE).
+                out.append(plainSetter(field));
             } else {
-                out.append(singularCollectionVarargsReplace(field));
-                out.append(singularCollectionIterableReplace(field));
-                if (field.singular) out.append(singularCollectionAdd(field));
+                if (field.isMap) {
+                    out.append(singularMapReplace(field));
+                    if (field.singular) out.append(singularMapPut(field));
+                    if (field.compute) out.append(singularMapPutIfAbsent(field));
+                } else {
+                    out.append(singularCollectionVarargsReplace(field));
+                    out.append(singularCollectionIterableReplace(field));
+                    if (field.singular) out.append(singularCollectionAdd(field));
+                }
+                if (field.clearable) out.append(singularClear(field));
             }
-            if (field.clearable) out.append(singularClear(field));
         } else if (field.isString && field.formattable) {
             out.append(plainSetter(field));
             out.append(stringFormattable(field));
@@ -304,12 +310,9 @@ final class SelfTypedSetters {
             make.TypeArray(elemType),
             null
         );
-        String containerFqn = field.isSet ? "java.util.LinkedHashSet" : "java.util.ArrayList";
         JCStatement assignFresh = make.Exec(make.Assign(
             make.Select(make.Ident(names._this), names.fromString(field.name)),
-            make.NewClass(null, List.nil(),
-                make.TypeApply(types.qualIdent(containerFqn), List.nil()),
-                List.nil(), null)
+            freshContainer(field)
         ));
         JCEnhancedForLoop loop = make.ForeachLoop(
             make.VarDef(make.Modifiers(Flags.PARAMETER), names.fromString("e"), elemType, null),
@@ -335,13 +338,10 @@ final class SelfTypedSetters {
             List.of(elemType)
         );
         JCVariableDecl iterableParam = param(field.name, iterableType);
-        String containerFqn = field.isSet ? "java.util.LinkedHashSet" : "java.util.ArrayList";
 
         JCStatement assignFresh = make.Exec(make.Assign(
             make.Select(make.Ident(names._this), names.fromString(field.name)),
-            make.NewClass(null, List.nil(),
-                make.TypeApply(types.qualIdent(containerFqn), List.nil()),
-                List.nil(), null)
+            freshContainer(field)
         ));
         JCExpression methodRef = make.Reference(
             JCTree.JCMemberReference.ReferenceMode.INVOKE,
@@ -384,6 +384,22 @@ final class SelfTypedSetters {
             List.of(keyType, valueType)
         );
         JCVariableDecl mapParam = param(field.name, mapType);
+        if (field.isCustomContainer) {
+            // this.field = $default$field(); this.field.putAll(field);
+            JCStatement assignFresh = make.Exec(make.Assign(
+                make.Select(make.Ident(names._this), names.fromString(field.name)),
+                freshContainer(field)
+            ));
+            JCStatement putAll = make.Exec(make.Apply(
+                List.nil(),
+                make.Select(
+                    make.Select(make.Ident(names._this), names.fromString(field.name)),
+                    names.fromString("putAll")),
+                List.of(make.Ident(names.fromString(field.name)))
+            ));
+            return method(setterName, List.of(mapParam),
+                List.of(assignFresh, putAll, returnSelf()));
+        }
         JCStatement assignFresh = make.Exec(make.Assign(
             make.Select(make.Ident(names._this), names.fromString(field.name)),
             make.NewClass(null, List.nil(),
@@ -484,6 +500,38 @@ final class SelfTypedSetters {
 
     private JCVariableDecl param(String name, JCExpression type) {
         return make.VarDef(make.Modifiers(Flags.PARAMETER), names.fromString(name), type, null);
+    }
+
+    /** Whether the field's declared initializer was captured for reuse as a builder default. */
+    private static boolean hasInit(FieldSpec field) {
+        return field.sourceInitializer != null && !field.sourceInitializer.isEmpty();
+    }
+
+    /** Call to the target's synthesised {@code $default$<field>()} initializer provider. */
+    private JCExpression providerCall(FieldSpec field) {
+        return make.Apply(
+            List.nil(),
+            make.Select(
+                make.Ident(names.fromString(ctx.targetSimpleName())),
+                names.fromString(RetainedInitFactory.providerName(field.name))
+            ),
+            List.nil()
+        );
+    }
+
+    /**
+     * A fresh, empty container for a {@code @Collector} reset setter. A custom
+     * container comes from the field's own {@code $default$} provider (a
+     * {@code new ArrayList<>()} would not be assignable to the field type);
+     * java.util containers use the matching concrete implementation.
+     */
+    private JCExpression freshContainer(FieldSpec field) {
+        if (field.isCustomContainer) return providerCall(field);
+        String fqn = field.isMap ? "java.util.LinkedHashMap"
+            : field.isSet ? "java.util.LinkedHashSet"
+            : "java.util.ArrayList";
+        return make.NewClass(null, List.nil(),
+            make.TypeApply(types.qualIdent(fqn), List.nil()), List.nil(), null);
     }
 
     /** Parameter declaration carrying the supplied annotations. */

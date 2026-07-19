@@ -3,12 +3,16 @@ import dev.simplified.shared.apt.SourceIntrospector;
 import dev.simplified.shared.apt.AnnotationLookup;
 
 import javax.lang.model.element.AnnotationMirror;
+import javax.lang.model.element.Element;
 import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
+import javax.lang.model.util.Types;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -52,6 +56,11 @@ public final class FieldSpec {
     public final boolean isListLike;                // List, Set, or Collection
     public final boolean isSet;
     public final boolean isMap;
+    // Recognised as a collection/map by a supertype walk rather than an exact
+    // java.util.* match (e.g. dev.simplified.collection.ConcurrentList). The
+    // builder can't `new` such a type, so its fresh instances come from the
+    // field's own captured initializer instead of new ArrayList<>()/etc.
+    public final boolean isCustomContainer;
     public final String collectionElement;          // element type for list/set/array
     public final String mapKey, mapValue;
 
@@ -93,6 +102,7 @@ public final class FieldSpec {
         this.isListLike = b.isListLike;
         this.isSet = b.isSet;
         this.isMap = b.isMap;
+        this.isCustomContainer = b.isCustomContainer;
         this.collectionElement = b.collectionElement;
         this.mapKey = b.mapKey;
         this.mapValue = b.mapValue;
@@ -130,7 +140,7 @@ public final class FieldSpec {
      * so no {@link SourceIntrospector} is threaded through this path - only
      * {@code ignore} is honoured here.
      */
-    public static FieldSpec fromInterfaceAccessor(ExecutableElement method, AnnotationLookup lookup) {
+    public static FieldSpec fromInterfaceAccessor(ExecutableElement method, AnnotationLookup lookup, Types typeUtils) {
         Builder b = new Builder();
         b.element = null;
         b.name = method.getSimpleName().toString();
@@ -139,7 +149,7 @@ public final class FieldSpec {
 
         b.notNull = lookup.hasAnnotation(method, "org.jetbrains.annotations.NotNull");
         b.nullable = lookup.hasAnnotation(method, "org.jetbrains.annotations.Nullable");
-        classifyType(b);
+        classifyType(b, typeUtils);
 
         b.formattable = lookup.hasAnnotation(method, "dev.simplified.annotations.Formattable");
         b.negateName = lookup.stringAttr(method, "dev.simplified.annotations.Negate", "value", null);
@@ -159,7 +169,7 @@ public final class FieldSpec {
         return new FieldSpec(b);
     }
 
-    private static void classifyType(Builder b) {
+    private static void classifyType(Builder b, Types typeUtils) {
         TypeKind kind = b.type.getKind();
         b.isPrimitive = kind.isPrimitive();
         b.isBoolean = kind == TypeKind.BOOLEAN;
@@ -168,32 +178,98 @@ public final class FieldSpec {
         if (b.isArray) {
             ArrayType array = (ArrayType) b.type;
             b.collectionElement = array.getComponentType().toString();
-        } else if (kind == TypeKind.DECLARED) {
-            DeclaredType declared = (DeclaredType) b.type;
-            String raw = stripTypeArgs(declared.toString());
-            List<? extends TypeMirror> args = declared.getTypeArguments();
+            return;
+        }
+        if (kind != TypeKind.DECLARED) return;
 
-            if ("java.lang.String".equals(raw)) {
-                b.isString = true;
-            } else if (OPTIONAL_FQN.equals(raw)) {
-                b.isOptional = true;
-                b.optionalInner = args.isEmpty() ? "java.lang.Object" : args.get(0).toString();
-            } else if (LIST_TYPES.contains(raw)) {
-                b.isListLike = true;
-                b.collectionElement = args.isEmpty() ? "java.lang.Object" : args.get(0).toString();
-            } else if (SET_TYPES.contains(raw)) {
-                b.isListLike = true;
-                b.isSet = true;
-                b.collectionElement = args.isEmpty() ? "java.lang.Object" : args.get(0).toString();
-            } else if (MAP_TYPES.contains(raw)) {
-                b.isMap = true;
-                b.mapKey = args.isEmpty() ? "java.lang.Object" : args.get(0).toString();
-                b.mapValue = args.size() < 2 ? "java.lang.Object" : args.get(1).toString();
-            }
+        DeclaredType declared = (DeclaredType) b.type;
+        String raw = stripTypeArgs(declared.toString());
+        List<? extends TypeMirror> args = declared.getTypeArguments();
+
+        if ("java.lang.String".equals(raw)) {
+            b.isString = true;
+        } else if (OPTIONAL_FQN.equals(raw)) {
+            b.isOptional = true;
+            b.optionalInner = arg(args, 0);
+        } else if (LIST_TYPES.contains(raw)) {
+            b.isListLike = true;
+            b.collectionElement = arg(args, 0);
+        } else if (SET_TYPES.contains(raw)) {
+            b.isListLike = true;
+            b.isSet = true;
+            b.collectionElement = arg(args, 0);
+        } else if (MAP_TYPES.contains(raw)) {
+            b.isMap = true;
+            b.mapKey = arg(args, 0);
+            b.mapValue = arg(args, 1);
+        } else if (typeUtils != null) {
+            // Not a known java.util.* container - walk supertypes to recognise
+            // a project-specific Collection/Map subtype. Such a type can't be
+            // instantiated with new ArrayList<>()/etc, so it is flagged as a
+            // custom container and the mutators build fresh instances from the
+            // field's own initializer instead.
+            classifyCustomContainer(b, typeUtils, declared);
         }
     }
 
-    public static FieldSpec from(VariableElement element, AnnotationLookup lookup, SourceIntrospector introspector) {
+    /**
+     * Recognises {@code declared} as a collection/map when it is a subtype of
+     * {@code java.util.Map}, {@code Set}, or {@code Collection}, reading the
+     * element/key/value types off the matched java.util supertype (with type
+     * arguments substituted through the walk). Sets {@link Builder#isCustomContainer}.
+     */
+    private static void classifyCustomContainer(Builder b, Types typeUtils, DeclaredType declared) {
+        DeclaredType map = findSupertype(typeUtils, declared, "java.util.Map", new HashSet<>());
+        if (map != null) {
+            b.isMap = true;
+            b.isCustomContainer = true;
+            List<? extends TypeMirror> a = map.getTypeArguments();
+            b.mapKey = arg(a, 0);
+            b.mapValue = arg(a, 1);
+            return;
+        }
+        DeclaredType set = findSupertype(typeUtils, declared, "java.util.Set", new HashSet<>());
+        if (set != null) {
+            b.isListLike = true;
+            b.isSet = true;
+            b.isCustomContainer = true;
+            b.collectionElement = arg(set.getTypeArguments(), 0);
+            return;
+        }
+        DeclaredType coll = findSupertype(typeUtils, declared, "java.util.Collection", new HashSet<>());
+        if (coll != null) {
+            b.isListLike = true;
+            b.isCustomContainer = true;
+            b.collectionElement = arg(coll.getTypeArguments(), 0);
+        }
+    }
+
+    /**
+     * Depth-first search for the supertype of {@code type} whose erasure is
+     * {@code targetFqn}, returning it with type arguments substituted (so the
+     * element types read off it are the concrete ones). {@code seen} guards
+     * against re-walking a shared ancestor.
+     */
+    private static DeclaredType findSupertype(Types typeUtils, TypeMirror type, String targetFqn, Set<String> seen) {
+        if (!(type instanceof DeclaredType dt)) return null;
+        Element element = dt.asElement();
+        if (element instanceof TypeElement te) {
+            String qn = te.getQualifiedName().toString();
+            if (qn.equals(targetFqn)) return dt;
+            if (!seen.add(qn)) return null;
+        }
+        for (TypeMirror sup : typeUtils.directSupertypes(dt)) {
+            DeclaredType found = findSupertype(typeUtils, sup, targetFqn, seen);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    private static String arg(List<? extends TypeMirror> args, int index) {
+        return args.size() <= index ? "java.lang.Object" : args.get(index).toString();
+    }
+
+    public static FieldSpec from(VariableElement element, AnnotationLookup lookup, SourceIntrospector introspector, Types typeUtils) {
         Builder b = new Builder();
         b.element = element;
         b.name = element.getSimpleName().toString();
@@ -204,37 +280,7 @@ public final class FieldSpec {
         b.notNull = lookup.hasAnnotation(element, "org.jetbrains.annotations.NotNull");
         b.nullable = lookup.hasAnnotation(element, "org.jetbrains.annotations.Nullable");
 
-        TypeKind kind = b.type.getKind();
-        b.isPrimitive = kind.isPrimitive();
-        b.isBoolean = kind == TypeKind.BOOLEAN;
-        b.isArray = kind == TypeKind.ARRAY;
-
-        if (b.isArray) {
-            ArrayType array = (ArrayType) b.type;
-            b.collectionElement = array.getComponentType().toString();
-        } else if (kind == TypeKind.DECLARED) {
-            DeclaredType declared = (DeclaredType) b.type;
-            String raw = stripTypeArgs(declared.toString());
-            List<? extends TypeMirror> args = declared.getTypeArguments();
-
-            if ("java.lang.String".equals(raw)) {
-                b.isString = true;
-            } else if (OPTIONAL_FQN.equals(raw)) {
-                b.isOptional = true;
-                b.optionalInner = args.isEmpty() ? "java.lang.Object" : args.get(0).toString();
-            } else if (LIST_TYPES.contains(raw)) {
-                b.isListLike = true;
-                b.collectionElement = args.isEmpty() ? "java.lang.Object" : args.get(0).toString();
-            } else if (SET_TYPES.contains(raw)) {
-                b.isListLike = true;
-                b.isSet = true;
-                b.collectionElement = args.isEmpty() ? "java.lang.Object" : args.get(0).toString();
-            } else if (MAP_TYPES.contains(raw)) {
-                b.isMap = true;
-                b.mapKey = args.isEmpty() ? "java.lang.Object" : args.get(0).toString();
-                b.mapValue = args.size() < 2 ? "java.lang.Object" : args.get(1).toString();
-            }
-        }
+        classifyType(b, typeUtils);
 
         // Companion annotations
         b.formattable = lookup.hasAnnotation(element, "dev.simplified.annotations.Formattable");
@@ -256,14 +302,6 @@ public final class FieldSpec {
         if (rule != null) {
             b.ignored = lookup.booleanAttr(rule, "ignore", false);
             b.builderDefault = lookup.booleanAttr(rule, "retainInit", false);
-            if (b.builderDefault && introspector != null) {
-                SourceIntrospector.InitializerInfo info = introspector.readFieldInitializer(element);
-                if (info != null) {
-                    b.sourceInitializer = info.text();
-                    b.initializerImports = new LinkedHashSet<>(info.typeImports());
-                    b.sourceInitializerTree = info.tree();
-                }
-            }
             AnnotationMirror via = lookup.nestedAnnotationValue(rule, "obtainVia");
             if (via != null) {
                 String m = lookup.stringAttr(via, "method", "");
@@ -271,6 +309,21 @@ public final class FieldSpec {
                 b.obtainViaMethod = m.isEmpty() ? null : m;
                 b.obtainViaField = f.isEmpty() ? null : f;
                 b.obtainViaStatic = lookup.booleanAttr(via, "isStatic", false);
+            }
+        }
+
+        // Capture the field's declared initializer when it is needed as a
+        // builder default - either explicitly via @BuildRule(retainInit), or
+        // implicitly because a @Collector on a custom (non-java.util)
+        // container has no `new ArrayList<>()`-style fallback and must build
+        // fresh instances from the field's own factory.
+        boolean needsInitializer = b.builderDefault || (b.collector && b.isCustomContainer);
+        if (needsInitializer && introspector != null) {
+            SourceIntrospector.InitializerInfo info = introspector.readFieldInitializer(element);
+            if (info != null) {
+                b.sourceInitializer = info.text();
+                b.initializerImports = new LinkedHashSet<>(info.typeImports());
+                b.sourceInitializerTree = info.tree();
             }
         }
 
@@ -298,7 +351,7 @@ public final class FieldSpec {
         boolean isBoolean, isString, isPrimitive, isArray;
         boolean isOptional;
         String optionalInner;
-        boolean isListLike, isSet, isMap;
+        boolean isListLike, isSet, isMap, isCustomContainer;
         String collectionElement, mapKey, mapValue;
         boolean formattable;
         String negateName;

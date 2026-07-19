@@ -232,6 +232,11 @@ final class BootstrapMethodFactory {
     }
 
     private JCExpression wrapDefensiveCopy(FieldSpec f, JCExpression raw) {
+        // A custom container can't be rebuilt with new java.util.ArrayList<>(...)
+        // - that is not assignable to the field's own type. Seed the builder
+        // with the source reference directly (no defensive copy); the collector
+        // setter, if any, copies on write.
+        if (f.isCustomContainer) return raw;
         if (f.isMap) return newCollectionCopy("java.util.LinkedHashMap", raw);
         if (f.isSet) return newCollectionCopy("java.util.LinkedHashSet", raw);
         if (f.isListLike) return newCollectionCopy("java.util.ArrayList", raw);

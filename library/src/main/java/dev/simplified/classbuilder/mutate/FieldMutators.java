@@ -85,17 +85,24 @@ final class FieldMutators {
         } else if (field.isArray) {
             out.append(arrayVarargs(field));
         } else if ((field.isListLike || field.isMap) && field.collector) {
-            // @Collector: bulk overloads always; add/put/clear/compute opt-in.
-            if (field.isMap) {
-                out.append(singularMapReplace(field));
-                if (field.singular) out.append(singularMapPut(field));
-                if (field.compute) out.append(singularMapPutIfAbsent(field));
+            if (field.isCustomContainer && !hasInit(field)) {
+                // Custom container with @Collector but no captured initializer
+                // to build fresh instances from - degrade to a plain replace
+                // setter (the processor emits a NOTE explaining how to enable it).
+                out.append(plainSetter(field));
             } else {
-                out.append(singularCollectionVarargsReplace(field));
-                out.append(singularCollectionIterableReplace(field));
-                if (field.singular) out.append(singularCollectionAdd(field));
+                // @Collector: bulk overloads always; add/put/clear/compute opt-in.
+                if (field.isMap) {
+                    out.append(singularMapReplace(field));
+                    if (field.singular) out.append(singularMapPut(field));
+                    if (field.compute) out.append(singularMapPutIfAbsent(field));
+                } else {
+                    out.append(singularCollectionVarargsReplace(field));
+                    out.append(singularCollectionIterableReplace(field));
+                    if (field.singular) out.append(singularCollectionAdd(field));
+                }
+                if (field.clearable) out.append(singularClear(field));
             }
-            if (field.clearable) out.append(singularClear(field));
         } else if (field.isString && field.formattable) {
             out.append(plainSetter(field));
             out.append(stringFormattable(field));
@@ -128,24 +135,19 @@ final class FieldMutators {
     }
 
     private JCExpression defaultInitializer(FieldSpec field) {
-        // @BuildRule(retainInit = true): the Builder's field default is a
-        // call to the synthesised Target.$default$<fieldName>() static method.
-        // That method (injected by RetainedInitFactory) contains the original
-        // declared initializer expression inside a normal method body, so
-        // javac's flow analyser handles it correctly. Embedding the expression
-        // directly in this field init was attempted and causes position-
-        // bookkeeping crashes in Flow$AssignAnalyzer.
-        if (field.builderDefault && field.sourceInitializer != null
-                && !field.sourceInitializer.isEmpty()) {
-            return make.Apply(
-                List.nil(),
-                make.Select(
-                    make.Ident(names.fromString(ctx.targetSimpleName())),
-                    names.fromString(RetainedInitFactory.providerName(field.name))
-                ),
-                List.nil()
-            );
-        }
+        // A captured field initializer (from @BuildRule(retainInit) or an
+        // auto-captured @Collector on a custom container) becomes a call to the
+        // synthesised Target.$default$<fieldName>() static method. That method
+        // (injected by RetainedInitFactory) contains the original declared
+        // initializer expression inside a normal method body, so javac's flow
+        // analyser handles it correctly. Embedding the expression directly in
+        // this field init was attempted and causes position-bookkeeping crashes
+        // in Flow$AssignAnalyzer.
+        if (hasInit(field)) return providerCall(field);
+        // A custom container has no new ArrayList<>()-style default that is
+        // assignable to its own type; without a captured initializer the
+        // builder slot stays null and a plain replace setter fills it.
+        if (field.isCustomContainer) return null;
         if (field.isOptional) {
             return make.Apply(
                 List.nil(),
@@ -163,6 +165,38 @@ final class FieldMutators {
             make.TypeApply(types.qualIdent("java.util.ArrayList"), List.nil()),
             List.nil(), null);
         return null;
+    }
+
+    /** Whether the field's declared initializer was captured for reuse as a builder default. */
+    private static boolean hasInit(FieldSpec field) {
+        return field.sourceInitializer != null && !field.sourceInitializer.isEmpty();
+    }
+
+    /** Call to the target's synthesised {@code $default$<field>()} initializer provider. */
+    private JCExpression providerCall(FieldSpec field) {
+        return make.Apply(
+            List.nil(),
+            make.Select(
+                make.Ident(names.fromString(ctx.targetSimpleName())),
+                names.fromString(RetainedInitFactory.providerName(field.name))
+            ),
+            List.nil()
+        );
+    }
+
+    /**
+     * A fresh, empty container for a {@code @Collector} reset setter. A custom
+     * container comes from the field's own {@code $default$} provider, because
+     * {@code new ArrayList<>()} (etc.) is not assignable to the field's own
+     * type; java.util containers use the matching concrete implementation.
+     */
+    private JCExpression freshContainer(FieldSpec field) {
+        if (field.isCustomContainer) return providerCall(field);
+        String fqn = field.isMap ? "java.util.LinkedHashMap"
+            : field.isSet ? "java.util.LinkedHashSet"
+            : "java.util.ArrayList";
+        return make.NewClass(null, List.nil(),
+            make.TypeApply(types.qualIdent(fqn), List.nil()), List.nil(), null);
     }
 
     // ------------------------------------------------------------------
@@ -386,13 +420,10 @@ final class FieldMutators {
             make.TypeArray(elemType),
             null
         );
-        // this.field = new <Container>();
-        String containerFqn = field.isSet ? "java.util.LinkedHashSet" : "java.util.ArrayList";
+        // this.field = <fresh empty container>;
         JCStatement assignFresh = make.Exec(make.Assign(
             make.Select(make.Ident(names._this), names.fromString(field.name)),
-            make.NewClass(null, List.nil(),
-                make.TypeApply(types.qualIdent(containerFqn), List.nil()),
-                List.nil(), null)
+            freshContainer(field)
         ));
         // for (T e : field) this.field.add(e);
         JCEnhancedForLoop loop = make.ForeachLoop(
@@ -422,13 +453,10 @@ final class FieldMutators {
             List.of(elemType)
         );
         JCVariableDecl iterableParam = param(field.name, iterableType);
-        String containerFqn = field.isSet ? "java.util.LinkedHashSet" : "java.util.ArrayList";
 
         JCStatement assignFresh = make.Exec(make.Assign(
             make.Select(make.Ident(names._this), names.fromString(field.name)),
-            make.NewClass(null, List.nil(),
-                make.TypeApply(types.qualIdent(containerFqn), List.nil()),
-                List.nil(), null)
+            freshContainer(field)
         ));
         // entries.forEach(this.field::add)
         JCExpression methodRef = make.Reference(
@@ -473,6 +501,22 @@ final class FieldMutators {
             List.of(keyType, valueType)
         );
         JCVariableDecl mapParam = param(field.name, mapType);
+        if (field.isCustomContainer) {
+            // this.field = $default$field(); this.field.putAll(field);
+            JCStatement assignFresh = make.Exec(make.Assign(
+                make.Select(make.Ident(names._this), names.fromString(field.name)),
+                freshContainer(field)
+            ));
+            JCStatement putAll = make.Exec(make.Apply(
+                List.nil(),
+                make.Select(
+                    make.Select(make.Ident(names._this), names.fromString(field.name)),
+                    names.fromString("putAll")),
+                List.of(make.Ident(names.fromString(field.name)))
+            ));
+            return methodDefRaw(setterName, List.of(mapParam),
+                List.of(assignFresh, putAll, returnThis()));
+        }
         JCStatement assignFresh = make.Exec(make.Assign(
             make.Select(make.Ident(names._this), names.fromString(field.name)),
             make.NewClass(null, List.nil(),
