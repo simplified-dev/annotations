@@ -109,7 +109,7 @@ final class RetainedInitFactory {
             // Stripping the initializer to a blank final makes the constructor
             // assignment the sole definite assignment. Non-final fields keep
             // their (dead but legal) initializer, matching prior behaviour.
-            if (f.isFinal) stripToBlankFinal(target, f.name);
+            stripToBlankFinal(target, f.name);
         }
     }
 
@@ -126,6 +126,11 @@ final class RetainedInitFactory {
         for (JCTree def : target.defs) {
             if (!(def instanceof JCVariableDecl decl)) continue;
             if (!decl.name.toString().equals(fieldName)) continue;
+            // Read finality off the tree rather than FieldSpec.isFinal: @Lazy
+            // adds Flags.FINAL during its own earlier pass, so the FieldSpec
+            // snapshot under-reports it and a @Lazy field would keep both its
+            // initializer and the constructor's assignment.
+            if ((decl.mods.flags & Flags.FINAL) == 0) return;
             if (decl.init == null) return; // already blank (re-run idempotency)
             decl.init = null;
             if (decl.sym != null) decl.sym.flags_field &= ~Flags.HASINIT;

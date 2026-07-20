@@ -22,6 +22,7 @@ import java.util.function.Supplier;
 
 import static com.google.testing.compile.CompilationSubject.assertThat;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -65,6 +66,73 @@ public class LazyFieldMutatorTest {
         fail("expected nested class '" + simpleName + "' on " + outer + "; found "
             + Arrays.toString(outer.getDeclaredClasses()));
         return null;
+    }
+
+    // ------------------------------------------------------------------
+    // @Lazy + @BuilderIgnore on a @ClassBuilder target
+    // ------------------------------------------------------------------
+
+    /**
+     * Control for the case below: on a {@code @ClassBuilder} target, a plain
+     * {@code @Lazy} field does get its memoizing getter synthesised.
+     */
+    @Test
+    public void lazyOnBuilderTarget_synthesisesGetter() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Kept",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Lazy;",
+            "@ClassBuilder(validate = false)",
+            "public class Kept {",
+            "    @Lazy String value = \"v\";",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        Class<?> target = Class.forName("demo.Kept", true, loadClasses(c));
+        assertTrue("@Lazy must synthesise getValue()", hasMethod(target, "getValue"));
+    }
+
+    /**
+     * {@code @BuilderIgnore} drops the field from the list {@code collectFields}
+     * hands to {@link LazyFieldMutator}, and a {@code @ClassBuilder} target is
+     * excluded from the standalone {@code @Lazy} pass - so the field gets no
+     * storage rewrite and no getter, and {@code @Lazy} is silently inert.
+     *
+     * <p>This is why {@code LazyFieldInspection} reports the combination. If
+     * the processor is ever changed to run the lazy pass over ignored fields
+     * too, this test fails and that inspection should be relaxed with it.
+     */
+    @Test
+    public void lazyPlusBuilderIgnore_silentlySkipsLazyProcessing() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Dropped",
+            "package demo;",
+            "import dev.simplified.annotations.BuilderIgnore;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Lazy;",
+            "@ClassBuilder(validate = false)",
+            "public class Dropped {",
+            "    String kept = \"k\";",
+            "    @Lazy @BuilderIgnore String value = \"v\";",
+            "    public String getKept() { return kept; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        Class<?> target = Class.forName("demo.Dropped", true, loadClasses(c));
+        assertFalse("@Lazy is dropped entirely when the field is @BuilderIgnore'd",
+            hasMethod(target, "getValue"));
+
+        Field value = target.getDeclaredField("value");
+        assertEquals("storage type is left as the raw declared type, not Lazy<T>",
+            "java.lang.String", value.getType().getName());
+    }
+
+    private static boolean hasMethod(Class<?> type, String name) {
+        for (Method m : type.getDeclaredMethods()) {
+            if (m.getName().equals(name)) return true;
+        }
+        return false;
     }
 
     // ------------------------------------------------------------------
