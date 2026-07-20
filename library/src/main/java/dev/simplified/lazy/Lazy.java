@@ -3,6 +3,7 @@ package dev.simplified.lazy;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.Objects;
 import java.util.function.Supplier;
 
 /**
@@ -54,7 +55,29 @@ public final class Lazy<T> implements Supplier<T> {
      * @return a new lazy holder wrapping {@code initializer}
      */
     public static <T> @NotNull Lazy<T> of(@NotNull Supplier<T> initializer) {
-        return new Lazy<>(initializer);
+        return new Lazy<>(Objects.requireNonNull(initializer,
+            "@Lazy field has no supplier - the builder setter was never called and the field declares no initializer"));
+    }
+
+    /**
+     * Field-attributed variant used by generated constructors. A {@code @Lazy}
+     * field defers a computation that is expected to exist, so arriving here
+     * with no supplier means the builder setter was never called on a field
+     * that also declares no initializer. Failing here surfaces that at
+     * {@code build()} rather than at some later, unrelated {@code get()}.
+     *
+     * @param <T> the deferred value type
+     * @param initializer the supplier whose result will be memoized
+     * @param owner fully-qualified name of the class declaring the field
+     * @param field the field's name, used to name the builder setter to call
+     * @return a new lazy holder wrapping {@code initializer}
+     */
+    public static <T> @NotNull Lazy<T> of(@NotNull Supplier<T> initializer,
+                                          @NotNull String owner,
+                                          @NotNull String field) {
+        return new Lazy<>(Objects.requireNonNull(initializer,
+            "@Lazy field '" + field + "' on " + owner + " has no supplier - call the builder's "
+                + field + "(..) setter or give the field an initializer"));
     }
 
     /**

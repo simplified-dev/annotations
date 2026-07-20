@@ -199,8 +199,10 @@ public class ClassBuilderProcessor extends AbstractProcessor {
      */
     private List<FieldSpec> collectAllFields(TypeElement target) {
         List<FieldSpec> out = new ArrayList<>();
+        Messager messager = processingEnv.getMessager();
         for (Element enclosed : target.getEnclosedElements()) {
             if (enclosed.getKind() != ElementKind.FIELD) continue;
+            rejectUnsupportedLazyCompanions((VariableElement) enclosed, messager);
             // Standalone @Lazy path - no @ClassBuilder, so no retainInit policy.
             out.add(FieldSpec.from((VariableElement) enclosed, lookup, introspector,
                 processingEnv.getTypeUtils(), false));
@@ -291,10 +293,50 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         );
     }
 
+    /**
+     * Companion annotations {@code @Lazy} documents as unsupported. Each assumes
+     * direct {@code T} storage, which {@code @Lazy} replaces with
+     * {@code Lazy<T>}, so the pairing is not merely redundant - it misbehaves
+     * silently. {@code @BuildFlag} degrades to a no-op because the validator
+     * sees the non-null wrapper rather than the value, and {@code @BuilderIgnore}
+     * drops the field before the lazy pass ever runs.
+     */
+    private static final String[][] LAZY_INCOMPATIBLE = {
+        {"dev.simplified.annotations.Collector", "Collector"},
+        {"dev.simplified.annotations.Negate", "Negate"},
+        {"dev.simplified.annotations.Formattable", "Formattable"},
+        {"dev.simplified.annotations.BuilderDefault", "BuilderDefault"},
+        {"dev.simplified.annotations.BuilderIgnore", "BuilderIgnore"},
+        {"dev.simplified.annotations.BuildFlag", "BuildFlag"},
+        {"dev.simplified.annotations.ObtainVia", "ObtainVia"},
+    };
+
+    /**
+     * Rejects {@code @Lazy} combined with a companion the annotation documents
+     * as unsupported. Runs before any builder-targeted filtering so an ignored
+     * field is still reported rather than silently dropped.
+     *
+     * @param field the field to check
+     * @param messager sink for the diagnostic
+     */
+    private void rejectUnsupportedLazyCompanions(VariableElement field, Messager messager) {
+        if (!lookup.hasAnnotation(field, LAZY_FQN)) return;
+        for (String[] companion : LAZY_INCOMPATIBLE) {
+            if (!lookup.hasAnnotation(field, companion[0])) continue;
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@Lazy cannot be combined with @" + companion[1]
+                    + " - the companion assumes direct field storage, which @Lazy replaces with Lazy<T>",
+                field
+            );
+        }
+    }
+
     private List<FieldSpec> collectFields(TypeElement target, BuilderConfig config) {
         List<FieldSpec> out = new ArrayList<>();
+        Messager messager = processingEnv.getMessager();
         for (Element enclosed : target.getEnclosedElements()) {
             if (enclosed.getKind() != ElementKind.FIELD) continue;
+            rejectUnsupportedLazyCompanions((VariableElement) enclosed, messager);
             if (enclosed.getModifiers().contains(Modifier.STATIC)) continue;
             if (enclosed.getModifiers().contains(Modifier.TRANSIENT)) continue;
             String name = enclosed.getSimpleName().toString();

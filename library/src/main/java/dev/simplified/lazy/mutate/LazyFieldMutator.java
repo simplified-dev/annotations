@@ -399,12 +399,29 @@ public final class LazyFieldMutator {
     }
 
     /** {@code Lazy.of(<paramName>)} - passes an existing Supplier through. */
+    /**
+     * {@code Lazy.of(param, owner, field)} for a constructor assignment whose
+     * parameter is a {@code Supplier}. Uses the field-attributed overload
+     * because this is the one path where a null supplier can arrive - the
+     * builder slot was never filled - and the resulting failure should name the
+     * field at {@code build()} instead of surfacing as a bare NPE at first
+     * {@code get()}.
+     */
     private JCExpression lazyOfIdent(String paramName) {
         return make.Apply(
             List.nil(),
             make.Select(types.qualIdent(LAZY_FQN), names.fromString("of")),
-            List.of(make.Ident(names.fromString(paramName)))
+            List.of(
+                make.Ident(names.fromString(paramName)),
+                make.Literal(ownerQualifiedName()),
+                make.Literal(paramName)
+            )
         );
+    }
+
+    /** Fully-qualified name of the class declaring the field, for error messages. */
+    private String ownerQualifiedName() {
+        return targetElement.getQualifiedName().toString();
     }
 
     private boolean hasLazyAnnotation(FieldSpec f) {

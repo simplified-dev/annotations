@@ -94,17 +94,13 @@ public class LazyFieldMutatorTest {
     }
 
     /**
-     * {@code @BuilderIgnore} drops the field from the list {@code collectFields}
-     * hands to {@link LazyFieldMutator}, and a {@code @ClassBuilder} target is
-     * excluded from the standalone {@code @Lazy} pass - so the field gets no
-     * storage rewrite and no getter, and {@code @Lazy} is silently inert.
-     *
-     * <p>This is why {@code LazyFieldInspection} reports the combination. If
-     * the processor is ever changed to run the lazy pass over ignored fields
-     * too, this test fails and that inspection should be relaxed with it.
+     * {@code @Lazy} documents the field-only companions as unsupported, and the
+     * processor now enforces that. {@code @BuilderIgnore} in particular used to
+     * compile and then silently do nothing: the field was filtered out before
+     * the lazy pass ran, so it got no storage rewrite and no getter.
      */
     @Test
-    public void lazyPlusBuilderIgnore_silentlySkipsLazyProcessing() throws Exception {
+    public void lazyPlusBuilderIgnore_isRejected() {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.Dropped",
             "package demo;",
             "import dev.simplified.annotations.BuilderIgnore;",
@@ -112,20 +108,27 @@ public class LazyFieldMutatorTest {
             "import dev.simplified.annotations.Lazy;",
             "@ClassBuilder(validate = false)",
             "public class Dropped {",
-            "    String kept = \"k\";",
             "    @Lazy @BuilderIgnore String value = \"v\";",
-            "    public String getKept() { return kept; }",
             "}");
         Compilation c = compile(src);
-        assertThat(c).succeeded();
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@Lazy cannot be combined with @BuilderIgnore");
+    }
 
-        Class<?> target = Class.forName("demo.Dropped", true, loadClasses(c));
-        assertFalse("@Lazy is dropped entirely when the field is @BuilderIgnore'd",
-            hasMethod(target, "getValue"));
-
-        Field value = target.getDeclaredField("value");
-        assertEquals("storage type is left as the raw declared type, not Lazy<T>",
-            "java.lang.String", value.getType().getName());
+    @Test
+    public void lazyPlusBuildFlag_isRejected() {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Flagged",
+            "package demo;",
+            "import dev.simplified.annotations.BuildFlag;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Lazy;",
+            "@ClassBuilder",
+            "public class Flagged {",
+            "    @Lazy @BuildFlag(nonNull = true) String value = \"v\";",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@Lazy cannot be combined with @BuildFlag");
     }
 
     private static boolean hasMethod(Class<?> type, String name) {
@@ -262,14 +265,8 @@ public class LazyFieldMutatorTest {
         assertEquals("fromSetter", target.getMethod("getValue").invoke(built));
     }
 
-    /**
-     * {@code @Lazy} makes the field final, so opting out of retention has to
-     * lift it to a blank final all the same - otherwise the initializer and the
-     * constructor's assignment collide. The @Lazy flavour of the same defect
-     * covered in RetainInitPolicyTest.
-     */
     @Test
-    public void classBuilderLazy_builderDefaultFalse_stillCompiles() throws Exception {
+    public void lazyPlusBuilderDefault_isRejected() {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.LazyOptOut",
             "package demo;",
             "import dev.simplified.annotations.BuilderDefault;",
@@ -280,7 +277,44 @@ public class LazyFieldMutatorTest {
             "    @Lazy @BuilderDefault(false) String value = \"declared\";",
             "}");
         Compilation c = compile(src);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@Lazy cannot be combined with @BuilderDefault");
+    }
+
+    /**
+     * A {@code @Lazy} field defers a computation that is expected to exist, so
+     * never supplying one is a mistake rather than an empty-but-valid field.
+     * The failure must land at {@code build()}, naming the field, instead of
+     * surfacing later as a bare NPE inside the getter.
+     */
+    @Test
+    public void missingSupplier_failsAtBuildNamingTheField() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Unset",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Lazy;",
+            "@ClassBuilder(validate = false)",
+            "public class Unset {",
+            "    @Lazy String token;",
+            "}");
+        Compilation c = compile(src);
         assertThat(c).succeeded();
+
+        Class<?> target = Class.forName("demo.Unset", true, loadClasses(c));
+        Object builder = target.getMethod("builder").invoke(null);
+        try {
+            builder.getClass().getMethod("build").invoke(builder);
+            fail("build() must reject a @Lazy field that was never supplied");
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            Throwable cause = e.getCause();
+            assertTrue("expected an NPE from the Lazy null check, got " + cause,
+                cause instanceof NullPointerException);
+            String message = cause.getMessage();
+            assertTrue("message must name the field, was: " + message,
+                message != null && message.contains("'token'"));
+            assertTrue("message must name the declaring class, was: " + message,
+                message.contains("demo.Unset"));
+        }
     }
 
     /** builder().build() with no setter calls, so every value is a default. */

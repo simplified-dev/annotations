@@ -97,12 +97,18 @@ final class CopyConstructorFactory {
             // Builder slot is Supplier<T>; target field is Lazy<T>. Wrap the
             // supplier as Lazy.of(...) at copy time so the target stores a
             // Lazy and the supplier's call is deferred to the first getter
-            // invocation.
+            // invocation. The field-attributed overload names the field if the
+            // slot was never filled, rather than letting a null supplier reach
+            // the first get().
             rhs = make.Apply(
                 List.nil(),
                 make.Select(ctx.types().qualIdent("dev.simplified.lazy.Lazy"),
                     names.fromString("of")),
-                List.of(rhs)
+                List.of(
+                    rhs,
+                    make.Literal(ctx.targetElement().getQualifiedName().toString()),
+                    make.Literal(f.name)
+                )
             );
         }
         return make.Exec(make.Assign(lhs, rhs));

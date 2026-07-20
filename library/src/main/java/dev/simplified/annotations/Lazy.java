@@ -53,10 +53,16 @@ import java.lang.annotation.Target;
  *       with the field-only companion annotations
  *       ({@link Collector}, {@link Negate}, {@link Formattable},
  *       {@link BuilderDefault}, {@link BuilderIgnore}, {@link BuildFlag},
- *       {@link ObtainVia}).</li>
+ *       {@link ObtainVia}). Each assumes direct {@code T} storage, so the
+ *       processor rejects the pairing rather than letting it misbehave.</li>
  *   <li>Standalone use (no {@code @ClassBuilder} on the enclosing class)
  *       requires a field initializer; the initializer becomes the supplier
  *       body.</li>
+ *   <li>With {@code @ClassBuilder} the builder supplies the value, so a field
+ *       with no initializer must have its setter called. A deferred
+ *       computation is expected to exist - building without supplying one
+ *       fails at {@code build()} naming the field, rather than surfacing later
+ *       as a {@link NullPointerException} inside the getter.</li>
  * </ul>
  *
  * @see dev.simplified.lazy.Lazy
