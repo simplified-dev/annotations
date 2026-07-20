@@ -125,13 +125,29 @@ final class FieldMutators {
             ? make.TypeApply(types.qualIdent("java.util.function.Supplier"),
                 List.of(types.parseType(field.typeDisplay)))
             : types.parseType(field.typeDisplay);
-        JCExpression init = field.lazy ? null : defaultInitializer(field);
+        JCExpression init = field.lazy ? lazyDefaultInitializer(field) : defaultInitializer(field);
         return make.VarDef(
             make.Modifiers(Flags.PRIVATE),
             names.fromString(field.name),
             fieldType,
             init
         );
+    }
+
+    /**
+     * Builder-slot default for a {@code @Lazy} field. The slot is typed
+     * {@code Supplier<T>} while the provider returns {@code T}, so the call is
+     * wrapped in a lambda rather than used directly. That also keeps both
+     * properties the two features promise separately: evaluation stays deferred
+     * to the first {@code get()}, and each builder holds its own lambda so the
+     * default is still computed fresh per {@code build()}.
+     *
+     * <p>Only a captured initializer produces a default; a {@code @Lazy} field
+     * without one leaves the slot null, and the setter must fill it.
+     */
+    private JCExpression lazyDefaultInitializer(FieldSpec field) {
+        if (!hasInit(field)) return null;
+        return make.Lambda(List.nil(), providerCall(field));
     }
 
     private JCExpression defaultInitializer(FieldSpec field) {

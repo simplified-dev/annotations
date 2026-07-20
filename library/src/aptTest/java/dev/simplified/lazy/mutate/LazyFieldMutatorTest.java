@@ -187,6 +187,88 @@ public class LazyFieldMutatorTest {
     }
 
     // ------------------------------------------------------------------
+    // @ClassBuilder + @Lazy + a retained initializer
+    // ------------------------------------------------------------------
+
+    /**
+     * A {@code @Lazy} field's declared initializer must reach the builder as a
+     * default like any other field's. The builder slot is {@code Supplier<T>}
+     * while {@code $default$<name>()} returns {@code T}, so the slot default is
+     * a lambda wrapping the provider call - which has to preserve both
+     * deferral (still lazy) and per-builder freshness (still a new value each
+     * build).
+     *
+     * <p>Before this was wired up the slot had no default at all: building
+     * without touching the setter left a null supplier and the NPE surfaced
+     * later, at the first getter call rather than at {@code build()}.
+     */
+    @Test
+    public void classBuilderLazy_retainedInitializerBecomesBuilderDefault() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Defaulted",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Lazy;",
+            "@ClassBuilder(validate = false)",
+            "public class Defaulted {",
+            "    @Lazy String value = Ticker.next();",
+            "}");
+        JavaFileObject ticker = JavaFileObjects.forSourceLines("demo.Ticker",
+            "package demo;",
+            "public class Ticker {",
+            "    public static int calls = 0;",
+            "    public static String next() { calls++; return \"v\" + calls; }",
+            "}");
+        Compilation c = compile(src, ticker);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> target = Class.forName("demo.Defaulted", true, cl);
+        Class<?> tickerCls = Class.forName("demo.Ticker", true, cl);
+        Field calls = tickerCls.getField("calls");
+
+        Object first = build(target);
+        assertEquals("building must not evaluate the lazy default", 0, calls.getInt(null));
+
+        assertEquals("v1", target.getMethod("getValue").invoke(first));
+        assertEquals("default evaluates once, on first get()", 1, calls.getInt(null));
+        target.getMethod("getValue").invoke(first);
+        assertEquals("and is memoized thereafter", 1, calls.getInt(null));
+
+        // Fresh per build: the second instance gets its own lambda, so it runs
+        // the initializer again rather than sharing the first value.
+        Object second = build(target);
+        assertEquals("v2", target.getMethod("getValue").invoke(second));
+    }
+
+    /** An explicit setter still wins over the retained default. */
+    @Test
+    public void classBuilderLazy_setterOverridesRetainedDefault() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Overridden",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Lazy;",
+            "@ClassBuilder(validate = false)",
+            "public class Overridden {",
+            "    @Lazy String value = \"fromInit\";",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        Class<?> target = Class.forName("demo.Overridden", true, loadClasses(c));
+        Class<?> builderCls = nested(target, "Builder");
+        Object b = target.getMethod("builder").invoke(null);
+        builderCls.getMethod("value", String.class).invoke(b, "fromSetter");
+        Object built = builderCls.getMethod("build").invoke(b);
+        assertEquals("fromSetter", target.getMethod("getValue").invoke(built));
+    }
+
+    /** builder().build() with no setter calls, so every value is a default. */
+    private static Object build(Class<?> target) throws Exception {
+        Object b = target.getMethod("builder").invoke(null);
+        return b.getClass().getMethod("build").invoke(b);
+    }
+
+    // ------------------------------------------------------------------
     // @ClassBuilder + @Lazy: dual setter shape, eager + supplier flow
     // ------------------------------------------------------------------
 
