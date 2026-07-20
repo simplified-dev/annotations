@@ -60,6 +60,8 @@ public final class BuilderMutator {
         boolean isAbstract = targetElement.getModifiers().contains(Modifier.ABSTRACT);
         String annotatedSuper = findAnnotatedDirectSuperSimpleName(targetElement);
 
+        if (!rejectUnsupportedInstanceDefaults(ctx, fields, isAbstract, annotatedSuper)) return true;
+
         // The build() we emit calls new Target(f1, f2, ...) positionally, and a
         // plain class that declares no constructor gets only javac's no-arg
         // default - so synthesise the matching all-args form. Injected ahead of
@@ -106,6 +108,50 @@ public final class BuilderMutator {
 
         new BootstrapMethodFactory(ctx, messager).appendAll();
         return true;
+    }
+
+    /**
+     * Reports fields whose initializer reads instance state but whose shape the
+     * constructor-computed path cannot carry, and SuperBuilder targets, where
+     * the path is not implemented. Reporting here - before anything is emitted -
+     * means the author sees one clear message against their own field instead
+     * of javac's "non-static ... static context" pointing into a generated
+     * provider they never wrote.
+     *
+     * @param ctx the per-target mutation context
+     * @param fields the builder-visible fields
+     * @param isAbstract whether the target is abstract
+     * @param annotatedSuper simple name of an annotated direct super, or {@code null}
+     * @return whether mutation should continue
+     */
+    private boolean rejectUnsupportedInstanceDefaults(MutationContext ctx,
+                                                      List<FieldSpec> fields,
+                                                      boolean isAbstract,
+                                                      String annotatedSuper) {
+        if (ctx.instanceDefaults().isEmpty()) return true;
+        boolean superBuilder = isAbstract || annotatedSuper != null;
+        boolean ok = true;
+        for (FieldSpec f : fields) {
+            if (!ctx.isInstanceDefault(f.name)) continue;
+            if (superBuilder) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "field '" + f.name + "' has an initializer that reads instance state, which is not "
+                        + "supported on a SuperBuilder target - set @BuilderDefault(false) on the field "
+                        + "or retainInit = false on the class",
+                    f.element
+                );
+                ok = false;
+            } else if (!MutationContext.supportsInstanceDefault(f)) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "field '" + f.name + "' has an initializer that reads instance state, which this "
+                        + "field's shape cannot carry as a builder default - set @BuilderDefault(false) "
+                        + "on the field or retainInit = false on the class",
+                    f.element
+                );
+                ok = false;
+            }
+        }
+        return ok;
     }
 
     /**

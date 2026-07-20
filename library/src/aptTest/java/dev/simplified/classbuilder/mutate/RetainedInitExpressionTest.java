@@ -21,6 +21,7 @@ import java.util.function.Supplier;
 
 import static com.google.testing.compile.CompilationSubject.assertThat;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 
 /**
  * Expression shapes a retained field initializer has to survive. The initializer
@@ -189,30 +190,95 @@ public class RetainedInitExpressionTest {
     // ------------------------------------------------------------------
 
     /**
-     * {@code $default$<field>()} is static, so an initializer reading instance
-     * state cannot be retained. javac reports it against the generated provider
-     * with a clear message rather than failing obscurely - but the restriction
-     * is real and {@code @ClassBuilder} documents it.
+     * An initializer reading instance state cannot be hoisted into the static
+     * provider evaluated at {@code builder()}, because no target exists then.
+     * Such a field takes the constructor-computed path instead, where
+     * {@code this} is available - so it behaves as an ordinary field
+     * initializer would.
      */
     @Test
-    public void initializerReadingInstanceState_isRejected() {
+    public void initializerReadingAnEarlierField_isRetained() throws Exception {
         Compilation c = compile(
             "  String base = \"b\";",
             "  String f = base + \"x\";",
             "  public String getBase() { return base; }",
             "  public String getF() { return f; }");
-        assertThat(c).failed();
-        assertThat(c).hadErrorContaining("non-static variable base cannot be referenced from a static context");
+        assertThat(c).succeeded();
+
+        assertEquals("bx", buildAndGet(c, "getF"));
     }
 
     @Test
-    public void initializerCallingAnInstanceMethod_isRejected() {
+    public void initializerCallingAnInstanceMethod_isRetained() throws Exception {
         Compilation c = compile(
             "  String f = compute();",
             "  String compute() { return \"x\"; }",
             "  public String getF() { return f; }");
+        assertThat(c).succeeded();
+
+        assertEquals("x", buildAndGet(c, "getF"));
+    }
+
+    /** {@code getClass()} is inherited from Object, so detection must see it too. */
+    @Test
+    public void initializerCallingGetClass_isRetained() throws Exception {
+        Compilation c = compile(
+            "  String f = getClass().getSimpleName();",
+            "  public String getF() { return f; }");
+        assertThat(c).succeeded();
+
+        assertEquals("Expr", buildAndGet(c, "getF"));
+    }
+
+    /** An explicit setter still beats a constructor-computed default. */
+    @Test
+    public void instanceDefault_isOverriddenByTheSetter() throws Exception {
+        Compilation c = compile(
+            "  String f = getClass().getSimpleName();",
+            "  public String getF() { return f; }");
+        assertThat(c).succeeded();
+
+        Class<?> target = Class.forName("demo.Expr", true, loadClasses(c));
+        Object builder = target.getMethod("builder").invoke(null);
+        builder.getClass().getMethod("f", String.class).invoke(builder, "set");
+        Object built = builder.getClass().getMethod("build").invoke(builder);
+        assertEquals("set", target.getMethod("getF").invoke(built));
+    }
+
+    /**
+     * The slot is {@code Supplier<T>} on this path and every setter wraps its
+     * argument, so null stays meaningful in both directions: an unset slot is
+     * null and takes the default, while an explicitly-set null survives as the
+     * caller's chosen value.
+     */
+    @Test
+    public void instanceDefault_explicitNullIsNotTreatedAsUnset() throws Exception {
+        Compilation c = compile(
+            "  String f = getClass().getSimpleName();",
+            "  public String getF() { return f; }");
+        assertThat(c).succeeded();
+
+        Class<?> target = Class.forName("demo.Expr", true, loadClasses(c));
+        Object builder = target.getMethod("builder").invoke(null);
+        builder.getClass().getMethod("f", String.class).invoke(builder, (Object) null);
+        Object built = builder.getClass().getMethod("build").invoke(builder);
+        assertNull("explicit null must win over the default", target.getMethod("getF").invoke(built));
+    }
+
+    /**
+     * Shapes whose setters mutate the builder slot in place, or read it as its
+     * declared type, cannot carry the {@code Supplier}-typed slot the
+     * constructor path needs. Those are reported against the field rather than
+     * left to fail inside generated code.
+     */
+    @Test
+    public void instanceDefault_onAnUnsupportedShape_isReportedAgainstTheField() {
+        Compilation c = compile(
+            "  @dev.simplified.annotations.Collector List<String> f = defaults();",
+            "  List<String> defaults() { return new ArrayList<>(); }",
+            "  public List<String> getF() { return f; }");
         assertThat(c).failed();
-        assertThat(c).hadErrorContaining("non-static method compute() cannot be referenced from a static context");
+        assertThat(c).hadErrorContaining("reads instance state");
     }
 
 }

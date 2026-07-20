@@ -153,8 +153,15 @@ final class RetainedInitFactory {
         JCStatement returnStmt = make.Return(cleaned);
         JCBlock body = make.Block(0, List.of(returnStmt));
         JCExpression returnType = types.parseType(field.typeDisplay);
+        // An initializer reading instance state cannot be evaluated when the
+        // builder is created, since no target exists then. Its provider is an
+        // instance method, called from the generated constructor where `this`
+        // is available - the same place an ordinary field initializer runs.
+        long modifiers = ctx.isInstanceDefault(field.name)
+            ? Flags.PRIVATE
+            : Flags.PRIVATE | Flags.STATIC;
         JCMethodDecl method = make.MethodDef(
-            make.Modifiers(Flags.PRIVATE | Flags.STATIC),
+            make.Modifiers(modifiers),
             names.fromString(providerName(field.name)),
             returnType,
             List.nil(),

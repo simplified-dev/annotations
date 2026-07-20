@@ -30,12 +30,22 @@ import java.lang.annotation.Target;
  * static field accesses, ternaries, switch expressions, anonymous classes,
  * lambdas (with or without parameters), and method or constructor references.
  *
- * <p>The one restriction follows from that provider being {@code static}: the
- * initializer cannot read instance state. An expression referencing an instance
- * field, calling an instance method, or capturing {@code this} - including a
- * {@code this::method} reference - fails to compile with javac's usual
- * "non-static ... cannot be referenced from a static context". Move such a
- * value into the constructor or a setter instead.
+ * <p>An initializer reading instance state - an instance field, an instance
+ * method, {@code getClass()}, {@code this} - is supported too, but is applied
+ * later: it cannot be evaluated when the builder is created, because no target
+ * exists then, so it is computed in the generated constructor instead. The
+ * observable difference is timing. A static-safe default is evaluated once per
+ * builder, whereas an instance-referencing one is evaluated per
+ * {@code build()}, so reusing a single builder for two builds yields two
+ * values rather than a shared one.
+ *
+ * <p>That path retypes the builder slot, so it is unavailable to field shapes
+ * whose setters mutate the slot in place or read it as its declared type -
+ * {@code boolean}, {@code Optional}, arrays, {@link Formattable} strings, and
+ * {@link Collector} collections or maps. An instance-referencing initializer on
+ * one of those is reported against the field; give it
+ * {@code @BuilderDefault(false)}, or set
+ * {@link ClassBuilder#retainInit() retainInit = false} on the class.
  *
  * <h2>Examples</h2>
  * <pre><code>

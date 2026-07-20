@@ -52,19 +52,20 @@ import java.lang.annotation.Target;
  *   <li>Not supported on static fields, record components, or in combination
  *       with the field-only companion annotations
  *       ({@link Collector}, {@link Negate}, {@link Formattable},
- *       {@link BuilderDefault}, {@link BuilderIgnore}, {@link BuildFlag},
- *       {@link ObtainVia}). Each assumes direct {@code T} storage, so the
- *       processor rejects the pairing rather than letting it misbehave.</li>
+ *       {@link BuilderIgnore}, {@link BuildFlag}, {@link ObtainVia}). Each
+ *       assumes direct {@code T} storage, so the processor rejects the pairing
+ *       rather than letting it misbehave. {@link BuilderDefault} is the
+ *       exception and is permitted: it selects how the default is applied, not
+ *       how the field is stored.</li>
  *   <li>Standalone use (no {@code @ClassBuilder} on the enclosing class)
  *       requires a field initializer; the initializer becomes the supplier
  *       body. Because that supplier is created in the field initializer, an
  *       instance context, the expression may reference the enclosing instance
  *       freely - instance methods, instance fields, and {@code this}.</li>
- *   <li>With {@code @ClassBuilder} the value arrives through the builder,
- *       whose default is a {@code static} provider holding the initializer, so
- *       the expression may <b>not</b> reference the enclosing instance there.
- *       Set {@link ClassBuilder#retainInit() retainInit = false} on the class
- *       when a lazy field needs an instance-referencing initializer.</li>
+ *   <li>With {@code @ClassBuilder} an instance-referencing initializer is
+ *       supported as well, computed in the generated constructor rather than
+ *       when the builder is created. Both branches stay deferred, so laziness
+ *       survives either way.</li>
  *   <li>With {@code @ClassBuilder} the builder supplies the value, so a field
  *       with no initializer must have its setter called. A deferred
  *       computation is expected to exist - building without supplying one

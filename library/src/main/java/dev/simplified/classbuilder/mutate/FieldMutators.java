@@ -121,11 +121,26 @@ final class FieldMutators {
      * lazy-from-supplier semantics through the dual setter pair.
      */
     JCVariableDecl fieldDecl(FieldSpec field) {
-        JCExpression fieldType = field.lazy
+        // A field whose default reads instance state is stored as Supplier<T>
+        // for the same reason a @Lazy field is: the constructor must tell "never
+        // set" from "set to null" without a parallel flag, and null is
+        // unambiguous on a Supplier-typed slot because every setter wraps its
+        // argument. The constructor reads null as "apply my default instead".
+        boolean supplierTyped = field.lazy || ctx.isInstanceDefault(field.name);
+        JCExpression fieldType = supplierTyped
             ? make.TypeApply(types.qualIdent("java.util.function.Supplier"),
                 List.of(types.parseType(field.typeDisplay)))
             : types.parseType(field.typeDisplay);
-        JCExpression init = field.lazy ? lazyDefaultInitializer(field) : defaultInitializer(field);
+        JCExpression init;
+        if (ctx.isInstanceDefault(field.name)) {
+            // No slot default: $default$<name>() is an instance method here, so
+            // it cannot be called before a target exists.
+            init = null;
+        } else if (field.lazy) {
+            init = lazyDefaultInitializer(field);
+        } else {
+            init = defaultInitializer(field);
+        }
         return make.VarDef(
             make.Modifiers(Flags.PRIVATE),
             names.fromString(field.name),
@@ -261,7 +276,21 @@ final class FieldMutators {
     private JCMethodDecl plainSetter(FieldSpec field) {
         String setterName = methodName(field.name, false);
         JCExpression fieldType = types.parseType(field.typeDisplay);
-        return methodDef(setterName, nullnessParam(field.name, fieldType, field), assignAndReturnThis(field.name));
+        JCVariableDecl p = nullnessParam(field.name, fieldType, field);
+        if (ctx.isInstanceDefault(field.name)) {
+            // The slot is Supplier<T> here, so the argument is wrapped rather
+            // than stored directly. That keeps null meaningful in both
+            // directions: an unset slot stays null and the constructor applies
+            // the default, while an explicit null becomes () -> null and
+            // survives as the caller's chosen value.
+            JCExpression lambda = make.Lambda(List.nil(), make.Ident(names.fromString(field.name)));
+            JCStatement assign = make.Exec(make.Assign(
+                make.Select(make.Ident(names._this), names.fromString(field.name)),
+                lambda
+            ));
+            return methodDef(setterName, p, List.of(assign, returnThis()));
+        }
+        return methodDef(setterName, p, assignAndReturnThis(field.name));
     }
 
     private JCMethodDecl arrayVarargs(FieldSpec field) {

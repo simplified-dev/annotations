@@ -13,6 +13,7 @@ import dev.simplified.classbuilder.apt.FieldSpec;
 
 import javax.lang.model.element.TypeElement;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Per-target value carrier threaded through the mutation pipeline so each
@@ -30,6 +31,7 @@ public final class MutationContext {
     private final String builderName;
     private final JavacTypeFactory types;
     private final ContractAnnotations contracts;
+    private final Set<String> instanceDefaults;
 
     public MutationContext(JavacBridge bridge,
                            TypeElement targetElement,
@@ -46,6 +48,41 @@ public final class MutationContext {
         this.types = new JavacTypeFactory(bridge.treeMaker(), bridge.names());
         this.contracts = new ContractAnnotations(
             bridge.treeMaker(), bridge.names(), this.types, config.emitContracts());
+        this.instanceDefaults = InstanceDefaultDetector.detect(targetElement, fields, bridge.elements());
+    }
+
+    /**
+     * Whether this field's retained initializer reads instance state, and so
+     * must be computed in the constructor rather than hoisted into a static
+     * provider evaluated when the builder is created.
+     *
+     * @param fieldName the field to test
+     * @return whether the field takes the constructor-computed default path
+     */
+    public boolean isInstanceDefault(String fieldName) {
+        return instanceDefaults.contains(fieldName);
+    }
+
+    /** Field names taking the constructor-computed default path. */
+    public Set<String> instanceDefaults() {
+        return instanceDefaults;
+    }
+
+    /**
+     * Whether a field can take the constructor-computed path at all. The slot
+     * is retyped to {@code Supplier<T>} there, so null distinguishes "never
+     * set" from "set to null" without a parallel flag - which rules out shapes
+     * whose setters mutate the slot in place or read it as its declared type.
+     * {@code @Lazy} fields always qualify: their slot is already
+     * {@code Supplier<T>} and they take a single dual-setter shape.
+     *
+     * @param field the field to test
+     * @return whether the constructor-computed path supports this field's shape
+     */
+    public static boolean supportsInstanceDefault(FieldSpec field) {
+        if (field.lazy) return true;
+        if (field.isBoolean || field.isOptional || field.isArray || field.formattable) return false;
+        return !((field.isListLike || field.isMap) && field.collector);
     }
 
     public JavacBridge bridge() { return bridge; }

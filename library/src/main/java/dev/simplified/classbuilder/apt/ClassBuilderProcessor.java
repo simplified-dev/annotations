@@ -305,7 +305,6 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         {"dev.simplified.annotations.Collector", "Collector"},
         {"dev.simplified.annotations.Negate", "Negate"},
         {"dev.simplified.annotations.Formattable", "Formattable"},
-        {"dev.simplified.annotations.BuilderDefault", "BuilderDefault"},
         {"dev.simplified.annotations.BuilderIgnore", "BuilderIgnore"},
         {"dev.simplified.annotations.BuildFlag", "BuildFlag"},
         {"dev.simplified.annotations.ObtainVia", "ObtainVia"},

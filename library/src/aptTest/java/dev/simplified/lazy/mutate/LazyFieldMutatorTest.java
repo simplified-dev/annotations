@@ -240,31 +240,70 @@ public class LazyFieldMutatorTest {
     }
 
     /**
-     * The one place the two features genuinely disagree. On a
-     * {@code @ClassBuilder} target the value must arrive through the builder
-     * slot, whose default is a static {@code $default$} provider - so the
-     * instance references a standalone {@code @Lazy} field may make become
-     * illegal. {@code @ClassBuilder(retainInit = false)} is the way out.
+     * A {@code @Lazy} field on a {@code @ClassBuilder} target may reference the
+     * enclosing instance, matching the standalone case. Its default is computed
+     * in the constructor, and both branches stay deferred - the supplied
+     * supplier is stored verbatim and the default becomes a lambda over the
+     * provider - so laziness survives the trip through the builder.
      */
     @Test
-    public void classBuilderLazy_initializerCannotReferenceInstanceState() {
-        String[] lines = {
+    public void classBuilderLazy_initializerMayReferenceInstanceState() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Mixed",
             "package demo;",
             "import dev.simplified.annotations.ClassBuilder;",
             "import dev.simplified.annotations.Lazy;",
             "@ClassBuilder(validate = false)",
             "public class Mixed {",
             "    @Lazy String v = compute();",
-            "    String compute() { return \"c\"; }",
-            "}"
-        };
-        Compilation rejected = compile(JavaFileObjects.forSourceLines("demo.Mixed", lines));
-        assertThat(rejected).failed();
-        assertThat(rejected).hadErrorContaining("cannot be referenced from a static context");
+            "    int calls = 0;",
+            "    String compute() { calls++; return \"c\" + calls; }",
+            "    public int getCalls() { return calls; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
 
-        lines[3] = "@ClassBuilder(validate = false, retainInit = false)";
-        Compilation accepted = compile(JavaFileObjects.forSourceLines("demo.Mixed", lines));
-        assertThat(accepted).succeeded();
+        Class<?> target = Class.forName("demo.Mixed", true, loadClasses(c));
+        Object builder = target.getMethod("builder").invoke(null);
+        Object built = builder.getClass().getMethod("build").invoke(builder);
+
+        assertEquals("building must not evaluate the lazy default",
+            0, target.getMethod("getCalls").invoke(built));
+        assertEquals("c1", target.getMethod("getV").invoke(built));
+        assertEquals("evaluated once, on first get()",
+            1, target.getMethod("getCalls").invoke(built));
+        target.getMethod("getV").invoke(built);
+        assertEquals("and memoized thereafter", 1, target.getMethod("getCalls").invoke(built));
+    }
+
+    /**
+     * {@code @BuilderDefault} is permitted on a {@code @Lazy} field now that the
+     * constructor path exists - it is the per-field way to decline retention,
+     * where previously only the class-wide {@code retainInit = false} was
+     * available.
+     */
+    @Test
+    public void lazyPlusBuilderDefaultFalse_isAccepted() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.LazyOptOut",
+            "package demo;",
+            "import dev.simplified.annotations.BuilderDefault;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Lazy;",
+            "@ClassBuilder(validate = false)",
+            "public class LazyOptOut {",
+            "    @Lazy @BuilderDefault(false) String value = \"declared\";",
+            "    @Lazy String kept = \"kept\";",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        Class<?> target = Class.forName("demo.LazyOptOut", true, loadClasses(c));
+        Object builder = target.getMethod("builder").invoke(null);
+        builder.getClass().getMethod("value", String.class).invoke(builder, "set");
+        Object built = builder.getClass().getMethod("build").invoke(builder);
+
+        assertEquals("set", target.getMethod("getValue").invoke(built));
+        assertEquals("the sibling field still retains its initializer",
+            "kept", target.getMethod("getKept").invoke(built));
     }
 
     // ------------------------------------------------------------------
@@ -341,22 +380,6 @@ public class LazyFieldMutatorTest {
         builderCls.getMethod("value", String.class).invoke(b, "fromSetter");
         Object built = builderCls.getMethod("build").invoke(b);
         assertEquals("fromSetter", target.getMethod("getValue").invoke(built));
-    }
-
-    @Test
-    public void lazyPlusBuilderDefault_isRejected() {
-        JavaFileObject src = JavaFileObjects.forSourceLines("demo.LazyOptOut",
-            "package demo;",
-            "import dev.simplified.annotations.BuilderDefault;",
-            "import dev.simplified.annotations.ClassBuilder;",
-            "import dev.simplified.annotations.Lazy;",
-            "@ClassBuilder(validate = false)",
-            "public class LazyOptOut {",
-            "    @Lazy @BuilderDefault(false) String value = \"declared\";",
-            "}");
-        Compilation c = compile(src);
-        assertThat(c).failed();
-        assertThat(c).hadErrorContaining("@Lazy cannot be combined with @BuilderDefault");
     }
 
     /**

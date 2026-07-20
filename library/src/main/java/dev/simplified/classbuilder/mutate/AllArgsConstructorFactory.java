@@ -1,6 +1,7 @@
 package dev.simplified.classbuilder.mutate;
 
 import com.sun.tools.javac.code.Flags;
+import com.sun.tools.javac.code.TypeTag;
 import com.sun.tools.javac.tree.JCTree.JCBlock;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import com.sun.tools.javac.tree.JCTree.JCExpression;
@@ -51,14 +52,23 @@ final class AllArgsConstructorFactory {
         ListBuffer<JCVariableDecl> params = new ListBuffer<>();
         ListBuffer<JCStatement> body = new ListBuffer<>();
         for (FieldSpec f : ctx.fields()) {
+            boolean instanceDefault = ctx.isInstanceDefault(f.name);
+            // An instance-default parameter arrives as Supplier<T> so null can
+            // mean "the builder slot was never filled". @Lazy parameters are
+            // retyped to Supplier<T> by LazyFieldMutator afterwards, so they
+            // are declared as T here and left to that pass.
+            JCExpression paramType = instanceDefault && !f.lazy
+                ? make.TypeApply(ctx.types().qualIdent("java.util.function.Supplier"),
+                    List.of(ctx.types().parseType(f.typeDisplay)))
+                : ctx.types().parseType(f.typeDisplay);
             params.append(make.VarDef(
                 make.Modifiers(Flags.PARAMETER),
                 names.fromString(f.name),
-                ctx.types().parseType(f.typeDisplay),
+                paramType,
                 null
             ));
             JCExpression lhs = make.Select(make.Ident(names._this), names.fromString(f.name));
-            body.append(make.Exec(make.Assign(lhs, make.Ident(names.fromString(f.name)))));
+            body.append(make.Exec(make.Assign(lhs, instanceDefault ? defaultingRhs(f) : make.Ident(names.fromString(f.name)))));
         }
         JCBlock block = make.Block(0, body.toList());
         // Javac spells the constructor name as <init>.
@@ -74,6 +84,57 @@ final class AllArgsConstructorFactory {
         );
         AstMarkers.markGenerated(ctor);
         return ctor;
+    }
+
+    /**
+     * Right-hand side for a field whose default reads instance state. The
+     * builder slot is {@code Supplier<T>}, so null means it was never filled
+     * and the instance {@code $default$} provider supplies the value instead.
+     * Evaluating here rather than at {@code builder()} is the whole point:
+     * {@code this} exists in a constructor, exactly as it does in the ordinary
+     * field initializer this expression came from.
+     *
+     * <pre>{@code
+     * // plain:  name != null ? name.get() : $default$name()
+     * // @Lazy:  v != null ? Lazy.of(v, owner, "v") : Lazy.of(() -> $default$v())
+     * }</pre>
+     */
+    private JCExpression defaultingRhs(FieldSpec f) {
+        JCExpression isSet = make.Binary(JCTree.Tag.NE,
+            make.Ident(names.fromString(f.name)),
+            make.Literal(TypeTag.BOT, null));
+        JCExpression providerCall = make.Apply(
+            List.nil(),
+            make.Ident(names.fromString(RetainedInitFactory.providerName(f.name))),
+            List.nil()
+        );
+        if (!f.lazy) {
+            JCExpression get = make.Apply(
+                List.nil(),
+                make.Select(make.Ident(names.fromString(f.name)), names.fromString("get")),
+                List.nil()
+            );
+            return make.Conditional(isSet, get, providerCall);
+        }
+        // A @Lazy field keeps its deferral on both branches: the supplied
+        // supplier is wrapped verbatim, and the default becomes a lambda over
+        // the provider so it is still not run until the first getter call.
+        JCExpression lazyType = ctx.types().qualIdent("dev.simplified.lazy.Lazy");
+        JCExpression supplied = make.Apply(
+            List.nil(),
+            make.Select(lazyType, names.fromString("of")),
+            List.of(
+                make.Ident(names.fromString(f.name)),
+                make.Literal(ctx.targetElement().getQualifiedName().toString()),
+                make.Literal(f.name)
+            )
+        );
+        JCExpression deferred = make.Apply(
+            List.nil(),
+            make.Select(ctx.types().qualIdent("dev.simplified.lazy.Lazy"), names.fromString("of")),
+            List.of(make.Lambda(List.nil(), providerCall))
+        );
+        return make.Conditional(isSet, supplied, deferred);
     }
 
     /**
