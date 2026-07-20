@@ -25,10 +25,17 @@ import java.lang.annotation.Target;
  * {@code $default$<fieldName>()} method carrying the source expression, and the
  * generated builder's field default calls that method.
  *
- * <p>Any Java expression that compiles in the target class's scope works -
- * method calls, constructor invocations, factory methods, field accesses - as
- * long as every identifier it references would resolve from the original field
- * declaration.
+ * <p>Because the expression is re-attributed inside a normal method body,
+ * arbitrary Java works: method calls, constructor invocations, factory methods,
+ * static field accesses, ternaries, switch expressions, anonymous classes,
+ * lambdas (with or without parameters), and method or constructor references.
+ *
+ * <p>The one restriction follows from that provider being {@code static}: the
+ * initializer cannot read instance state. An expression referencing an instance
+ * field, calling an instance method, or capturing {@code this} - including a
+ * {@code this::method} reference - fails to compile with javac's usual
+ * "non-static ... cannot be referenced from a static context". Move such a
+ * value into the constructor or a setter instead.
  *
  * <h2>Examples</h2>
  * <pre><code>

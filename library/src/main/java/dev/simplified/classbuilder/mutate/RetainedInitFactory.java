@@ -181,19 +181,35 @@ final class RetainedInitFactory {
      * reset the Builder's new method body inherits attribution pointers from
      * the original field's scope, which javac's type-checker then NPEs on
      * when it tries to reconcile them against the method's own scope.
+     *
+     * <p>{@link JCVariableDecl} covers a lambda's parameters and any locals in
+     * its block body. Their {@code VarSymbol}s carry a definite-assignment
+     * address allocated in the field initializer's scope; left in place,
+     * {@code Flow$AssignAnalyzer.visitLambda} feeds that stale address to
+     * {@code Bits.incl} and javac dies on an assertion with no diagnostic.
+     * Nulling the symbol makes the provider method's own scope allocate fresh
+     * addresses, which is the same reason the expression is moved into a
+     * method body rather than embedded in a field initializer.
      */
     private static final class ResettingCopier extends TreeCopier<Void> {
-        ResettingCopier(TreeMaker maker) { super(maker); }
+
+        private final int pos;
+
+        ResettingCopier(TreeMaker maker) {
+            super(maker);
+            this.pos = maker.pos;
+        }
 
         @Override
         public <T extends JCTree> T copy(T tree, Void unused) {
             T copy = super.copy(tree, unused);
             if (copy != null) {
-                copy.pos = Position.NOPOS;
+                copy.pos = pos;
                 copy.type = null;
                 if (copy instanceof JCIdent id) id.sym = null;
                 else if (copy instanceof JCFieldAccess fa) fa.sym = null;
                 else if (copy instanceof JCMethodInvocation mi) mi.polyKind = null;
+                else if (copy instanceof JCVariableDecl vd) vd.sym = null;
                 else if (copy instanceof JCNewClass nc) {
                     nc.constructor = null;
                     nc.constructorType = null;
