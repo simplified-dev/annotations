@@ -162,7 +162,51 @@ Plus bootstrap methods on `Pizza` itself: `static Pizza.Builder builder()`, `sta
 
 For abstract classes, `@ClassBuilder` produces a self-typed `Builder<T, B>` that concrete subclasses inherit with `class Builder extends Super.Builder<Sub, Sub.Builder>`; `self()` and `build()` are abstract on the root and overridden per subclass. This mirrors Lombok's `@SuperBuilder` with no runtime dependency.
 
-Records, interfaces, and plain classes are all supported. For interfaces, the processor writes a sibling `<Name>Impl.java` in addition to `<Name>Builder.java` since there is no in-source mutation surface on an interface body.
+Records, interfaces, and plain classes are all supported. For interfaces, the processor writes a sibling `<Name>Impl.java` in addition to `<Name>Builder.java` since there is no in-source mutation surface for a nested builder on an interface body. The entry points still land on the interface itself, so an interface target is used exactly like a class:
+
+```java
+@ClassBuilder
+public interface Shape {
+    String name();
+    int sides();
+}
+
+Shape s = Shape.builder().name("tri").sides(3).build();
+Shape t = Shape.from(s).sides(4).build();
+Shape u = t.mutate().name("quad").build();
+```
+
+`builder()` and `from(T)` are `static` interface methods and `mutate()` is a `default`, so no runtime dependency or implementor change is involved. The usual `generate*` opt-outs and the skip-on-collision rule apply as they do on a class.
+
+#### Generic targets
+
+A target may declare type parameters, on any of those shapes:
+
+```java
+@ClassBuilder
+public class Crate<V> {
+    V item;
+    List<V> spares = new ArrayList<>();
+}
+
+Crate<String> c = Crate.<String>builder().item("x").build();
+```
+
+The generated builder re-declares the target's parameters, since a nested `Builder` is `static` and an interface's sibling builder is a separate top-level class - neither can see the enclosing type's variables. Every static member that mentions one carries its own copy, so `from(T)` and the initializer providers infer them back at the call site. Bounds are preserved (`class Ranked<V extends Comparable<V>>` yields `Builder<V extends Comparable<V>>`).
+
+On a SuperBuilder chain the parameters lead the self-typed pair, and a concrete link reproduces the arguments the target passes up:
+
+```java
+@ClassBuilder public abstract class Box<V> { V item; }
+@ClassBuilder public class StringBox extends Box<String> { int n; }
+
+// Box.Builder<V, T extends Box<V>, B extends Builder<V, T, B>>
+// StringBox.Builder extends Box.Builder<String, StringBox, StringBox.Builder>
+StringBox b = StringBox.builder().item("x").n(1).build();
+```
+
+> [!NOTE]
+> `builder()` is a generic static method, and a chained call has nothing to infer its parameter from - so a typed chain needs the explicit witness, `Crate.<String>builder()`, the same as Lombok's generic `@Builder`. Writing `Crate.builder()` infers `Object`; the result still assigns to a `Crate<String>` local, but only under an unchecked warning. Where the parameter is already determined by an argument, as in `Crate.from(existing)`, no witness is needed.
 
 ### `@Lazy`
 
@@ -234,6 +278,60 @@ annotation-processing time.
 
 Since `@ClassBuilder(retainInit)` already defaults to `true`, the common use is the opt-out form
 `@BuilderDefault(false)`. Writing it bare is only needed on a class that set `retainInit = false`.
+
+An initializer that reads instance state - an instance field, an instance method, `getClass()`,
+`this` - is retained too, but applied later. It cannot be evaluated when the builder is created,
+since no target exists then, so it is computed in the generated constructor instead, where `this`
+is available exactly as in the ordinary field initializer it came from:
+
+```java
+@ClassBuilder
+public class Report {
+    String kind = getClass().getSimpleName();   // computed per build()
+    String header = "== " + kind;               // reads the field above
+    UUID id = UUID.randomUUID();                // static-safe: per builder
+}
+```
+
+The observable difference is timing: a static-safe default is evaluated once per builder, an
+instance-referencing one once per `build()`. This works across a SuperBuilder chain as well, through
+the copy constructor each link carries - a default on an abstract root sees the concrete subclass
+being built, and a link's own default runs after `super(b)` has drained the parent's slots.
+
+The path retypes the builder slot to `Supplier<T>` so an unset slot stays distinguishable from an
+explicitly-set null. Every shape whose setter simply assigns carries that - `boolean` (including a
+`@Negate` pair), `Optional`, arrays, `@Formattable` strings, plain fields and `@Lazy` ones.
+
+`@Collector` containers take a merge rather than a `Supplier`, since their `add` / `put` / `clear`
+setters need a real container to mutate while the builder runs. The slot carries only what the caller
+contributed and the constructor folds it onto the computed default, so the observable behaviour
+matches a static-safe default exactly:
+
+```java
+@ClassBuilder
+public class Bag {
+    @Collector(singular = true, clearable = true) List<String> items = seed();
+    List<String> seed() { return new ArrayList<>(List.of("a")); }
+}
+
+Bag.builder().build()                  // [a]      - default seeds the collection
+Bag.builder().addItem("b").build()     // [a, b]   - add appends onto it
+Bag.builder().items("x").build()       // [x]      - wholesale replace discards it
+Bag.builder().clearItems().build()     // []       - so does clear
+```
+
+A custom container works the same way, whatever its shape - including one with no usable
+constructor, or an interface, which has none at all:
+
+```java
+@Collector(singular = true) ConcurrentList<String> items = seed();
+ConcurrentList<String> seed() { return ConcurrentLists.of(List.of(prefix)); }
+```
+
+Nothing needs to construct the declared type. The builder collects contributions into a plain
+`java.util` scratch, and the constructor takes the real container from the field's own initializer -
+so the built object holds exactly what `seed()` returned, subclass and all, rather than something
+reconstructed from the declared type. No inference is done on the initializer at any point.
 
 #### `@BuildFlag` Attributes
 
