@@ -30,7 +30,10 @@ import java.util.Collection;
  *   <li>static {@code Builder builder()} - returns a fresh {@code Builder}.</li>
  *   <li>static {@code Builder from(T)} - reads every field off an existing
  *       instance into a fresh {@code Builder}.</li>
- *   <li>instance {@code Builder mutate()} - delegates to {@code from(this)}.</li>
+ *   <li>instance {@code Builder mutate()} - seeds a fresh {@code Builder}
+ *       inline from {@code this} (not by delegating to {@code from(this)}), so
+ *       {@code generateFrom = false} suppresses {@code from(T)} without
+ *       dangling this method.</li>
  * </ul>
  *
  * <p>Collision policy: if the target already declares a method with the
@@ -170,7 +173,7 @@ final class BootstrapMethodFactory {
             body.append(make.Exec(make.Apply(
                 List.nil(),
                 make.Select(make.Ident(names.fromString("b")), names.fromString(setterName(f))),
-                List.of(readFromInstance(f))
+                List.of(readFrom(f, make.Ident(names.fromString("instance"))))
             )));
         }
         body.append(make.Return(make.Ident(names.fromString("b"))));
@@ -192,40 +195,39 @@ final class BootstrapMethodFactory {
     }
 
     /**
-     * Builds the accessor expression used in {@code from(T)} for a given field.
-     * Honours {@link FieldSpec#obtainViaMethod} / {@link FieldSpec#obtainViaField}
-     * / {@link FieldSpec#obtainViaStatic}; otherwise uses the record/interface
-     * {@code name()} form, the {@code isX()} form for booleans, or {@code getX()}.
-     * Wraps mutable collection reads in defensive copies.
+     * Builds the accessor expression that reads a field off {@code receiver}.
+     * Shared by {@code from(T)} (receiver = the {@code instance} parameter) and
+     * {@code mutate()} (receiver = {@code this}). Honours {@link
+     * FieldSpec#obtainViaMethod} / {@link FieldSpec#obtainViaField} / {@link
+     * FieldSpec#obtainViaStatic}; otherwise uses the record/interface {@code
+     * name()} form, the {@code isX()} form for booleans, or {@code getX()}.
+     * Wraps mutable collection reads in defensive copies. {@code receiver} is
+     * consumed exactly once, so callers must pass a fresh node per field.
      */
-    private JCExpression readFromInstance(FieldSpec f) {
+    private JCExpression readFrom(FieldSpec f, JCExpression receiver) {
         JCExpression raw;
         if (f.obtainViaStatic && f.obtainViaMethod != null) {
             raw = make.Apply(List.nil(),
                 make.Select(make.Ident(names.fromString(ctx.targetSimpleName())),
                     names.fromString(f.obtainViaMethod)),
-                List.of(make.Ident(names.fromString("instance"))));
+                List.of(receiver));
         } else if (f.obtainViaMethod != null) {
             raw = make.Apply(List.nil(),
-                make.Select(make.Ident(names.fromString("instance")),
-                    names.fromString(f.obtainViaMethod)),
+                make.Select(receiver, names.fromString(f.obtainViaMethod)),
                 List.nil());
         } else if (f.obtainViaField != null) {
-            raw = make.Select(make.Ident(names.fromString("instance")),
-                names.fromString(f.obtainViaField));
+            raw = make.Select(receiver, names.fromString(f.obtainViaField));
         } else if (isRecord) {
             raw = make.Apply(List.nil(),
-                make.Select(make.Ident(names.fromString("instance")), names.fromString(f.name)),
+                make.Select(receiver, names.fromString(f.name)),
                 List.nil());
         } else if (f.isBoolean) {
             raw = make.Apply(List.nil(),
-                make.Select(make.Ident(names.fromString("instance")),
-                    names.fromString("is" + capitalise(f.name))),
+                make.Select(receiver, names.fromString("is" + capitalise(f.name))),
                 List.nil());
         } else {
             raw = make.Apply(List.nil(),
-                make.Select(make.Ident(names.fromString("instance")),
-                    names.fromString("get" + capitalise(f.name))),
+                make.Select(receiver, names.fromString("get" + capitalise(f.name))),
                 List.nil());
         }
         return wrapDefensiveCopy(f, raw);
@@ -259,14 +261,28 @@ final class BootstrapMethodFactory {
 
     private JCMethodDecl mutateMethod() {
         JCExpression builderType = make.Ident(names.fromString(ctx.builderName()));
-        // return <TargetName>.<fromMethod>(this);
-        JCExpression fromCall = make.Apply(
-            List.nil(),
-            make.Select(make.Ident(names.fromString(ctx.targetSimpleName())),
-                names.fromString(ctx.config().fromMethodName())),
-            List.of(make.Ident(names._this))
-        );
-        JCBlock body = make.Block(0, List.of(make.Return(fromCall)));
+
+        ListBuffer<JCStatement> body = new ListBuffer<>();
+        // Builder b = new Builder();
+        body.append(make.VarDef(
+            make.Modifiers(0),
+            names.fromString("b"),
+            builderType,
+            make.NewClass(null, List.nil(), make.Ident(names.fromString(ctx.builderName())), List.nil(), null)
+        ));
+        // Seed each field directly off `this` through the builder's public
+        // setters - the SAME field set (fromFields, inherited fields included
+        // for SuperBuilder subclasses) and accessor logic from(T) uses. Inlined
+        // here rather than delegating to from(this) so generateFrom = false can
+        // suppress the static factory without dangling this method.
+        for (FieldSpec f : fromFields) {
+            body.append(make.Exec(make.Apply(
+                List.nil(),
+                make.Select(make.Ident(names.fromString("b")), names.fromString(setterName(f))),
+                List.of(readFrom(f, make.Ident(names._this)))
+            )));
+        }
+        body.append(make.Return(make.Ident(names.fromString("b"))));
 
         // mutate() reads this implicitly and returns a fresh Builder; "-> new"
         // captures the fresh-return shape without pure (the implicit this
@@ -279,7 +295,7 @@ final class BootstrapMethodFactory {
             List.nil(),
             List.nil(),
             List.nil(),
-            body,
+            make.Block(0, body.toList()),
             null
         );
         AstMarkers.markGenerated(method);

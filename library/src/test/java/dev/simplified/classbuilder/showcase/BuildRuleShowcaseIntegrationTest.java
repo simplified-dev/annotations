@@ -46,6 +46,7 @@ public class BuildRuleShowcaseIntegrationTest {
         "classBuilder.plain",
         "classBuilder.plain.from",
         "classBuilder.plain.mutate",
+        "classBuilder.generateFrom.false.mutate",
         "classBuilder.renamed",
         "classBuilder.exclude",
         "classBuilder.access.package",

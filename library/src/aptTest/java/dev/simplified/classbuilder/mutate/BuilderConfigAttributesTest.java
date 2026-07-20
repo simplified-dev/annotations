@@ -188,11 +188,11 @@ public class BuilderConfigAttributesTest {
     }
 
     @Test
-    public void generateFrom_falseSkipsFromBootstrap() throws Exception {
+    public void generateFrom_falseSkipsFromButKeepsMutateInlined() throws Exception {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.NoFrom",
             "package demo;",
             "import dev.simplified.annotations.ClassBuilder;",
-            "@ClassBuilder(generateFrom = false, generateMutate = false, validate = false)",
+            "@ClassBuilder(generateFrom = false, validate = false)",
             "public class NoFrom {",
             "    int x;",
             "    public NoFrom(int x) { this.x = x; }",
@@ -207,9 +207,22 @@ public class BuilderConfigAttributesTest {
             hasMethod(target, "from", target));
         assertTrue("builder() remains when only from is disabled",
             hasMethod(target, "builder"));
-        // mutate must also be suppressed (we disabled it to avoid its from() dependency)
-        assertFalse("generateMutate=false must skip mutate()",
+        // mutate() is decoupled from from(): it seeds inline off `this`, so it
+        // survives generateFrom=false rather than dangling a from(this) call.
+        assertTrue("mutate() remains when only from is disabled",
             hasMethod(target, "mutate"));
+
+        // Prove mutate() round-trips without any from(T) to delegate to.
+        Class<?> builder = nested(target, "Builder");
+        Object b = target.getMethod("builder").invoke(null);
+        builder.getMethod("x", int.class).invoke(b, 7);
+        Object first = builder.getMethod("build").invoke(b);
+
+        Object b2 = target.getMethod("mutate").invoke(first);
+        builder.getMethod("x", int.class).invoke(b2, 9);
+        Object second = builder.getMethod("build").invoke(b2);
+        assertEquals(7, target.getMethod("getX").invoke(first));
+        assertEquals(9, target.getMethod("getX").invoke(second));
     }
 
     @Test

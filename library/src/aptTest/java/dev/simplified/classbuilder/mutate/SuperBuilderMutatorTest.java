@@ -454,4 +454,55 @@ public class SuperBuilderMutatorTest {
         }
     }
 
+    // ------------------------------------------------------------------
+    // generateFrom = false on a concrete link keeps mutate() inlined
+    // ------------------------------------------------------------------
+
+    @Test
+    public void generateFromFalse_concreteChildMutateInlinesInheritedFields() throws Exception {
+        JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Doc",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Doc {",
+            "    String title;",
+            "    public String getTitle() { return title; }",
+            "}");
+        JavaFileObject child = JavaFileObjects.forSourceLines("demo.Article",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(generateFrom = false, validate = false)",
+            "public class Article extends Doc {",
+            "    int words;",
+            "    public int getWords() { return words; }",
+            "}");
+        Compilation c = compile(parent, child);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> docCls = Class.forName("demo.Doc", true, cl);
+        Class<?> articleCls = Class.forName("demo.Article", true, cl);
+        Class<?> childBuilder = nested(articleCls, "Builder");
+
+        // from(T) is suppressed on the concrete link ...
+        for (Method m : articleCls.getDeclaredMethods()) {
+            assertFalse("generateFrom=false must skip from(T) on the concrete link; found " + m,
+                m.getName().equals("from"));
+        }
+
+        // ... but mutate() still round-trips, seeding the inherited `title`
+        // through the inherited public setter inline (not via from(this)).
+        Object b = articleCls.getMethod("builder").invoke(null);
+        childBuilder.getMethod("title", String.class).invoke(b, "Intro");
+        childBuilder.getMethod("words", int.class).invoke(b, 42);
+        Object first = childBuilder.getMethod("build").invoke(b);
+
+        Object b2 = articleCls.getMethod("mutate").invoke(first);
+        childBuilder.getMethod("words", int.class).invoke(b2, 99);
+        Object second = childBuilder.getMethod("build").invoke(b2);
+
+        assertEquals("Intro", docCls.getMethod("getTitle").invoke(second));
+        assertEquals(99, articleCls.getMethod("getWords").invoke(second));
+    }
+
 }

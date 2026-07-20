@@ -95,6 +95,20 @@ public final class BuildRuleShowcase {
         @Override public String toString() { return "ValidationDisabled[required=" + required + "]"; }
     }
 
+    // generateFrom = false suppresses the static from(T) factory while
+    // mutate() stays: mutate() seeds a fresh Builder inline off `this` rather
+    // than delegating to from(this), so the instance-seed method no longer
+    // dangles when the factory is off.
+    @ClassBuilder(generateFrom = false)
+    public static final class NoFrom {
+        private final String label;
+        private final int size;
+        public NoFrom(String label, int size) { this.label = label; this.size = size; }
+        public String getLabel() { return label; }
+        public int getSize() { return size; }
+        @Override public String toString() { return "NoFrom[label=" + label + ", size=" + size + "]"; }
+    }
+
     // ==================================================================
     // @BuildRule.retainInit / ignore
     // ==================================================================
@@ -376,6 +390,22 @@ public final class BuildRuleShowcase {
                 return source.mutate().age(2).build();
             })
             .asSuccess("mutate() returned new instance with age=2");
+
+        report.expect("classBuilder.generateFrom.false.mutate")
+            .runVoid(() -> {
+                // mutate() round-trips even though from(T) is suppressed - it
+                // seeds inline off `this`, not via from(this).
+                NoFrom base = NoFrom.builder().label("a").size(1).build();
+                NoFrom mutated = base.mutate().size(2).build();
+                if (!"a".equals(mutated.getLabel()) || mutated.getSize() != 2)
+                    throw new AssertionError("mutate() round-trip failed: " + mutated);
+                // generateFrom = false must leave no static from(T) factory.
+                for (Method m : NoFrom.class.getDeclaredMethods()) {
+                    if (m.getName().equals("from"))
+                        throw new AssertionError("from() must not exist when generateFrom = false");
+                }
+            })
+            .asSuccess("mutate() round-trips inline; no static from() emitted");
 
         report.expect("classBuilder.renamed")
             .runVoid(() -> {
