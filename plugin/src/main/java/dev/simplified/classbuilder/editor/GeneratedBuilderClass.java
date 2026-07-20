@@ -9,6 +9,8 @@ import com.intellij.psi.SyntheticElement;
 import com.intellij.psi.augment.PsiAugmentProvider;
 import com.intellij.psi.impl.light.LightPsiClassBuilder;
 import com.intellij.psi.impl.source.PsiExtensibleClass;
+import com.intellij.psi.util.CachedValuesManager;
+import com.intellij.psi.util.PsiModificationTracker;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -104,8 +106,8 @@ final class GeneratedBuilderClass extends LightPsiClassBuilder
      * Materialises the setters + {@code build()} via
      * {@link PsiAugmentProvider#collectAugments} on every call. The augment
      * provider itself caches the result via
-     * {@link com.intellij.psi.util.CachedValuesManager} keyed to
-     * {@link com.intellij.psi.util.PsiModificationTracker#MODIFICATION_COUNT},
+     * {@link CachedValuesManager} keyed to
+     * {@link PsiModificationTracker#MODIFICATION_COUNT},
      * so this stays cheap while staying invalidated on any PSI edit.
      *
      * <p>An earlier per-instance {@code volatile} cache here was a bug:
@@ -116,7 +118,7 @@ final class GeneratedBuilderClass extends LightPsiClassBuilder
      * landed. Adding a new field to the target after that didn't refresh
      * the methods.
      *
-     * <p>{@link com.intellij.psi.PsiClass#findMethodsByName} and the bulk of
+     * <p>{@link PsiClass#findMethodsByName} and the bulk of
      * IntelliJ's name-lookup paths walk {@code getMethods()} directly rather
      * than going through {@link PsiExtensibleClass}'s
      * {@code getOwnMethods() + augments} aggregation. Without this override

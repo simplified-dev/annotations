@@ -4,10 +4,11 @@ import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
+import java.util.Optional;
 
 /**
  * Adds a {@code @PrintFormat} string overload to a {@link String} or
- * {@link java.util.Optional Optional}{@code <String>} field on a
+ * {@link Optional}{@code <String>} field on a
  * {@link ClassBuilder}-annotated type.
  *
  * <p>The emitted overload accepts a format template and a varargs array,

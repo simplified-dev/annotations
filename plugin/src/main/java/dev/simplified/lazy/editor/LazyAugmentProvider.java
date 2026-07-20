@@ -20,10 +20,13 @@ import com.intellij.psi.PsiType;
 import com.intellij.psi.TypeAnnotationProvider;
 import com.intellij.psi.impl.light.LightMethodBuilder;
 import com.intellij.psi.impl.light.LightModifierList;
+import com.intellij.psi.impl.source.PsiExtensibleClass;
 import com.intellij.psi.util.CachedValueProvider;
 import com.intellij.psi.util.CachedValuesManager;
 import com.intellij.psi.util.PsiModificationTracker;
+import dev.simplified.annotations.AccessLevel;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
+import dev.simplified.lazy.mutate.LazyFieldMutator;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -35,7 +38,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Surfaces the memoizing getter that {@link dev.simplified.lazy.mutate.LazyFieldMutator}
+ * Surfaces the memoizing getter that {@link LazyFieldMutator}
  * synthesises at javac time, so autocompletion and goto-symbol resolve
  * {@code getFoo()} on a {@code @Lazy}-annotated field before the first build
  * round.
@@ -186,7 +189,7 @@ public final class LazyAugmentProvider extends AbstractRecursionSafeAugmentProvi
 
     /**
      * Reads {@code @Lazy.access()} as a PSI modifier keyword. Maps
-     * {@link dev.simplified.annotations.AccessLevel#PACKAGE PACKAGE} to the
+     * {@link AccessLevel#PACKAGE PACKAGE} to the
      * empty string (no keyword); everything else returns the lowercase
      * Java modifier. Default when unset is {@code "public"}.
      */
@@ -224,7 +227,7 @@ public final class LazyAugmentProvider extends AbstractRecursionSafeAugmentProvi
 
     /**
      * Collects the names of all zero-argument methods directly declared on
-     * {@code target}. Uses {@link com.intellij.psi.impl.source.PsiExtensibleClass#getOwnMethods()}
+     * {@code target}. Uses {@link PsiExtensibleClass#getOwnMethods()}
      * rather than {@link PsiClass#getMethods()} - the latter is augment-aware
      * and re-enters every {@link PsiAugmentProvider} (including this one),
      * causing a {@link StackOverflowError} in the synthesis call chain. For

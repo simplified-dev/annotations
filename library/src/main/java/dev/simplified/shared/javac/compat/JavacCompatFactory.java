@@ -2,6 +2,8 @@ package dev.simplified.shared.javac.compat;
 
 import dev.simplified.shared.javac.compat.v17.JavacCompatV17;
 
+import java.util.ServiceLoader;
+
 /**
  * Resolves a {@link JavacCompat} implementation for the running JDK.
  *
@@ -13,7 +15,7 @@ import dev.simplified.shared.javac.compat.v17.JavacCompatV17;
  * divergence the fix is a new subclass plus a version gate here - no
  * caller change required.
  *
- * <p>Version-gated static dispatch, deliberately not {@link java.util.ServiceLoader} -
+ * <p>Version-gated static dispatch, deliberately not {@link ServiceLoader} -
  * fewer moving parts, no META-INF plumbing, no classloader surprises when
  * {@code --add-exports} misconfigurations surface.
  */

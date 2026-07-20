@@ -8,10 +8,11 @@ import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypes;
 import com.intellij.psi.util.InheritanceUtil;
 import com.intellij.psi.util.PsiUtil;
+import dev.simplified.classbuilder.apt.FieldSpec;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * PSI-side analogue of {@link dev.simplified.classbuilder.apt.FieldSpec}: the shape
+ * PSI-side analogue of {@link FieldSpec}: the shape
  * vocabulary the augment provider needs to synthesise setters. FieldSpec
  * itself is tied to {@code javax.lang.model} (APT-only); this mirror is
  * derived from PSI so editor-time synthesis has no APT dependency.
@@ -43,7 +44,7 @@ public final class PsiFieldShape {
      * Recognised as a {@code Collection}/{@code Map} subtype by a supertype
      * walk rather than an exact {@code java.util.*} match (e.g.
      * {@code dev.simplified.collection.ConcurrentList}). Mirrors
-     * {@link dev.simplified.classbuilder.apt.FieldSpec#isCustomContainer}.
+     * {@link FieldSpec#isCustomContainer}.
      */
     public final boolean isCustomContainer;
     public final PsiType collectionElement;
@@ -174,7 +175,7 @@ public final class PsiFieldShape {
      * recognise any {@code Collection}/{@code Map} subtype by walking its
      * supertypes, reading the element/key/value types off the matched java.util
      * supertype. Mirrors the {@code Types}-based walk in
-     * {@link dev.simplified.classbuilder.apt.FieldSpec}. Flagged
+     * {@link FieldSpec}. Flagged
      * {@link Builder#isCustomContainer} so the extractor mirrors the APT's
      * initializer requirement for {@code @Collector}.
      */

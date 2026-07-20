@@ -2,6 +2,8 @@ package dev.simplified.shared.javac.compat;
 
 import dev.simplified.shared.javac.compat.v17.JavacAccessV17;
 
+import java.util.ServiceLoader;
+
 /**
  * Resolves a {@link JavacAccess} implementation for the running JDK.
  *
@@ -14,7 +16,7 @@ import dev.simplified.shared.javac.compat.v17.JavacAccessV17;
  * one gate, no caller change required.
  *
  * <p>Version-gated static dispatch, deliberately not
- * {@link java.util.ServiceLoader} - this runs from a static initializer
+ * {@link ServiceLoader} - this runs from a static initializer
  * before any classpath service-discovery has had a chance to warm up.
  */
 public final class JavacAccessFactory {

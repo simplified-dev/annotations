@@ -21,10 +21,12 @@ import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypes;
 import com.intellij.psi.TypeAnnotationProvider;
+import com.intellij.psi.augment.PsiAugmentProvider;
 import com.intellij.psi.impl.light.LightMethodBuilder;
 import com.intellij.psi.impl.light.LightModifierList;
 import com.intellij.psi.impl.light.LightParameter;
 import com.intellij.psi.impl.light.LightPsiClassBuilder;
+import com.intellij.util.IncorrectOperationException;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
@@ -174,7 +176,7 @@ final class GeneratedMemberFactory {
     /**
      * Builds a {@link LightParameter} carrying the given annotation FQNs on its
      * modifier list. Platform's {@link LightModifierList#addAnnotation(String)}
-     * throws {@link com.intellij.util.IncorrectOperationException}, so this
+     * throws {@link IncorrectOperationException}, so this
      * helper hands the parameter a custom modifier list ({@link AnnotatedLightModifierList})
      * that stores pre-built {@link PsiAnnotation}s from
      * {@link PsiElementFactory#createAnnotationFromText}. Only FQN-only
@@ -183,7 +185,7 @@ final class GeneratedMemberFactory {
      * delivered at query time by
      * {@link ClassBuilderInferredAnnotationProvider}.
      *
-     * <p>{@code declarationScope} must be the {@link com.intellij.psi.PsiMethod}
+     * <p>{@code declarationScope} must be the {@link PsiMethod}
      * the parameter belongs to (matches what
      * {@code LightMethodBuilder.addParameter(name, type)} does internally).
      * Passing the containing class instead causes IntelliJ 233+ to silently
@@ -264,7 +266,7 @@ final class GeneratedMemberFactory {
      *
      * <p>This pattern mirrors Lombok's {@code LombokLightClassBuilder}: in
      * IntelliJ 2023.3+, the IDE consults
-     * {@link com.intellij.psi.augment.PsiAugmentProvider#collectAugments}
+     * {@link PsiAugmentProvider#collectAugments}
      * for the inner class's members rather than reading the
      * {@code LightPsiClassBuilder.myMethods} field that {@code addMethod}
      * populates. Pre-attaching methods to that field leaves them invisible

@@ -1,6 +1,7 @@
 package dev.simplified.classbuilder.editor;
 
 import com.intellij.codeInsight.InferredAnnotationsManager;
+import com.intellij.codeInsight.InferredAnnotationsManagerImpl;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiFile;
@@ -198,7 +199,7 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
      * Direct check that the platform's printf inspection fires on synth
      * formattable setters - mirrors what the user actually sees. Catches
      * regressions where {@code @PrintFormat} is attached to the parameter
-     * but isn't surfaced in a way that {@link com.intellij.psi.PsiParameter#getAnnotation}
+     * but isn't surfaced in a way that {@link PsiParameter#getAnnotation}
      * (or {@code AnnotationUtil}) can find.
      */
     public void testStringFormattable_propagatesToPrintFormatLookup() {
@@ -419,7 +420,7 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
      * always route through the full provider chain for light elements, so we
      * assert the registration directly - the real IDE's daemon loop iterates
      * the same list per
-     * {@link com.intellij.codeInsight.InferredAnnotationsManagerImpl}.
+     * {@link InferredAnnotationsManagerImpl}.
      */
     public void testProviderRegisteredInExtensionPoint() {
         boolean present = com.intellij.codeInsight.InferredAnnotationProvider.EP_NAME

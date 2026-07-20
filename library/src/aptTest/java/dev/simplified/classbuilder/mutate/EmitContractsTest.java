@@ -15,6 +15,7 @@ import javax.tools.JavaFileObject;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -32,7 +33,7 @@ import static org.junit.Assert.fail;
  * Mirrors {@link dev.simplified.classbuilder.apt.BuilderEmitter#emitContract}.
  *
  * <p>{@code @XContract} has {@code @Retention(CLASS)}, so
- * {@link java.lang.reflect.Method#getDeclaredAnnotations()} can't observe it.
+ * {@link Method#getDeclaredAnnotations()} can't observe it.
  * Parsing the class-file bytes via ASM reaches the
  * {@code RuntimeInvisibleAnnotations} attribute where class-retention
  * annotations live.

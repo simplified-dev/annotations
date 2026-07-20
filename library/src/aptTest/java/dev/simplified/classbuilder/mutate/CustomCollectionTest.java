@@ -4,6 +4,7 @@ import com.google.testing.compile.Compilation;
 import com.google.testing.compile.Compiler;
 import com.google.testing.compile.JavaFileObjects;
 import dev.simplified.classbuilder.apt.ClassBuilderProcessor;
+import dev.simplified.classbuilder.apt.FieldSpec;
 import org.junit.Test;
 
 import javax.tools.JavaFileObject;
@@ -28,7 +29,7 @@ import static org.junit.Assert.fail;
 /**
  * Round-trip coverage for {@code @Collector} on a project-specific
  * (non-{@code java.util}) collection/map type recognised by the supertype walk
- * in {@link dev.simplified.classbuilder.apt.FieldSpec}.
+ * in {@link FieldSpec}.
  *
  * <p>The fixtures use an <em>interface</em> container built through a static
  * factory - the exact shape of {@code dev.simplified.collection.ConcurrentList}

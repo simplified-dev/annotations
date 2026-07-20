@@ -7,6 +7,7 @@ import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
+import com.intellij.psi.PsiType;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
 
 /**
@@ -17,7 +18,7 @@ import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
  *
  * <p>Extends {@link LightJavaCodeInsightFixtureTestCase} so {@code java.lang.String}
  * etc. resolve via the bundled mock JDK - tests that assert on
- * {@link com.intellij.psi.PsiType#getCanonicalText} need that mapping to
+ * {@link PsiType#getCanonicalText} need that mapping to
  * return FQNs instead of source text.
  */
 public class LazyAugmentProviderTest extends LightJavaCodeInsightFixtureTestCase {

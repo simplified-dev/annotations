@@ -6,6 +6,7 @@ import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
+import java.util.HashMap;
 
 /**
  * Marks an enum's instance field as a lookup key for use with
@@ -26,7 +27,7 @@ import java.lang.annotation.Target;
  *
  * <p>Lookup is a zero-allocation linear scan over the parallel array. First
  * match wins on duplicate keys. For typical enum sizes (&lt; 32 constants)
- * the scan is faster than a {@link java.util.HashMap} due to cache locality
+ * the scan is faster than a {@link HashMap} due to cache locality
  * and zero hash computation.
  *
  * <h2>Strict-validation toggles</h2>

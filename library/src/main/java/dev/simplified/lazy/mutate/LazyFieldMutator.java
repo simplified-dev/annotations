@@ -23,6 +23,7 @@ import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
 import com.sun.tools.javac.util.Position;
+import dev.simplified.annotations.AccessLevel;
 import dev.simplified.classbuilder.apt.FieldSpec;
 
 import javax.annotation.processing.Messager;
@@ -294,7 +295,7 @@ public final class LazyFieldMutator {
     /**
      * Reads the {@code access} attribute from the field's {@code @Lazy}
      * annotation and translates it to the matching javac modifier flag.
-     * {@link dev.simplified.annotations.AccessLevel#PACKAGE PACKAGE} maps
+     * {@link AccessLevel#PACKAGE PACKAGE} maps
      * to {@code 0L} (no keyword). Default when the attribute is absent is
      * {@link Flags#PUBLIC}, matching the annotation's declared default.
      */

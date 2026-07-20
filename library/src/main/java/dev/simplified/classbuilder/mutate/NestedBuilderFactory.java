@@ -17,6 +17,7 @@ import com.sun.tools.javac.tree.TreeMaker;
 import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
+import dev.simplified.classbuilder.apt.BuilderConfig;
 import dev.simplified.classbuilder.apt.FieldSpec;
 
 /**
@@ -73,8 +74,8 @@ final class NestedBuilderFactory {
     /**
      * Emits {@code public Target build() { Target t = new Target(f1, f2, ...);
      * (validate?) BuildFlagValidator.validate(t); return t; }}.
-     * Honours {@link dev.simplified.classbuilder.apt.BuilderConfig#validate()} and
-     * {@link dev.simplified.classbuilder.apt.BuilderConfig#factoryMethod()}.
+     * Honours {@link BuilderConfig#validate()} and
+     * {@link BuilderConfig#factoryMethod()}.
      *
      * <p>Validation runs against the constructed target, not the Builder,
      * because {@code @BuildRule} annotations live on the target class's

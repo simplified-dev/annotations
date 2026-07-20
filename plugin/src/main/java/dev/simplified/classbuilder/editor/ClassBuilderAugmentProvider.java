@@ -11,6 +11,7 @@ import com.intellij.psi.impl.source.PsiExtensibleClass;
 import com.intellij.psi.util.CachedValueProvider;
 import com.intellij.psi.util.CachedValuesManager;
 import com.intellij.psi.util.PsiModificationTracker;
+import com.intellij.util.IdempotenceChecker;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -37,7 +38,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
     /**
      * Memoises per-target synthesised members. {@link CachedValuesManager}
      * periodically re-runs producers and requires the results be equal across
-     * invocations ({@link com.intellij.util.IdempotenceChecker}). Building a
+     * invocations ({@link IdempotenceChecker}). Building a
      * fresh {@code LightPsiClassBuilder} / {@code LightMethodBuilder} on each
      * call yields new-identity instances that fail that check, so we keep one
      * cached pair on the target's user data keyed by the resolved
@@ -176,7 +177,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      * Returns cached {@link SynthesizedMembers} when the stored config matches
      * the current annotation, otherwise re-synthesises and replaces the cache.
      * Pairs with {@link #SYNTHESIZED} to defeat
-     * {@link com.intellij.util.IdempotenceChecker} re-invocation failures:
+     * {@link IdempotenceChecker} re-invocation failures:
      * whoever wins the synthesis race stores its result under the key, and
      * subsequent calls (including the checker's rerun) retrieve the same
      * {@link PsiClass} / {@link PsiMethod} instances.

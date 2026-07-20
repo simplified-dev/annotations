@@ -14,7 +14,7 @@ import java.util.List;
 /**
  * Bridges {@code @dev.simplified.annotations.XContract} into IntelliJ's data-flow
  * analysis by synthesising an equivalent
- * {@link org.jetbrains.annotations.Contract} on demand.
+ * {@link Contract} on demand.
  *
  * <p>IntelliJ asks every registered {@code InferredAnnotationProvider} for
  * annotations on each method it analyses. When the requested annotation is

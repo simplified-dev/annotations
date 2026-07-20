@@ -6,10 +6,12 @@ import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
+import java.util.Collection;
+import java.util.Map;
 
 /**
- * Expands the setter matrix on a {@link java.util.Collection Collection} or
- * {@link java.util.Map Map} field in a {@link ClassBuilder}-annotated type.
+ * Expands the setter matrix on a {@link Collection} or
+ * {@link Map} field in a {@link ClassBuilder}-annotated type.
  *
  * <p>Without this annotation, a {@code List<T>} / {@code Set<T>} /
  * {@code Map<K,V>} field gets a single whole-collection replace setter

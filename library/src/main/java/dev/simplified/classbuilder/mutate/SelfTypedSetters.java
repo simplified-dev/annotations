@@ -19,6 +19,7 @@ import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.classbuilder.validate.Strings;
 
 /**
  * Self-typed variant of {@link FieldMutators}: emits setters whose return
@@ -213,7 +214,7 @@ final class SelfTypedSetters {
     /**
      * {@code B withName(@PrintFormat String format, Object... args)} that
      * stores {@code String.format(format, args)}. Falls back to
-     * {@link dev.simplified.classbuilder.validate.Strings#formatNullable} when the
+     * {@link Strings#formatNullable} when the
      * field carries {@code @Nullable}.
      */
     private JCMethodDecl stringFormattable(FieldSpec field) {

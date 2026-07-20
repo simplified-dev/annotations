@@ -3,8 +3,10 @@ package dev.simplified.shared.psi;
 import com.intellij.lang.Language;
 import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiAnnotation;
+import com.intellij.psi.PsiElementFactory;
 import com.intellij.psi.PsiManager;
 import com.intellij.psi.impl.light.LightModifierList;
+import com.intellij.util.IncorrectOperationException;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -14,10 +16,10 @@ import java.util.Map;
 /**
  * {@link LightModifierList} subclass that exposes a caller-populated annotation
  * set. The platform's default implementation returns an empty annotation array
- * and throws {@link com.intellij.util.IncorrectOperationException} from
+ * and throws {@link IncorrectOperationException} from
  * {@link #addAnnotation(String)}; this subclass lets augment-provider synthesis
  * ride pre-built {@link PsiAnnotation}s (typically from
- * {@link com.intellij.psi.PsiElementFactory#createAnnotationFromText}) so
+ * {@link PsiElementFactory#createAnnotationFromText}) so
  * IntelliJ inspections that walk {@code getModifierList().getAnnotations()}
  * (printf, nullability, etc.) see them.
  *

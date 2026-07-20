@@ -8,6 +8,7 @@ import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElementFactory;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifierListOwner;
+import com.intellij.psi.impl.light.LightMethodBuilder;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import org.jetbrains.annotations.Contract;
 import org.jetbrains.annotations.NotNull;
@@ -23,7 +24,7 @@ import java.util.List;
  *
  * <p>{@code LightModifierList.addAnnotation(String)} only accepts zero-
  * attribute annotation FQNs, so attribute-carrying annotations cannot ride on
- * the {@link com.intellij.psi.impl.light.LightMethodBuilder}s the augment
+ * the {@link LightMethodBuilder}s the augment
  * provider produces. This provider fills that gap: for every method tagged by
  * {@link GeneratedMemberMarker}, it reconstructs the contract shape from the
  * method's signature and the containing target's {@code @ClassBuilder} config,

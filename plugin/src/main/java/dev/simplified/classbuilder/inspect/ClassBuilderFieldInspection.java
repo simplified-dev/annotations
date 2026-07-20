@@ -16,6 +16,9 @@ import com.intellij.psi.util.InheritanceUtil;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Collection;
+import java.util.Map;
+
 /**
  * Flags misuse of companion field annotations on a {@code @ClassBuilder}
  * target. Examples:
@@ -23,8 +26,8 @@ import org.jetbrains.annotations.Nullable;
  * <ul>
  *   <li>{@code @Formattable} on a non-String / non-Optional&lt;String&gt; field</li>
  *   <li>{@code @Negate} on a non-{@code boolean} field</li>
- *   <li>{@code @Collector} on a non-{@link java.util.Collection Collection} or
- *       non-{@link java.util.Map Map} field</li>
+ *   <li>{@code @Collector} on a non-{@link Collection} or
+ *       non-{@link Map} field</li>
  *   <li>{@code @BuildRule(flag = @BuildFlag(pattern = ...))} on a
  *       non-{@link CharSequence} field</li>
  *   <li>{@code @BuildRule(flag = @BuildFlag(limit = N))} on a type where the

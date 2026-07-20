@@ -10,6 +10,7 @@ import com.sun.tools.javac.tree.JCTree.JCMethodInvocation;
 import com.sun.tools.javac.tree.JCTree.JCNewClass;
 import com.sun.tools.javac.tree.JCTree.JCStatement;
 import com.sun.tools.javac.tree.JCTree.JCVariableDecl;
+import com.sun.tools.javac.parser.ParserFactory;
 import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.TreeCopier;
 import com.sun.tools.javac.tree.TreeMaker;
@@ -32,7 +33,7 @@ import dev.simplified.shared.javac.JavacTypeFactory;
  * <p>This mirrors Lombok's {@code @Builder.Default} plumbing: embedding the
  * initializer expression directly in the Builder's field declaration clashes
  * with javac's flow analyser (manifests as {@code Bits.incl} assertions) and
- * reparsing via {@link com.sun.tools.javac.parser.ParserFactory} produces a
+ * reparsing via {@link ParserFactory} produces a
  * tree whose internal state still confuses flow analysis. Cloning the
  * already-parsed tree from the target's own compilation unit - with symbol
  * and type pointers reset so javac re-attributes in the method-body scope -
@@ -65,7 +66,7 @@ final class RetainedInitFactory {
 
     /**
      * For every field whose initializer tree was captured by
-     * {@link dev.simplified.shared.apt.SourceIntrospector}, appends a provider
+     * {@link SourceIntrospector}, appends a provider
      * method to the target class. A tree is captured either for
      * {@code @BuildRule(retainInit = true)} or for a {@code @Collector} on a
      * custom (non-java.util) container, which needs the field's own factory to

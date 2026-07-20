@@ -2,6 +2,7 @@ package dev.simplified.classbuilder.editor;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
 
 import com.intellij.openapi.application.AccessToken;
+import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiMethod;
@@ -365,7 +366,7 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
 
     /**
      * Cross-package variant - exercises {@link ClassBuilderElementFinder}'s
-     * bridge from {@link com.intellij.psi.JavaPsiFacade#findClass} to the
+     * bridge from {@link JavaPsiFacade#findClass} to the
      * augmented inner class. Without that finder the highlighter calls
      * {@code findClass("a.Doc.Builder", scope)} which returns null (augment
      * providers don't participate in the global class index), and reports
