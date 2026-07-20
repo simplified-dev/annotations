@@ -190,6 +190,84 @@ public class LazyFieldMutatorTest {
     }
 
     // ------------------------------------------------------------------
+    // What a standalone @Lazy initializer may reference
+    // ------------------------------------------------------------------
+
+    /**
+     * Standalone {@code @Lazy} wraps the initializer in place, as
+     * {@code Lazy.of(() -> <init>)} still sitting in the field initializer -
+     * an instance context. So unlike a retained builder default, which is
+     * hoisted into a static provider, a lazy initializer may reach the
+     * enclosing instance freely.
+     */
+    @Test
+    public void standaloneLazy_initializerMayReferenceInstanceState() {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Inst",
+            "package demo;",
+            "import dev.simplified.annotations.Lazy;",
+            "public class Inst {",
+            "    String base = \"b\";",
+            "    @Lazy String fromMethod = compute();",
+            "    @Lazy String fromField = base + \"x\";",
+            "    @Lazy String fromThis = this.base + \"y\";",
+            "    String compute() { return \"c\"; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+    }
+
+    /**
+     * The wrapping copier must preserve source positions. javac reads them for
+     * forward-reference detection - an earlier field looks like a forward
+     * reference if the copy claims an invalid position - and for
+     * {@code Flow$AssignAnalyzer.trackable}, which allocates a lambda
+     * parameter's definite-assignment address only when its position is valid.
+     * Failing the latter, javac dies inside {@code Bits.incl} with no
+     * diagnostic at all.
+     */
+    @Test
+    public void standaloneLazy_initializerMayContainLambdaWithParameters() {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Lam",
+            "package demo;",
+            "import dev.simplified.annotations.Lazy;",
+            "import java.util.function.Function;",
+            "public class Lam {",
+            "    @Lazy Function<String,String> f = s -> s + \"!\";",
+            "    @Lazy Function<String,Integer> g = String::length;",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+    }
+
+    /**
+     * The one place the two features genuinely disagree. On a
+     * {@code @ClassBuilder} target the value must arrive through the builder
+     * slot, whose default is a static {@code $default$} provider - so the
+     * instance references a standalone {@code @Lazy} field may make become
+     * illegal. {@code @ClassBuilder(retainInit = false)} is the way out.
+     */
+    @Test
+    public void classBuilderLazy_initializerCannotReferenceInstanceState() {
+        String[] lines = {
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Lazy;",
+            "@ClassBuilder(validate = false)",
+            "public class Mixed {",
+            "    @Lazy String v = compute();",
+            "    String compute() { return \"c\"; }",
+            "}"
+        };
+        Compilation rejected = compile(JavaFileObjects.forSourceLines("demo.Mixed", lines));
+        assertThat(rejected).failed();
+        assertThat(rejected).hadErrorContaining("cannot be referenced from a static context");
+
+        lines[3] = "@ClassBuilder(validate = false, retainInit = false)";
+        Compilation accepted = compile(JavaFileObjects.forSourceLines("demo.Mixed", lines));
+        assertThat(accepted).succeeded();
+    }
+
+    // ------------------------------------------------------------------
     // @ClassBuilder + @Lazy + a retained initializer
     // ------------------------------------------------------------------
 

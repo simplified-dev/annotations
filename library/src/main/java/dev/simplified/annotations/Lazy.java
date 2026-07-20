@@ -57,7 +57,14 @@ import java.lang.annotation.Target;
  *       processor rejects the pairing rather than letting it misbehave.</li>
  *   <li>Standalone use (no {@code @ClassBuilder} on the enclosing class)
  *       requires a field initializer; the initializer becomes the supplier
- *       body.</li>
+ *       body. Because that supplier is created in the field initializer, an
+ *       instance context, the expression may reference the enclosing instance
+ *       freely - instance methods, instance fields, and {@code this}.</li>
+ *   <li>With {@code @ClassBuilder} the value arrives through the builder,
+ *       whose default is a {@code static} provider holding the initializer, so
+ *       the expression may <b>not</b> reference the enclosing instance there.
+ *       Set {@link ClassBuilder#retainInit() retainInit = false} on the class
+ *       when a lazy field needs an instance-referencing initializer.</li>
  *   <li>With {@code @ClassBuilder} the builder supplies the value, so a field
  *       with no initializer must have its setter called. A deferred
  *       computation is expected to exist - building without supplying one

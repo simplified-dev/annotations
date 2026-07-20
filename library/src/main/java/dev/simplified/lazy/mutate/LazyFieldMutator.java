@@ -464,7 +464,19 @@ public final class LazyFieldMutator {
         public <T extends JCTree> T copy(T tree, Void unused) {
             T copy = super.copy(tree, unused);
             if (copy != null) {
-                copy.pos = Position.NOPOS;
+                // Positions are deliberately left as-is. Unlike the retained
+                // initializer, which moves into a separate provider method,
+                // this expression stays exactly where it was and is only
+                // wrapped in a lambda - so its original positions are the
+                // correct ones. Overwriting them breaks two javac checks that
+                // read positions: forward-reference detection compares a
+                // referenced field's position against the reference's, so an
+                // earlier field starts looking like a forward reference; and
+                // Flow$AssignAnalyzer.trackable gates a lambda parameter's
+                // definite-assignment address on its position, failing which
+                // the following Bits.incl asserts and javac dies with no
+                // diagnostic at all. Only sym / type need clearing, so javac
+                // re-attributes inside the lambda body.
                 copy.type = null;
                 if (copy instanceof JCIdent id) id.sym = null;
                 else if (copy instanceof JCFieldAccess fa) fa.sym = null;
