@@ -16,6 +16,7 @@ public record BuilderConfig(
     String toBuilderMethodName,
     String methodPrefix,
     AccessLevel access,
+    AccessLevel constructorAccess,
     boolean generateBuilder,
     boolean generateFrom,
     boolean generateMutate,

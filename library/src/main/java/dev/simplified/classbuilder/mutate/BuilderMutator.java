@@ -57,6 +57,18 @@ public final class BuilderMutator {
 
         warnUnbuildableCustomCollectors(targetElement, fields);
 
+        boolean isAbstract = targetElement.getModifiers().contains(Modifier.ABSTRACT);
+        String annotatedSuper = findAnnotatedDirectSuperSimpleName(targetElement);
+
+        // The build() we emit calls new Target(f1, f2, ...) positionally, and a
+        // plain class that declares no constructor gets only javac's no-arg
+        // default - so synthesise the matching all-args form. Injected ahead of
+        // LazyFieldMutator so a @Lazy field's parameter and assignment are
+        // rewritten here exactly as they would be in a hand-written ctor.
+        if (needsAllArgsConstructor(targetElement, target, ctx, isAbstract, annotatedSuper)) {
+            bridge.compat().appendDef(target, new AllArgsConstructorFactory(ctx).build());
+        }
+
         // @Lazy fields: rewrite storage type to Lazy<T>, wrap initialisers,
         // adjust matching constructor params + assignments, synthesise
         // memoizing getters. Runs before any other phase (SuperBuilder or
@@ -64,9 +76,6 @@ public final class BuilderMutator {
         // field tree, and so the synthesised getter is in place before the
         // nested Builder generation considers method-name collisions.
         new LazyFieldMutator(ctx.bridge(), targetElement, target, fields, true, messager).mutate();
-
-        boolean isAbstract = targetElement.getModifiers().contains(Modifier.ABSTRACT);
-        String annotatedSuper = findAnnotatedDirectSuperSimpleName(targetElement);
 
         if (isAbstract || annotatedSuper != null) {
             // For SuperBuilder subclasses, the bootstrap from(T) must populate
@@ -97,6 +106,35 @@ public final class BuilderMutator {
 
         new BootstrapMethodFactory(ctx, messager).appendAll();
         return true;
+    }
+
+    /**
+     * Decides whether the target needs a synthesised all-args constructor.
+     * Skipped for records (the canonical constructor already has the shape), for
+     * SuperBuilder targets (they take a copy constructor instead), when a
+     * {@code factoryMethod} means {@code build()} never calls {@code new}, when
+     * the author declared any constructor, when a hand-written nested builder
+     * suppresses injection wholesale, and when there are no fields to pass -
+     * that last case would collide with javac's own default constructor.
+     *
+     * @param targetElement the annotated type
+     * @param target the target's class declaration
+     * @param ctx the per-target mutation context
+     * @param isAbstract whether the target is abstract
+     * @param annotatedSuper simple name of an annotated direct super, or {@code null}
+     * @return whether an all-args constructor should be injected
+     */
+    private boolean needsAllArgsConstructor(TypeElement targetElement,
+                                            JCClassDecl target,
+                                            MutationContext ctx,
+                                            boolean isAbstract,
+                                            String annotatedSuper) {
+        if (targetElement.getKind() == ElementKind.RECORD) return false;
+        if (isAbstract || annotatedSuper != null) return false;
+        if (!ctx.config().factoryMethod().isEmpty()) return false;
+        if (ctx.fields().isEmpty()) return false;
+        if (AllArgsConstructorFactory.hasExplicitConstructor(target)) return false;
+        return !hasExistingNested(target, ctx.builderName());
     }
 
     /**

@@ -58,8 +58,16 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
                 String fromMethodName() default "from";
                 String toBuilderMethodName() default "mutate";
                 String methodPrefix() default "";
+                String factoryMethod() default "";
+                AccessLevel access() default AccessLevel.PUBLIC;
+                AccessLevel constructorAccess() default AccessLevel.PACKAGE;
                 String[] exclude() default {};
             }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/AccessLevel.java",
+            """
+            package dev.simplified.annotations;
+            public enum AccessLevel { PUBLIC, PROTECTED, PACKAGE, PRIVATE }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/Negate.java",
             """
@@ -123,6 +131,130 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
             GeneratedMemberMarker.isGenerated(froms[0]));
         assertTrue("mutate() carries generated marker",
             GeneratedMemberMarker.isGenerated(mutates[0]));
+    }
+
+    // ------------------------------------------------------------------
+    // All-args constructor synthesis
+    // ------------------------------------------------------------------
+
+    public void testAllArgsConstructorSynthesized() {
+        PsiFile file = myFixture.configureByText("Gadget.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Gadget {
+                String name;
+                int count;
+            }
+            """);
+        PsiClass gadget = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+
+        PsiMethod[] ctors = gadget.getConstructors();
+        assertEquals("all-args constructor must be synthesised", 1, ctors.length);
+        assertEquals("parameter count must match the field list", 2, ctors[0].getParameterList().getParametersCount());
+        assertTrue("constructor carries generated marker", GeneratedMemberMarker.isGenerated(ctors[0]));
+        assertFalse("constructor must be package-private by default",
+            ctors[0].hasModifierProperty(PsiModifier.PUBLIC));
+        assertFalse("constructor must be package-private by default",
+            ctors[0].hasModifierProperty(PsiModifier.PRIVATE));
+    }
+
+    public void testConstructorAccess_honoured() {
+        PsiFile file = myFixture.configureByText("Sealed.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(constructorAccess = AccessLevel.PRIVATE)
+            public class Sealed {
+                String name;
+            }
+            """);
+        PsiClass sealed = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+        PsiMethod[] ctors = sealed.getConstructors();
+        assertEquals(1, ctors.length);
+        assertTrue("constructorAccess must drive the modifier",
+            ctors[0].hasModifierProperty(PsiModifier.PRIVATE));
+    }
+
+    public void testExplicitConstructor_noSynthesis() {
+        PsiFile file = myFixture.configureByText("Manual.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Manual {
+                String name;
+                int count;
+                public Manual(String name, int count) { this.name = name; this.count = count; }
+            }
+            """);
+        PsiClass manual = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+        PsiMethod[] ctors = manual.getConstructors();
+        assertEquals("author's constructor must be the only one", 1, ctors.length);
+        assertFalse("author's constructor must not carry the generated marker",
+            GeneratedMemberMarker.isGenerated(ctors[0]));
+    }
+
+    public void testFactoryMethod_noConstructorSynthesis() {
+        PsiFile file = myFixture.configureByText("Factoried.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(factoryMethod = "of")
+            public class Factoried {
+                String name;
+                public static Factoried of(String name) { return null; }
+            }
+            """);
+        PsiClass factoried = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+        assertEquals("a set factoryMethod suppresses synthesis", 0, factoried.getConstructors().length);
+    }
+
+    public void testAbstractClass_noAllArgsConstructor() {
+        PsiFile file = myFixture.configureByText("Base.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Base {
+                String name;
+            }
+            """);
+        PsiClass base = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+        assertEquals("abstract targets take the copy constructor instead",
+            0, base.getConstructors().length);
+    }
+
+    public void testRecord_noAllArgsConstructor() {
+        PsiFile file = myFixture.configureByText("Coord.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public record Coord(String name, int count) {}
+            """);
+        PsiClass coord = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+        for (PsiMethod ctor : coord.getConstructors()) {
+            assertFalse("record must keep only its canonical constructor",
+                GeneratedMemberMarker.isGenerated(ctor));
+        }
+    }
+
+    /**
+     * The user-facing payoff: a same-package {@code new Target(...)} must resolve
+     * in the editor before the first {@code javac} round rather than showing as
+     * an unresolved constructor.
+     */
+    public void testHighlighting_samePackageNewResolves() {
+        myFixture.configureByText("Consumer.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            class Target {
+                String name;
+                int count;
+            }
+            public class Consumer {
+                static Target make() { return new Target("a", 1); }
+            }
+            """);
+        myFixture.checkHighlighting(false, false, false);
     }
 
     public void testNonAnnotatedClass_noAugment() {

@@ -136,6 +136,16 @@ public @interface ClassBuilder {
     @NotNull AccessLevel access() default AccessLevel.PUBLIC;
 
     /**
+     * The access level of the synthesised all-args constructor. Defaults to
+     * package-private, matching the implicit constructor Lombok {@code @Builder}
+     * supplies, so callers are routed through {@code build()} and its
+     * {@code @BuildFlag} validation rather than instantiating the type directly.
+     * Independent of {@link #access()}, which governs the builder class and the
+     * bootstrap methods.
+     */
+    @NotNull AccessLevel constructorAccess() default AccessLevel.PACKAGE;
+
+    /**
      * Whether to generate the static {@code builder()} factory on the annotated
      * type.
      */

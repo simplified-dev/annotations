@@ -7,6 +7,7 @@ import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
+import com.intellij.psi.impl.source.PsiExtensibleClass;
 import com.intellij.psi.util.CachedValueProvider;
 import com.intellij.psi.util.CachedValuesManager;
 import com.intellij.psi.util.PsiModificationTracker;
@@ -14,6 +15,7 @@ import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
@@ -49,7 +51,17 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
 
     private record SynthesizedMembers(GeneratedMemberFactory.EditorBuilderConfig config,
                                       List<PsiMethod> bootstrapMethods,
-                                      PsiClass builderClass) {
+                                      PsiClass builderClass,
+                                      @Nullable PsiMethod allArgsConstructor) {
+
+        /** Bootstrap methods plus the all-args constructor when one was synthesised. */
+        List<PsiMethod> allMethods() {
+            if (allArgsConstructor == null) return bootstrapMethods;
+            List<PsiMethod> out = new ArrayList<>(bootstrapMethods.size() + 1);
+            out.addAll(bootstrapMethods);
+            out.add(allArgsConstructor);
+            return out;
+        }
     }
 
     @Override
@@ -124,7 +136,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             }
             SynthesizedMembers members = synthesizeOrReuse(target, resolved);
             return CachedValueProvider.Result.create(
-                members.bootstrapMethods(),
+                members.allMethods(),
                 PsiModificationTracker.MODIFICATION_COUNT);
         });
     }
@@ -184,12 +196,45 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         try {
             PsiClass builderClass = GeneratedMemberFactory.synthesizeBuilderClass(target, config);
             List<PsiMethod> bootstrap = GeneratedMemberFactory.bootstrapMethods(target, config, builderClass);
-            SynthesizedMembers fresh = new SynthesizedMembers(config, bootstrap, builderClass);
+            PsiMethod ctor = needsAllArgsConstructor(target, config)
+                ? GeneratedMemberFactory.allArgsConstructor(target, config)
+                : null;
+            SynthesizedMembers fresh = new SynthesizedMembers(config, bootstrap, builderClass, ctor);
             target.putUserData(SYNTHESIZED, fresh);
             return fresh;
         } finally {
             IN_PROGRESS.get().remove(target);
         }
+    }
+
+    /**
+     * Mirrors the APT-side gate in {@code BuilderMutator.needsAllArgsConstructor}
+     * so the editor surfaces a constructor exactly when javac will inject one.
+     * Records keep their canonical constructor, a set {@code factoryMethod} means
+     * {@code build()} never calls {@code new}, and any author-declared
+     * constructor suppresses synthesis outright.
+     *
+     * <p>Reads {@code getOwnMethods()} rather than {@code getConstructors()}:
+     * the latter is augment-aware and would recurse back into this provider.
+     */
+    private static boolean needsAllArgsConstructor(PsiClass target,
+                                                   GeneratedMemberFactory.EditorBuilderConfig config) {
+        if (target.isRecord() || target.isInterface() || target.isEnum()) return false;
+        if (target.hasModifierProperty(PsiModifier.ABSTRACT)) return false;
+        if (!config.factoryMethod().isEmpty()) return false;
+        // A concrete subclass of an annotated super sits in a SuperBuilder chain
+        // and takes CopyConstructorFactory's Target(Builder b) instead.
+        PsiClass superClass = target.getSuperClass();
+        if (superClass != null && findClassBuilderAnnotation(superClass) != null) return false;
+        if (target instanceof PsiExtensibleClass extensible) {
+            for (PsiMethod own : extensible.getOwnMethods()) {
+                if (own.isConstructor()) return false;
+            }
+            for (PsiClass nested : extensible.getOwnInnerClasses()) {
+                if (config.builderName().equals(nested.getName())) return false;
+            }
+        }
+        return true;
     }
 
     private static PsiAnnotation findClassBuilderAnnotation(PsiClass target) {

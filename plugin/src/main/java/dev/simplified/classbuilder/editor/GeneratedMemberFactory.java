@@ -100,6 +100,45 @@ final class GeneratedMemberFactory {
         return out;
     }
 
+    /**
+     * Synthesises the all-args constructor the APT pipeline injects, so the
+     * editor resolves a same-package {@code new Target(...)} before the first
+     * {@code javac} round. Parameter order and types mirror
+     * {@code AllArgsConstructorFactory}, including the {@code Supplier<T>}
+     * rewrite {@code @Lazy} fields receive.
+     *
+     * @param target the annotated type
+     * @param config resolved editor-side builder configuration
+     * @return the synthesised constructor, or {@code null} when the target has
+     *         no builder-visible fields to pass
+     */
+    static @Nullable PsiMethod allArgsConstructor(PsiClass target, EditorBuilderConfig config) {
+        Project project = target.getProject();
+        PsiManager psiManager = PsiManager.getInstance(project);
+        PsiElementFactory elements = JavaPsiFacade.getElementFactory(project);
+
+        List<PsiFieldShape> fields = PsiFieldShapeExtractor.fromClass(target, excludedNames(target));
+        if (fields.isEmpty()) return null;
+
+        String name = target.getName();
+        if (name == null) return null;
+
+        LightMethodBuilder ctor = new LightMethodBuilder(psiManager, name)
+            .setConstructor(true)
+            .setContainingClass(target);
+        for (PsiFieldShape field : fields) {
+            PsiType type = field.lazy
+                ? elements.createTypeFromText(
+                    "java.util.function.Supplier<" + field.type.getCanonicalText() + ">", target)
+                : field.type;
+            ctor.addParameter(buildParam(ctor, field.name, type, false));
+        }
+        applyAccess(ctor, config.constructorAccess());
+        GeneratedMemberMarker.mark(ctor);
+        ctor.setNavigationElement(target);
+        return ctor;
+    }
+
     private static String builderTypeFqn(PsiClass target, EditorBuilderConfig config) {
         String qualified = target.getQualifiedName();
         String base = qualified != null ? qualified : target.getName();
@@ -626,7 +665,8 @@ final class GeneratedMemberFactory {
     record EditorBuilderConfig(String builderName, String builderMethodName,
                                String buildMethodName, String fromMethodName,
                                String toBuilderMethodName, String methodPrefix,
-                               String access, boolean generateBuilder,
+                               String access, String constructorAccess,
+                               String factoryMethod, boolean generateBuilder,
                                boolean generateFrom, boolean generateMutate) {
         static EditorBuilderConfig fromAnnotation(PsiAnnotation annotation) {
             String builderName = ClassBuilderConstants.stringAttr(annotation,
@@ -642,6 +682,11 @@ final class GeneratedMemberFactory {
             String methodPrefix = ClassBuilderConstants.stringAttr(annotation,
                 ClassBuilderConstants.ATTR_METHOD_PREFIX, ClassBuilderConstants.DEFAULT_METHOD_PREFIX);
             String access = ClassBuilderConstants.accessKeyword(annotation);
+            // Package-private default, matching the ctor Lombok @Builder supplies.
+            String constructorAccess = ClassBuilderConstants.accessKeyword(annotation,
+                ClassBuilderConstants.ATTR_CONSTRUCTOR_ACCESS, "");
+            String factoryMethod = ClassBuilderConstants.stringAttr(annotation,
+                ClassBuilderConstants.ATTR_FACTORY_METHOD, "");
             boolean generateBuilder = ClassBuilderConstants.booleanAttr(annotation,
                 ClassBuilderConstants.ATTR_GENERATE_BUILDER, true);
             boolean generateFrom = ClassBuilderConstants.booleanAttr(annotation,
@@ -650,6 +695,7 @@ final class GeneratedMemberFactory {
                 ClassBuilderConstants.ATTR_GENERATE_MUTATE, true);
             return new EditorBuilderConfig(builderName, builderMethodName, buildMethodName,
                 fromMethodName, toBuilderMethodName, methodPrefix, access,
+                constructorAccess, factoryMethod,
                 generateBuilder, generateFrom, generateMutate);
         }
     }

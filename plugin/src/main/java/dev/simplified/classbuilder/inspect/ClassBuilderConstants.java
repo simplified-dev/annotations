@@ -68,6 +68,8 @@ public final class ClassBuilderConstants {
     public static final @NotNull String ATTR_GENERATE_MUTATE = "generateMutate";
     public static final @NotNull String ATTR_EMIT_CONTRACTS = "emitContracts";
     public static final @NotNull String ATTR_ACCESS = "access";
+    public static final @NotNull String ATTR_CONSTRUCTOR_ACCESS = "constructorAccess";
+    public static final @NotNull String ATTR_FACTORY_METHOD = "factoryMethod";
 
     public static final @NotNull String DEFAULT_BUILDER_NAME = "Builder";
     public static final @NotNull String DEFAULT_BUILDER_METHOD = "builder";
@@ -93,23 +95,41 @@ public final class ClassBuilderConstants {
     }
 
     /**
-     * Reads a {@code AccessLevel.X} enum reference from an annotation attribute, or returns the fallback.
+     * Reads the {@code access} attribute as a Java modifier keyword, defaulting
+     * to {@code public}.
      */
     public static @NotNull String accessKeyword(@Nullable PsiAnnotation annotation) {
-        if (annotation == null) return "public";
-        PsiAnnotationMemberValue value = annotation.findAttributeValue(ATTR_ACCESS);
+        return accessKeyword(annotation, ATTR_ACCESS, "public");
+    }
+
+    /**
+     * Reads an {@code AccessLevel.X} enum reference from an annotation attribute
+     * as a Java modifier keyword. {@code PACKAGE} maps to the empty string,
+     * which is how package-private is spelled in source.
+     *
+     * @param annotation the annotation to read, or {@code null}
+     * @param attr the attribute name holding the {@code AccessLevel}
+     * @param fallback keyword to return when the attribute is absent or unreadable
+     * @return the modifier keyword, or the empty string for package-private
+     */
+    public static @NotNull String accessKeyword(@Nullable PsiAnnotation annotation,
+                                                @NotNull String attr,
+                                                @NotNull String fallback) {
+        if (annotation == null) return fallback;
+        PsiAnnotationMemberValue value = annotation.findAttributeValue(attr);
         if (value instanceof PsiReferenceExpression ref) {
             String name = ref.getReferenceName();
             if (name != null) {
                 return switch (name) {
+                    case "PUBLIC" -> "public";
                     case "PROTECTED" -> "protected";
                     case "PACKAGE" -> "";
                     case "PRIVATE" -> "private";
-                    default -> "public";
+                    default -> fallback;
                 };
             }
         }
-        return "public";
+        return fallback;
     }
 
 }
