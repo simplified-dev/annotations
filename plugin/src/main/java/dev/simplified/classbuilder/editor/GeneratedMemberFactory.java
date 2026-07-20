@@ -18,7 +18,9 @@ import com.intellij.psi.PsiEllipsisType;
 import com.intellij.psi.PsiManager;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
+import com.intellij.psi.PsiSubstitutor;
 import com.intellij.psi.PsiType;
+import com.intellij.psi.PsiTypeParameter;
 import com.intellij.psi.PsiTypes;
 import com.intellij.psi.TypeAnnotationProvider;
 import com.intellij.psi.augment.PsiAugmentProvider;
@@ -26,6 +28,7 @@ import com.intellij.psi.impl.light.LightMethodBuilder;
 import com.intellij.psi.impl.light.LightModifierList;
 import com.intellij.psi.impl.light.LightParameter;
 import com.intellij.psi.impl.light.LightPsiClassBuilder;
+import com.intellij.psi.impl.light.LightTypeParameterBuilder;
 import com.intellij.util.IncorrectOperationException;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -86,17 +89,19 @@ final class GeneratedMemberFactory {
         // re-resolve cleanly through that chain - it then flags the bootstrap
         // call with "Cannot access ...Builder". Threading the actual PsiClass
         // instance bypasses resolution entirely.
-        PsiClassType builderType = elements.createType(builderClass);
-        PsiClassType targetType = elements.createType(target);
-
         List<PsiMethod> out = new ArrayList<>(3);
         if (config.generateBuilder() && !config.builderMethodName().isEmpty()) {
-            out.add(buildStaticNoArg(psiManager, target, config.builderMethodName(), builderType, config.access()));
+            out.add(buildStaticNoArg(psiManager, elements, target, builderClass,
+                config.builderMethodName(), config.access()));
         }
         if (config.generateFrom() && !config.fromMethodName().isEmpty()) {
-            out.add(buildStaticOneArg(psiManager, target, config.fromMethodName(), builderType, targetType, "instance", config.access()));
+            out.add(buildStaticOneArg(psiManager, elements, target, builderClass,
+                config.fromMethodName(), "instance", config.access()));
         }
         if (config.generateMutate() && !config.toBuilderMethodName().isEmpty()) {
+            // An instance method, so the target's own parameters are in scope
+            // and it needs none of its own.
+            PsiClassType builderType = applied(elements, builderClass, target.getTypeParameters());
             out.add(buildInstanceNoArg(psiManager, target, config.toBuilderMethodName(), builderType, config.access()));
         }
         return out;
@@ -147,10 +152,53 @@ final class GeneratedMemberFactory {
         return base + "." + config.builderName();
     }
 
-    private static PsiMethod buildStaticNoArg(PsiManager manager, PsiClass target,
-                                              String name, PsiType returnType, String access) {
-        LightMethodBuilder m = new LightMethodBuilder(manager, name)
-            .setMethodReturnType(returnType)
+    /**
+     * A class type with the given type parameters applied, or the plain type
+     * when there are none. Which parameters to pass matters: a member declared
+     * inside the synth Builder must use the <em>Builder's</em> copies, while a
+     * static member on the target uses its own method-level copies - the
+     * target's own parameters are out of scope in a static context and would
+     * leave the type unsubstitutable at the call site.
+     */
+    /**
+     * A substitutor rewriting {@code from}'s type parameters into {@code to}'s,
+     * positionally. Used to re-express the target's declared field types in the
+     * synth Builder's own parameters.
+     *
+     * @param elements the element factory
+     * @param from the parameters appearing in the types to rewrite
+     * @param to the parameters to rewrite them into
+     * @return the substitutor, empty when either side has no parameters
+     */
+    private static PsiSubstitutor remap(PsiElementFactory elements,
+                                        PsiTypeParameter[] from, PsiTypeParameter[] to) {
+        PsiSubstitutor out = PsiSubstitutor.EMPTY;
+        for (int i = 0; i < from.length && i < to.length; i++) {
+            out = out.put(from[i], elements.createType(to[i]));
+        }
+        return out;
+    }
+
+    private static PsiClassType applied(PsiElementFactory elements, PsiClass cls,
+                                        PsiTypeParameter[] arguments) {
+        if (arguments.length == 0) return elements.createType(cls);
+        PsiType[] args = new PsiType[arguments.length];
+        for (int i = 0; i < arguments.length; i++) args[i] = elements.createType(arguments[i]);
+        return elements.createType(cls, args);
+    }
+
+    /**
+     * A {@code static} bootstrap on a generic target declares its own copies of
+     * the target's type parameters, so the caller can infer or witness them -
+     * {@code static <V> Builder<V> builder()}. The return type is built after
+     * the copies exist, since it has to reference them rather than the target's.
+     */
+    private static PsiMethod buildStaticNoArg(PsiManager manager, PsiElementFactory elements,
+                                              PsiClass target, PsiClass builderClass,
+                                              String name, String access) {
+        DocProxyingLightMethodBuilder m = new DocProxyingLightMethodBuilder(manager, name);
+        m.withTypeParameters(target.getTypeParameters());
+        m.setMethodReturnType(applied(elements, builderClass, m.getTypeParameters()))
             .addModifier(PsiModifier.STATIC)
             .setContainingClass(target);
         applyAccess(m, access);
@@ -159,14 +207,16 @@ final class GeneratedMemberFactory {
         return m;
     }
 
-    private static PsiMethod buildStaticOneArg(PsiManager manager, PsiClass target,
-                                               String name, PsiType returnType,
-                                               PsiType paramType, String paramName, String access) {
-        LightMethodBuilder m = new LightMethodBuilder(manager, name)
-            .setMethodReturnType(returnType)
+    private static PsiMethod buildStaticOneArg(PsiManager manager, PsiElementFactory elements,
+                                               PsiClass target, PsiClass builderClass,
+                                               String name, String paramName, String access) {
+        DocProxyingLightMethodBuilder m = new DocProxyingLightMethodBuilder(manager, name);
+        m.withTypeParameters(target.getTypeParameters());
+        PsiTypeParameter[] own = m.getTypeParameters();
+        m.setMethodReturnType(applied(elements, builderClass, own))
             .addModifier(PsiModifier.STATIC)
             .setContainingClass(target);
-        m.addParameter(buildParam(m, paramName, paramType, false, NOT_NULL_FQN));
+        m.addParameter(buildParam(m, paramName, applied(elements, target, own), false, NOT_NULL_FQN));
         applyAccess(m, access);
         GeneratedMemberMarker.mark(m);
         m.setNavigationElement(target);
@@ -275,13 +325,136 @@ final class GeneratedMemberFactory {
      * keep things in sync.
      */
     static PsiClass synthesizeBuilderClass(PsiClass target, EditorBuilderConfig config) {
+        PsiElementFactory elements = JavaPsiFacade.getElementFactory(target.getProject());
+        ChainRole role = ChainRole.of(target);
+
         GeneratedBuilderClass builder = new GeneratedBuilderClass(target, config.builderName());
         if (!config.access().isEmpty()) builder.getModifierList().addModifier(config.access());
         builder.getModifierList().addModifier(PsiModifier.STATIC);
+        if (role.isSelfTyped()) {
+            builder.getModifierList().addModifier(PsiModifier.ABSTRACT);
+            addSelfTypeParameters(elements, target, builder);
+        }
+        if (role.hasAnnotatedSuper()) {
+            applySuperBuilder(elements, target, builder, role);
+        }
         builder.setContainingClass(target);
         builder.setNavigationElement(target);
         GeneratedMemberMarker.mark(builder);
         return builder;
+    }
+
+    /**
+     * Appends {@code <T extends Target, B extends Builder<T, B>>} to a
+     * self-typed Builder. {@code B}'s bound names the Builder being built, so
+     * both parameters have to exist before either bound can be attached.
+     *
+     * <p>The names dodge whatever the target declares, since a generic target
+     * may itself use {@code T} or {@code B} - the same collision the APT side
+     * resolves in {@code MutationContext.selfTypeName}.
+     */
+    private static void addSelfTypeParameters(PsiElementFactory elements, PsiClass target,
+                                              GeneratedBuilderClass builder) {
+        Set<String> taken = new HashSet<>();
+        for (PsiTypeParameter tp : target.getTypeParameters()) taken.add(tp.getName());
+        PsiTypeParameter[] ownCopies = builder.getTypeParameters();
+
+        LightTypeParameterBuilder t = builder.addTypeParameter(freeTypeParamName("T", taken));
+        if (t == null) return;
+        taken.add(t.getName());
+        LightTypeParameterBuilder b = builder.addTypeParameter(freeTypeParamName("B", taken));
+        if (b == null) return;
+
+        t.getExtendsList().addReference(applied(elements, target, ownCopies));
+        // B extends Builder<own..., T, B>
+        PsiType[] args = new PsiType[ownCopies.length + 2];
+        for (int i = 0; i < ownCopies.length; i++) args[i] = elements.createType(ownCopies[i]);
+        args[ownCopies.length] = elements.createType(t);
+        args[ownCopies.length + 1] = elements.createType(b);
+        b.getExtendsList().addReference(elements.createType(builder, args));
+    }
+
+    /**
+     * Points a chain link's Builder at its parent's synthesised Builder. The
+     * leading arguments are whatever the target passes to its superclass, so
+     * {@code class StringBox extends Box<String>} yields
+     * {@code extends Box.Builder<String, StringBox, StringBox.Builder>}; the two
+     * trailing self-type arguments bind on a concrete link and forward on a
+     * chained abstract.
+     *
+     * <p>The parent's Builder is resolved through the augment provider rather
+     * than by name, so the reference points at the same synth instance the
+     * platform hands out elsewhere. Re-entering for the <em>parent</em> is safe:
+     * the recursion guard is keyed per target, and a root has no super of its
+     * own to walk to.
+     */
+    private static void applySuperBuilder(PsiElementFactory elements, PsiClass target,
+                                          GeneratedBuilderClass builder, ChainRole role) {
+        PsiClass parent = ChainRole.annotatedSuperOf(target);
+        if (parent == null) return;
+        PsiClass parentBuilder = synthBuilderOf(parent);
+        if (parentBuilder == null) return;
+
+        PsiTypeParameter[] ownCopies = ownTypeParameters(builder, target);
+        // Field types and superclass arguments are written in the target's type
+        // parameters; re-express them in this Builder's copies.
+        PsiSubstitutor toBuilder = remap(elements, target.getTypeParameters(), ownCopies);
+
+        List<PsiType> args = new ArrayList<>();
+        for (PsiClassType superType : target.getExtendsList() == null
+            ? PsiClassType.EMPTY_ARRAY
+            : target.getExtendsList().getReferencedTypes()) {
+            for (PsiType arg : superType.getParameters()) args.add(toBuilder.substitute(arg));
+        }
+        if (role.isSelfTyped()) {
+            PsiTypeParameter[] selfTypes = selfTypeParameters(builder, target);
+            if (selfTypes.length != 2) return;
+            args.add(elements.createType(selfTypes[0]));
+            args.add(elements.createType(selfTypes[1]));
+        } else {
+            args.add(applied(elements, target, ownCopies));
+            args.add(applied(elements, builder, ownCopies));
+        }
+        if (args.size() != parentBuilder.getTypeParameters().length) return;
+        builder.setSuperType(elements.createType(parentBuilder, args.toArray(PsiType.EMPTY_ARRAY)));
+    }
+
+    /**
+     * The parent's synthesised Builder, obtained through the augment-aware
+     * {@code getInnerClasses()} so a hand-written nested Builder on the parent
+     * is found too.
+     */
+    private static @Nullable PsiClass synthBuilderOf(PsiClass parent) {
+        PsiAnnotation annotation = PsiFieldShapeExtractor.classBuilderAnnotation(parent);
+        if (annotation == null) return null;
+        String name = EditorBuilderConfig.fromAnnotation(annotation).builderName();
+        for (PsiClass nested : parent.getInnerClasses()) {
+            if (name.equals(nested.getName())) return nested;
+        }
+        return null;
+    }
+
+    /** The Builder's copies of the target's own parameters, excluding any self-types. */
+    private static PsiTypeParameter[] ownTypeParameters(PsiClass builder, PsiClass target) {
+        PsiTypeParameter[] all = builder.getTypeParameters();
+        int own = target.getTypeParameters().length;
+        if (all.length <= own) return all;
+        return java.util.Arrays.copyOfRange(all, 0, own);
+    }
+
+    /** The trailing {@code T} / {@code B} parameters on a self-typed Builder. */
+    private static PsiTypeParameter[] selfTypeParameters(PsiClass builder, PsiClass target) {
+        PsiTypeParameter[] all = builder.getTypeParameters();
+        int own = target.getTypeParameters().length;
+        if (all.length != own + 2) return PsiTypeParameter.EMPTY_ARRAY;
+        return java.util.Arrays.copyOfRange(all, own, all.length);
+    }
+
+    /** Appends {@code $} until the name is not one the target already declares. */
+    private static String freeTypeParamName(String preferred, Set<String> taken) {
+        String candidate = preferred;
+        while (taken.contains(candidate)) candidate = candidate + "$";
+        return candidate;
     }
 
     /**
@@ -300,13 +473,43 @@ final class GeneratedMemberFactory {
         // self-type resolves directly to our synth class instance, bypassing
         // the inner-class lookup chain that fails the access-check pass during
         // cross-package highlighting.
-        PsiClassType selfType = elements.createType(builder);
-        PsiClassType targetType = elements.createType(target);
+        //
+        // Both types are applied to the BUILDER's type parameters, not the
+        // target's: these members are declared inside the synth Builder, which
+        // is static and carries its own copies. Using the target's would leave
+        // the setter chain returning a type nothing can substitute, and
+        // build() yielding a raw target whose getters read as Object.
+        ChainRole role = ChainRole.of(target);
+        PsiTypeParameter[] ownParams = ownTypeParameters(builder, target);
+
+        // On a self-typed Builder the setters return the B parameter, so a
+        // subclass builder flows through inherited setters as its own type and
+        // the chain can be called in any order. Elsewhere they return the
+        // Builder itself.
+        PsiClassType selfType;
+        PsiClassType targetType;
+        if (role.isSelfTyped()) {
+            PsiTypeParameter[] selfTypes = selfTypeParameters(builder, target);
+            selfType = selfTypes.length == 2
+                ? elements.createType(selfTypes[1])
+                : applied(elements, builder, ownParams);
+            targetType = selfTypes.length == 2
+                ? elements.createType(selfTypes[0])
+                : applied(elements, target, ownParams);
+        } else {
+            selfType = applied(elements, builder, ownParams);
+            targetType = applied(elements, target, ownParams);
+        }
+
+        // Field types are declared in the target's type parameters; re-express
+        // them in the Builder's copies so a Builder<String> receiver actually
+        // substitutes them.
+        PsiSubstitutor toBuilder = remap(elements, target.getTypeParameters(), ownParams);
 
         Set<String> excluded = excludedNames(target);
         List<PsiFieldShape> fields = target.isRecord()
-            ? PsiFieldShapeExtractor.fromRecord(target, excluded)
-            : PsiFieldShapeExtractor.fromClass(target, excluded);
+            ? PsiFieldShapeExtractor.fromRecord(target, excluded, toBuilder)
+            : PsiFieldShapeExtractor.fromClass(target, excluded, toBuilder);
 
         SetterCtx ctx = new SetterCtx(psiManager, elements, target, builder, selfType, config);
         List<PsiMethod> methods = new ArrayList<>();
@@ -314,17 +517,38 @@ final class GeneratedMemberFactory {
             methods.addAll(settersFor(ctx, field));
         }
 
+        // self() exists only inside a chain: abstract on a self-typed Builder,
+        // overridden to return this on a concrete link. A standalone builder
+        // chains on its own type and needs none.
+        if (role.isSelfTyped()) {
+            methods.add(chainMethod(psiManager, target, builder, "self", selfType,
+                PsiModifier.PROTECTED, true));
+        } else if (role == ChainRole.CONCRETE_LINK) {
+            methods.add(chainMethod(psiManager, target, builder, "self", selfType,
+                PsiModifier.PROTECTED, false));
+        }
+
         // build() - always public (access attribute governs the enclosing
-        // builder class + bootstraps, not the terminal build method).
-        LightMethodBuilder build = new LightMethodBuilder(psiManager, config.buildMethodName())
-            .setMethodReturnType(targetType)
-            .addModifier(PsiModifier.PUBLIC)
-            .setContainingClass(builder);
-        GeneratedMemberMarker.mark(build);
-        build.setNavigationElement(target);
-        methods.add(build);
+        // builder class + bootstraps, not the terminal build method). Abstract
+        // on a self-typed Builder, where each concrete link produces its own T.
+        methods.add(chainMethod(psiManager, target, builder, config.buildMethodName(), targetType,
+            PsiModifier.PUBLIC, role.isSelfTyped()));
 
         return methods;
+    }
+
+    /** A nullary method on the synth Builder, optionally abstract. */
+    private static PsiMethod chainMethod(PsiManager manager, PsiClass target, PsiClass builder,
+                                         String name, PsiType returnType, String access,
+                                         boolean isAbstract) {
+        LightMethodBuilder m = new LightMethodBuilder(manager, name)
+            .setMethodReturnType(returnType)
+            .addModifier(access)
+            .setContainingClass(builder);
+        if (isAbstract) m.addModifier(PsiModifier.ABSTRACT);
+        GeneratedMemberMarker.mark(m);
+        m.setNavigationElement(target);
+        return m;
     }
 
     // ------------------------------------------------------------------

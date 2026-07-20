@@ -1,13 +1,17 @@
 package dev.simplified.classbuilder.editor;
 
 import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiClassType;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiMethod;
+import com.intellij.psi.PsiTypeParameter;
 import com.intellij.psi.SyntheticElement;
 import com.intellij.psi.augment.PsiAugmentProvider;
 import com.intellij.psi.impl.light.LightPsiClassBuilder;
+import com.intellij.psi.impl.light.LightTypeParameterBuilder;
+import com.intellij.psi.impl.light.LightTypeParameterListBuilder;
 import com.intellij.psi.impl.source.PsiExtensibleClass;
 import com.intellij.psi.util.CachedValuesManager;
 import com.intellij.psi.util.PsiModificationTracker;
@@ -51,6 +55,67 @@ final class GeneratedBuilderClass extends LightPsiClassBuilder
         super(containingClass, name);
         String parentFqn = containingClass.getQualifiedName();
         this.myQualifiedName = (parentFqn != null ? parentFqn : containingClass.getName()) + "." + name;
+        copyTypeParameters(containingClass);
+    }
+
+    /**
+     * Re-declares the target's type parameters on this class, bounds included.
+     * The synthesised Builder is {@code static} and so cannot see the enclosing
+     * type's variables - without its own copies, a generic target's setters and
+     * {@code build()} would resolve against a raw builder and the editor would
+     * report {@code Object} where the target's parameter belongs.
+     *
+     * <p>The copies are distinct {@link PsiTypeParameter}s from the target's,
+     * matching what javac emits, so callers building a type for use inside this
+     * class must apply <em>these</em> parameters rather than the target's.
+     */
+    private void copyTypeParameters(@NotNull PsiClass containingClass) {
+        PsiTypeParameter[] sources = containingClass.getTypeParameters();
+        if (sources.length == 0) return;
+        LightTypeParameterListBuilder list = typeParameterList();
+        if (list == null) return;
+        for (int i = 0; i < sources.length; i++) {
+            LightTypeParameterBuilder copy =
+                new LightTypeParameterBuilder(sources[i].getName(), this, i);
+            for (PsiClassType bound : sources[i].getExtendsListTypes()) {
+                copy.getExtendsList().addReference(bound);
+            }
+            list.addParameter(copy);
+        }
+    }
+
+    /**
+     * Appends a further type parameter and returns it so the caller can attach
+     * bounds afterwards. Used for the SuperBuilder self-types, whose bounds are
+     * self-referential ({@code B extends Builder<T, B>}) and so cannot be built
+     * until both parameters exist.
+     *
+     * @param name the parameter's name
+     * @return the appended parameter, or {@code null} if the list is unavailable
+     */
+    @Nullable LightTypeParameterBuilder addTypeParameter(@NotNull String name) {
+        LightTypeParameterListBuilder list = typeParameterList();
+        if (list == null) return null;
+        LightTypeParameterBuilder param =
+            new LightTypeParameterBuilder(name, this, list.getTypeParameters().length);
+        list.addParameter(param);
+        return param;
+    }
+
+    /**
+     * Declares this Builder's supertype - the parent's synthesised Builder, for
+     * a link in a SuperBuilder chain. Without it the platform's inherited-member
+     * lookup has nothing to walk and every setter declared further up the chain
+     * reads as unresolved.
+     *
+     * @param superType the parameterised parent builder type
+     */
+    void setSuperType(@NotNull PsiClassType superType) {
+        getExtendsList().addReference(superType);
+    }
+
+    private @Nullable LightTypeParameterListBuilder typeParameterList() {
+        return getTypeParameterList();
     }
 
     // ------------------------------------------------------------------

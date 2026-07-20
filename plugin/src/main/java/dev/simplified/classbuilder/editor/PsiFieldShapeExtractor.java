@@ -10,6 +10,8 @@ import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiModifierListOwner;
 import com.intellij.psi.PsiRecordComponent;
+import com.intellij.psi.PsiSubstitutor;
+import com.intellij.psi.PsiTypeParameter;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 
 import java.util.ArrayList;
@@ -42,25 +44,48 @@ final class PsiFieldShapeExtractor {
      * components are handled separately by {@link #fromRecord}.
      */
     static List<PsiFieldShape> fromClass(PsiClass target, Set<String> excluded) {
+        return fromClass(target, excluded, PsiSubstitutor.EMPTY);
+    }
+
+    /**
+     * Substituting variant. A member synthesised onto the {@code static} nested
+     * Builder of a generic target must express field types in the Builder's own
+     * type parameters, not the target's - they are distinct
+     * {@link PsiTypeParameter}s, so a setter left holding the target's would
+     * never be substituted by a {@code Builder<String>} receiver and the editor
+     * would reject every call. Applied once here, ahead of classification, so
+     * the derived element / key / value types follow.
+     *
+     * @param target the annotated type
+     * @param excluded field names to skip
+     * @param substitutor mapping to apply to each declared type
+     * @return the extracted shapes
+     */
+    static List<PsiFieldShape> fromClass(PsiClass target, Set<String> excluded, PsiSubstitutor substitutor) {
         List<PsiFieldShape> out = new ArrayList<>();
         for (PsiField field : target.getFields()) {
             if (field.hasModifierProperty(PsiModifier.STATIC)) continue;
             if (field.hasModifierProperty(PsiModifier.TRANSIENT)) continue;
             if (excluded.contains(field.getName())) continue;
             if (isIgnored(field)) continue;
-            out.add(buildShape(field, field.getName(), field.getType()));
+            out.add(buildShape(field, field.getName(), substitutor.substitute(field.getType())));
         }
         return out;
     }
 
     /** Record-component variant; records expose fields via {@link PsiRecordComponent}. */
     static List<PsiFieldShape> fromRecord(PsiClass record, Set<String> excluded) {
+        return fromRecord(record, excluded, PsiSubstitutor.EMPTY);
+    }
+
+    /** Substituting variant of {@link #fromRecord(PsiClass, Set)}. */
+    static List<PsiFieldShape> fromRecord(PsiClass record, Set<String> excluded, PsiSubstitutor substitutor) {
         List<PsiFieldShape> out = new ArrayList<>();
         for (PsiRecordComponent c : record.getRecordComponents()) {
             String name = c.getName();
             if (excluded.contains(name)) continue;
             if (isIgnored(c)) continue;
-            out.add(buildShape(c, name, c.getType()));
+            out.add(buildShape(c, name, substitutor.substitute(c.getType())));
         }
         return out;
     }
