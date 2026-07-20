@@ -45,7 +45,8 @@ public final class BuilderMutator {
      *         element has no source tree (class-file origin, stub, etc.) and
      *         the caller should fall back
      */
-    public boolean mutate(TypeElement targetElement, BuilderConfig config, List<FieldSpec> fields) {
+    public boolean mutate(TypeElement targetElement, BuilderConfig config, List<FieldSpec> fields,
+                          List<FieldSpec> allFields) {
         JCClassDecl target = bridge.treeOf(targetElement);
         if (target == null) return false;
 
@@ -77,7 +78,12 @@ public final class BuilderMutator {
         // regular) so RetainedInitFactory + FieldMutators see the rewritten
         // field tree, and so the synthesised getter is in place before the
         // nested Builder generation considers method-name collisions.
-        new LazyFieldMutator(ctx.bridge(), targetElement, target, fields, true, messager).mutate();
+        // allFields, not fields: @Lazy rewrites storage and synthesises a
+        // getter, neither of which depends on the builder exposing the field.
+        // A @BuilderIgnore'd lazy field keeps its own initializer and is never
+        // touched by the constructor, so it behaves exactly as the standalone
+        // case does.
+        new LazyFieldMutator(ctx.bridge(), targetElement, target, allFields, true, messager).mutate();
 
         if (isAbstract || annotatedSuper != null) {
             // For SuperBuilder subclasses, the bootstrap from(T) must populate

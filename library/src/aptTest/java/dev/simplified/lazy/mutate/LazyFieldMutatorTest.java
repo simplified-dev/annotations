@@ -94,25 +94,52 @@ public class LazyFieldMutatorTest {
     }
 
     /**
-     * {@code @Lazy} documents the field-only companions as unsupported, and the
-     * processor now enforces that. {@code @BuilderIgnore} in particular used to
-     * compile and then silently do nothing: the field was filtered out before
-     * the lazy pass ran, so it got no storage rewrite and no getter.
+     * {@code @BuilderIgnore} says the builder should not expose the field; it
+     * says nothing about how the field is stored. So it composes with
+     * {@code @Lazy}: the field still gets {@code Lazy<T>} storage and a
+     * memoizing getter, it simply has no setter and no constructor parameter,
+     * and keeps its own initializer as the value source.
+     *
+     * <p>This pairing was briefly rejected because the lazy pass only saw the
+     * builder-visible fields and silently skipped ignored ones. Feeding it the
+     * unfiltered list is the actual fix.
      */
     @Test
-    public void lazyPlusBuilderIgnore_isRejected() {
-        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Dropped",
+    public void lazyPlusBuilderIgnore_stillRewritesStorageAndGetter() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Ignored",
             "package demo;",
             "import dev.simplified.annotations.BuilderIgnore;",
             "import dev.simplified.annotations.ClassBuilder;",
             "import dev.simplified.annotations.Lazy;",
             "@ClassBuilder(validate = false)",
-            "public class Dropped {",
-            "    @Lazy @BuilderIgnore String value = \"v\";",
+            "public class Ignored {",
+            "    String kept = \"k\";",
+            "    @Lazy @BuilderIgnore String hidden = compute();",
+            "    int calls = 0;",
+            "    String compute() { calls++; return \"h\" + calls; }",
+            "    public String getKept() { return kept; }",
+            "    public int getCalls() { return calls; }",
             "}");
         Compilation c = compile(src);
-        assertThat(c).failed();
-        assertThat(c).hadErrorContaining("@Lazy cannot be combined with @BuilderIgnore");
+        assertThat(c).succeeded();
+
+        Class<?> target = Class.forName("demo.Ignored", true, loadClasses(c));
+
+        Field hidden = target.getDeclaredField("hidden");
+        assertEquals("storage must still be rewritten to Lazy<T>",
+            "dev.simplified.lazy.Lazy", hidden.getType().getName());
+        assertTrue("@Lazy must still synthesise the getter", hasMethod(target, "getHidden"));
+
+        Class<?> builderCls = nested(target, "Builder");
+        assertFalse("an ignored field must get no builder setter",
+            hasMethod(builderCls, "hidden"));
+
+        Object b = target.getMethod("builder").invoke(null);
+        Object built = builderCls.getMethod("build").invoke(b);
+        assertEquals("building must not evaluate the ignored lazy field",
+            0, target.getMethod("getCalls").invoke(built));
+        assertEquals("h1", target.getMethod("getHidden").invoke(built));
+        assertEquals("k", target.getMethod("getKept").invoke(built));
     }
 
     @Test

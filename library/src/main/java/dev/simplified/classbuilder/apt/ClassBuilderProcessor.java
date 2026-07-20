@@ -151,8 +151,13 @@ public class ClassBuilderProcessor extends AbstractProcessor {
                 target);
             return;
         }
+        // The @Lazy pass gets every field, not the builder-visible subset:
+        // rewriting a field's storage and synthesising its getter is
+        // independent of whether the builder exposes it, so a @BuilderIgnore'd
+        // or excluded field must still be processed. Static fields are included
+        // too, so @Lazy can report them rather than silently skipping.
         BuilderMutator mutator = new BuilderMutator(javacBridge.get(), messager);
-        if (!mutator.mutate(target, config, fields)) {
+        if (!mutator.mutate(target, config, fields, collectAllFields(target))) {
             messager.printMessage(Diagnostic.Kind.ERROR,
                 "@ClassBuilder could not resolve a source tree for " + target
                     + "; mutation requires the annotated element to have a source declaration.",
@@ -297,15 +302,17 @@ public class ClassBuilderProcessor extends AbstractProcessor {
      * Companion annotations {@code @Lazy} documents as unsupported. Each assumes
      * direct {@code T} storage, which {@code @Lazy} replaces with
      * {@code Lazy<T>}, so the pairing is not merely redundant - it misbehaves
-     * silently. {@code @BuildFlag} degrades to a no-op because the validator
-     * sees the non-null wrapper rather than the value, and {@code @BuilderIgnore}
-     * drops the field before the lazy pass ever runs.
+     * silently. {@code @BuildFlag}, for instance, degrades to a no-op because
+     * the validator sees the non-null wrapper rather than the value.
+     *
+     * <p>{@code @BuilderDefault} and {@code @BuilderIgnore} are deliberately
+     * absent: both govern how the builder treats a field rather than how it is
+     * stored, so neither actually conflicts with the storage rewrite.
      */
     private static final String[][] LAZY_INCOMPATIBLE = {
         {"dev.simplified.annotations.Collector", "Collector"},
         {"dev.simplified.annotations.Negate", "Negate"},
         {"dev.simplified.annotations.Formattable", "Formattable"},
-        {"dev.simplified.annotations.BuilderIgnore", "BuilderIgnore"},
         {"dev.simplified.annotations.BuildFlag", "BuildFlag"},
         {"dev.simplified.annotations.ObtainVia", "ObtainVia"},
     };

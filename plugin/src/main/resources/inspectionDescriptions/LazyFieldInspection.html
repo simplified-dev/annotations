@@ -14,12 +14,13 @@ Flags misuse of the <code>@Lazy</code> field annotation:
       the supplier body. Without one and without a builder driving
       construction, no value can ever be produced.</li>
   <li><code>@Lazy</code> alongside <code>@Collector</code>,
-      <code>@Negate</code>, <code>@Formattable</code>, or
-      <code>@BuilderDefault</code>, <code>@BuilderIgnore</code>,
+      <code>@Negate</code>, <code>@Formattable</code>,
       <code>@BuildFlag</code>, or <code>@ObtainVia</code>
       is not supported - the companion-annotation
       contracts assume direct <code>T</code>-typed storage rather than
-      a memoizing wrapper.</li>
+      a memoizing wrapper. <code>@BuilderDefault</code> and
+      <code>@BuilderIgnore</code> are not flagged: they govern how the
+      builder treats the field, not how it is stored.</li>
   <li><code>@Lazy</code> alongside Lombok <code>@Getter</code> is
       redundant: <code>@Lazy</code> generates its own memoizing getter,
       so Lombok's getter is never emitted.</li>

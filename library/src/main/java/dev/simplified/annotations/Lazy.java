@@ -52,11 +52,13 @@ import java.lang.annotation.Target;
  *   <li>Not supported on static fields, record components, or in combination
  *       with the field-only companion annotations
  *       ({@link Collector}, {@link Negate}, {@link Formattable},
- *       {@link BuilderIgnore}, {@link BuildFlag}, {@link ObtainVia}). Each
- *       assumes direct {@code T} storage, so the processor rejects the pairing
- *       rather than letting it misbehave. {@link BuilderDefault} is the
- *       exception and is permitted: it selects how the default is applied, not
- *       how the field is stored.</li>
+ *       {@link BuildFlag}, {@link ObtainVia}). Each assumes direct {@code T}
+ *       storage, so the processor rejects the pairing rather than letting it
+ *       misbehave. {@link BuilderDefault} and {@link BuilderIgnore} are
+ *       permitted: they govern how the builder treats the field, not how it is
+ *       stored. A {@code @BuilderIgnore}d lazy field keeps its own initializer
+ *       and is never touched by the constructor, so it behaves as in the
+ *       standalone case.</li>
  *   <li>Standalone use (no {@code @ClassBuilder} on the enclosing class)
  *       requires a field initializer; the initializer becomes the supplier
  *       body. Because that supplier is created in the field initializer, an

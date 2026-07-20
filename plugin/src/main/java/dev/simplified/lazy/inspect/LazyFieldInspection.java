@@ -30,9 +30,10 @@ import org.jetbrains.annotations.NotNull;
  *       has no {@code @ClassBuilder} - no source of supplier value exists.</li>
  *   <li>{@code @Lazy} combined with the field-only ClassBuilder companions
  *       ({@code @Collector}, {@code @Negate}, {@code @Formattable},
- *       {@code @BuilderDefault}, {@code @BuilderIgnore}, {@code @BuildFlag},
- *       {@code @ObtainVia}) - the companion contracts assume direct
- *       {@code T} storage.</li>
+ *       {@code @BuildFlag}, {@code @ObtainVia}) - the companion contracts
+ *       assume direct {@code T} storage. {@code @BuilderDefault} and
+ *       {@code @BuilderIgnore} are not flagged: they govern the builder's view
+ *       of the field, not its storage.</li>
  *   <li>{@code @Lazy} alongside Lombok {@code @Getter} - the Lazy-generated
  *       getter wins, Lombok's would be a duplicate.</li>
  * </ul>
@@ -44,8 +45,6 @@ public class LazyFieldInspection extends LocalInspectionTool {
     private static final String COLLECTOR_FQN = ClassBuilderConstants.COLLECTOR_FQN;
     private static final String NEGATE_FQN = ClassBuilderConstants.NEGATE_FQN;
     private static final String FORMATTABLE_FQN = ClassBuilderConstants.FORMATTABLE_FQN;
-    private static final String BUILDER_DEFAULT_FQN = ClassBuilderConstants.BUILDER_DEFAULT_FQN;
-    private static final String BUILDER_IGNORE_FQN = ClassBuilderConstants.BUILDER_IGNORE_FQN;
     private static final String BUILD_FLAG_FQN = ClassBuilderConstants.BUILD_FLAG_FQN;
     private static final String OBTAIN_VIA_FQN = ClassBuilderConstants.OBTAIN_VIA_FQN;
     private static final String LOMBOK_GETTER_FQN = "lombok.Getter";
@@ -98,8 +97,9 @@ public class LazyFieldInspection extends LocalInspectionTool {
                 checkConflict(holder, field, COLLECTOR_FQN, "@Collector");
                 checkConflict(holder, field, NEGATE_FQN, "@Negate");
                 checkConflict(holder, field, FORMATTABLE_FQN, "@Formattable");
-                checkConflict(holder, field, BUILDER_DEFAULT_FQN, "@BuilderDefault");
-                checkConflict(holder, field, BUILDER_IGNORE_FQN, "@BuilderIgnore");
+                // @BuilderDefault and @BuilderIgnore are absent by design: both
+                // govern how the builder treats the field, not how it is
+                // stored, so neither conflicts with the storage rewrite.
                 checkConflict(holder, field, BUILD_FLAG_FQN, "@BuildFlag");
                 checkConflict(holder, field, OBTAIN_VIA_FQN, "@ObtainVia");
 
