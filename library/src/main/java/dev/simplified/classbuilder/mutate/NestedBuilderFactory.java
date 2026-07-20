@@ -48,6 +48,11 @@ final class NestedBuilderFactory {
             JCVariableDecl decl = fieldMutators.fieldDecl(f);
             AstMarkers.markGenerated(decl);
             defs.append(decl);
+            JCVariableDecl marker = fieldMutators.replacedMarkerDecl(f);
+            if (marker != null) {
+                AstMarkers.markGenerated(marker);
+                defs.append(marker);
+            }
         }
         // Setters
         for (FieldSpec f : ctx.fields()) {
@@ -57,12 +62,14 @@ final class NestedBuilderFactory {
         defs.append(buildMethod());
 
         // Builder class visibility follows @ClassBuilder.access; always STATIC
-        // because nested builders must not capture an enclosing this.
+        // because nested builders must not capture an enclosing this. Being
+        // static is also why a generic target's type parameters have to be
+        // re-declared here - the enclosing class's are out of scope.
         JCModifiers mods = make.Modifiers(ctx.accessFlag() | Flags.STATIC);
         JCClassDecl nested = make.ClassDef(
             mods,
             names.fromString(ctx.builderName()),
-            List.nil(),
+            ctx.typeParams(),
             null,
             List.nil(),
             defs.toList()
@@ -86,7 +93,14 @@ final class NestedBuilderFactory {
         ListBuffer<JCStatement> body = new ListBuffer<>();
 
         ListBuffer<JCExpression> args = new ListBuffer<>();
-        for (FieldSpec f : ctx.fields()) args.append(make.Ident(names.fromString(f.name)));
+        for (FieldSpec f : ctx.fields()) {
+            args.append(make.Ident(names.fromString(f.name)));
+            // A collected instance default passes its replaced marker alongside
+            // the container, matching the extra constructor parameter.
+            if (ctx.isCollectedInstanceDefault(f)) {
+                args.append(make.Ident(names.fromString(MutationContext.replacedMarker(f.name))));
+            }
+        }
 
         JCExpression instantiation;
         String factory = ctx.config().factoryMethod();
@@ -97,10 +111,12 @@ final class NestedBuilderFactory {
                 args.toList()
             );
         } else {
+            // Target, or Target<K, V> on a generic target - the Builder's own
+            // type parameters, which bind one-for-one with the target's.
             instantiation = make.NewClass(
                 null,
                 List.nil(),
-                make.Ident(names.fromString(ctx.targetSimpleName())),
+                ctx.targetType(),
                 args.toList(),
                 null
             );
@@ -108,7 +124,7 @@ final class NestedBuilderFactory {
 
         if (ctx.config().validate()) {
             // Target t = new Target(...); BuildFlagValidator.validate(t); return t;
-            JCExpression targetType = make.Ident(names.fromString(ctx.targetSimpleName()));
+            JCExpression targetType = ctx.targetType();
             JCVariableDecl targetVar = make.VarDef(
                 make.Modifiers(Flags.FINAL),
                 names.fromString("$result"),
@@ -130,7 +146,7 @@ final class NestedBuilderFactory {
         }
 
         JCBlock block = make.Block(0, body.toList());
-        JCExpression returnType = make.Ident(names.fromString(ctx.targetSimpleName()));
+        JCExpression returnType = ctx.targetType();
         // build() always returns a fresh target instance; "-> new" without
         // mutates or pure matches BuilderEmitter.emitBuildMethod.
         JCMethodDecl method = make.MethodDef(

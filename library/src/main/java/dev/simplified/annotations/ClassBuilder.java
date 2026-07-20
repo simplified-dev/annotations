@@ -28,9 +28,33 @@ import java.lang.annotation.Target;
  * </ul>
  * If the target already declares any of those methods by name and arity,
  * injection is skipped for that name and the user-supplied version wins -
- * a compiler {@code NOTE} is emitted for visibility. Interface targets still
- * receive a sibling {@code <Name>Impl.java} plus {@code <Name>Builder.java}
- * since there is no mutation surface on an interface body.
+ * a compiler {@code NOTE} is emitted for visibility.
+ *
+ * <p>An interface target gets its builder as a sibling
+ * {@code <Name>Builder.java} (plus {@code <Name>Impl.java}), there being no
+ * in-source surface for a nested class on an interface body. The bootstrap
+ * methods still land on the interface itself, so it is entered exactly like a
+ * class - {@code Shape.builder()} rather than {@code new ShapeBuilder<>()}.
+ * {@code builder} and {@code from} are {@code static} interface methods and
+ * {@code mutate} is a {@code default}, both legal since Java 8, so implementors
+ * need no change.
+ *
+ * <h2>Generic targets</h2>
+ * A target may declare type parameters, on any supported shape. The generated
+ * builder re-declares them, since a nested {@code Builder} is {@code static}
+ * and an interface's sibling builder is a separate top-level class - neither
+ * can see the enclosing type's variables. Bounds carry over, and every static
+ * member mentioning a parameter takes its own copy so the call site infers it
+ * back. On a SuperBuilder chain the target's parameters lead the self-typed
+ * pair ({@code Builder<V, T extends Box<V>, B extends Builder<V, T, B>>}) and a
+ * concrete link reproduces the arguments it passes up.
+ *
+ * <p>{@code builder()} is a generic static method, so a chained call has
+ * nothing to infer from and needs the explicit witness -
+ * {@code Crate.<String>builder().item("x").build()}. The bare form infers
+ * {@code Object}, which still assigns to a parameterised local but only under
+ * an unchecked warning. {@code from(T)} infers from its argument and needs no
+ * witness.
  *
  * <h2>Per-field customisation</h2>
  * <ul>

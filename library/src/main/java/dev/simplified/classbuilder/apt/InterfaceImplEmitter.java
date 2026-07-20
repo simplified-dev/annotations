@@ -1,6 +1,8 @@
 package dev.simplified.classbuilder.apt;
 
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.TypeParameterElement;
+import javax.lang.model.type.TypeMirror;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeSet;
@@ -26,11 +28,17 @@ final class InterfaceImplEmitter {
         imports.add("java.util.Objects");
         List<String> fieldTypes = new ArrayList<>(fields.size());
         for (FieldSpec f : fields) fieldTypes.add(simplifyType(f.typeDisplay, packageName, imports));
+        // A generic interface propagates its parameters onto the impl, which is
+        // a separate top-level class and so cannot see the interface's. Resolved
+        // before the import block is written, since a bound can import types.
+        String typeParamDecl = typeParamDecl(target, packageName, imports);
+        String typeArgs = typeArgs(target);
         for (String imp : imports) sb.append("import ").append(imp).append(";\n");
         if (!imports.isEmpty()) sb.append('\n');
 
         String interfaceName = target.getSimpleName().toString();
-        sb.append("final class ").append(implName).append(" implements ").append(interfaceName).append(" {\n\n");
+        sb.append("final class ").append(implName).append(typeParamDecl)
+            .append(" implements ").append(interfaceName).append(typeArgs).append(" {\n\n");
 
         // Fields
         for (int i = 0; i < fields.size(); i++) {
@@ -58,7 +66,11 @@ final class InterfaceImplEmitter {
         // equals / hashCode / toString
         sb.append("    @Override public boolean equals(Object o) {\n");
         sb.append("        if (this == o) return true;\n");
-        sb.append("        if (!(o instanceof ").append(implName).append(" other)) return false;\n");
+        // Wildcard rather than the impl's own parameters: equals takes an
+        // Object, so there is nothing to bind them to, and a raw type in an
+        // instanceof pattern is rejected.
+        sb.append("        if (!(o instanceof ").append(implName).append(typeArgs.isEmpty() ? "" : "<?>")
+            .append(" other)) return false;\n");
         for (FieldSpec f : fields) sb.append("        if (!Objects.equals(this.").append(f.name).append(", other.").append(f.name).append(")) return false;\n");
         sb.append("        return true;\n    }\n\n");
 
@@ -78,6 +90,44 @@ final class InterfaceImplEmitter {
 
         sb.append("}\n");
         return sb.toString();
+    }
+
+    /**
+     * The interface's type parameters in declaration form, bounds included -
+     * {@code "<K, V extends Comparable<V>>"}. Empty when it is not generic.
+     * {@code java.lang.Object} bounds are dropped, being what an unbounded
+     * parameter means anyway.
+     */
+    private static String typeParamDecl(TypeElement target, String packageName, TreeSet<String> imports) {
+        if (target.getTypeParameters().isEmpty()) return "";
+        StringBuilder sb = new StringBuilder("<");
+        boolean firstParam = true;
+        for (TypeParameterElement tp : target.getTypeParameters()) {
+            if (!firstParam) sb.append(", ");
+            firstParam = false;
+            sb.append(tp.getSimpleName());
+            boolean firstBound = true;
+            for (TypeMirror bound : tp.getBounds()) {
+                if ("java.lang.Object".equals(bound.toString())) continue;
+                sb.append(firstBound ? " extends " : " & ")
+                    .append(simplifyType(bound.toString(), packageName, imports));
+                firstBound = false;
+            }
+        }
+        return sb.append('>').toString();
+    }
+
+    /** The interface's type parameters in reference form - {@code "<K, V>"}. */
+    private static String typeArgs(TypeElement target) {
+        if (target.getTypeParameters().isEmpty()) return "";
+        StringBuilder sb = new StringBuilder("<");
+        boolean first = true;
+        for (TypeParameterElement tp : target.getTypeParameters()) {
+            if (!first) sb.append(", ");
+            first = false;
+            sb.append(tp.getSimpleName());
+        }
+        return sb.append('>').toString();
     }
 
     private static String simplifyType(String typeStr, String packageName, TreeSet<String> imports) {

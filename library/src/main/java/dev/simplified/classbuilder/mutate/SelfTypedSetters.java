@@ -137,8 +137,8 @@ final class SelfTypedSetters {
 
     private JCMethodDecl plainSetter(FieldSpec field) {
         JCExpression fieldType = types.parseType(field.typeDisplay);
-        return method(methodName(field.name, false), List.of(nullnessParam(field.name, fieldType, field)),
-            assignAndReturnSelf(field.name));
+        JCVariableDecl p = nullnessParam(field.name, fieldType, field);
+        return method(methodName(field.name, false), List.of(p), assignAndReturnSelf(field));
     }
 
     private JCMethodDecl arrayVarargs(FieldSpec field) {
@@ -149,15 +149,12 @@ final class SelfTypedSetters {
             make.TypeArray(elemType),
             null
         );
-        return method(methodName(field.name, false), List.of(p), assignAndReturnSelf(field.name));
+        return method(methodName(field.name, false), List.of(p), assignAndReturnSelf(field));
     }
 
     private JCMethodDecl booleanZeroArg(FieldSpec field, String methodBase, boolean inverse) {
         String setterName = "is" + capitalise(methodBase);
-        JCStatement assign = make.Exec(make.Assign(
-            make.Select(make.Ident(names._this), names.fromString(field.name)),
-            make.Literal(!inverse)
-        ));
+        JCStatement assign = slotAssign(field, make.Literal(!inverse));
         return method(setterName, List.nil(), List.of(assign, returnSelf()));
     }
 
@@ -165,10 +162,7 @@ final class SelfTypedSetters {
         String setterName = "is" + capitalise(methodBase);
         JCExpression paramRef = make.Ident(names.fromString(methodBase));
         JCExpression value = inverse ? make.Unary(JCTree.Tag.NOT, paramRef) : paramRef;
-        JCStatement assign = make.Exec(make.Assign(
-            make.Select(make.Ident(names._this), names.fromString(field.name)),
-            value
-        ));
+        JCStatement assign = slotAssign(field, value);
         JCVariableDecl p = param(methodBase, make.TypeIdent(TypeTag.BOOLEAN));
         return method(setterName, List.of(p), List.of(assign, returnSelf()));
     }
@@ -204,7 +198,7 @@ final class SelfTypedSetters {
             types.qualIdent("java.util.Optional"),
             List.of(types.parseType(field.optionalInner))
         );
-        return method(setterName, List.of(param(field.name, optType)), assignAndReturnSelf(field.name));
+        return method(setterName, List.of(param(field.name, optType)), assignAndReturnSelf(field));
     }
 
     // ------------------------------------------------------------------
@@ -254,10 +248,7 @@ final class SelfTypedSetters {
                     make.Ident(names.fromString("args")))
             );
         }
-        JCStatement assign = make.Exec(make.Assign(
-            make.Select(make.Ident(names._this), names.fromString(field.name)),
-            rhs
-        ));
+        JCStatement assign = slotAssign(field, rhs);
         return method(setterName, List.of(formatParam, argsParam),
             List.of(assign, returnSelf()));
     }
@@ -289,10 +280,7 @@ final class SelfTypedSetters {
             List.of(make.Ident(names.fromString(field.name)),
                 make.Ident(names.fromString("args")))
         );
-        JCStatement assign = make.Exec(make.Assign(
-            make.Select(make.Ident(names._this), names.fromString(field.name)),
-            rhs
-        ));
+        JCStatement assign = slotAssign(field, rhs);
         return method(setterName, List.of(formatParam, argsParam),
             List.of(assign, returnSelf()));
     }
@@ -327,7 +315,7 @@ final class SelfTypedSetters {
             ))
         );
         return method(setterName, List.of(varargs),
-            List.of(assignFresh, loop, returnSelf()));
+            withReplacedMark(field, List.of(assignFresh, loop, returnSelf())));
     }
 
     /** {@code B withEntries(Iterable<T> entries)} - reset-and-forEach replace. */
@@ -356,7 +344,7 @@ final class SelfTypedSetters {
             List.of(methodRef)
         ));
         return method(setterName, List.of(iterableParam),
-            List.of(assignFresh, forEach, returnSelf()));
+            withReplacedMark(field, List.of(assignFresh, forEach, returnSelf())));
     }
 
     /** {@code B addEntry(T entry)} - append one element to the existing collection. */
@@ -399,7 +387,7 @@ final class SelfTypedSetters {
                 List.of(make.Ident(names.fromString(field.name)))
             ));
             return method(setterName, List.of(mapParam),
-                List.of(assignFresh, putAll, returnSelf()));
+                withReplacedMark(field, List.of(assignFresh, putAll, returnSelf())));
         }
         JCStatement assignFresh = make.Exec(make.Assign(
             make.Select(make.Ident(names._this), names.fromString(field.name)),
@@ -409,7 +397,7 @@ final class SelfTypedSetters {
                 null)
         ));
         return method(setterName, List.of(mapParam),
-            List.of(assignFresh, returnSelf()));
+            withReplacedMark(field, List.of(assignFresh, returnSelf())));
     }
 
     /** {@code B putEntry(K key, V value)} - put one entry into the existing map. */
@@ -479,7 +467,8 @@ final class SelfTypedSetters {
                 names.fromString("clear")),
             List.nil()
         ));
-        return method(clearName, List.nil(), List.of(clear, returnSelf()));
+        return method(clearName, List.nil(),
+            withReplacedMark(field, List.of(clear, returnSelf())));
     }
 
     // ------------------------------------------------------------------
@@ -492,6 +481,42 @@ final class SelfTypedSetters {
             make.Ident(names.fromString(fieldName))
         ));
         return List.of(assign, returnSelf());
+    }
+
+    /**
+     * Assigns the builder slot, wrapping the value as {@code () -> value} when
+     * the field takes the constructor-computed path. Mirrors
+     * {@link FieldMutators#slotAssign}: the slot is {@code Supplier<T>} there,
+     * and every setter has to wrap so null keeps meaning "never set".
+     */
+    private JCStatement slotAssign(FieldSpec field, JCExpression value) {
+        JCExpression rhs = ctx.isInstanceDefault(field.name)
+            ? make.Lambda(List.nil(), value)
+            : value;
+        return make.Exec(make.Assign(
+            make.Select(make.Ident(names._this), names.fromString(field.name)),
+            rhs
+        ));
+    }
+
+    /**
+     * Prepends the replaced marker to a wholesale-replace setter's body when the
+     * field takes the collected merge path. Mirrors
+     * {@link FieldMutators#withReplacedMark}.
+     */
+    private List<JCStatement> withReplacedMark(FieldSpec field, List<JCStatement> body) {
+        if (!ctx.isCollectedInstanceDefault(field)) return body;
+        JCStatement mark = make.Exec(make.Assign(
+            make.Select(make.Ident(names._this),
+                names.fromString(MutationContext.replacedMarker(field.name))),
+            make.Literal(true)
+        ));
+        return body.prepend(mark);
+    }
+
+    /** Slot assignment from a like-named parameter, then {@code return self();}. */
+    private List<JCStatement> assignAndReturnSelf(FieldSpec field) {
+        return List.of(slotAssign(field, make.Ident(names.fromString(field.name))), returnSelf());
     }
 
     /** {@code return self();} - used in place of {@code return this;} under self-typed generics. */
@@ -526,8 +551,28 @@ final class SelfTypedSetters {
      * {@code new ArrayList<>()} would not be assignable to the field type);
      * java.util containers use the matching concrete implementation.
      */
+    /** Call to the target's synthesised {@code $empty$<field>()} factory. */
+    private JCExpression emptyFactoryCall(FieldSpec field) {
+        return make.Apply(
+            List.nil(),
+            make.Select(
+                make.Ident(names.fromString(ctx.targetSimpleName())),
+                names.fromString(RetainedInitFactory.emptyName(field.name))
+            ),
+            List.nil()
+        );
+    }
+
     private JCExpression freshContainer(FieldSpec field) {
-        if (field.isCustomContainer) return providerCall(field);
+        // A collected instance default collects into a plain java.util scratch:
+        // the real container comes from the initializer in the constructor, so
+        // nothing here has to build the declared type at all.
+        if (ctx.isCollectedInstanceDefault(field)) return ctx.freshCollectedSlot(field);
+        // A custom container otherwise resets through the emptied copy of its
+        // own initializer - the only expression able to produce the declared
+        // type - and the initializer is the field's default as well as its
+        // factory, so a replace setter must not keep its contents.
+        if (field.isCustomContainer) return emptyFactoryCall(field);
         String fqn = field.isMap ? "java.util.LinkedHashMap"
             : field.isSet ? "java.util.LinkedHashSet"
             : "java.util.ArrayList";
@@ -571,7 +616,9 @@ final class SelfTypedSetters {
 
     private JCMethodDecl method(String methodName, List<JCVariableDecl> params, List<JCStatement> body) {
         JCBlock block = make.Block(0, body);
-        JCExpression returnType = make.Ident(names.fromString("B"));
+        // The self-type parameter, which dodges its usual "B" spelling when the
+        // target declares a type parameter of that name.
+        JCExpression returnType = make.Ident(names.fromString(ctx.selfBuilderName()));
         // Contract mirrors FieldMutators: every setter returns this via
         // self() and mutates the builder. Arity picks the left-hand side.
         List<JCAnnotation> contract = switch (params.size()) {

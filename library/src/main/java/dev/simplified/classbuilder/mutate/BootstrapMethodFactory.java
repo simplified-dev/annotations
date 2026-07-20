@@ -125,16 +125,18 @@ final class BootstrapMethodFactory {
     // ------------------------------------------------------------------
 
     private JCMethodDecl builderFactory() {
-        JCExpression builderType = make.Ident(names.fromString(ctx.builderName()));
-        JCExpression newBuilder = make.NewClass(null, List.nil(), builderType, List.nil(), null);
+        JCExpression newBuilder = make.NewClass(null, List.nil(), ctx.builderType(), List.nil(), null);
         JCBlock body = make.Block(0, List.of(make.Return(newBuilder)));
 
         // builder() constructs a fresh Builder; "-> new" mirrors build().
+        // On a generic target the method declares its own copies of the type
+        // parameters - it is static, so the class's are not in scope, and the
+        // caller infers them from the assignment context.
         JCMethodDecl method = make.MethodDef(
             make.Modifiers(ctx.accessFlag() | Flags.STATIC, contracts.newReturnNullary()),
             names.fromString(ctx.config().builderMethodName()),
-            make.Ident(names.fromString(ctx.builderName())),
-            List.nil(),
+            ctx.builderType(),
+            ctx.typeParams(),
             List.nil(),
             List.nil(),
             body,
@@ -149,12 +151,10 @@ final class BootstrapMethodFactory {
     // ------------------------------------------------------------------
 
     private JCMethodDecl fromFactory() {
-        JCExpression targetType = make.Ident(names.fromString(ctx.targetSimpleName()));
-        JCExpression builderType = make.Ident(names.fromString(ctx.builderName()));
         JCVariableDecl instanceParam = make.VarDef(
             make.Modifiers(Flags.PARAMETER),
             names.fromString("instance"),
-            targetType,
+            ctx.targetType(),
             null
         );
 
@@ -163,8 +163,8 @@ final class BootstrapMethodFactory {
         body.append(make.VarDef(
             make.Modifiers(0),
             names.fromString("b"),
-            builderType,
-            make.NewClass(null, List.nil(), make.Ident(names.fromString(ctx.builderName())), List.nil(), null)
+            ctx.builderType(),
+            make.NewClass(null, List.nil(), ctx.builderType(), List.nil(), null)
         ));
         // Use the builder's public setters so the statement works identically
         // on standalone concrete classes AND on SuperBuilder subclasses whose
@@ -183,8 +183,8 @@ final class BootstrapMethodFactory {
         JCMethodDecl method = make.MethodDef(
             make.Modifiers(ctx.accessFlag() | Flags.STATIC, contracts.newReturnPureUnary()),
             names.fromString(ctx.config().fromMethodName()),
-            builderType,
-            List.nil(),
+            ctx.builderType(),
+            ctx.typeParams(),
             List.of(instanceParam),
             List.nil(),
             make.Block(0, body.toList()),
@@ -260,15 +260,15 @@ final class BootstrapMethodFactory {
     // ------------------------------------------------------------------
 
     private JCMethodDecl mutateMethod() {
-        JCExpression builderType = make.Ident(names.fromString(ctx.builderName()));
-
         ListBuffer<JCStatement> body = new ListBuffer<>();
         // Builder b = new Builder();
+        // Being an instance method, this one needs no type parameters of its
+        // own on a generic target - the class's are already in scope.
         body.append(make.VarDef(
             make.Modifiers(0),
             names.fromString("b"),
-            builderType,
-            make.NewClass(null, List.nil(), make.Ident(names.fromString(ctx.builderName())), List.nil(), null)
+            ctx.builderType(),
+            make.NewClass(null, List.nil(), ctx.builderType(), List.nil(), null)
         ));
         // Seed each field directly off `this` through the builder's public
         // setters - the SAME field set (fromFields, inherited fields included
@@ -291,7 +291,7 @@ final class BootstrapMethodFactory {
         JCMethodDecl method = make.MethodDef(
             mods,
             names.fromString(ctx.config().toBuilderMethodName()),
-            builderType,
+            ctx.builderType(),
             List.nil(),
             List.nil(),
             List.nil(),

@@ -4,6 +4,8 @@ import dev.simplified.annotations.AccessLevel;
 
 import javax.annotation.processing.Messager;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.TypeParameterElement;
+import javax.lang.model.type.TypeMirror;
 import javax.tools.Diagnostic;
 import java.util.List;
 import java.util.Set;
@@ -30,6 +32,15 @@ final class BuilderEmitter {
     private final TargetKind targetKind;
     private String interfaceImplName;
 
+    /** {@code ""} or the declaration form {@code "<T extends Comparable<T>>"}. */
+    private final String typeParamDecl;
+    /** {@code ""} or the reference form {@code "<T>"}. */
+    private final String typeArgs;
+    /** The target with its type arguments applied - {@code "Repo"} or {@code "Repo<T>"}. */
+    private final String targetRef;
+    /** The builder with its type arguments applied - the setter return type. */
+    private final String builderRef;
+
     private final StringBuilder body = new StringBuilder(2048);
 
     BuilderEmitter(TypeElement target, String packageName, BuilderConfig config, List<FieldSpec> fields, Messager messager) {
@@ -47,6 +58,54 @@ final class BuilderEmitter {
         this.messager = messager;
         this.isRecord = isRecord;
         this.targetKind = targetKind;
+        // A generic target propagates its parameters onto the sibling builder,
+        // which is a separate top-level class and so cannot see the target's.
+        this.typeParamDecl = buildTypeParamDecl();
+        this.typeArgs = buildTypeArgs();
+        this.targetRef = targetSimpleName + typeArgs;
+        this.builderRef = builderName + typeArgs;
+    }
+
+    /**
+     * The target's type parameters in declaration form, bounds included -
+     * {@code "<K, V extends Comparable<V>>"}. Empty when the target is not
+     * generic. {@code java.lang.Object} bounds are dropped, being what an
+     * unbounded parameter means anyway.
+     */
+    private String buildTypeParamDecl() {
+        if (target.getTypeParameters().isEmpty()) return "";
+        StringBuilder sb = new StringBuilder("<");
+        boolean firstParam = true;
+        for (TypeParameterElement tp : target.getTypeParameters()) {
+            if (!firstParam) sb.append(", ");
+            firstParam = false;
+            sb.append(tp.getSimpleName());
+            boolean firstBound = true;
+            for (TypeMirror bound : tp.getBounds()) {
+                if ("java.lang.Object".equals(bound.toString())) continue;
+                sb.append(firstBound ? " extends " : " & ").append(simplifyType(bound.toString()));
+                firstBound = false;
+            }
+        }
+        return sb.append('>').toString();
+    }
+
+    /** The target's type parameters in reference form - {@code "<K, V>"}. */
+    private String buildTypeArgs() {
+        if (target.getTypeParameters().isEmpty()) return "";
+        StringBuilder sb = new StringBuilder("<");
+        boolean first = true;
+        for (TypeParameterElement tp : target.getTypeParameters()) {
+            if (!first) sb.append(", ");
+            first = false;
+            sb.append(tp.getSimpleName());
+        }
+        return sb.append('>').toString();
+    }
+
+    /** {@code "<>"} on a generic target, for diamond instantiation. */
+    private String diamond() {
+        return typeArgs.isEmpty() ? "" : "<>";
     }
 
     void setInterfaceImplName(String implName) {
@@ -75,7 +134,7 @@ final class BuilderEmitter {
     // ------------------------------------------------------------------
 
     private void emitClassHeader() {
-        body.append(accessKeyword()).append("class ").append(builderName).append(" {\n\n");
+        body.append(accessKeyword()).append("class ").append(builderName).append(typeParamDecl).append(" {\n\n");
     }
 
     private void emitClassFooter() {
@@ -124,6 +183,19 @@ final class BuilderEmitter {
             imports.add("java.util.LinkedHashMap");
             return "new LinkedHashMap<>()";
         }
+        // An array is a container like the rest, so an unset slot is empty
+        // rather than null - matching the AST-mutation path. The zero-length
+        // dimension has to come first, so a multi-dimensional component's own
+        // brackets are moved after it: String[] yields new String[0][].
+        if (f.isArray) {
+            String component = typeName(f.collectionElement);
+            int nested = 0;
+            while (component.endsWith("[]")) {
+                component = component.substring(0, component.length() - 2);
+                nested++;
+            }
+            return "new " + component + "[0]" + "[]".repeat(nested);
+        }
         return null;
     }
 
@@ -157,7 +229,7 @@ final class BuilderEmitter {
 
     private void emitPlainSetter(FieldSpec f) {
         emitContract("_ -> this", false, "this");
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ')
+        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ')
             .append(methodName(f.name, false)).append('(').append(nullabilityPrefix(f)).append(typeName(f.typeDisplay)).append(' ').append(f.name).append(") {\n");
         body.append("        this.").append(f.name).append(" = ").append(f.name).append(";\n");
         body.append("        return this;\n    }\n\n");
@@ -172,7 +244,7 @@ final class BuilderEmitter {
         imports.add("org.intellij.lang.annotations.PrintFormat");
         boolean nullable = f.nullable;
         emitContract("_, _ -> this", false, "this");
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ')
+        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ')
             .append(methodName(f.name, false))
             .append("(@PrintFormat ").append(nullable ? "@Nullable " : "@NotNull ").append("String ").append(f.name)
             .append(", @Nullable Object... args) {\n");
@@ -197,12 +269,12 @@ final class BuilderEmitter {
     private void emitBooleanSetterPair(FieldSpec f, String methodBase, boolean inverse) {
         String methodCap = "is" + capitalise(methodBase);
         emitContract("-> this", false, "this");
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(methodCap).append("() {\n");
+        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(methodCap).append("() {\n");
         body.append("        this.").append(f.name).append(" = ").append(inverse ? "false" : "true").append(";\n");
         body.append("        return this;\n    }\n\n");
 
         emitContract("_ -> this", false, "this");
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ')
+        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ')
             .append(methodCap).append("(boolean ").append(methodBase).append(") {\n");
         if (inverse) {
             body.append("        this.").append(f.name).append(" = !").append(methodBase).append(";\n");
@@ -221,14 +293,14 @@ final class BuilderEmitter {
 
         // (@Nullable T) wrapper - for Optional<String> with @Formattable, this is the raw-nullable variant
         emitContract("_ -> this", false, "this");
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ')
+        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ')
             .append(setterName).append("(@Nullable ").append(inner).append(' ').append(f.name).append(") {\n");
         body.append("        return this.").append(setterName).append("(Optional.ofNullable(").append(f.name).append("));\n");
         body.append("    }\n\n");
 
         // (Optional<T>) wrapped variant
         emitContract("_ -> this", false, "this");
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ')
+        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ')
             .append(setterName).append("(@NotNull Optional<").append(inner).append("> ").append(f.name).append(") {\n");
         body.append("        this.").append(f.name).append(" = ").append(f.name).append(";\n");
         body.append("        return this;\n    }\n\n");
@@ -238,7 +310,7 @@ final class BuilderEmitter {
             imports.add("org.intellij.lang.annotations.PrintFormat");
             imports.add("dev.simplified.classbuilder.validate.Strings");
             emitContract("_, _ -> this", false, "this");
-            body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(setterName)
+            body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(setterName)
                 .append("(@PrintFormat @Nullable String ").append(f.name).append(", @Nullable Object... args) {\n");
             body.append("        this.").append(f.name).append(" = Strings.formatNullable(").append(f.name).append(", args);\n");
             body.append("        return this;\n    }\n\n");
@@ -257,7 +329,7 @@ final class BuilderEmitter {
 
             // whole: withFoo(Map<K,V>) - replace (always)
             emitContract("_ -> this", false, "this");
-            body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(whole)
+            body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(whole)
                 .append("(@NotNull Map<").append(k).append(", ").append(v).append("> ").append(f.name).append(") {\n");
             body.append("        this.").append(f.name).append(" = new LinkedHashMap<>(").append(f.name).append(");\n");
             body.append("        return this;\n    }\n\n");
@@ -265,7 +337,7 @@ final class BuilderEmitter {
             if (f.singular) {
                 String putName = "put" + capitalise(f.singularName);
                 emitContract("_, _ -> this", false, "this");
-                body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(putName)
+                body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(putName)
                     .append("(@NotNull ").append(k).append(" key, ").append(v).append(" value) {\n");
                 body.append("        this.").append(f.name).append(".put(key, value);\n");
                 body.append("        return this;\n    }\n\n");
@@ -275,7 +347,7 @@ final class BuilderEmitter {
                 imports.add("java.util.function.Supplier");
                 String putName = "put" + capitalise(f.singularName) + "IfAbsent";
                 emitContract("_, _ -> this", false, "this");
-                body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(putName)
+                body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(putName)
                     .append("(@NotNull ").append(k).append(" key, @NotNull Supplier<").append(v).append("> valueSupplier) {\n");
                 body.append("        if (!this.").append(f.name).append(".containsKey(key)) this.").append(f.name).append(".put(key, valueSupplier.get());\n");
                 body.append("        return this;\n    }\n\n");
@@ -283,7 +355,7 @@ final class BuilderEmitter {
 
             if (f.clearable) {
                 emitContract("-> this", false, "this");
-                body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(clear).append("() {\n");
+                body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(clear).append("() {\n");
                 body.append("        this.").append(f.name).append(".clear();\n");
                 body.append("        return this;\n    }\n\n");
             }
@@ -296,7 +368,7 @@ final class BuilderEmitter {
 
         // varargs replace (always)
         emitContract("_ -> this", false, "this");
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(whole)
+        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(whole)
             .append("(@NotNull ").append(elem).append("... ").append(f.name).append(") {\n");
         body.append("        this.").append(f.name).append(" = new ").append(container).append("<>();\n");
         body.append("        for (").append(elem).append(" e : ").append(f.name).append(") this.").append(f.name).append(".add(e);\n");
@@ -304,7 +376,7 @@ final class BuilderEmitter {
 
         // Iterable replace (always)
         emitContract("_ -> this", false, "this");
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(whole)
+        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(whole)
             .append("(@NotNull Iterable<").append(elem).append("> ").append(f.name).append(") {\n");
         body.append("        this.").append(f.name).append(" = new ").append(container).append("<>();\n");
         body.append("        ").append(f.name).append(".forEach(this.").append(f.name).append("::add);\n");
@@ -313,7 +385,7 @@ final class BuilderEmitter {
         if (f.singular) {
             String single = (config.methodPrefix().isEmpty() ? "add" : config.methodPrefix()) + capitalise(f.singularName);
             emitContract("_ -> this", false, "this");
-            body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(single)
+            body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(single)
                 .append("(@NotNull ").append(elem).append(' ').append(f.singularName).append(") {\n");
             body.append("        this.").append(f.name).append(".add(").append(f.singularName).append(");\n");
             body.append("        return this;\n    }\n\n");
@@ -321,7 +393,7 @@ final class BuilderEmitter {
 
         if (f.clearable) {
             emitContract("-> this", false, "this");
-            body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(clear).append("() {\n");
+            body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(clear).append("() {\n");
             body.append("        this.").append(f.name).append(".clear();\n");
             body.append("        return this;\n    }\n\n");
         }
@@ -331,7 +403,7 @@ final class BuilderEmitter {
         String elem = typeName(f.collectionElement);
         String setter = methodName(f.name, false);
         emitContract("_ -> this", false, "this");
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderName).append(' ').append(setter)
+        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(setter)
             .append("(@NotNull ").append(elem).append("... ").append(f.name).append(") {\n");
         body.append("        this.").append(f.name).append(" = ").append(f.name).append(";\n");
         body.append("        return this;\n    }\n\n");
@@ -346,9 +418,13 @@ final class BuilderEmitter {
         if (config.fromMethodName().isEmpty()) return;
 
         emitContract("_ -> new", true, null);
-        body.append("    ").append(accessKeyword()).append("static @NotNull ").append(builderName).append(' ').append(config.fromMethodName())
-            .append("(@NotNull ").append(targetSimpleName).append(" instance) {\n");
-        body.append("        ").append(builderName).append(" b = new ").append(builderName).append("();\n");
+        // Being static, from() cannot see the target's type parameters and
+        // re-declares them; the caller infers them from the argument.
+        body.append("    ").append(accessKeyword()).append("static ").append(typeParamDecl)
+            .append(typeParamDecl.isEmpty() ? "" : " ")
+            .append("@NotNull ").append(builderRef).append(' ').append(config.fromMethodName())
+            .append("(@NotNull ").append(targetRef).append(" instance) {\n");
+        body.append("        ").append(builderRef).append(" b = new ").append(builderName).append(diamond()).append("();\n");
         for (FieldSpec f : fields) body.append("        b.").append(f.name).append(" = ").append(readFromInstance(f)).append(";\n");
         body.append("        return b;\n    }\n\n");
     }
@@ -379,7 +455,7 @@ final class BuilderEmitter {
 
     private void emitBuildMethod() {
         emitContract("-> new", false, null);
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(targetSimpleName).append(' ').append(config.buildMethodName()).append("() {\n");
+        body.append("    ").append(accessKeyword()).append("@NotNull ").append(targetRef).append(' ').append(config.buildMethodName()).append("() {\n");
         boolean useFactory = !config.factoryMethod().isEmpty();
         String constructorTarget;
         if (targetKind == TargetKind.INTERFACE && useFactory) {
@@ -389,11 +465,15 @@ final class BuilderEmitter {
             // verify this, so it's documented in ClassBuilder's Javadoc.
             constructorTarget = targetSimpleName + "." + config.factoryMethod();
         } else if (targetKind == TargetKind.INTERFACE) {
-            constructorTarget = "new " + (interfaceImplName == null ? targetSimpleName + "Impl" : interfaceImplName);
+            // Diamond, not the explicit arguments: the impl's parameters mirror
+            // the interface's, so the assignment or return target infers them.
+            constructorTarget = "new "
+                + (interfaceImplName == null ? targetSimpleName + "Impl" : interfaceImplName)
+                + diamond();
         } else if (useFactory) {
             constructorTarget = targetSimpleName + "." + config.factoryMethod();
         } else {
-            constructorTarget = "new " + targetSimpleName;
+            constructorTarget = "new " + targetSimpleName + diamond();
         }
         // Validator reads @BuildFlag annotations off the constructed target,
         // not the Builder (whose fields are synthesised without annotations),
@@ -401,7 +481,7 @@ final class BuilderEmitter {
         boolean emitValidation = config.validate();
         if (emitValidation) {
             imports.add("dev.simplified.classbuilder.validate.BuildFlagValidator");
-            body.append("        final ").append(targetSimpleName).append(" $result = ").append(constructorTarget).append('(');
+            body.append("        final ").append(targetRef).append(" $result = ").append(constructorTarget).append('(');
         } else {
             body.append("        return ").append(constructorTarget).append('(');
         }

@@ -3,7 +3,9 @@ import dev.simplified.shared.apt.SourceIntrospector;
 import dev.simplified.shared.apt.AnnotationLookup;
 
 import dev.simplified.annotations.AccessLevel;
+import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import dev.simplified.classbuilder.mutate.BuilderMutator;
+import dev.simplified.classbuilder.mutate.InterfaceBootstrapMutator;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.lazy.mutate.LazyFieldMutator;
 import dev.simplified.shared.javac.compat.JavacAccessFactory;
@@ -250,6 +252,19 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         String qualifiedName = packageName.isEmpty() ? emitter.builderClassName() : packageName + "." + emitter.builderClassName();
         JavaFileObject file = processingEnv.getFiler().createSourceFile(qualifiedName, target);
         try (Writer w = file.openWriter()) { w.write(source); }
+
+        // Bootstrap methods onto the interface itself, so an interface target is
+        // entered the same way a class is - Repo.builder() rather than
+        // new RepoBuilder<>(). The builder stays a sibling class; only the entry
+        // points move onto the interface body, which static and default methods
+        // make possible without shifting interfaces to the mutation path.
+        if (javacBridge.isPresent()) {
+            JCClassDecl targetTree = javacBridge.get().treeOf(target);
+            if (targetTree != null) {
+                new InterfaceBootstrapMutator(javacBridge.get(), messager, target, targetTree,
+                    config, emitter.builderClassName()).appendAll();
+            }
+        }
     }
 
     private List<FieldSpec> collectFieldsFromInterface(TypeElement target, BuilderConfig config) {

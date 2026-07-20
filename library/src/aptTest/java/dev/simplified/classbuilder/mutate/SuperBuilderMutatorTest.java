@@ -22,6 +22,7 @@ import static com.google.testing.compile.CompilationSubject.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -421,6 +422,201 @@ public class SuperBuilderMutatorTest {
         Optional<?> empty = (Optional<?>) itemCls.getMethod("getCaption")
             .invoke(photoBuilder.getMethod("build").invoke(b2));
         assertFalse(empty.isPresent());
+    }
+
+    // ------------------------------------------------------------------
+    // Instance-referencing defaults across the chain
+    // ------------------------------------------------------------------
+
+    /**
+     * An initializer on the abstract root that reads instance state is computed
+     * in the copy constructor, where {@code this} is the concrete subclass being
+     * built. {@code getClass()} therefore names the child, exactly as it would
+     * in a hand-written field initializer on the parent.
+     */
+    @Test
+    public void instanceDefaultOnAbstractRoot_isComputedAgainstTheChild() throws Exception {
+        JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Frame",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Frame {",
+            "    String kind = getClass().getSimpleName();",
+            "    public String getKind() { return kind; }",
+            "}");
+        JavaFileObject child = JavaFileObjects.forSourceLines("demo.Window",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Window extends Frame {",
+            "    int width;",
+            "    public int getWidth() { return width; }",
+            "}");
+        Compilation c = compile(parent, child);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> frameCls = Class.forName("demo.Frame", true, cl);
+        Class<?> windowCls = Class.forName("demo.Window", true, cl);
+        Class<?> windowBuilder = nested(windowCls, "Builder");
+
+        Object b = windowCls.getMethod("builder").invoke(null);
+        windowBuilder.getMethod("width", int.class).invoke(b, 800);
+        Object built = windowBuilder.getMethod("build").invoke(b);
+        assertEquals("Window", frameCls.getMethod("getKind").invoke(built));
+
+        // The inherited setter still beats the default, and an explicit null
+        // survives rather than being read back as "unset".
+        Object b2 = windowCls.getMethod("builder").invoke(null);
+        windowBuilder.getMethod("kind", String.class).invoke(b2, "custom");
+        assertEquals("custom",
+            frameCls.getMethod("getKind").invoke(windowBuilder.getMethod("build").invoke(b2)));
+
+        Object b3 = windowCls.getMethod("builder").invoke(null);
+        windowBuilder.getMethod("kind", String.class).invoke(b3, (Object) null);
+        assertNull("explicit null must win over the default",
+            frameCls.getMethod("getKind").invoke(windowBuilder.getMethod("build").invoke(b3)));
+    }
+
+    /**
+     * A concrete link's own instance-referencing default is computed after
+     * {@code super(b)} has drained the parent's slots, so it may read state the
+     * parent just assigned.
+     */
+    @Test
+    public void instanceDefaultOnConcreteLink_seesParentStateAlreadyAssigned() throws Exception {
+        JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Node",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Node {",
+            "    String kind = getClass().getSimpleName();",
+            "    public String getKind() { return kind; }",
+            "}");
+        JavaFileObject child = JavaFileObjects.forSourceLines("demo.Leaf",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Leaf extends Node {",
+            "    String id = \"id-\" + getKind();",
+            "    public String getId() { return id; }",
+            "}");
+        Compilation c = compile(parent, child);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> leafCls = Class.forName("demo.Leaf", true, cl);
+        Class<?> leafBuilder = nested(leafCls, "Builder");
+
+        Object b = leafCls.getMethod("builder").invoke(null);
+        Object built = leafBuilder.getMethod("build").invoke(b);
+        assertEquals("id-Leaf", leafCls.getMethod("getId").invoke(built));
+
+        Object b2 = leafCls.getMethod("builder").invoke(null);
+        leafBuilder.getMethod("id", String.class).invoke(b2, "explicit");
+        assertEquals("explicit",
+            leafCls.getMethod("getId").invoke(leafBuilder.getMethod("build").invoke(b2)));
+    }
+
+    /**
+     * A {@code @Lazy} field on the abstract root whose default reads instance
+     * state keeps both promises at once: the value is computed in the copy
+     * constructor's scope, and both branches stay deferred, so nothing runs
+     * until the first getter call.
+     */
+    @Test
+    public void lazyInstanceDefaultOnAbstractRoot_staysDeferred() throws Exception {
+        JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Src",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Lazy;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Src {",
+            "    @Lazy String value = compute();",
+            "    int calls = 0;",
+            "    String compute() { calls++; return \"c\" + calls; }",
+            "    public int getCalls() { return calls; }",
+            "}");
+        JavaFileObject child = JavaFileObjects.forSourceLines("demo.Impl",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Impl extends Src {",
+            "    int order;",
+            "    public int getOrder() { return order; }",
+            "}");
+        Compilation c = compile(parent, child);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> srcCls = Class.forName("demo.Src", true, cl);
+        Class<?> implCls = Class.forName("demo.Impl", true, cl);
+        Class<?> implBuilder = nested(implCls, "Builder");
+
+        Object b = implCls.getMethod("builder").invoke(null);
+        Object built = implBuilder.getMethod("build").invoke(b);
+        assertEquals("building must not evaluate the lazy default",
+            0, srcCls.getMethod("getCalls").invoke(built));
+        assertEquals("c1", srcCls.getMethod("getValue").invoke(built));
+        assertEquals("evaluated once, on first get()",
+            1, srcCls.getMethod("getCalls").invoke(built));
+        srcCls.getMethod("getValue").invoke(built);
+        assertEquals("and memoized thereafter", 1, srcCls.getMethod("getCalls").invoke(built));
+
+        // A supplied value replaces the default and is still only run on get().
+        Object b2 = implCls.getMethod("builder").invoke(null);
+        implBuilder.getMethod("value", String.class).invoke(b2, "given");
+        Object supplied = implBuilder.getMethod("build").invoke(b2);
+        assertEquals("given", srcCls.getMethod("getValue").invoke(supplied));
+        assertEquals("the default provider must never run when a value was set",
+            0, srcCls.getMethod("getCalls").invoke(supplied));
+    }
+
+    /**
+     * A custom container that cannot be constructed works on the chain too -
+     * the copy constructor takes the same fold, and the container comes from
+     * the initializer rather than the declared type.
+     */
+    @Test
+    public void instanceDefaultOnAnUnconstructableCustomContainer_worksOnTheChain() throws Exception {
+        JavaFileObject container = JavaFileObjects.forSourceLines("demo.Pile",
+            "package demo;",
+            "import java.util.ArrayList;",
+            "import java.util.Collection;",
+            "public class Pile extends ArrayList<String> {",
+            "    private Pile(Collection<? extends String> c) { super(c); }",
+            "    public static Pile of(Collection<? extends String> c) { return new Pile(c); }",
+            "}");
+        JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Bag",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Collector;",
+            "import java.util.List;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Bag {",
+            "    String prefix = \"p\";",
+            "    @Collector(singular = true) Pile items = defaults();",
+            "    Pile defaults() { return Pile.of(List.of(prefix)); }",
+            "    public String getPrefix() { return prefix; }",
+            "    public Pile getItems() { return items; }",
+            "}");
+        JavaFileObject child = JavaFileObjects.forSourceLines("demo.Sack",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Sack extends Bag {}");
+        Compilation c = compile(container, parent, child);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> bag = Class.forName("demo.Bag", true, cl);
+        Class<?> sack = Class.forName("demo.Sack", true, cl);
+        Object builder = sack.getMethod("builder").invoke(null);
+        builder.getClass().getMethod("addItem", String.class).invoke(builder, "b");
+        Object items = bag.getMethod("getItems")
+            .invoke(builder.getClass().getMethod("build").invoke(builder));
+        assertEquals(List.of("p", "b"), items);
+        assertEquals("Pile", items.getClass().getSimpleName());
     }
 
     @Test

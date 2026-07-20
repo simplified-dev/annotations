@@ -43,6 +43,29 @@ import java.util.Map;
  * becomes {@code entry}, {@code boxes} becomes {@code box}, {@code tags}
  * becomes {@code tag}).
  *
+ * <h2>Interaction with the field's initializer</h2>
+ * A declared initializer seeds the collection (see {@link BuilderDefault}), and
+ * the setters compose with it as their names suggest:
+ *
+ * <pre>{@code
+ * @Collector(singular = true, clearable = true) List<String> items = List.of("a");
+ *
+ * builder().build()                 // [a]     - the default seeds it
+ * builder().addItem("b").build()    // [a, b]  - a single-element add appends
+ * builder().items("x").build()      // [x]     - a wholesale replace discards it
+ * builder().clearItems().build()    // []      - so does clear
+ * }</pre>
+ *
+ * <p>The default is copied per builder before any of this, so an immutable one
+ * such as {@code List.of(...)} is safe to add to and a default that returns
+ * shared state cannot be mutated through the builder.
+ *
+ * <p>This holds for a custom container type as well - one recognised by
+ * implementing {@link Collection} or {@link Map} rather than by being a
+ * {@code java.util} type - including one with no accessible constructor, or an
+ * interface. The built field always holds the instance the initializer
+ * returned; nothing is reconstructed from the declared type.
+ *
  * <h2>Examples</h2>
  * <pre><code>
  * // Bulk-only: withEntries(T...) + withEntries(Iterable&lt;T&gt;)

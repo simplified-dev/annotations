@@ -21,7 +21,7 @@ import java.lang.annotation.Target;
  * <p>The initializer is evaluated <b>fresh per builder instance</b>: a
  * {@code UUID.randomUUID()} default produces a new UUID for each builder, and a
  * {@code new ArrayList<>()} default produces a fresh mutable list. Under the
- * hood the processor injects a package-private static
+ * hood the processor injects a private static
  * {@code $default$<fieldName>()} method carrying the source expression, and the
  * generated builder's field default calls that method.
  *
@@ -39,13 +39,28 @@ import java.lang.annotation.Target;
  * {@code build()}, so reusing a single builder for two builds yields two
  * values rather than a shared one.
  *
- * <p>That path retypes the builder slot, so it is unavailable to field shapes
- * whose setters mutate the slot in place or read it as its declared type -
- * {@code boolean}, {@code Optional}, arrays, {@link Formattable} strings, and
- * {@link Collector} collections or maps. An instance-referencing initializer on
- * one of those is reported against the field; give it
- * {@code @BuilderDefault(false)}, or set
- * {@link ClassBuilder#retainInit() retainInit = false} on the class.
+ * <p>A SuperBuilder chain behaves the same way, through the copy constructor
+ * each link already carries. Every class computes its own defaults, so one
+ * declared on an abstract root sees the concrete subclass under construction -
+ * {@code getClass()} there names the child - and one declared on a link runs
+ * after the parent's slots have been drained, so it may read them.
+ *
+ * <p>Every field shape whose setter simply assigns takes that path -
+ * {@code boolean} (including a {@link Negate} pair), {@code Optional}, arrays,
+ * {@link Formattable} strings, plain fields and {@link Lazy} ones alike. A
+ * {@link Collector} container takes a merge instead, since its {@code add} /
+ * {@code put} / {@code clear} setters need a real container to mutate while the
+ * builder runs: the builder collects contributions into a scratch collection and
+ * the constructor folds them onto the container the initializer returns. The
+ * result is the same either way - the default seeds the collection,
+ * single-element setters append onto it, and a wholesale replace or
+ * {@code clear} discards it.
+ *
+ * <p>That holds for a custom container type too, whatever its shape - one with
+ * no accessible constructor, or an interface, which has none at all. Nothing
+ * has to construct the declared type: the built object holds exactly the
+ * instance the initializer returned, subclass and all, rather than something
+ * rebuilt from the declaration.
  *
  * <h2>Examples</h2>
  * <pre><code>

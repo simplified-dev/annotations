@@ -15,6 +15,7 @@ import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.TreeCopier;
 import com.sun.tools.javac.tree.TreeMaker;
 import com.sun.tools.javac.util.List;
+import com.sun.tools.javac.util.Name;
 import com.sun.tools.javac.util.Names;
 import com.sun.tools.javac.util.Position;
 import dev.simplified.classbuilder.apt.FieldSpec;
@@ -69,6 +70,16 @@ final class RetainedInitFactory {
         return "$default$" + fieldName;
     }
 
+    /** The convention-named merge helper for a collected instance default. */
+    static String mergeName(String fieldName) {
+        return "$merge$" + fieldName;
+    }
+
+    /** The convention-named empty-container factory for a collected custom container. */
+    static String emptyName(String fieldName) {
+        return "$empty$" + fieldName;
+    }
+
     /**
      * For every field whose initializer tree was captured by
      * {@link SourceIntrospector}, appends a provider
@@ -98,6 +109,19 @@ final class RetainedInitFactory {
             } else if (!hasExistingProvider(target, providerName(f.name))) {
                 JCMethodDecl provider = buildProvider(f, original);
                 if (provider != null) ctx.bridge().compat().appendDef(target, provider);
+                // A collected instance default also needs the merge helper that
+                // folds the builder's contributions onto the computed default.
+                if (ctx.isCollectedInstanceDefault(f) && !hasExistingProvider(target, mergeName(f.name))) {
+                    ctx.bridge().compat().appendDef(target, buildMerge(f));
+                }
+                // A custom container's initializer is the field's factory as
+                // well as its default, and the two want different things once
+                // it carries contents. Split them here.
+                if (MutationContext.isCollected(f) && f.isCustomContainer
+                    && !ctx.isCollectedInstanceDefault(f)
+                    && !hasExistingProvider(target, emptyName(f.name))) {
+                    ctx.bridge().compat().appendDef(target, buildEmptyFactory(f));
+                }
             }
             // Blank-final lift: a final field carrying both an initializer AND
             // the builder-called constructor's `this.<name> = <name>` assignment
@@ -157,14 +181,129 @@ final class RetainedInitFactory {
         // builder is created, since no target exists then. Its provider is an
         // instance method, called from the generated constructor where `this`
         // is available - the same place an ordinary field initializer runs.
-        long modifiers = ctx.isInstanceDefault(field.name)
-            ? Flags.PRIVATE
-            : Flags.PRIVATE | Flags.STATIC;
+        boolean instance = ctx.isInstanceDefault(field.name);
+        long modifiers = instance ? Flags.PRIVATE : Flags.PRIVATE | Flags.STATIC;
+        // A static provider on a generic target cannot see the class's type
+        // variables, so it re-declares them; the call site infers them back
+        // from the builder slot's own type. The instance form needs none -
+        // it runs with the class's parameters already in scope.
         JCMethodDecl method = make.MethodDef(
             make.Modifiers(modifiers),
             names.fromString(providerName(field.name)),
             returnType,
+            instance ? List.nil() : ctx.typeParams(),
             List.nil(),
+            List.nil(),
+            body,
+            null
+        );
+        AstMarkers.markGenerated(method);
+        return method;
+    }
+
+    /**
+     * Builds the merge helper for a {@code @Collector} field whose default reads
+     * instance state:
+     *
+     * <pre>{@code
+     * private List<String> $merge$items(List<String> contributed, boolean replaced) {
+     *     if (replaced) return contributed;
+     *     List<String> base = $default$items();
+     *     base.addAll(contributed);
+     *     return base;
+     * }
+     * }</pre>
+     *
+     * <p>The builder cannot seed its slot from an instance-reading default -
+     * no target exists when the builder is created - so the slot carries only
+     * what the caller contributed and the fold happens here, where {@code this}
+     * is available. An untouched builder contributes an empty collection, which
+     * makes the untouched and appended-to cases the same code path; only a
+     * wholesale replace ({@code items(...)}, {@code clearItems()}) has to
+     * discard the default, which is what {@code replaced} records.
+     */
+    private JCMethodDecl buildMerge(FieldSpec field) {
+        JCExpression fieldType = types.parseType(field.typeDisplay);
+        Name contributed = names.fromString("contributed");
+        Name replaced = names.fromString("replaced");
+        Name base = names.fromString("base");
+
+        // The container always comes from the field's own initializer, even
+        // when the caller replaced its contents - so the built object holds
+        // exactly what the initializer returns, subclass and all, and nothing
+        // has to construct the declared type.
+        JCStatement declareBase = make.VarDef(
+            make.Modifiers(0), base, types.parseType(field.typeDisplay),
+            make.Apply(List.nil(), make.Ident(names.fromString(providerName(field.name))), List.nil()));
+        JCStatement discardDefault = make.If(
+            make.Ident(replaced),
+            make.Exec(make.Apply(List.nil(),
+                make.Select(make.Ident(base), names.fromString("clear")), List.nil())),
+            null);
+        // addAll for a collection, putAll for a map.
+        JCStatement fold = make.Exec(make.Apply(
+            List.nil(),
+            make.Select(make.Ident(base), names.fromString(field.isMap ? "putAll" : "addAll")),
+            List.of(make.Ident(contributed))
+        ));
+        JCBlock body = make.Block(0,
+            List.of(declareBase, discardDefault, fold, make.Return(make.Ident(base))));
+
+        JCMethodDecl method = make.MethodDef(
+            make.Modifiers(Flags.PRIVATE),
+            names.fromString(mergeName(field.name)),
+            fieldType,
+            List.nil(),
+            List.of(
+                make.VarDef(make.Modifiers(Flags.PARAMETER), contributed, ctx.collectedSlotType(field), null),
+                make.VarDef(make.Modifiers(Flags.PARAMETER), replaced,
+                    make.TypeIdent(com.sun.tools.javac.code.TypeTag.BOOLEAN), null)
+            ),
+            List.nil(),
+            body,
+            null
+        );
+        AstMarkers.markGenerated(method);
+        return method;
+    }
+
+    /**
+     * Builds the empty-container factory for a {@code @Collector} on a custom
+     * container:
+     *
+     * <pre>{@code
+     * private static ConcurrentList<String> $empty$items() {
+     *     ConcurrentList<String> fresh = $default$items();
+     *     fresh.clear();
+     *     return fresh;
+     * }
+     * }</pre>
+     *
+     * <p>A {@code java.util} container has a universal way to make a fresh
+     * empty one - {@code new ArrayList<>()} and friends - so its default and
+     * its factory are independent. A custom container has no such expression:
+     * the only thing that can produce one is the field's own initializer. That
+     * makes the initializer serve both roles, and the roles disagree the moment
+     * it carries contents - a replace setter resetting through it would keep
+     * the default's elements instead of discarding them. Emptying a fresh
+     * instance separates the two.
+     */
+    private JCMethodDecl buildEmptyFactory(FieldSpec field) {
+        Name fresh = names.fromString("fresh");
+        JCStatement declare = make.VarDef(
+            make.Modifiers(0), fresh, types.parseType(field.typeDisplay),
+            make.Apply(List.nil(), make.Ident(names.fromString(providerName(field.name))), List.nil()));
+        JCStatement clear = make.Exec(make.Apply(
+            List.nil(),
+            make.Select(make.Ident(fresh), names.fromString("clear")),
+            List.nil()
+        ));
+        JCBlock body = make.Block(0, List.of(declare, clear, make.Return(make.Ident(fresh))));
+        JCMethodDecl method = make.MethodDef(
+            make.Modifiers(Flags.PRIVATE | Flags.STATIC),
+            names.fromString(emptyName(field.name)),
+            types.parseType(field.typeDisplay),
+            ctx.typeParams(),
             List.nil(),
             List.nil(),
             body,

@@ -59,9 +59,7 @@ public final class BuilderMutator {
         warnUnbuildableCustomCollectors(targetElement, fields);
 
         boolean isAbstract = targetElement.getModifiers().contains(Modifier.ABSTRACT);
-        String annotatedSuper = findAnnotatedDirectSuperSimpleName(targetElement);
-
-        if (!rejectUnsupportedInstanceDefaults(ctx, fields, isAbstract, annotatedSuper)) return true;
+        AnnotatedSuper annotatedSuper = findAnnotatedDirectSuper(targetElement);
 
         // The build() we emit calls new Target(f1, f2, ...) positionally, and a
         // plain class that declares no constructor gets only javac's no-arg
@@ -117,50 +115,6 @@ public final class BuilderMutator {
     }
 
     /**
-     * Reports fields whose initializer reads instance state but whose shape the
-     * constructor-computed path cannot carry, and SuperBuilder targets, where
-     * the path is not implemented. Reporting here - before anything is emitted -
-     * means the author sees one clear message against their own field instead
-     * of javac's "non-static ... static context" pointing into a generated
-     * provider they never wrote.
-     *
-     * @param ctx the per-target mutation context
-     * @param fields the builder-visible fields
-     * @param isAbstract whether the target is abstract
-     * @param annotatedSuper simple name of an annotated direct super, or {@code null}
-     * @return whether mutation should continue
-     */
-    private boolean rejectUnsupportedInstanceDefaults(MutationContext ctx,
-                                                      List<FieldSpec> fields,
-                                                      boolean isAbstract,
-                                                      String annotatedSuper) {
-        if (ctx.instanceDefaults().isEmpty()) return true;
-        boolean superBuilder = isAbstract || annotatedSuper != null;
-        boolean ok = true;
-        for (FieldSpec f : fields) {
-            if (!ctx.isInstanceDefault(f.name)) continue;
-            if (superBuilder) {
-                messager.printMessage(Diagnostic.Kind.ERROR,
-                    "field '" + f.name + "' has an initializer that reads instance state, which is not "
-                        + "supported on a SuperBuilder target - set @BuilderDefault(false) on the field "
-                        + "or retainInit = false on the class",
-                    f.element
-                );
-                ok = false;
-            } else if (!MutationContext.supportsInstanceDefault(f)) {
-                messager.printMessage(Diagnostic.Kind.ERROR,
-                    "field '" + f.name + "' has an initializer that reads instance state, which this "
-                        + "field's shape cannot carry as a builder default - set @BuilderDefault(false) "
-                        + "on the field or retainInit = false on the class",
-                    f.element
-                );
-                ok = false;
-            }
-        }
-        return ok;
-    }
-
-    /**
      * Decides whether the target needs a synthesised all-args constructor.
      * Skipped for records (the canonical constructor already has the shape), for
      * SuperBuilder targets (they take a copy constructor instead), when a
@@ -173,14 +127,14 @@ public final class BuilderMutator {
      * @param target the target's class declaration
      * @param ctx the per-target mutation context
      * @param isAbstract whether the target is abstract
-     * @param annotatedSuper simple name of an annotated direct super, or {@code null}
+     * @param annotatedSuper the annotated direct super, or {@code null}
      * @return whether an all-args constructor should be injected
      */
     private boolean needsAllArgsConstructor(TypeElement targetElement,
                                             JCClassDecl target,
                                             MutationContext ctx,
                                             boolean isAbstract,
-                                            String annotatedSuper) {
+                                            AnnotatedSuper annotatedSuper) {
         if (targetElement.getKind() == ElementKind.RECORD) return false;
         if (isAbstract || annotatedSuper != null) return false;
         if (!ctx.config().factoryMethod().isEmpty()) return false;
@@ -266,7 +220,7 @@ public final class BuilderMutator {
         return out;
     }
 
-    private static String findAnnotatedDirectSuperSimpleName(TypeElement target) {
+    private static AnnotatedSuper findAnnotatedDirectSuper(TypeElement target) {
         TypeMirror superMirror = target.getSuperclass();
         if (!(superMirror instanceof DeclaredType dt)) return null;
         Element superElement = dt.asElement();
@@ -275,7 +229,9 @@ public final class BuilderMutator {
         if ("java.lang.Object".equals(superQn)) return null;
         for (var m : superType.getAnnotationMirrors()) {
             if (m.getAnnotationType().toString().equals("dev.simplified.annotations.ClassBuilder")) {
-                return superType.getSimpleName().toString();
+                List<String> args = new ArrayList<>();
+                for (TypeMirror arg : dt.getTypeArguments()) args.add(arg.toString());
+                return new AnnotatedSuper(superType.getSimpleName().toString(), args);
             }
         }
         return null;

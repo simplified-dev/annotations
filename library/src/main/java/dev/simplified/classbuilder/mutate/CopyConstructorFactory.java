@@ -5,6 +5,7 @@ import dev.simplified.shared.javac.JavacTypeFactory;
 
 import com.sun.tools.javac.code.BoundKind;
 import com.sun.tools.javac.code.Flags;
+import com.sun.tools.javac.code.TypeTag;
 import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.JCTree.JCBlock;
 import com.sun.tools.javac.tree.JCTree.JCExpression;
@@ -45,73 +46,130 @@ final class CopyConstructorFactory {
     }
 
     /**
-     * Builds the copy constructor for an abstract target at the root of a
-     * SuperBuilder chain. Parameter type is the wildcard form
-     * {@code Builder<?, ?>} so the constructor accepts any subclass builder.
+     * Builds the copy constructor for one link of a SuperBuilder chain.
+     *
+     * @param selfTypedBuilder whether this target's builder carries the
+     *        self-typed parameters, in which case the constructor takes the
+     *        wildcard form {@code Builder<?, ?>} so it accepts any subclass
+     *        builder; a concrete link's builder binds them and is named plainly
+     * @param callSuper whether to open with {@code super(b)}, letting an
+     *        annotated parent drain the fields it declares before this type
+     *        copies its own
+     * @return the generated constructor
      */
-    JCMethodDecl abstractRoot() {
-        JCExpression builderWild = make.TypeApply(
-            make.Ident(names.fromString(ctx.builderName())),
-            List.of(make.Wildcard(make.TypeBoundKind(BoundKind.UNBOUND), null),
-                make.Wildcard(make.TypeBoundKind(BoundKind.UNBOUND), null))
-        );
+    JCMethodDecl build(boolean selfTypedBuilder, boolean callSuper) {
         JCVariableDecl param = make.VarDef(
             make.Modifiers(Flags.PARAMETER),
             names.fromString("b"),
-            builderWild,
+            selfTypedBuilder ? selfTypedBuilderType() : ctx.builderType(),
             null
         );
         ListBuffer<JCStatement> body = new ListBuffer<>();
+        if (callSuper) {
+            body.append(make.Exec(make.Apply(
+                List.nil(),
+                make.Ident(names._super),
+                List.of(make.Ident(names.fromString("b")))
+            )));
+        }
         for (FieldSpec f : ctx.fields()) body.append(assignFromBuilder(f));
         return buildCtor(List.of(param), body.toList(), Flags.PROTECTED);
     }
 
     /**
-     * Builds the copy constructor for a concrete target in a SuperBuilder chain
-     * whose direct super is annotated. Calls {@code super(b)} first to let the
-     * parent drain the shared fields, then copies this type's own fields.
+     * {@code Builder<?, ?>}, or on a generic target
+     * {@code Builder<V, ?, ?>} - the target's own parameters are bound, since
+     * the enclosing class supplies them, while the two self-type slots stay
+     * wildcards so any subclass builder is accepted.
      */
-    JCMethodDecl concreteLink() {
-        JCExpression builderType = make.Ident(names.fromString(ctx.builderName()));
-        JCVariableDecl param = make.VarDef(
-            make.Modifiers(Flags.PARAMETER),
-            names.fromString("b"),
-            builderType,
-            null
-        );
-        ListBuffer<JCStatement> body = new ListBuffer<>();
-        // super(b);
-        body.append(make.Exec(make.Apply(
-            List.nil(),
-            make.Ident(names._super),
-            List.of(make.Ident(names.fromString("b")))
-        )));
-        for (FieldSpec f : ctx.fields()) body.append(assignFromBuilder(f));
-        return buildCtor(List.of(param), body.toList(), Flags.PROTECTED);
+    private JCExpression selfTypedBuilderType() {
+        ListBuffer<JCExpression> args = new ListBuffer<>();
+        args.appendList(ctx.typeArgs());
+        args.append(make.Wildcard(make.TypeBoundKind(BoundKind.UNBOUND), null));
+        args.append(make.Wildcard(make.TypeBoundKind(BoundKind.UNBOUND), null));
+        return make.TypeApply(make.Ident(names.fromString(ctx.builderName())), args.toList());
     }
 
     private JCStatement assignFromBuilder(FieldSpec f) {
         JCExpression lhs = make.Select(make.Ident(names._this), names.fromString(f.name));
-        JCExpression rhs = make.Select(make.Ident(names.fromString("b")), names.fromString(f.name));
-        if (f.lazy) {
-            // Builder slot is Supplier<T>; target field is Lazy<T>. Wrap the
-            // supplier as Lazy.of(...) at copy time so the target stores a
-            // Lazy and the supplier's call is deferred to the first getter
-            // invocation. The field-attributed overload names the field if the
-            // slot was never filled, rather than letting a null supplier reach
-            // the first get().
-            rhs = make.Apply(
-                List.nil(),
-                make.Select(ctx.types().qualIdent("dev.simplified.lazy.Lazy"),
-                    names.fromString("of")),
-                List.of(
-                    rhs,
-                    make.Literal(ctx.targetElement().getQualifiedName().toString()),
-                    make.Literal(f.name)
-                )
-            );
-        }
+        // Builder slot is Supplier<T> for a @Lazy field while the target field
+        // is Lazy<T>. Wrap the supplier as Lazy.of(...) at copy time so the
+        // target stores a Lazy and the supplier's call is deferred to the first
+        // getter invocation. The field-attributed overload names the field if
+        // the slot was never filled, rather than letting a null supplier reach
+        // the first get().
+        // A collected instance default reads both the contributed container and
+        // its replaced marker off the builder, and folds them against the
+        // instance-computed default.
+        JCExpression rhs = ctx.isCollectedInstanceDefault(f)
+            ? AllArgsConstructorFactory.mergeCall(ctx, f, slotRead(f), markerRead(f))
+            : ctx.isInstanceDefault(f.name) ? defaultingRhs(f)
+            : f.lazy ? lazyOf(slotRead(f), f)
+            : slotRead(f);
         return make.Exec(make.Assign(lhs, rhs));
+    }
+
+    /**
+     * Right-hand side for a field whose default reads instance state, mirroring
+     * {@code AllArgsConstructorFactory.defaultingRhs} for the SuperBuilder
+     * chain. The slot is {@code Supplier<T>}, so null means it was never filled
+     * and the instance {@code $default$} provider supplies the value instead.
+     * A constructor is where {@code this} exists, exactly as it does in the
+     * ordinary field initializer the expression came from.
+     *
+     * <pre>{@code
+     * // plain:  b.name != null ? b.name.get() : $default$name()
+     * // @Lazy:  b.v != null ? Lazy.of(b.v, owner, "v") : Lazy.of(() -> $default$v())
+     * }</pre>
+     */
+    private JCExpression defaultingRhs(FieldSpec f) {
+        JCExpression isSet = make.Binary(JCTree.Tag.NE, slotRead(f), make.Literal(TypeTag.BOT, null));
+        JCExpression providerCall = make.Apply(
+            List.nil(),
+            make.Ident(names.fromString(RetainedInitFactory.providerName(f.name))),
+            List.nil()
+        );
+        if (!f.lazy) {
+            JCExpression get = make.Apply(
+                List.nil(),
+                make.Select(slotRead(f), names.fromString("get")),
+                List.nil()
+            );
+            return make.Conditional(isSet, get, providerCall);
+        }
+        // A @Lazy field keeps its deferral on both branches: the supplied
+        // supplier is wrapped verbatim, and the default becomes a lambda over
+        // the provider so it is still not run until the first getter call.
+        JCExpression deferred = make.Apply(
+            List.nil(),
+            make.Select(ctx.types().qualIdent("dev.simplified.lazy.Lazy"), names.fromString("of")),
+            List.of(make.Lambda(List.nil(), providerCall))
+        );
+        return make.Conditional(isSet, lazyOf(slotRead(f), f), deferred);
+    }
+
+    /** {@code b.<fieldName>} - a fresh read of the builder slot. */
+    private JCExpression slotRead(FieldSpec f) {
+        return make.Select(make.Ident(names.fromString("b")), names.fromString(f.name));
+    }
+
+    /** {@code b.$replaced$<fieldName>} - a fresh read of the replaced marker. */
+    private JCExpression markerRead(FieldSpec f) {
+        return make.Select(make.Ident(names.fromString("b")),
+            names.fromString(MutationContext.replacedMarker(f.name)));
+    }
+
+    /** {@code Lazy.of(<supplier>, "<owner>", "<fieldName>")}. */
+    private JCExpression lazyOf(JCExpression supplier, FieldSpec f) {
+        return make.Apply(
+            List.nil(),
+            make.Select(ctx.types().qualIdent("dev.simplified.lazy.Lazy"), names.fromString("of")),
+            List.of(
+                supplier,
+                make.Literal(ctx.targetElement().getQualifiedName().toString()),
+                make.Literal(f.name)
+            )
+        );
     }
 
     private JCMethodDecl buildCtor(List<JCVariableDecl> params, List<JCStatement> body, long modifiers) {

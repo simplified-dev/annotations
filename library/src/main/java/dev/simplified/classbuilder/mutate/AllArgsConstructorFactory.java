@@ -52,6 +52,22 @@ final class AllArgsConstructorFactory {
         ListBuffer<JCVariableDecl> params = new ListBuffer<>();
         ListBuffer<JCStatement> body = new ListBuffer<>();
         for (FieldSpec f : ctx.fields()) {
+            // A collected instance default arrives as the container the caller
+            // contributed to plus the marker saying whether they replaced it
+            // wholesale; the merge helper folds the two against the default.
+            if (ctx.isCollectedInstanceDefault(f)) {
+                String markerName = MutationContext.replacedMarker(f.name);
+                params.append(make.VarDef(make.Modifiers(Flags.PARAMETER),
+                    names.fromString(f.name), ctx.collectedSlotType(f), null));
+                params.append(make.VarDef(make.Modifiers(Flags.PARAMETER),
+                    names.fromString(markerName), make.TypeIdent(TypeTag.BOOLEAN), null));
+                body.append(make.Exec(make.Assign(
+                    make.Select(make.Ident(names._this), names.fromString(f.name)),
+                    mergeCall(f, make.Ident(names.fromString(f.name)),
+                        make.Ident(names.fromString(markerName)))
+                )));
+                continue;
+            }
             boolean instanceDefault = ctx.isInstanceDefault(f.name);
             // An instance-default parameter arrives as Supplier<T> so null can
             // mean "the builder slot was never filled". @Lazy parameters are
@@ -59,7 +75,7 @@ final class AllArgsConstructorFactory {
             // are declared as T here and left to that pass.
             JCExpression paramType = instanceDefault && !f.lazy
                 ? make.TypeApply(ctx.types().qualIdent("java.util.function.Supplier"),
-                    List.of(ctx.types().parseType(f.typeDisplay)))
+                    List.of(ctx.types().parseBoxedType(f.typeDisplay)))
                 : ctx.types().parseType(f.typeDisplay);
             params.append(make.VarDef(
                 make.Modifiers(Flags.PARAMETER),
@@ -135,6 +151,20 @@ final class AllArgsConstructorFactory {
             List.of(make.Lambda(List.nil(), providerCall))
         );
         return make.Conditional(isSet, supplied, deferred);
+    }
+
+    /** {@code $merge$<name>(contributed, replaced)} on the target. */
+    static JCExpression mergeCall(MutationContext ctx, FieldSpec field,
+                                  JCExpression contributed, JCExpression replaced) {
+        return ctx.make().Apply(
+            List.nil(),
+            ctx.make().Ident(ctx.names().fromString(RetainedInitFactory.mergeName(field.name))),
+            List.of(contributed, replaced)
+        );
+    }
+
+    private JCExpression mergeCall(FieldSpec field, JCExpression contributed, JCExpression replaced) {
+        return mergeCall(ctx, field, contributed, replaced);
     }
 
     /**

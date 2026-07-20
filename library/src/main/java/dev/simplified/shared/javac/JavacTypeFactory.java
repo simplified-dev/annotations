@@ -48,6 +48,29 @@ public final class JavacTypeFactory {
     }
 
     /**
+     * Like {@link #parseType} but yields the wrapper for a primitive, so the
+     * result is usable as a type argument - {@code Supplier<Boolean>}, never the
+     * uncompilable {@code Supplier<boolean>}. Non-primitives are unchanged.
+     *
+     * @param display the type-display string
+     * @return the type expression, boxed when primitive
+     */
+    public JCExpression parseBoxedType(String display) {
+        String boxed = switch (stripTypeUseAnnotations(display.trim())) {
+            case "boolean" -> "java.lang.Boolean";
+            case "byte" -> "java.lang.Byte";
+            case "short" -> "java.lang.Short";
+            case "int" -> "java.lang.Integer";
+            case "long" -> "java.lang.Long";
+            case "char" -> "java.lang.Character";
+            case "float" -> "java.lang.Float";
+            case "double" -> "java.lang.Double";
+            default -> null;
+        };
+        return boxed != null ? qualIdent(boxed) : parseType(display);
+    }
+
+    /**
      * Parses a javax.lang.model type display string into a javac type
      * expression. Handles primitives, arrays, and generic type arguments
      * recursively.
