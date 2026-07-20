@@ -191,7 +191,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
 
     /**
      * Collects every field from the target (including static) without
-     * honouring {@code @ClassBuilder.exclude} or {@code @BuildRule(ignore)}.
+     * honouring {@code @ClassBuilder.exclude} or {@code @BuilderIgnore}.
      * Used by {@link #processStandaloneLazy} so {@code @Lazy} fields are
      * visible regardless of any other builder-targeted filters - including
      * static ones, which the {@link LazyFieldMutator} needs to see in order
@@ -201,7 +201,9 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         List<FieldSpec> out = new ArrayList<>();
         for (Element enclosed : target.getEnclosedElements()) {
             if (enclosed.getKind() != ElementKind.FIELD) continue;
-            out.add(FieldSpec.from((VariableElement) enclosed, lookup, introspector, processingEnv.getTypeUtils()));
+            // Standalone @Lazy path - no @ClassBuilder, so no retainInit policy.
+            out.add(FieldSpec.from((VariableElement) enclosed, lookup, introspector,
+                processingEnv.getTypeUtils(), false));
         }
         return out;
     }
@@ -271,6 +273,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         AccessLevel access = parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, "access", "PUBLIC"));
         AccessLevel constructorAccess =
             parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, "constructorAccess", "PACKAGE"));
+        boolean retainInit = lookup.booleanAttr(target, ANNOTATION_FQN, "retainInit", true);
         boolean generateBuilder = lookup.booleanAttr(target, ANNOTATION_FQN, "generateBuilder", true);
         boolean generateFrom = lookup.booleanAttr(target, ANNOTATION_FQN, "generateFrom", true);
         boolean generateMutate = lookup.booleanAttr(target, ANNOTATION_FQN, "generateMutate", true);
@@ -282,7 +285,8 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         Set<String> excludeSet = new HashSet<>(Arrays.asList(lookup.stringArrayAttr(target, ANNOTATION_FQN, "exclude")));
         return new BuilderConfig(
             builderName, builderMethodName, buildMethodName, fromMethodName, toBuilderMethodName,
-            methodPrefix, access, constructorAccess, generateBuilder, generateFrom, generateMutate,
+            methodPrefix, access, constructorAccess, retainInit,
+            generateBuilder, generateFrom, generateMutate,
             generateCopyConstructor, generateImpl, validate, emitContracts, factoryMethod, excludeSet
         );
     }
@@ -295,7 +299,8 @@ public class ClassBuilderProcessor extends AbstractProcessor {
             if (enclosed.getModifiers().contains(Modifier.TRANSIENT)) continue;
             String name = enclosed.getSimpleName().toString();
             if (config.excludeSet().contains(name)) continue;
-            FieldSpec spec = FieldSpec.from((VariableElement) enclosed, lookup, introspector, processingEnv.getTypeUtils());
+            FieldSpec spec = FieldSpec.from((VariableElement) enclosed, lookup, introspector,
+                processingEnv.getTypeUtils(), config.retainInit());
             if (spec.ignored) continue;
             out.add(spec);
         }

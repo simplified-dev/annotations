@@ -96,10 +96,10 @@ public final class BuilderMutator {
             return true;
         }
 
-        // $default$<fieldName>() providers for @BuildRule(retainInit) fields.
+        // $default$<fieldName>() providers for retained-initializer fields.
         // Must run before the nested Builder is built so FieldMutators'
         // Target.$default$<name>() references resolve at javac attribution.
-        new RetainedInitFactory(ctx).appendAll();
+        new RetainedInitFactory(ctx, messager).appendAll();
 
         JCClassDecl nested = new NestedBuilderFactory(ctx).build();
         bridge.compat().appendDef(target, nested);
@@ -187,6 +187,11 @@ public final class BuilderMutator {
             Element se = dt.asElement();
             if (!(se instanceof TypeElement superType)) break;
             if ("java.lang.Object".equals(superType.getQualifiedName().toString())) break;
+            // retainInit is the ancestor's own policy, not the subclass's.
+            // Inert on this path (no introspector, so no initializer is
+            // captured), but reading it locally keeps the semantics honest.
+            boolean superRetainInit = lookup.booleanAttr(
+                superType, "dev.simplified.annotations.ClassBuilder", "retainInit", true);
             // Collect this ancestor's own fields.
             for (Element enc : superType.getEnclosedElements()) {
                 if (enc.getKind() != ElementKind.FIELD) continue;
@@ -195,7 +200,7 @@ public final class BuilderMutator {
                 // Inherited fields use the plain classification (no Types walk):
                 // their initializers aren't accessible cross-class, so a custom
                 // container on a parent falls back to a plain setter here.
-                FieldSpec spec = FieldSpec.from((VariableElement) enc, lookup, null, null);
+                FieldSpec spec = FieldSpec.from((VariableElement) enc, lookup, null, null, superRetainInit);
                 if (spec.ignored) continue;
                 ancestors.add(spec);
             }

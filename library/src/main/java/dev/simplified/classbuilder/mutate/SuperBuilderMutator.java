@@ -84,7 +84,7 @@ final class SuperBuilderMutator {
         // chain fields keep their providers on their respective declaring
         // classes. FieldMutators.defaultInitializer references them by
         // ctx.targetSimpleName() - always the field's own class.
-        new RetainedInitFactory(ctx).appendAll();
+        new RetainedInitFactory(ctx, messager).appendAll();
 
         JCClassDecl nested;
         if (annotatedSuperSimpleName == null) {

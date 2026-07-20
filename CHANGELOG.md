@@ -9,6 +9,22 @@ Versions 1.0.0 through 1.0.5 were published under the legacy plugin ID
 Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations` /
 `io.github.simplified-dev:annotations`. See the 2.0.0 entry for the rename details.
 
+## [2.5.0]
+
+### Added
+
+- **All-args constructor synthesis** - a plain class carrying `@ClassBuilder` that declares no constructor of its own now gets one injected, matching the positional `new Target(f1, f2, ...)` the generated `build()` emits. Previously every such class had to hand-write the constructor or fail to compile. Detection follows Lombok `@Builder`'s rule (synthesise only in the absence of an author-written constructor) and stands down for records, SuperBuilder targets, a set `factoryMethod`, and fieldless targets. `ClassBuilderAugmentProvider` surfaces the constructor to the PSI layer so a same-package `new Target(...)` resolves before the first javac round.
+- **`constructorAccess` attribute** on `@ClassBuilder` - sets the synthesised constructor's visibility, defaulting to `AccessLevel.PACKAGE` to match the implicit constructor Lombok `@Builder` supplies. Kept separate from `access` (which governs the builder class and bootstrap methods and stays `PUBLIC`) so the constructor cannot silently become a way to bypass `build()` and its `@BuildFlag` validation.
+- **`retainInit` attribute** on `@ClassBuilder`, defaulting to `true` - the builder now seeds every field from its declared initializer without any per-field annotation. A field written `String name = "anonymous"` keeps `"anonymous"` as its builder default. Fields with no initializer are unaffected.
+- **`@BuilderDefault` / `@BuilderIgnore`** - field-level annotations replacing `@BuildRule`'s `retainInit` and `ignore` attributes. These names existed before 1.4.0 and were folded into `@BuildRule` then; 2.5.0 restores them.
+
+### Changed
+
+- **BREAKING: `@BuildRule` is removed and split into four standalone field annotations.** `@BuildRule(retainInit = true)` → delete it (now the default); `@BuildRule(retainInit = false)` → `@BuilderDefault(false)`; `@BuildRule(ignore = true)` → `@BuilderIgnore`; `@BuildRule(flag = @BuildFlag(...))` → `@BuildFlag(...)`; `@BuildRule(obtainVia = @ObtainVia(...))` → `@ObtainVia(...)`. `@BuildFlag` and `@ObtainVia` change from `@Target({})` (nested-only) to `@Target(FIELD)` and are now written directly on the field.
+
+  The four concerns shared nothing but their attachment point, and bundling them forced a real cost: `@BuildRule` had to be `RUNTIME`-retained solely so `BuildFlagValidator` could reflect the nested `flag`, which dragged `retainInit`, `ignore`, and `obtainVia` - all consumed at annotation-processing time - into every consumer's class files. After the split only `@BuildFlag` is `RUNTIME`; the other three are `CLASS`. The split also makes the field-level surface uniform, since `@Collector`, `@Negate`, `@Formattable`, `@Lazy`, and `@KeyField` were already standalone.
+- **Field-level `@BuilderDefault` overrides the class-level `retainInit` policy.** Presence of the annotation is the signal: bare `@BuilderDefault` retains, `@BuilderDefault(false)` opts out, and a field with neither inherits the class setting. A missing initializer is an error only when a field asked for retention by name - inheriting the class-wide policy on an uninitialised field is silent, since there is nothing to retain.
+
 ## [2.1.0]
 
 ### Added

@@ -13,8 +13,9 @@ import java.util.Set;
  * Reads source-level information that is not surfaced by the {@link javax.lang.model}
  * API, via the javac-specific {@link Trees} bridge.
  *
- * <p>Used to resolve the declared initializer of a {@code @BuildRule(retainInit = true)} field
- * so the generated builder can reproduce it.
+ * <p>Used to resolve the declared initializer of a retained-initializer field
+ * ({@code @ClassBuilder(retainInit = true)}, or an explicit
+ * {@code @BuilderDefault}) so the generated builder can reproduce it.
  *
  * <p>If {@link Trees} is unavailable (non-javac/ecj environment), every helper
  * returns {@code null} / empty, and callers should treat the feature as a no-op.
@@ -49,7 +50,7 @@ public final class SourceIntrospector {
      * <p>This deliberately does <b>not</b> resolve the identifiers inside the
      * initializer. Resolving them ({@code trees.getElement}) forces attribution
      * of the enclosing class mid-round; for a {@code final}
-     * {@code @BuildRule(retainInit)} field that attribution runs the
+     * retained-initializer field that attribution runs the
      * constructor's definite-assignment check and emits
      * {@code "cannot assign a value to final variable"} <em>before</em> the
      * field's initializer can be lifted to a blank final. The AST-mutation path

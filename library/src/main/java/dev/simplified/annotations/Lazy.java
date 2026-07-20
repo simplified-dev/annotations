@@ -52,7 +52,8 @@ import java.lang.annotation.Target;
  *   <li>Not supported on static fields, record components, or in combination
  *       with the field-only companion annotations
  *       ({@link Collector}, {@link Negate}, {@link Formattable},
- *       {@link BuildRule}).</li>
+ *       {@link BuilderDefault}, {@link BuilderIgnore}, {@link BuildFlag},
+ *       {@link ObtainVia}).</li>
  *   <li>Standalone use (no {@code @ClassBuilder} on the enclosing class)
  *       requires a field initializer; the initializer becomes the supplier
  *       body.</li>

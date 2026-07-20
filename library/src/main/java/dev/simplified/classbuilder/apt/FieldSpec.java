@@ -51,7 +51,7 @@ public final class FieldSpec {
     public final boolean isPrimitive;
     public final boolean isArray;
     // The field carries the `final` modifier. A final field whose initializer is
-    // retained as a builder default (@BuildRule(retainInit)) must have that
+    // retained as a builder default (@BuilderDefault) must have that
     // initializer stripped to a blank final, or the builder-called constructor
     // cannot assign it ("cannot assign a value to final variable").
     public final boolean isFinal;
@@ -78,9 +78,11 @@ public final class FieldSpec {
     public final String singularName;               // derived from @Collector.singularMethodName or field-name inflection; null if no @Collector
     public final boolean clearable;                 // @Collector(clearable = true) - clear() method
     public final boolean compute;                   // @Collector(compute = true) - maps only, putIfAbsent(K, Supplier<V>)
-    public final boolean ignored;                   // @BuildRule(ignore = true) or listed in @ClassBuilder.exclude
+    public final boolean ignored;                   // @BuilderIgnore or listed in @ClassBuilder.exclude
     public final boolean lazy;                       // @Lazy: storage rewritten to Lazy<T>, getter synthesised
     public final boolean builderDefault;
+    /** True only when the field itself carried {@code @BuilderDefault}, not when it inherited the class policy. */
+    public final boolean builderDefaultExplicit;
     public final String sourceInitializer;          // copied source text of the field's declared initializer
     public final Set<String> initializerImports;    // type FQNs referenced by sourceInitializer
     // The javac parse-time tree for the initializer (a JCExpression at
@@ -123,6 +125,7 @@ public final class FieldSpec {
         this.ignored = b.ignored;
         this.lazy = b.lazy;
         this.builderDefault = b.builderDefault;
+        this.builderDefaultExplicit = b.builderDefaultExplicit;
         this.sourceInitializer = b.sourceInitializer;
         this.initializerImports = b.initializerImports == null ? Set.of() : b.initializerImports;
         this.sourceInitializerTree = b.sourceInitializerTree;
@@ -142,10 +145,10 @@ public final class FieldSpec {
      * retained (the underlying element is a method), so {@link #element} is null
      * and callers that need source reporting should fall back to the type element.
      *
-     * <p>{@code @BuildRule(retainInit)} and {@code @BuildRule(obtainVia)} do
-     * not apply to interface accessors (the annotations target fields only),
-     * so no {@link SourceIntrospector} is threaded through this path - only
-     * {@code ignore} is honoured here.
+     * <p>{@code @BuilderDefault} and {@code @ObtainVia} do not apply to
+     * interface accessors (the annotations target fields only), so no
+     * {@link SourceIntrospector} is threaded through this path - only
+     * {@code @BuilderIgnore} is honoured here.
      */
     public static FieldSpec fromInterfaceAccessor(ExecutableElement method, AnnotationLookup lookup, Types typeUtils) {
         Builder b = new Builder();
@@ -168,10 +171,7 @@ public final class FieldSpec {
             String v = lookup.stringAttr(method, "dev.simplified.annotations.Collector", "singularMethodName", "");
             b.singularName = v.isEmpty() ? defaultSingular(b.name) : v;
         }
-        AnnotationMirror rule = lookup.findMirror(method, "dev.simplified.annotations.BuildRule");
-        if (rule != null) {
-            b.ignored = lookup.booleanAttr(rule, "ignore", false);
-        }
+        b.ignored = lookup.hasAnnotation(method, "dev.simplified.annotations.BuilderIgnore");
 
         return new FieldSpec(b);
     }
@@ -276,7 +276,8 @@ public final class FieldSpec {
         return args.size() <= index ? "java.lang.Object" : args.get(index).toString();
     }
 
-    public static FieldSpec from(VariableElement element, AnnotationLookup lookup, SourceIntrospector introspector, Types typeUtils) {
+    public static FieldSpec from(VariableElement element, AnnotationLookup lookup, SourceIntrospector introspector,
+                                 Types typeUtils, boolean classRetainInit) {
         Builder b = new Builder();
         b.element = element;
         b.name = element.getSimpleName().toString();
@@ -302,29 +303,38 @@ public final class FieldSpec {
             String v = lookup.stringAttr(element, "dev.simplified.annotations.Collector", "singularMethodName", "");
             b.singularName = v.isEmpty() ? defaultSingular(b.name) : v;
         }
-        // @BuildRule is the single entry point for retainInit / ignore /
-        // flag / obtainVia. flag() lives in the class-file bytecode too but
-        // is only read at runtime by BuildFlagValidator - APT doesn't
-        // decompose its nested attributes.
-        AnnotationMirror rule = lookup.findMirror(element, "dev.simplified.annotations.BuildRule");
-        if (rule != null) {
-            b.ignored = lookup.booleanAttr(rule, "ignore", false);
-            b.builderDefault = lookup.booleanAttr(rule, "retainInit", false);
-            AnnotationMirror via = lookup.nestedAnnotationValue(rule, "obtainVia");
-            if (via != null) {
-                String m = lookup.stringAttr(via, "method", "");
-                String f = lookup.stringAttr(via, "field", "");
-                b.obtainViaMethod = m.isEmpty() ? null : m;
-                b.obtainViaField = f.isEmpty() ? null : f;
-                b.obtainViaStatic = lookup.booleanAttr(via, "isStatic", false);
-            }
+        b.ignored = lookup.hasAnnotation(element, "dev.simplified.annotations.BuilderIgnore");
+
+        // @BuilderDefault overrides the class-level retainInit policy. Presence
+        // of the annotation is the signal: written bare it means "retain" (its
+        // own value() default), written @BuilderDefault(false) it opts out, and
+        // absent it inherits whatever the class declared. Track the explicit
+        // case separately - a missing initializer is only an error when this
+        // field asked for retention by name, not when it merely inherited the
+        // class-wide policy and has nothing to retain.
+        AnnotationMirror declaredDefault =
+            lookup.findMirror(element, "dev.simplified.annotations.BuilderDefault");
+        if (declaredDefault != null) {
+            b.builderDefault = lookup.booleanAttr(declaredDefault, "value", true);
+            b.builderDefaultExplicit = b.builderDefault;
+        } else {
+            b.builderDefault = classRetainInit;
+        }
+
+        AnnotationMirror via = lookup.findMirror(element, "dev.simplified.annotations.ObtainVia");
+        if (via != null) {
+            String m = lookup.stringAttr(via, "method", "");
+            String f = lookup.stringAttr(via, "field", "");
+            b.obtainViaMethod = m.isEmpty() ? null : m;
+            b.obtainViaField = f.isEmpty() ? null : f;
+            b.obtainViaStatic = lookup.booleanAttr(via, "isStatic", false);
         }
 
         // Capture the field's declared initializer when it is needed as a
-        // builder default - either explicitly via @BuildRule(retainInit), or
-        // implicitly because a @Collector on a custom (non-java.util)
-        // container has no `new ArrayList<>()`-style fallback and must build
-        // fresh instances from the field's own factory.
+        // builder default - either via retainInit, or implicitly because a
+        // @Collector on a custom (non-java.util) container has no
+        // `new ArrayList<>()`-style fallback and must build fresh instances
+        // from the field's own factory.
         boolean needsInitializer = b.builderDefault || (b.collector && b.isCustomContainer);
         if (needsInitializer && introspector != null) {
             SourceIntrospector.InitializerInfo info = introspector.readFieldInitializer(element);
@@ -365,7 +375,7 @@ public final class FieldSpec {
         String negateName;
         boolean collector, singular, clearable, compute;
         String singularName;
-        boolean ignored, lazy, builderDefault;
+        boolean ignored, lazy, builderDefault, builderDefaultExplicit;
         String sourceInitializer;
         Set<String> initializerImports;
         com.sun.source.tree.Tree sourceInitializerTree;

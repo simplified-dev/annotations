@@ -84,12 +84,11 @@ final class BuilderEmitter {
 
     private void emitFields() {
         for (FieldSpec f : fields) {
-            if (f.builderDefault && f.sourceInitializer == null && f.element != null) {
-                messager.printMessage(Diagnostic.Kind.ERROR,
-                    "@BuildRule(retainInit = true) requires the field to have an initializer expression",
-                    f.element
-                );
-            }
+            // No @BuilderDefault check here: this emitter only ever runs for
+            // INTERFACE targets, whose FieldSpecs come from
+            // fromInterfaceAccessor and never carry a builder default. The
+            // equivalent diagnostic for classes and records lives on the
+            // AST-mutation path, in RetainedInitFactory.
             body.append("    private ");
             body.append(typeName(f.typeDisplay));
             body.append(' ').append(f.name);
@@ -396,7 +395,7 @@ final class BuilderEmitter {
         } else {
             constructorTarget = "new " + targetSimpleName;
         }
-        // Validator reads @BuildRule annotations off the constructed target,
+        // Validator reads @BuildFlag annotations off the constructed target,
         // not the Builder (whose fields are synthesised without annotations),
         // so we capture the new instance first, validate, then return.
         boolean emitValidation = config.validate();

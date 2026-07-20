@@ -15,7 +15,9 @@ Flags misuse of the <code>@Lazy</code> field annotation:
       construction, no value can ever be produced.</li>
   <li><code>@Lazy</code> alongside <code>@Collector</code>,
       <code>@Negate</code>, <code>@Formattable</code>, or
-      <code>@BuildRule</code> is not supported - the companion-annotation
+      <code>@BuilderDefault</code>, <code>@BuilderIgnore</code>,
+      <code>@BuildFlag</code>, or <code>@ObtainVia</code>
+      is not supported - the companion-annotation
       contracts assume direct <code>T</code>-typed storage rather than
       a memoizing wrapper.</li>
   <li><code>@Lazy</code> alongside Lombok <code>@Getter</code> is

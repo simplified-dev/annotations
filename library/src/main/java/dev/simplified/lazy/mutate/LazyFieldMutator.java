@@ -80,7 +80,10 @@ public final class LazyFieldMutator {
         "dev.simplified.annotations.Collector", "Collector",
         "dev.simplified.annotations.Negate", "Negate",
         "dev.simplified.annotations.Formattable", "Formattable",
-        "dev.simplified.annotations.BuildRule", "BuildRule"
+        "dev.simplified.annotations.BuilderDefault", "BuilderDefault",
+        "dev.simplified.annotations.BuilderIgnore", "BuilderIgnore",
+        "dev.simplified.annotations.BuildFlag", "BuildFlag",
+        "dev.simplified.annotations.ObtainVia", "ObtainVia"
     );
 
     private final JavacBridge bridge;

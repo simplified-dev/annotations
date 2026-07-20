@@ -23,9 +23,12 @@ import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.JavacTypeFactory;
 
+import javax.annotation.processing.Messager;
+import javax.tools.Diagnostic;
+
 /**
  * Emits a {@code private static <FieldType> $default$<fieldName>()} method on
- * the target class for every field carrying {@code @BuildRule(retainInit = true)}.
+ * the target class for every field whose declared initializer is retained.
  * The method body returns a deep-cloned copy of the original field initializer
  * expression; the generated Builder's field default becomes a call to this
  * static provider.
@@ -51,12 +54,14 @@ final class RetainedInitFactory {
     private final TreeMaker make;
     private final Names names;
     private final JavacTypeFactory types;
+    private final Messager messager;
 
-    RetainedInitFactory(MutationContext ctx) {
+    RetainedInitFactory(MutationContext ctx, Messager messager) {
         this.ctx = ctx;
         this.make = ctx.make();
         this.names = ctx.names();
         this.types = ctx.types();
+        this.messager = messager;
     }
 
     /** The convention-named static provider for a field's retained initializer. */
@@ -68,7 +73,7 @@ final class RetainedInitFactory {
      * For every field whose initializer tree was captured by
      * {@link SourceIntrospector}, appends a provider
      * method to the target class. A tree is captured either for
-     * {@code @BuildRule(retainInit = true)} or for a {@code @Collector} on a
+     * a retained initializer or for a {@code @Collector} on a
      * custom (non-java.util) container, which needs the field's own factory to
      * build fresh instances. Fields without a captured tree (text-only, record
      * components, etc.) are skipped - the Builder falls back to its per-type
@@ -78,7 +83,20 @@ final class RetainedInitFactory {
         JCClassDecl target = ctx.target();
         for (FieldSpec f : ctx.fields()) {
             Object captured = f.sourceInitializerTree;
-            if (!(captured instanceof JCExpression original)) continue;
+            if (!(captured instanceof JCExpression original)) {
+                // A field that asked for retention by name but has nothing to
+                // retain would otherwise be silently inert. Fields that merely
+                // inherited the class-wide retainInit policy stay quiet - most
+                // of a class's fields have no initializer and that is normal.
+                if (f.builderDefaultExplicit && f.element != null) {
+                    messager.printMessage(Diagnostic.Kind.WARNING,
+                        "@BuilderDefault has no effect on '" + f.name
+                            + "' - the field declares no initializer to retain",
+                        f.element
+                    );
+                }
+                continue;
+            }
             if (!hasExistingProvider(target, providerName(f.name))) {
                 JCMethodDecl provider = buildProvider(f, original);
                 if (provider != null) ctx.bridge().compat().appendDef(target, provider);

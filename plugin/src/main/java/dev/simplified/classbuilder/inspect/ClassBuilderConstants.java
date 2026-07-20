@@ -19,8 +19,8 @@ public final class ClassBuilderConstants {
     public static final @NotNull String ANNOTATION_SHORT_NAME = "ClassBuilder";
     public static final @NotNull String XCONTRACT_FQN = "dev.simplified.annotations.XContract";
 
-    public static final @NotNull String BUILD_RULE_FQN = "dev.simplified.annotations.BuildRule";
-    public static final @NotNull String BUILD_RULE_SHORT_NAME = "BuildRule";
+    public static final @NotNull String BUILDER_DEFAULT_FQN = "dev.simplified.annotations.BuilderDefault";
+    public static final @NotNull String BUILDER_IGNORE_FQN = "dev.simplified.annotations.BuilderIgnore";
     public static final @NotNull String BUILD_FLAG_FQN = "dev.simplified.annotations.BuildFlag";
     public static final @NotNull String OBTAIN_VIA_FQN = "dev.simplified.annotations.ObtainVia";
     public static final @NotNull String COLLECTOR_FQN = "dev.simplified.annotations.Collector";
@@ -35,7 +35,10 @@ public final class ClassBuilderConstants {
      */
     public static final @NotNull Set<String> TRACKED_ANNOTATION_FQNS = Set.of(
         ANNOTATION_FQN,
-        BUILD_RULE_FQN,
+        BUILDER_DEFAULT_FQN,
+        BUILDER_IGNORE_FQN,
+        BUILD_FLAG_FQN,
+        OBTAIN_VIA_FQN,
         COLLECTOR_FQN,
         NEGATE_FQN,
         FORMATTABLE_FQN,
@@ -50,7 +53,10 @@ public final class ClassBuilderConstants {
      */
     public static final @NotNull Set<String> TRACKED_ANNOTATION_SHORT_NAMES = Set.of(
         ANNOTATION_SHORT_NAME,
-        BUILD_RULE_SHORT_NAME,
+        "BuilderDefault",
+        "BuilderIgnore",
+        "BuildFlag",
+        "ObtainVia",
         "Collector",
         "Negate",
         "Formattable",

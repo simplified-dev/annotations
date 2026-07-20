@@ -34,11 +34,13 @@ import java.lang.annotation.Target;
  *
  * <h2>Per-field customisation</h2>
  * <ul>
- *   <li>{@link BuildRule} - parent for generic field rules: {@code retainInit}
- *       (carry the field's initialiser into the builder), {@code ignore}
- *       (exclude a single field), nested {@link BuildFlag} for runtime
- *       constraints, nested {@link ObtainVia} to override how
- *       {@code from}/{@code mutate} reads the field</li>
+ *   <li>{@link BuilderDefault} - opt a single field in or out of carrying its
+ *       declared initialiser into the builder, overriding {@link #retainInit()}</li>
+ *   <li>{@link BuilderIgnore} - exclude a single field from the builder</li>
+ *   <li>{@link BuildFlag} - runtime constraints enforced in the generated
+ *       {@code build()}</li>
+ *   <li>{@link ObtainVia} - override how {@code from}/{@code mutate} reads the
+ *       field off an existing instance</li>
  *   <li>{@link Collector} - emit varargs / {@code Iterable} bulk setters on
  *       collection and map fields, with opt-in single-element add/put,
  *       {@code clearX}, and lazy {@code putXIfAbsent} overloads</li>
@@ -57,12 +59,12 @@ import java.lang.annotation.Target;
  *
  * // Record with a required field
  * &#64;ClassBuilder
- * public record User(&#64;BuildRule(flag = &#64;BuildFlag(nonNull = true, notEmpty = true)) String name, int age) { }
+ * public record User(&#64;BuildFlag(nonNull = true, notEmpty = true) String name, int age) { }
  *
  * // Interface - plugin generates ShapeImpl + ShapeBuilder
  * &#64;ClassBuilder(generateImpl = true)
  * public interface Shape {
- *     &#64;BuildRule(flag = &#64;BuildFlag(nonNull = true)) String name();
+ *     &#64;BuildFlag(nonNull = true) String name();
  * }
  *
  * // Builder on a static factory method
@@ -81,7 +83,8 @@ import java.lang.annotation.Target;
  * public final class Config { ... }
  * </code></pre>
  *
- * @see BuildRule
+ * @see BuilderDefault
+ * @see BuilderIgnore
  * @see BuildFlag
  * @see Collector
  * @see Negate
@@ -144,6 +147,21 @@ public @interface ClassBuilder {
      * bootstrap methods.
      */
     @NotNull AccessLevel constructorAccess() default AccessLevel.PACKAGE;
+
+    /**
+     * Whether the generated builder seeds each field from its declared
+     * initializer rather than the JVM default. On by default, since a field
+     * written as {@code String name = "anonymous"} almost always means that
+     * value to survive into the builder.
+     *
+     * <p>Applies to every field of the type. An individual field overrides it
+     * with {@link BuilderDefault}, whose setting always wins; fields carrying no
+     * {@code @BuilderDefault} inherit this one. Fields without an initializer
+     * are unaffected either way.
+     *
+     * @see BuilderDefault
+     */
+    boolean retainInit() default true;
 
     /**
      * Whether to generate the static {@code builder()} factory on the annotated
@@ -210,7 +228,7 @@ public @interface ClassBuilder {
     /**
      * Field names to exclude from the builder, in addition to the fields
      * always excluded ({@code static}, {@code transient}, and fields marked
-     * with {@link BuildRule#ignore()}).
+     * with {@link BuilderIgnore}).
      */
     @NotNull String[] exclude() default { };
 

@@ -54,7 +54,7 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
             """
             package dev.simplified.annotations;
             import java.lang.annotation.*;
-            @Retention(RetentionPolicy.RUNTIME) @Target({})
+            @Retention(RetentionPolicy.RUNTIME) @Target(ElementType.FIELD)
             public @interface BuildFlag {
                 boolean nonNull() default false;
                 String pattern() default "";
@@ -65,24 +65,28 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
             """
             package dev.simplified.annotations;
             import java.lang.annotation.*;
-            @Retention(RetentionPolicy.CLASS) @Target({})
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
             public @interface ObtainVia {
                 String method() default "";
                 String field() default "";
                 boolean isStatic() default false;
             }
             """);
-        myFixture.addFileToProject("dev/simplified/annotations/BuildRule.java",
+        myFixture.addFileToProject("dev/simplified/annotations/BuilderDefault.java",
             """
             package dev.simplified.annotations;
             import java.lang.annotation.*;
-            @Retention(RetentionPolicy.RUNTIME) @Target(ElementType.FIELD)
-            public @interface BuildRule {
-                boolean retainInit() default false;
-                boolean ignore() default false;
-                BuildFlag flag() default @BuildFlag;
-                ObtainVia obtainVia() default @ObtainVia;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
+            public @interface BuilderDefault {
+                boolean value() default true;
             }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/BuilderIgnore.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
+            public @interface BuilderIgnore { }
             """);
     }
 
@@ -133,35 +137,35 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
         myFixture.configureByText("Foo.java",
             """
             import dev.simplified.annotations.BuildFlag;
-            import dev.simplified.annotations.BuildRule;
             public class Foo {
-                @BuildRule(flag = @BuildFlag(limit = 10)) int count;
+                @BuildFlag(limit = 10) int count;
             }
             """);
-        assertTrue(hasErrorContaining("@BuildRule(flag = @BuildFlag(limit"));
+        assertTrue(hasErrorContaining(
+            "@BuildFlag(limit = ...) only applies to CharSequence, Collection, Map, array, or Optional<String>/Optional<Number> fields"));
     }
 
     public void testBuildRuleFlagLimit_notApplicableToAllTypes() {
         myFixture.configureByText("Foo.java",
             """
             import dev.simplified.annotations.BuildFlag;
-            import dev.simplified.annotations.BuildRule;
             public class Foo {
-                @BuildRule(flag = @BuildFlag(limit = 10)) boolean flag;
+                @BuildFlag(limit = 10) boolean flag;
             }
             """);
-        assertTrue(hasErrorContaining("@BuildRule(flag = @BuildFlag(limit"));
+        assertTrue(hasErrorContaining(
+            "@BuildFlag(limit = ...) only applies to CharSequence, Collection, Map, array, or Optional<String>/Optional<Number> fields"));
     }
 
     public void testBuildRuleFlagPattern_warnedOnIntField() {
         myFixture.configureByText("Foo.java",
             """
             import dev.simplified.annotations.BuildFlag;
-            import dev.simplified.annotations.BuildRule;
             public class Foo {
-                @BuildRule(flag = @BuildFlag(pattern = "[a-z]+")) int count;
+                @BuildFlag(pattern = "[a-z]+") int count;
             }
             """);
-        assertTrue(hasErrorContaining("@BuildRule(flag = @BuildFlag(pattern"));
+        assertTrue(hasErrorContaining(
+            "@BuildFlag(pattern = ...) only applies to CharSequence or Optional<String> fields"));
     }
 }

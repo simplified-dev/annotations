@@ -19,7 +19,7 @@ Four Java annotations with matching IntelliJ IDEA tooling - covering static reso
   - [@Lazy](#lazy)
 - [Annotation Reference](#annotation-reference)
   - [@ClassBuilder Attributes](#classbuilder-attributes)
-  - [@BuildRule Attributes](#buildrule-attributes)
+  - [Field Annotations](#field-annotations)
   - [Field-Level Companions](#field-level-companions)
 - [Documentation](#documentation)
 - [License](#license)
@@ -33,8 +33,9 @@ Four Java annotations with matching IntelliJ IDEA tooling - covering static reso
   - `Optional<T>` dual setters (raw nullable + wrapped)
   - `@Collector` varargs/iterable bulk overloads with opt-in single-element add/put, clear, and lazy put-if-absent
   - `@Formattable` `@PrintFormat` string overload
-  - `@BuildRule(retainInit = true)` carries field initializers (`UUID.randomUUID()`, `List.of(...)`, etc.) into the builder as defaults evaluated fresh per `build()`
-  - `@BuildRule(flag = @BuildFlag(...))` runtime validator enforcing `nonNull` / `notEmpty` / `group` / `pattern` / `limit` in the generated `build()`
+  - Field initializers (`UUID.randomUUID()`, `List.of(...)`, etc.) carried into the builder as defaults evaluated fresh per `build()`, with no annotation required
+  - An all-args constructor synthesised when the class declares none, so a plain class needs nothing but the annotation
+  - `@BuildFlag` runtime validator enforcing `nonNull` / `notEmpty` / `group` / `pattern` / `limit` in the generated `build()`
 - **`@Lazy`** - field-level annotation that defers a field's value computation until first access and caches it thereafter. The processor rewrites the storage from `T` to `Lazy<T>`, wraps the initializer as `Lazy.of(() -> <init>)`, and synthesises a memoizing getter. With `@ClassBuilder` the builder gets a dual `field(T)` / `field(Supplier<T>)` setter pair so deferred computations can flow through the builder unchanged.
 
 ## Getting Started
@@ -138,8 +139,8 @@ import java.util.UUID;
 
 @ClassBuilder
 public class Pizza {
-    @BuildRule(retainInit = true) UUID id = UUID.randomUUID();
-    @BuildRule(flag = @BuildFlag(nonNull = true)) String name;
+    UUID id = UUID.randomUUID();
+    @BuildFlag(nonNull = true) String name;
     @Collector(singular = true, clearable = true) List<String> toppings;
     @Formattable Optional<String> description;
     @Negate("vegetarian") boolean containsMeat;
@@ -157,7 +158,7 @@ Generates a `Pizza.Builder` with:
 Plus bootstrap methods on `Pizza` itself: `static Pizza.Builder builder()`, `static Pizza.Builder from(Pizza)`, and `Pizza.Builder mutate()`.
 
 > [!NOTE]
-> `@BuildRule(retainInit = true)` evaluates the field initializer **fresh per builder instance** - `UUID.randomUUID()` produces a new UUID each time, `new ArrayList<>()` produces a fresh list. Any expression valid in the target class's scope is supported (constructor calls, factory methods, static method invocations, ternaries, etc.).
+> Field initializers are retained as builder defaults automatically - `id` needs no annotation. Each is evaluated **fresh per builder instance**, so `UUID.randomUUID()` produces a new UUID each time and `new ArrayList<>()` a fresh list. Any expression valid in the target class's scope is supported (constructor calls, factory methods, static method invocations, ternaries, etc.). Opt a single field out with `@BuilderDefault(false)`, or the whole class with `@ClassBuilder(retainInit = false)`.
 
 For abstract classes, `@ClassBuilder` produces a self-typed `Builder<T, B>` that concrete subclasses inherit with `class Builder extends Super.Builder<Sub, Sub.Builder>`; `self()` and `build()` are abstract on the root and overridden per subclass. This mirrors Lombok's `@SuperBuilder` with no runtime dependency.
 
@@ -213,14 +214,26 @@ When the enclosing class also carries `@ClassBuilder`, the generated builder rec
 | `factoryMethod` | `String` | `""` | Static factory method `build()` delegates to instead of `new` |
 | `exclude` | `String[]` | `{}` | Field names to exclude from the builder |
 
-### `@BuildRule` Attributes
+### Field Annotations
+
+Each is written directly on the field. Only `@BuildFlag` is retained at runtime; the rest are consumed at
+annotation-processing time.
+
+| Annotation | Purpose |
+|------------|---------|
+| `@BuilderDefault` | Override the class-level `retainInit` policy for one field |
+| `@BuilderIgnore` | Exclude this field from builder synthesis entirely |
+| `@BuildFlag` | Runtime validation constraints (see below) |
+| `@ObtainVia` | Override how `from(T)` / `mutate()` reads this field |
+
+#### `@BuilderDefault` Attributes
 
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `retainInit` | `boolean` | `false` | Carry the field's declared initializer into the builder as a per-build default |
-| `ignore` | `boolean` | `false` | Exclude this field from builder synthesis entirely |
-| `flag` | `@BuildFlag` | `@BuildFlag` | Runtime validation constraints (see below) |
-| `obtainVia` | `@ObtainVia` | `@ObtainVia` | Override how `from(T)` / `mutate()` reads this field |
+| `value` | `boolean` | `true` | Whether to carry the field's declared initializer into the builder as a per-build default |
+
+Since `@ClassBuilder(retainInit)` already defaults to `true`, the common use is the opt-out form
+`@BuilderDefault(false)`. Writing it bare is only needed on a class that set `retainInit = false`.
 
 #### `@BuildFlag` Attributes
 

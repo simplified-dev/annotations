@@ -62,7 +62,7 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
             """
             package dev.simplified.annotations;
             import java.lang.annotation.*;
-            @Retention(RetentionPolicy.RUNTIME) @Target({})
+            @Retention(RetentionPolicy.RUNTIME) @Target(ElementType.FIELD)
             public @interface BuildFlag {
                 boolean nonNull() default false;
             }
@@ -71,24 +71,28 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
             """
             package dev.simplified.annotations;
             import java.lang.annotation.*;
-            @Retention(RetentionPolicy.CLASS) @Target({})
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
             public @interface ObtainVia {
                 String method() default "";
                 String field() default "";
                 boolean isStatic() default false;
             }
             """);
-        myFixture.addFileToProject("dev/simplified/annotations/BuildRule.java",
+        myFixture.addFileToProject("dev/simplified/annotations/BuilderDefault.java",
             """
             package dev.simplified.annotations;
             import java.lang.annotation.*;
-            @Retention(RetentionPolicy.RUNTIME) @Target(ElementType.FIELD)
-            public @interface BuildRule {
-                boolean retainInit() default false;
-                boolean ignore() default false;
-                BuildFlag flag() default @BuildFlag;
-                ObtainVia obtainVia() default @ObtainVia;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
+            public @interface BuilderDefault {
+                boolean value() default true;
             }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/BuilderIgnore.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
+            public @interface BuilderIgnore { }
             """);
     }
 
@@ -284,22 +288,21 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
         }
     }
 
-    /** {@code @BuildRule(flag = @BuildFlag(nonNull = true))} pushes {@code @NotNull} onto the primary setter param. */
+    /** {@code @BuildFlag(nonNull = true)} pushes {@code @NotNull} onto the primary setter param. */
     public void testBuildRule_flagNonNull_forcesNotNullOnPlainSetter() {
         PsiClass builder = builderFor("Widget",
             """
             import dev.simplified.annotations.ClassBuilder;
             import dev.simplified.annotations.BuildFlag;
-            import dev.simplified.annotations.BuildRule;
             @ClassBuilder
             public class Widget {
-                @BuildRule(flag = @BuildFlag(nonNull = true)) String name;
+                @BuildFlag(nonNull = true) String name;
             }
             """);
 
         PsiMethod setter = builder.findMethodsByName("name", false)[0];
         PsiParameter name = setter.getParameterList().getParameter(0);
-        assertNotNull("@BuildRule(flag = @BuildFlag(nonNull)) forces @NotNull",
+        assertNotNull("@BuildFlag(nonNull) forces @NotNull",
             name.getModifierList().findAnnotation(NOT_NULL_FQN));
     }
 

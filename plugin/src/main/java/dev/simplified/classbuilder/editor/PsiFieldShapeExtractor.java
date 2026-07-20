@@ -19,7 +19,7 @@ import java.util.Set;
 /**
  * Walks a {@code @ClassBuilder}-annotated PsiClass (or a record) and derives
  * the {@link PsiFieldShape} list the augment provider uses to synthesise
- * setters. Honours {@code @BuildRule(ignore)} and the annotation's
+ * setters. Honours {@code @BuilderIgnore} and the annotation's
  * {@code exclude} attribute, and reads companion annotations
  * ({@code @Collector}, {@code @Negate}, {@code @Formattable},
  * {@code @Nullable}) so the synthesised shape matrix lines up with what
@@ -27,7 +27,8 @@ import java.util.Set;
  */
 final class PsiFieldShapeExtractor {
 
-    private static final String BUILD_RULE_FQN = ClassBuilderConstants.BUILD_RULE_FQN;
+    private static final String BUILDER_IGNORE_FQN = ClassBuilderConstants.BUILDER_IGNORE_FQN;
+    private static final String BUILD_FLAG_FQN = ClassBuilderConstants.BUILD_FLAG_FQN;
     private static final String COLLECTOR_FQN = ClassBuilderConstants.COLLECTOR_FQN;
     private static final String NEGATE_FQN = ClassBuilderConstants.NEGATE_FQN;
     private static final String FORMATTABLE_FQN = ClassBuilderConstants.FORMATTABLE_FQN;
@@ -64,10 +65,9 @@ final class PsiFieldShapeExtractor {
         return out;
     }
 
-    /** True when the owner carries {@code @BuildRule(ignore = true)}. */
+    /** True when the owner carries {@code @BuilderIgnore}. */
     private static boolean isIgnored(PsiModifierListOwner owner) {
-        PsiAnnotation rule = findAnnotation(owner, BUILD_RULE_FQN);
-        return rule != null && booleanAttr(rule, "ignore", false);
+        return hasAnnotation(owner, BUILDER_IGNORE_FQN);
     }
 
     /**
@@ -114,16 +114,9 @@ final class PsiFieldShapeExtractor {
             b.collector = false;
         }
 
-        // @BuildRule.flag().nonNull() - PsiAnnotation.findAttributeValue
-        // returns a PsiAnnotation for nested-annotation attributes; read
-        // its own attribute via the same booleanAttr helper.
-        PsiAnnotation rule = findAnnotation(owner, BUILD_RULE_FQN);
-        if (rule != null) {
-            PsiAnnotationMemberValue flagValue = rule.findAttributeValue("flag");
-            if (flagValue instanceof PsiAnnotation flag) {
-                b.nonNullByBuildFlag = booleanAttr(flag, "nonNull", false);
-            }
-        }
+        PsiAnnotation flag = findAnnotation(owner, BUILD_FLAG_FQN);
+        if (flag != null) b.nonNullByBuildFlag = booleanAttr(flag, "nonNull", false);
+
         return b.build();
     }
 

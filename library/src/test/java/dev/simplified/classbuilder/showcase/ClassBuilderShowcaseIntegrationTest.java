@@ -32,12 +32,12 @@ import static org.junit.Assert.fail;
  * fails the build), and the trailer must read {@code BUILD SUCCESSFUL}.
  */
 @RunWith(Parameterized.class)
-public class BuildRuleShowcaseIntegrationTest {
+public class ClassBuilderShowcaseIntegrationTest {
 
     /**
      * The full set of case IDs the showcase is expected to emit. This
      * set is the coverage contract: adding a case to
-     * {@link BuildRuleShowcase} requires adding its id here, and vice
+     * {@link ClassBuilderShowcase} requires adding its id here, and vice
      * versa - the drift is caught by
      * {@link CoverageTest#expectedIdsMatchEmittedIds()}.
      */
@@ -50,18 +50,18 @@ public class BuildRuleShowcaseIntegrationTest {
         "classBuilder.exclude",
         "classBuilder.access.package",
         "classBuilder.validate.disabled",
-        "buildRule.retainInit.literal",
-        "buildRule.retainInit.numeric",
-        "buildRule.retainInit.object",
-        "buildRule.retainInit.fresh",
-        "buildRule.retainInit.collection",
-        "buildRule.retainInit.factory",
-        "buildRule.retainInit.override",
-        "buildRule.retainInit.final.literal",
-        "buildRule.retainInit.final.override",
-        "buildRule.retainInit.final.isFinal",
-        "buildRule.retainInit.final.lombok",
-        "buildRule.ignore",
+        "builderDefault.literal",
+        "builderDefault.numeric",
+        "builderDefault.object",
+        "builderDefault.fresh",
+        "builderDefault.collection",
+        "builderDefault.factory",
+        "builderDefault.override",
+        "builderDefault.final.literal",
+        "builderDefault.final.override",
+        "builderDefault.final.isFinal",
+        "builderDefault.final.lombok",
+        "builderIgnore",
         "buildFlag.nonNull.null",
         "buildFlag.nonNull.value",
         "buildFlag.notEmpty.string.empty",
@@ -179,7 +179,7 @@ public class BuildRuleShowcaseIntegrationTest {
 
     private final String id;
 
-    public BuildRuleShowcaseIntegrationTest(String id) {
+    public ClassBuilderShowcaseIntegrationTest(String id) {
         this.id = id;
     }
 

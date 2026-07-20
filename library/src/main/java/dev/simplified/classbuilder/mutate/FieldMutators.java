@@ -135,7 +135,7 @@ final class FieldMutators {
     }
 
     private JCExpression defaultInitializer(FieldSpec field) {
-        // A captured field initializer (from @BuildRule(retainInit) or an
+        // A captured field initializer (from a retained initializer or an
         // auto-captured @Collector on a custom container) becomes a call to the
         // synthesised Target.$default$<fieldName>() static method. That method
         // (injected by RetainedInitFactory) contains the original declared

@@ -40,9 +40,8 @@ public final class AnnotationLookup {
 
     // ------------------------------------------------------------------
     // Mirror-keyed overloads - needed for nested annotation attributes
-    // (e.g. @BuildRule.flag() / @BuildRule.obtainVia()), where the outer
-    // element is a field but the values we need live inside another
-    // AnnotationMirror returned by attrValue(outerMirror, "flag").
+    // where the outer element is a field but the values we need live inside
+    // another AnnotationMirror returned by attrValue(outerMirror, attr).
     // ------------------------------------------------------------------
 
     public String stringAttr(AnnotationMirror mirror, String attr, String fallback) {

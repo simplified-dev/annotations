@@ -78,7 +78,7 @@ final class NestedBuilderFactory {
      * {@link BuilderConfig#factoryMethod()}.
      *
      * <p>Validation runs against the constructed target, not the Builder,
-     * because {@code @BuildRule} annotations live on the target class's
+     * because {@code @BuildFlag} annotations live on the target class's
      * fields. The Builder's own fields are synthesised and unannotated, so
      * validating {@code this} was a no-op prior to this change.
      */

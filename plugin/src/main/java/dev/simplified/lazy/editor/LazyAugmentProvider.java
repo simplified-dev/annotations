@@ -66,7 +66,10 @@ public final class LazyAugmentProvider extends AbstractRecursionSafeAugmentProvi
         ClassBuilderConstants.COLLECTOR_FQN, "Collector",
         ClassBuilderConstants.NEGATE_FQN, "Negate",
         ClassBuilderConstants.FORMATTABLE_FQN, "Formattable",
-        ClassBuilderConstants.BUILD_RULE_FQN, "BuildRule"
+        ClassBuilderConstants.BUILDER_DEFAULT_FQN, "BuilderDefault",
+        ClassBuilderConstants.BUILDER_IGNORE_FQN, "BuilderIgnore",
+        ClassBuilderConstants.BUILD_FLAG_FQN, "BuildFlag",
+        ClassBuilderConstants.OBTAIN_VIA_FQN, "ObtainVia"
     );
 
     @Override

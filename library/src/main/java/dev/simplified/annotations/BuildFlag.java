@@ -3,6 +3,7 @@ package dev.simplified.annotations;
 import org.intellij.lang.annotations.Language;
 import org.jetbrains.annotations.NotNull;
 
+import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
@@ -14,11 +15,6 @@ import java.util.Optional;
  * Declares runtime-enforced constraints on a builder field that are verified by
  * {@code BuildFlagValidator.validate(this)} inside the builder's generated
  * {@code build()} method.
- *
- * <p>Used only as the {@link BuildRule#flag} attribute of
- * {@link BuildRule} - not a field-level annotation in its own right.
- * {@link Target @Target} is empty so direct field usage
- * ({@code @BuildFlag String x;}) is a compile-time error.
  *
  * <p>Each attribute is independent and may be combined. When {@link #group()} is
  * empty, {@link #nonNull()} / {@link #notEmpty()} enforce the field
@@ -34,23 +30,25 @@ import java.util.Optional;
  * <h2>Examples</h2>
  * <pre><code>
  * // Required, must be non-empty, at most 256 characters
- * &#64;BuildRule(flag = &#64;BuildFlag(nonNull = true, notEmpty = true, limit = 256))
+ * &#64;BuildFlag(nonNull = true, notEmpty = true, limit = 256)
  * private String name;
  *
  * // At least one of emoji or label must be set
- * &#64;BuildRule(flag = &#64;BuildFlag(nonNull = true, group = "face")) private Emoji emoji;
- * &#64;BuildRule(flag = &#64;BuildFlag(nonNull = true, group = "face")) private String label;
+ * &#64;BuildFlag(nonNull = true, group = "face") private Emoji emoji;
+ * &#64;BuildFlag(nonNull = true, group = "face") private String label;
  *
  * // Must match a regex
- * &#64;BuildRule(flag = &#64;BuildFlag(nonNull = true, pattern = "[a-z0-9_]+"))
+ * &#64;BuildFlag(nonNull = true, pattern = "[a-z0-9_]+")
  * private String identifier;
  *
  * // Limit applied to a collection
- * &#64;BuildRule(flag = &#64;BuildFlag(limit = 25))
+ * &#64;BuildFlag(limit = 25)
  * private List&lt;Field&gt; fields;
  * </code></pre>
+ *
+ * @see ClassBuilder#validate
  */
-@Target({})
+@Target(ElementType.FIELD)
 @Retention(RetentionPolicy.RUNTIME)
 public @interface BuildFlag {
 

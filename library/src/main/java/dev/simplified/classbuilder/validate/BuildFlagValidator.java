@@ -1,7 +1,6 @@
 package dev.simplified.classbuilder.validate;
 
 import dev.simplified.annotations.BuildFlag;
-import dev.simplified.annotations.BuildRule;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -19,9 +18,8 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
- * Runtime helper that scans an object's fields for
- * {@link BuildRule @BuildRule(flag = @BuildFlag(...))} annotations and
- * enforces the nested flag's constraints. Invoked from the generated
+ * Runtime helper that scans an object's fields for {@link BuildFlag}
+ * annotations and enforces their constraints. Invoked from the generated
  * {@code build()} method of every {@code @ClassBuilder}-annotated type.
  *
  * <p>The list of flagged fields per class is cached on first invocation,
@@ -107,10 +105,8 @@ public final class BuildFlagValidator {
         List<FlaggedField> out = new ArrayList<>();
         for (Class<?> c = cls; c != null && c != Object.class; c = c.getSuperclass()) {
             for (Field field : c.getDeclaredFields()) {
-                BuildRule rule = field.getAnnotation(BuildRule.class);
-                if (rule == null) continue;
-                BuildFlag flag = rule.flag();
-                if (!hasAnyConstraint(flag)) continue;
+                BuildFlag flag = field.getAnnotation(BuildFlag.class);
+                if (flag == null || !hasAnyConstraint(flag)) continue;
                 try {
                     field.setAccessible(true);
                 } catch (RuntimeException ignored) {

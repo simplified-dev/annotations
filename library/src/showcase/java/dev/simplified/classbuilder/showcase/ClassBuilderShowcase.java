@@ -2,7 +2,7 @@ package dev.simplified.classbuilder.showcase;
 
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.BuildFlag;
-import dev.simplified.annotations.BuildRule;
+import dev.simplified.annotations.BuilderIgnore;
 import dev.simplified.annotations.ClassBuilder;
 import dev.simplified.annotations.Collector;
 import dev.simplified.annotations.Formattable;
@@ -32,7 +32,7 @@ import java.util.Optional;
  * <p>Each @ClassBuilder-annotated class carries an explicit all-args
  * constructor matching the non-ignored, non-excluded fields in declaration
  * order - the generated {@code build()} invokes that constructor
- * positionally. Fields carrying {@code @BuildRule(ignore = true)} or listed
+ * positionally. Fields carrying {@code @BuilderIgnore} or listed
  * in {@code @ClassBuilder(exclude = ...)} are skipped in the constructor
  * signature; their initializers supply the field value.
  *
@@ -41,9 +41,9 @@ import java.util.Optional;
  * with a matching constructor, (b) appending a {@code report.expect(...)}
  * block in main(), and (c) adding the id to the test's EXPECTED_IDS.
  */
-public final class BuildRuleShowcase {
+public final class ClassBuilderShowcase {
 
-    private BuildRuleShowcase() {}
+    private ClassBuilderShowcase() {}
 
     // ==================================================================
     // @ClassBuilder base cases
@@ -89,7 +89,7 @@ public final class BuildRuleShowcase {
 
     @ClassBuilder(validate = false)
     public static final class ValidationDisabled {
-        @BuildRule(flag = @BuildFlag(nonNull = true)) private final String required;
+        @BuildFlag(nonNull = true) private final String required;
         public ValidationDisabled(String required) { this.required = required; }
         public String getRequired() { return required; }
         @Override public String toString() { return "ValidationDisabled[required=" + required + "]"; }
@@ -110,12 +110,12 @@ public final class BuildRuleShowcase {
     }
 
     // ==================================================================
-    // @BuildRule.retainInit / ignore
+    // retained initializers / @BuilderIgnore
     // ==================================================================
 
     @ClassBuilder
     public static final class RetainedInit {
-        @BuildRule(retainInit = true) private String greeting = "hello-from-init";
+        private String greeting = "hello-from-init";
         public RetainedInit(String greeting) { this.greeting = greeting; }
         public String getGreeting() { return greeting; }
         @Override public String toString() { return "RetainedInit[greeting=" + greeting + "]"; }
@@ -123,14 +123,14 @@ public final class BuildRuleShowcase {
 
     @ClassBuilder
     public static final class RetainedInitNumeric {
-        @BuildRule(retainInit = true) private int threshold = 42;
+        private int threshold = 42;
         public RetainedInitNumeric(int threshold) { this.threshold = threshold; }
         public int getThreshold() { return threshold; }
     }
 
     @ClassBuilder
     public static final class RetainedInitObject {
-        @BuildRule(retainInit = true) private Object blob = new Object();
+        private Object blob = new Object();
         public RetainedInitObject(Object blob) { this.blob = blob; }
         public Object getBlob() { return blob; }
     }
@@ -139,21 +139,21 @@ public final class BuildRuleShowcase {
     public static final class RetainedInitFresh {
         // The headline retainInit use case: an expression that must evaluate
         // FRESH on every build() - UUID.randomUUID() re-runs for each builder.
-        @BuildRule(retainInit = true) private java.util.UUID id = java.util.UUID.randomUUID();
+        private java.util.UUID id = java.util.UUID.randomUUID();
         public RetainedInitFresh(java.util.UUID id) { this.id = id; }
         public java.util.UUID getId() { return id; }
     }
 
     @ClassBuilder
     public static final class RetainedInitCollection {
-        @BuildRule(retainInit = true) private java.util.ArrayList<String> tags = new java.util.ArrayList<>();
+        private java.util.ArrayList<String> tags = new java.util.ArrayList<>();
         public RetainedInitCollection(java.util.ArrayList<String> tags) { this.tags = tags; }
         public java.util.List<String> getTags() { return tags; }
     }
 
     @ClassBuilder
     public static final class RetainedInitFactoryCall {
-        @BuildRule(retainInit = true) private java.util.List<String> roles = java.util.List.of("guest", "user");
+        private java.util.List<String> roles = java.util.List.of("guest", "user");
         public RetainedInitFactoryCall(java.util.List<String> roles) { this.roles = roles; }
         public java.util.List<String> getRoles() { return roles; }
     }
@@ -165,8 +165,8 @@ public final class BuildRuleShowcase {
     // initializer (List.of - the case that forced attribution and broke).
     @ClassBuilder
     public static final class RetainedInitFinal {
-        @BuildRule(retainInit = true) private final int tileSize = 128;
-        @BuildRule(retainInit = true) private final List<String> layers = List.of("base");
+        private final int tileSize = 128;
+        private final List<String> layers = List.of("base");
         public RetainedInitFinal(int tileSize, List<String> layers) {
             this.tileSize = tileSize;
             this.layers = layers;
@@ -180,8 +180,8 @@ public final class BuildRuleShowcase {
     @Getter
     @ClassBuilder
     public static final class RetainedInitFinalLombok {
-        @BuildRule(retainInit = true) private final int tileSize = 128;
-        @BuildRule(retainInit = true) private final List<String> layers = List.of("base");
+        private final int tileSize = 128;
+        private final List<String> layers = List.of("base");
         public RetainedInitFinalLombok(int tileSize, List<String> layers) {
             this.tileSize = tileSize;
             this.layers = layers;
@@ -191,102 +191,102 @@ public final class BuildRuleShowcase {
     @ClassBuilder
     public static final class IgnoredField {
         private final String visible;
-        @BuildRule(ignore = true) private final String hidden;
+        @BuilderIgnore private final String hidden;
         public IgnoredField(String visible) { this.visible = visible; this.hidden = "hidden-default"; }
         public String getVisible() { return visible; }
         public String getHidden() { return hidden; }
     }
 
     // ==================================================================
-    // @BuildRule.flag = @BuildFlag - nonNull / notEmpty / pattern / limit / group
+    // @BuildFlag - nonNull / notEmpty / pattern / limit / group
     // ==================================================================
 
     @ClassBuilder
     public static final class NullRequired {
-        @BuildRule(flag = @BuildFlag(nonNull = true)) private final String name;
+        @BuildFlag(nonNull = true) private final String name;
         public NullRequired(String name) { this.name = name; }
         public String getName() { return name; }
     }
 
     @ClassBuilder
     public static final class EmptyStringRequired {
-        @BuildRule(flag = @BuildFlag(notEmpty = true)) private final String s;
+        @BuildFlag(notEmpty = true) private final String s;
         public EmptyStringRequired(String s) { this.s = s; }
         public String getS() { return s; }
     }
 
     @ClassBuilder
     public static final class EmptyOptionalRequired {
-        @BuildRule(flag = @BuildFlag(notEmpty = true)) private final Optional<String> opt;
+        @BuildFlag(notEmpty = true) private final Optional<String> opt;
         public EmptyOptionalRequired(Optional<String> opt) { this.opt = opt; }
         public Optional<String> getOpt() { return opt; }
     }
 
     @ClassBuilder
     public static final class EmptyCollectionRequired {
-        @BuildRule(flag = @BuildFlag(notEmpty = true)) private final List<String> items;
+        @BuildFlag(notEmpty = true) private final List<String> items;
         public EmptyCollectionRequired(List<String> items) { this.items = items; }
         public List<String> getItems() { return items; }
     }
 
     @ClassBuilder
     public static final class EmptyMapRequired {
-        @BuildRule(flag = @BuildFlag(notEmpty = true)) private final Map<String, String> entries;
+        @BuildFlag(notEmpty = true) private final Map<String, String> entries;
         public EmptyMapRequired(Map<String, String> entries) { this.entries = entries; }
         public Map<String, String> getEntries() { return entries; }
     }
 
     @ClassBuilder
     public static final class EmptyArrayRequired {
-        @BuildRule(flag = @BuildFlag(notEmpty = true)) private final Object[] arr;
+        @BuildFlag(notEmpty = true) private final Object[] arr;
         public EmptyArrayRequired(Object[] arr) { this.arr = arr; }
         public Object[] getArr() { return arr; }
     }
 
     @ClassBuilder
     public static final class PatternConstrained {
-        @BuildRule(flag = @BuildFlag(pattern = "[a-z]+")) private final String ident;
+        @BuildFlag(pattern = "[a-z]+") private final String ident;
         public PatternConstrained(String ident) { this.ident = ident; }
         public String getIdent() { return ident; }
     }
 
     @ClassBuilder
     public static final class LimitedString {
-        @BuildRule(flag = @BuildFlag(limit = 5)) private final String text;
+        @BuildFlag(limit = 5) private final String text;
         public LimitedString(String text) { this.text = text; }
         public String getText() { return text; }
     }
 
     @ClassBuilder
     public static final class LimitedCollection {
-        @BuildRule(flag = @BuildFlag(limit = 2)) private final List<String> tags;
+        @BuildFlag(limit = 2) private final List<String> tags;
         public LimitedCollection(List<String> tags) { this.tags = tags; }
         public List<String> getTags() { return tags; }
     }
 
     @ClassBuilder
     public static final class LimitedOptionalNumber {
-        @BuildRule(flag = @BuildFlag(limit = 100)) private final Optional<Integer> amount;
+        @BuildFlag(limit = 100) private final Optional<Integer> amount;
         public LimitedOptionalNumber(Optional<Integer> amount) { this.amount = amount; }
         public Optional<Integer> getAmount() { return amount; }
     }
 
     @ClassBuilder
     public static final class FaceGroup {
-        @BuildRule(flag = @BuildFlag(nonNull = true, group = "face")) private final String label;
-        @BuildRule(flag = @BuildFlag(nonNull = true, group = "face")) private final String emoji;
+        @BuildFlag(nonNull = true, group = "face") private final String label;
+        @BuildFlag(nonNull = true, group = "face") private final String emoji;
         public FaceGroup(String label, String emoji) { this.label = label; this.emoji = emoji; }
         public String getLabel() { return label; }
         public String getEmoji() { return emoji; }
     }
 
     // ==================================================================
-    // @BuildRule.obtainVia - from(T) accessor redirection
+    // @ObtainVia - from(T) accessor redirection
     // ==================================================================
 
     @ClassBuilder
     public static final class ViaMethod {
-        @BuildRule(obtainVia = @ObtainVia(method = "customAccessor")) private final String custom;
+        @ObtainVia(method = "customAccessor") private final String custom;
         public ViaMethod(String custom) { this.custom = custom; }
         public String customAccessor() { return "method-derived-" + custom; }
         public String getCustom() { return custom; }
@@ -295,10 +295,10 @@ public final class BuildRuleShowcase {
 
     @ClassBuilder
     public static final class ViaField {
-        @BuildRule(obtainVia = @ObtainVia(field = "realValue")) private final String alias;
+        @ObtainVia(field = "realValue") private final String alias;
         // Regular field that @ObtainVia redirects to during from(T); marked
         // ignored so the APT keeps it out of the Builder/constructor surface.
-        @BuildRule(ignore = true) public String realValue = "from-real-field";
+        @BuilderIgnore public String realValue = "from-real-field";
         public ViaField(String alias) { this.alias = alias; }
         public String getAlias() { return alias; }
         @Override public String toString() { return "ViaField[alias=" + alias + "]"; }
@@ -306,7 +306,7 @@ public final class BuildRuleShowcase {
 
     @ClassBuilder
     public static final class ViaStatic {
-        @BuildRule(obtainVia = @ObtainVia(method = "extract", isStatic = true)) private final String value;
+        @ObtainVia(method = "extract", isStatic = true) private final String value;
         public ViaStatic(String value) { this.value = value; }
         public static String extract(ViaStatic target) { return "static-helper-result"; }
         public String getValue() { return value; }
@@ -439,9 +439,9 @@ public final class BuildRuleShowcase {
             .run(() -> ValidationDisabled.builder().build())
             .asSuccess("build() returned even though nonNull field is null");
 
-        // --- @BuildRule.retainInit / ignore ------------------------------
+        // --- retained initializers / @BuilderIgnore ----------------------
 
-        report.expect("buildRule.retainInit.literal")
+        report.expect("builderDefault.literal")
             .runVoid(() -> {
                 RetainedInit built = RetainedInit.builder().build();
                 if (!"hello-from-init".equals(built.getGreeting()))
@@ -449,7 +449,7 @@ public final class BuildRuleShowcase {
             })
             .asSuccess("string literal initializer materialised as builder default");
 
-        report.expect("buildRule.retainInit.numeric")
+        report.expect("builderDefault.numeric")
             .runVoid(() -> {
                 RetainedInitNumeric built = RetainedInitNumeric.builder().build();
                 if (built.getThreshold() != 42)
@@ -457,7 +457,7 @@ public final class BuildRuleShowcase {
             })
             .asSuccess("int literal initializer materialised as builder default");
 
-        report.expect("buildRule.retainInit.object")
+        report.expect("builderDefault.object")
             .runVoid(() -> {
                 RetainedInitObject a = RetainedInitObject.builder().build();
                 RetainedInitObject b = RetainedInitObject.builder().build();
@@ -468,7 +468,7 @@ public final class BuildRuleShowcase {
             })
             .asSuccess("new Object() re-evaluated on every build()");
 
-        report.expect("buildRule.retainInit.fresh")
+        report.expect("builderDefault.fresh")
             .runVoid(() -> {
                 // Every build() evaluates UUID.randomUUID() again - two
                 // sequential builds must yield distinct IDs.
@@ -481,7 +481,7 @@ public final class BuildRuleShowcase {
             })
             .asSuccess("UUID.randomUUID() re-evaluated on every build()");
 
-        report.expect("buildRule.retainInit.collection")
+        report.expect("builderDefault.collection")
             .runVoid(() -> {
                 // Each builder gets its OWN fresh ArrayList.
                 RetainedInitCollection first = RetainedInitCollection.builder().build();
@@ -492,7 +492,7 @@ public final class BuildRuleShowcase {
             })
             .asSuccess("new ArrayList<>() returns a fresh instance per build()");
 
-        report.expect("buildRule.retainInit.factory")
+        report.expect("builderDefault.factory")
             .runVoid(() -> {
                 RetainedInitFactoryCall built = RetainedInitFactoryCall.builder().build();
                 if (!java.util.List.of("guest", "user").equals(built.getRoles()))
@@ -500,7 +500,7 @@ public final class BuildRuleShowcase {
             })
             .asSuccess("List.of(...) factory call preserved as builder default");
 
-        report.expect("buildRule.retainInit.override")
+        report.expect("builderDefault.override")
             .runVoid(() -> {
                 RetainedInit built = RetainedInit.builder().greeting("explicit").build();
                 if (!"explicit".equals(built.getGreeting()))
@@ -510,7 +510,7 @@ public final class BuildRuleShowcase {
 
         // --- BUG-2 / F3: final retainInit (blank-final lift) -------------
 
-        report.expect("buildRule.retainInit.final.literal")
+        report.expect("builderDefault.final.literal")
             .runVoid(() -> {
                 RetainedInitFinal built = RetainedInitFinal.builder().build();
                 if (built.getTileSize() != 128)
@@ -520,7 +520,7 @@ public final class BuildRuleShowcase {
             })
             .asSuccess("final retainInit (int literal + List.of identifier) materialised as defaults");
 
-        report.expect("buildRule.retainInit.final.override")
+        report.expect("builderDefault.final.override")
             .runVoid(() -> {
                 RetainedInitFinal built = RetainedInitFinal.builder().tileSize(256).build();
                 if (built.getTileSize() != 256)
@@ -528,7 +528,7 @@ public final class BuildRuleShowcase {
             })
             .asSuccess("explicit setter overrides the retained final default");
 
-        report.expect("buildRule.retainInit.final.isFinal")
+        report.expect("builderDefault.final.isFinal")
             .runVoid(() -> {
                 boolean found = false;
                 for (java.lang.reflect.Field f : RetainedInitFinal.class.getDeclaredFields()) {
@@ -541,7 +541,7 @@ public final class BuildRuleShowcase {
             })
             .asSuccess("source final preserved as ACC_FINAL - immutability intact");
 
-        report.expect("buildRule.retainInit.final.lombok")
+        report.expect("builderDefault.final.lombok")
             .runVoid(() -> {
                 RetainedInitFinalLombok built = RetainedInitFinalLombok.builder().build();
                 if (built.getTileSize() != 128 || !List.of("base").equals(built.getLayers()))
@@ -550,7 +550,7 @@ public final class BuildRuleShowcase {
             })
             .asSuccess("final retainInit compiles + round-trips under Lombok @Getter co-residence");
 
-        report.expect("buildRule.ignore")
+        report.expect("builderIgnore")
             .runVoid(() -> {
                 for (Method m : IgnoredField.Builder.class.getDeclaredMethods()) {
                     if (m.getName().equals("hidden"))
@@ -562,7 +562,7 @@ public final class BuildRuleShowcase {
             })
             .asSuccess("no hidden on Builder; default initializer preserved");
 
-        // --- @BuildRule.flag = @BuildFlag --------------------------------
+        // --- @BuildFlag --------------------------------------------------
 
         report.expect("buildFlag.nonNull.null")
             .runExpectingThrow(() -> NullRequired.builder().build())
@@ -643,7 +643,7 @@ public final class BuildRuleShowcase {
             .run(() -> FaceGroup.builder().label("OK").build())
             .asSuccess("one group member satisfied");
 
-        // --- @BuildRule.obtainVia ----------------------------------------
+        // --- @ObtainVia ---------------------------------------------------
 
         report.expect("obtainVia.method")
             .runVoid(() -> {

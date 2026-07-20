@@ -158,7 +158,7 @@ idea {
 // The showcase source set is a consumer-style fixture: @ClassBuilder types
 // annotated with every runtime-observable configuration, plus a main() that
 // exercises the generated builders. Packaged as a standalone runnable jar
-// and exercised by BuildRuleShowcaseIntegrationTest in src/test.
+// and exercised by ClassBuilderShowcaseIntegrationTest in src/test.
 //
 // CRITICAL: the showcase jar is INTERNAL verification only. It is never
 // added to the "release" maven publication, and its output directory is
@@ -197,7 +197,7 @@ val showcaseJar by tasks.registering(Jar::class) {
     from(sourceSets["showcase"].output)
     from(sourceSets.main.get().output)
     manifest {
-        attributes("Main-Class" to "dev.simplified.classbuilder.showcase.BuildRuleShowcase")
+        attributes("Main-Class" to "dev.simplified.classbuilder.showcase.ClassBuilderShowcase")
     }
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }

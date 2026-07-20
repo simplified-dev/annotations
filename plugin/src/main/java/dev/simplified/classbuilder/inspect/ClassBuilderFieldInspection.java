@@ -28,9 +28,9 @@ import java.util.Map;
  *   <li>{@code @Negate} on a non-{@code boolean} field</li>
  *   <li>{@code @Collector} on a non-{@link Collection} or
  *       non-{@link Map} field</li>
- *   <li>{@code @BuildRule(flag = @BuildFlag(pattern = ...))} on a
+ *   <li>{@code @BuildFlag(pattern = ...)} on a
  *       non-{@link CharSequence} field</li>
- *   <li>{@code @BuildRule(flag = @BuildFlag(limit = N))} on a type where the
+ *   <li>{@code @BuildFlag(limit = N)} on a type where the
  *       limit is not meaningful</li>
  * </ul>
  */
@@ -39,7 +39,7 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
     private static final String FORMATTABLE_FQN = "dev.simplified.annotations.Formattable";
     private static final String NEGATE_FQN = "dev.simplified.annotations.Negate";
     private static final String COLLECTOR_FQN = "dev.simplified.annotations.Collector";
-    private static final String BUILD_RULE_FQN = "dev.simplified.annotations.BuildRule";
+    private static final String BUILD_FLAG_FQN = "dev.simplified.annotations.BuildFlag";
 
     @Override
     public @NotNull PsiElementVisitor buildVisitor(@NotNull ProblemsHolder holder, boolean isOnTheFly) {
@@ -70,37 +70,24 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
                         ProblemHighlightType.GENERIC_ERROR);
                 }
 
-                PsiAnnotation rule = field.getAnnotation(BUILD_RULE_FQN);
-                if (rule != null) {
-                    PsiAnnotation flag = nestedAnnotationAttr(rule, "flag");
-                    if (flag != null) {
-                        if (!ClassBuilderConstants.stringAttr(flag, "pattern", "").isEmpty()
-                                && !isCharSequenceLike(type)) {
-                            holder.registerProblem(flag,
-                                "@BuildRule(flag = @BuildFlag(pattern = ...)) only applies to CharSequence or Optional<String> fields",
-                                ProblemHighlightType.WARNING);
-                        }
-                        int limit = intAttr(flag, "limit");
-                        if (limit >= 0 && !isLimitable(type)) {
-                            holder.registerProblem(flag,
-                                "@BuildRule(flag = @BuildFlag(limit = ...)) only applies to CharSequence, Collection, Map, array, "
-                                    + "or Optional<String>/Optional<Number> fields",
-                                ProblemHighlightType.WARNING);
-                        }
+                PsiAnnotation flag = field.getAnnotation(BUILD_FLAG_FQN);
+                if (flag != null) {
+                    if (!ClassBuilderConstants.stringAttr(flag, "pattern", "").isEmpty()
+                            && !isCharSequenceLike(type)) {
+                        holder.registerProblem(flag,
+                            "@BuildFlag(pattern = ...) only applies to CharSequence or Optional<String> fields",
+                            ProblemHighlightType.WARNING);
+                    }
+                    int limit = intAttr(flag, "limit");
+                    if (limit >= 0 && !isLimitable(type)) {
+                        holder.registerProblem(flag,
+                            "@BuildFlag(limit = ...) only applies to CharSequence, Collection, Map, array, "
+                                + "or Optional<String>/Optional<Number> fields",
+                            ProblemHighlightType.WARNING);
                     }
                 }
             }
         };
-    }
-
-    /**
-     * Reads a nested-annotation attribute. {@code PsiAnnotation.findAttributeValue}
-     * returns a {@code PsiAnnotation} when the attribute's type is another
-     * annotation; any other shape (missing, default) returns {@code null}.
-     */
-    private static @Nullable PsiAnnotation nestedAnnotationAttr(@NotNull PsiAnnotation parent, @NotNull String attr) {
-        PsiAnnotationMemberValue value = parent.findAttributeValue(attr);
-        return value instanceof PsiAnnotation nested ? nested : null;
     }
 
     private static boolean isStringLike(@NotNull PsiType type) {
