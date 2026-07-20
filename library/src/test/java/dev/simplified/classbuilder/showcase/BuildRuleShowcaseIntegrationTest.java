@@ -99,6 +99,11 @@ public class BuildRuleShowcaseIntegrationTest {
 
     @BeforeClass
     public static void runShowcase() throws Exception {
+        // @Parameters runs before @BeforeClass and already bootstraps the
+        // subprocess, so an unguarded run here spawns the showcase jar a
+        // second time to recompute a result that is already cached.
+        if (cases != null) return;
+
         String jarPath = requireProp("showcase.jar");
         String outputDir = requireProp("showcase.output.dir");
 
