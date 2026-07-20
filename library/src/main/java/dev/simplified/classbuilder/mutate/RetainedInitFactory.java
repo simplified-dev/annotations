@@ -1,11 +1,5 @@
 package dev.simplified.classbuilder.mutate;
-import dev.simplified.shared.apt.SourceIntrospector;
-import dev.simplified.shared.javac.AstMarkers;
-import dev.simplified.shared.javac.JavacBridge;
-import dev.simplified.shared.javac.JavacTypeFactory;
-
 import com.sun.tools.javac.code.Flags;
-import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.JCTree.JCBlock;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import com.sun.tools.javac.tree.JCTree.JCExpression;
@@ -15,12 +9,18 @@ import com.sun.tools.javac.tree.JCTree.JCMethodDecl;
 import com.sun.tools.javac.tree.JCTree.JCMethodInvocation;
 import com.sun.tools.javac.tree.JCTree.JCNewClass;
 import com.sun.tools.javac.tree.JCTree.JCStatement;
+import com.sun.tools.javac.tree.JCTree.JCVariableDecl;
+import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.TreeCopier;
 import com.sun.tools.javac.tree.TreeMaker;
 import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.Names;
 import com.sun.tools.javac.util.Position;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.shared.apt.SourceIntrospector;
+import dev.simplified.shared.javac.AstMarkers;
+import dev.simplified.shared.javac.JavacBridge;
+import dev.simplified.shared.javac.JavacTypeFactory;
 
 /**
  * Emits a {@code private static <FieldType> $default$<fieldName>()} method on
@@ -78,9 +78,39 @@ final class RetainedInitFactory {
         for (FieldSpec f : ctx.fields()) {
             Object captured = f.sourceInitializerTree;
             if (!(captured instanceof JCExpression original)) continue;
-            if (hasExistingProvider(target, providerName(f.name))) continue;
-            JCMethodDecl provider = buildProvider(f, original);
-            if (provider != null) ctx.bridge().compat().appendDef(target, provider);
+            if (!hasExistingProvider(target, providerName(f.name))) {
+                JCMethodDecl provider = buildProvider(f, original);
+                if (provider != null) ctx.bridge().compat().appendDef(target, provider);
+            }
+            // Blank-final lift: once the $default$<name>() provider holds the
+            // value, a `final` field must give up its own initializer - a final
+            // field carrying both an initializer AND the builder-called
+            // constructor's `this.<name> = <name>` assignment is doubly defined
+            // and javac rejects it ("cannot assign a value to final variable").
+            // Stripping the initializer to a blank final makes the constructor
+            // assignment the sole definite assignment. Non-final fields keep
+            // their (dead but legal) initializer, matching prior behaviour.
+            if (f.isFinal) stripToBlankFinal(target, f.name);
+        }
+    }
+
+    /**
+     * Removes a {@code final} field's declared initializer so the
+     * builder-populated constructor can assign it. Nulls the tree initializer -
+     * which survives javac's re-{@code MemberEnter} passes under multi-round
+     * (Lombok-co-resident) processing, so the field symbol is re-derived as a
+     * genuine blank final - and clears {@code HASINIT} on the field symbol for
+     * the single-round case where no re-enter happens. Idempotent across rounds
+     * (an already-blank field is left alone).
+     */
+    private void stripToBlankFinal(JCClassDecl target, String fieldName) {
+        for (JCTree def : target.defs) {
+            if (!(def instanceof JCVariableDecl decl)) continue;
+            if (!decl.name.toString().equals(fieldName)) continue;
+            if (decl.init == null) return; // already blank (re-run idempotency)
+            decl.init = null;
+            if (decl.sym != null) decl.sym.flags_field &= ~Flags.HASINIT;
+            return;
         }
     }
 

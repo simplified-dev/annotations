@@ -215,6 +215,31 @@ tasks.test {
 }
 
 // ----------------------------------------------------------------------------
+// Lombok co-residence for the showcase (BUG-2 / F3 regression gate)
+//
+// The showcase includes @ClassBuilder + Lombok @Getter cases carrying `final`
+// @BuildRule(retainInit) fields, so the blank-final lift is exercised under REAL
+// javac + REAL Lombok multi-round processing - the exact configuration that
+// surfaced BUG-2. Lombok is compile-time only (source-level @Getter); the
+// showcase jar needs no runtime Lombok. Existing showcase cases carry no Lombok
+// annotations, so Lombok is a no-op on them. The showcase jar is internal
+// verification only (never published), so this dependency stays out of the
+// release artifact.
+// ----------------------------------------------------------------------------
+// Newest Lombok: it retains javac support back to 17 while adding the newer
+// JDKs (1.18.36 crashes on JDK 25 - NoSuchFieldException on a moved javac
+// internal). The showcase is internal verification only, so this version is
+// independent of any consumer's Lombok.
+val showcaseLombok by configurations.creating
+dependencies { showcaseLombok("org.projectlombok:lombok:1.18.42") }
+sourceSets["showcase"].compileClasspath += showcaseLombok
+tasks.named<JavaCompile>("compileShowcaseJava") {
+    options.annotationProcessorPath = files(sourceSets.main.get().output) +
+        showcaseLombok +
+        configurations.compileClasspath.get()
+}
+
+// ----------------------------------------------------------------------------
 // Maven publication
 //   https://central.sonatype.com/publishing
 //

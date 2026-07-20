@@ -9,6 +9,7 @@ import dev.simplified.annotations.Formattable;
 import dev.simplified.annotations.Negate;
 import dev.simplified.annotations.ObtainVia;
 import dev.simplified.classbuilder.validate.BuilderValidationException;
+import lombok.Getter;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -141,6 +142,36 @@ public final class BuildRuleShowcase {
         @BuildRule(retainInit = true) private java.util.List<String> roles = java.util.List.of("guest", "user");
         public RetainedInitFactoryCall(java.util.List<String> roles) { this.roles = roles; }
         public java.util.List<String> getRoles() { return roles; }
+    }
+
+    // BUG-2 / F3: `final` retainInit fields. The blank-final lift strips the
+    // field initializer (preserved by $default$) so the builder-called
+    // constructor can assign it, while the field stays `final` in source and
+    // bytecode. Covers a literal (no forced attribution) and an identifier
+    // initializer (List.of - the case that forced attribution and broke).
+    @ClassBuilder
+    public static final class RetainedInitFinal {
+        @BuildRule(retainInit = true) private final int tileSize = 128;
+        @BuildRule(retainInit = true) private final List<String> layers = List.of("base");
+        public RetainedInitFinal(int tileSize, List<String> layers) {
+            this.tileSize = tileSize;
+            this.layers = layers;
+        }
+        public int getTileSize() { return tileSize; }
+        public List<String> getLayers() { return layers; }
+    }
+
+    // The same `final` retainInit shape with Lombok @Getter co-resident - the
+    // multi-round processing configuration that surfaced BUG-2 in asset-renderer.
+    @Getter
+    @ClassBuilder
+    public static final class RetainedInitFinalLombok {
+        @BuildRule(retainInit = true) private final int tileSize = 128;
+        @BuildRule(retainInit = true) private final List<String> layers = List.of("base");
+        public RetainedInitFinalLombok(int tileSize, List<String> layers) {
+            this.tileSize = tileSize;
+            this.layers = layers;
+        }
     }
 
     @ClassBuilder
@@ -446,6 +477,48 @@ public final class BuildRuleShowcase {
                     throw new AssertionError("expected explicit override, got " + built.getGreeting());
             })
             .asSuccess("explicit setter overrides retained initializer");
+
+        // --- BUG-2 / F3: final retainInit (blank-final lift) -------------
+
+        report.expect("buildRule.retainInit.final.literal")
+            .runVoid(() -> {
+                RetainedInitFinal built = RetainedInitFinal.builder().build();
+                if (built.getTileSize() != 128)
+                    throw new AssertionError("expected tileSize=128, got " + built.getTileSize());
+                if (!List.of("base").equals(built.getLayers()))
+                    throw new AssertionError("expected layers=[base], got " + built.getLayers());
+            })
+            .asSuccess("final retainInit (int literal + List.of identifier) materialised as defaults");
+
+        report.expect("buildRule.retainInit.final.override")
+            .runVoid(() -> {
+                RetainedInitFinal built = RetainedInitFinal.builder().tileSize(256).build();
+                if (built.getTileSize() != 256)
+                    throw new AssertionError("expected override tileSize=256, got " + built.getTileSize());
+            })
+            .asSuccess("explicit setter overrides the retained final default");
+
+        report.expect("buildRule.retainInit.final.isFinal")
+            .runVoid(() -> {
+                boolean found = false;
+                for (java.lang.reflect.Field f : RetainedInitFinal.class.getDeclaredFields()) {
+                    if (!f.getName().equals("tileSize")) continue;
+                    found = true;
+                    if (!Modifier.isFinal(f.getModifiers()))
+                        throw new AssertionError("tileSize must stay final in bytecode (ACC_FINAL)");
+                }
+                if (!found) throw new AssertionError("tileSize field not found");
+            })
+            .asSuccess("source final preserved as ACC_FINAL - immutability intact");
+
+        report.expect("buildRule.retainInit.final.lombok")
+            .runVoid(() -> {
+                RetainedInitFinalLombok built = RetainedInitFinalLombok.builder().build();
+                if (built.getTileSize() != 128 || !List.of("base").equals(built.getLayers()))
+                    throw new AssertionError("Lombok co-resident final retainInit failed: "
+                        + built.getTileSize() + " / " + built.getLayers());
+            })
+            .asSuccess("final retainInit compiles + round-trips under Lombok @Getter co-residence");
 
         report.expect("buildRule.ignore")
             .runVoid(() -> {

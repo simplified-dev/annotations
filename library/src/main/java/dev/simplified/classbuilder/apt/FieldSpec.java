@@ -1,10 +1,11 @@
 package dev.simplified.classbuilder.apt;
-import dev.simplified.shared.apt.SourceIntrospector;
 import dev.simplified.shared.apt.AnnotationLookup;
+import dev.simplified.shared.apt.SourceIntrospector;
 
 import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.ArrayType;
@@ -49,6 +50,11 @@ public final class FieldSpec {
     public final boolean isString;
     public final boolean isPrimitive;
     public final boolean isArray;
+    // The field carries the `final` modifier. A final field whose initializer is
+    // retained as a builder default (@BuildRule(retainInit)) must have that
+    // initializer stripped to a blank final, or the builder-called constructor
+    // cannot assign it ("cannot assign a value to final variable").
+    public final boolean isFinal;
 
     public final boolean isOptional;
     public final String optionalInner;              // null unless isOptional
@@ -97,6 +103,7 @@ public final class FieldSpec {
         this.isString = b.isString;
         this.isPrimitive = b.isPrimitive;
         this.isArray = b.isArray;
+        this.isFinal = b.isFinal;
         this.isOptional = b.isOptional;
         this.optionalInner = b.optionalInner;
         this.isListLike = b.isListLike;
@@ -275,6 +282,7 @@ public final class FieldSpec {
         b.name = element.getSimpleName().toString();
         b.type = element.asType();
         b.typeDisplay = element.asType().toString();
+        b.isFinal = element.getModifiers().contains(Modifier.FINAL);
 
         // Nullability
         b.notNull = lookup.hasAnnotation(element, "org.jetbrains.annotations.NotNull");
@@ -348,7 +356,7 @@ public final class FieldSpec {
         TypeMirror type;
         String typeDisplay;
         boolean notNull, nullable;
-        boolean isBoolean, isString, isPrimitive, isArray;
+        boolean isBoolean, isString, isPrimitive, isArray, isFinal;
         boolean isOptional;
         String optionalInner;
         boolean isListLike, isSet, isMap, isCustomContainer;
