@@ -255,6 +255,61 @@ public class RetainInitPolicyTest {
     }
 
     // ------------------------------------------------------------------
+    // Final fields whose retention is turned off
+    // ------------------------------------------------------------------
+
+    /**
+     * Turning retention off must still lift a {@code final} field to a blank
+     * final. The generated constructor assigns every field either way, so a
+     * final field left holding its own initializer is doubly defined and javac
+     * rejects it with "cannot assign a value to final variable".
+     *
+     * <p>The field then defaults to null, which is exactly what the non-final
+     * case already did - opting out of retention means the declared value does
+     * not reach the builder.
+     */
+    @Test
+    public void builderDefaultFalse_onFinalField_stillCompiles() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.FinalOptOut",
+            """
+            package demo;
+            import dev.simplified.annotations.BuilderDefault;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false)
+            public class FinalOptOut {
+                @BuilderDefault(false) final String name = "declared";
+                public String getName() { return name; }
+            }
+            """.split("\n"));
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        Class<?> target = Class.forName("demo.FinalOptOut", true, loadClasses(c));
+        assertNull("opting out drops the declared value, as for a non-final field",
+            get(target, buildUntouched(target), "getName"));
+    }
+
+    /** Same lift, driven by the class-level policy rather than a field annotation. */
+    @Test
+    public void classRetainInitFalse_onFinalField_stillCompiles() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.FinalSparse",
+            """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false, retainInit = false)
+            public class FinalSparse {
+                final String name = "declared";
+                public String getName() { return name; }
+            }
+            """.split("\n"));
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        Class<?> target = Class.forName("demo.FinalSparse", true, loadClasses(c));
+        assertNull(get(target, buildUntouched(target), "getName"));
+    }
+
+    // ------------------------------------------------------------------
     // Fresh-per-build semantics survive the policy change
     // ------------------------------------------------------------------
 

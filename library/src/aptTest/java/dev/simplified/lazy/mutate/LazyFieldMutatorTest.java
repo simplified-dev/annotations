@@ -262,6 +262,27 @@ public class LazyFieldMutatorTest {
         assertEquals("fromSetter", target.getMethod("getValue").invoke(built));
     }
 
+    /**
+     * {@code @Lazy} makes the field final, so opting out of retention has to
+     * lift it to a blank final all the same - otherwise the initializer and the
+     * constructor's assignment collide. The @Lazy flavour of the same defect
+     * covered in RetainInitPolicyTest.
+     */
+    @Test
+    public void classBuilderLazy_builderDefaultFalse_stillCompiles() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.LazyOptOut",
+            "package demo;",
+            "import dev.simplified.annotations.BuilderDefault;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Lazy;",
+            "@ClassBuilder(validate = false)",
+            "public class LazyOptOut {",
+            "    @Lazy @BuilderDefault(false) String value = \"declared\";",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+    }
+
     /** builder().build() with no setter calls, so every value is a default. */
     private static Object build(Class<?> target) throws Exception {
         Object b = target.getMethod("builder").invoke(null);

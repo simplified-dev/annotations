@@ -95,20 +95,23 @@ final class RetainedInitFactory {
                         f.element
                     );
                 }
-                continue;
-            }
-            if (!hasExistingProvider(target, providerName(f.name))) {
+            } else if (!hasExistingProvider(target, providerName(f.name))) {
                 JCMethodDecl provider = buildProvider(f, original);
                 if (provider != null) ctx.bridge().compat().appendDef(target, provider);
             }
-            // Blank-final lift: once the $default$<name>() provider holds the
-            // value, a `final` field must give up its own initializer - a final
-            // field carrying both an initializer AND the builder-called
-            // constructor's `this.<name> = <name>` assignment is doubly defined
-            // and javac rejects it ("cannot assign a value to final variable").
-            // Stripping the initializer to a blank final makes the constructor
+            // Blank-final lift: a final field carrying both an initializer AND
+            // the builder-called constructor's `this.<name> = <name>` assignment
+            // is doubly defined and javac rejects it ("cannot assign a value to
+            // final variable"). Stripping the initializer makes the constructor
             // assignment the sole definite assignment. Non-final fields keep
             // their (dead but legal) initializer, matching prior behaviour.
+            //
+            // Runs for every field, not only those whose initializer was
+            // retained: the constructor assigns all of them either way, so
+            // turning retention off (@BuilderDefault(false), or a class-level
+            // retainInit = false) must not leave a final field's initializer
+            // in place. Such a field simply defaults to null, exactly as the
+            // non-final case already did.
             stripToBlankFinal(target, f.name);
         }
     }
