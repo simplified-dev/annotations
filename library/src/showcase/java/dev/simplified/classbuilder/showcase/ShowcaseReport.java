@@ -62,10 +62,15 @@ public final class ShowcaseReport {
         } catch (IOException e) {
             throw new UncheckedIOException("unable to write showcase report to " + output, e);
         }
-        // Also echo the trailer to stdout so Gradle's test-task log shows it.
-        System.out.println();
-        System.out.println(ok ? "BUILD SUCCESSFUL" : "BUILD FAILED");
-        System.out.println(total + " cases, " + failed + " failures");
+        // Echo the trailer to stdout only when something failed. The passing
+        // trailer is already in the report file, which is the channel callers
+        // parse; echoing it as well only lands a case count in the consuming
+        // build's log, where readers mistake it for that build's test tally.
+        if (!ok) {
+            System.out.println();
+            System.out.println("BUILD FAILED");
+            System.out.println(total + " cases, " + failed + " failures");
+        }
         System.exit(ok ? 0 : 1);
     }
 
