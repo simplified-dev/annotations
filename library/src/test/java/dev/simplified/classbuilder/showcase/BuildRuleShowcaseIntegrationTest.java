@@ -1,6 +1,5 @@
 package dev.simplified.classbuilder.showcase;
 
-import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -99,9 +98,11 @@ public class BuildRuleShowcaseIntegrationTest {
 
     @BeforeClass
     public static void runShowcase() throws Exception {
-        // @Parameters runs before @BeforeClass and already bootstraps the
-        // subprocess, so an unguarded run here spawns the showcase jar a
-        // second time to recompute a result that is already cached.
+        // Sole launch site for the subprocess. Every caller invokes this
+        // unconditionally and the cache check below is what collapses them to
+        // a single run. Nothing clears the cache once populated, so the launch
+        // is idempotent for the life of the JVM and stays that way whichever
+        // class Gradle happens to schedule first.
         if (cases != null) return;
 
         String jarPath = requireProp("showcase.jar");
@@ -161,22 +162,16 @@ public class BuildRuleShowcaseIntegrationTest {
         trailer = parsedTrailer;
     }
 
-    @AfterClass
-    public static void dropRefs() {
-        cases = null;
-        trailer = null;
-    }
-
     // ------------------------------------------------------------------
     // Parameterised per-case assertion
     // ------------------------------------------------------------------
 
     @Parameterized.Parameters(name = "{0}")
     public static Collection<Object[]> parameters() throws Exception {
-        // runShowcase() fires in @BeforeClass on the first invocation, but
-        // @Parameters runs before @BeforeClass. Bootstrap the subprocess
-        // here so the parameter list reflects what the jar actually emitted.
-        if (cases == null) runShowcase();
+        // @Parameters runs before @BeforeClass, so this is usually the call
+        // that actually launches the jar - the parameter list has to reflect
+        // what it emitted. Later callers no-op.
+        runShowcase();
         List<Object[]> out = new ArrayList<>();
         for (String id : EXPECTED_IDS) out.add(new Object[] { id });
         return out;
@@ -203,7 +198,7 @@ public class BuildRuleShowcaseIntegrationTest {
     public static class CoverageTest {
         @BeforeClass
         public static void ensureReport() throws Exception {
-            if (cases == null) runShowcase();
+            runShowcase();
         }
 
         @Test
