@@ -1,7 +1,4 @@
 package dev.simplified.enumlookup.editor;
-import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
-import dev.simplified.shared.psi.GeneratedMemberMarker;
-
 import com.intellij.openapi.project.Project;
 import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiAnnotation;
@@ -22,6 +19,8 @@ import com.intellij.psi.util.CachedValueProvider;
 import com.intellij.psi.util.CachedValuesManager;
 import com.intellij.psi.util.PsiModificationTracker;
 import dev.simplified.enumlookup.inspect.EnumLookupConstants;
+import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
+import dev.simplified.shared.psi.GeneratedMemberMarker;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 

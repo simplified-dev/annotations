@@ -1,6 +1,4 @@
 package dev.simplified.lazy.inspect;
-import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
-
 import com.intellij.codeInspection.LocalInspectionTool;
 import com.intellij.codeInspection.ProblemHighlightType;
 import com.intellij.codeInspection.ProblemsHolder;
@@ -11,8 +9,9 @@ import com.intellij.psi.PsiElementVisitor;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiPrimitiveType;
-import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiRecordComponent;
+import com.intellij.psi.PsiType;
+import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import org.jetbrains.annotations.NotNull;
 
 /**

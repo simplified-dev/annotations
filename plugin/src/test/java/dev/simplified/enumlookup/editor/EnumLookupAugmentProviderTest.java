@@ -1,6 +1,4 @@
 package dev.simplified.enumlookup.editor;
-import dev.simplified.shared.psi.GeneratedMemberMarker;
-
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiFile;
@@ -8,6 +6,7 @@ import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
+import dev.simplified.shared.psi.GeneratedMemberMarker;
 
 /**
  * Exercises {@link EnumLookupAugmentProvider}: a {@code @EnumLookup} enum

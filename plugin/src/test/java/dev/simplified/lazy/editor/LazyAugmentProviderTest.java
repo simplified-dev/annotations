@@ -1,6 +1,4 @@
 package dev.simplified.lazy.editor;
-import dev.simplified.shared.psi.GeneratedMemberMarker;
-
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiFile;
@@ -9,6 +7,7 @@ import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiType;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
+import dev.simplified.shared.psi.GeneratedMemberMarker;
 
 /**
  * Exercises {@link LazyAugmentProvider}: a class with a {@code @Lazy} field

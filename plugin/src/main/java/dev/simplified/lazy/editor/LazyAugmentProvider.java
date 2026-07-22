@@ -1,8 +1,4 @@
 package dev.simplified.lazy.editor;
-import dev.simplified.shared.psi.AnnotatedLightModifierList;
-import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
-import dev.simplified.shared.psi.GeneratedMemberMarker;
-
 import com.intellij.lang.java.JavaLanguage;
 import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiAnnotation;
@@ -27,6 +23,9 @@ import com.intellij.psi.util.PsiModificationTracker;
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.lazy.mutate.LazyFieldMutator;
+import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
+import dev.simplified.shared.psi.AnnotatedLightModifierList;
+import dev.simplified.shared.psi.GeneratedMemberMarker;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 

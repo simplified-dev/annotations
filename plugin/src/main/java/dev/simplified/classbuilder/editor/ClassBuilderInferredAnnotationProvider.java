@@ -1,6 +1,4 @@
 package dev.simplified.classbuilder.editor;
-import dev.simplified.shared.psi.GeneratedMemberMarker;
-
 import com.intellij.codeInsight.InferredAnnotationProvider;
 import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiAnnotation;
@@ -10,6 +8,7 @@ import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifierListOwner;
 import com.intellij.psi.impl.light.LightMethodBuilder;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
+import dev.simplified.shared.psi.GeneratedMemberMarker;
 import org.jetbrains.annotations.Contract;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;

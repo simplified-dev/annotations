@@ -1,6 +1,4 @@
 package dev.simplified.classbuilder.editor;
-import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
-
 import com.intellij.openapi.util.Key;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
@@ -13,6 +11,7 @@ import com.intellij.psi.util.CachedValuesManager;
 import com.intellij.psi.util.PsiModificationTracker;
 import com.intellij.util.IdempotenceChecker;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
+import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
