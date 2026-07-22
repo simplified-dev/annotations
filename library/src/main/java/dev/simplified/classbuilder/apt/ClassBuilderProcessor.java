@@ -2,7 +2,10 @@ package dev.simplified.classbuilder.apt;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import dev.simplified.accessor.mutate.AccessorMutator;
 import dev.simplified.annotations.AccessLevel;
+import dev.simplified.annotations.Getter;
 import dev.simplified.annotations.NamingStyle;
+import dev.simplified.annotations.Setter;
+import dev.simplified.annotations.SetterNames;
 import dev.simplified.args.mutate.ArgsConstructorMutator;
 import dev.simplified.classbuilder.mutate.BuilderMutator;
 import dev.simplified.classbuilder.mutate.InterfaceBootstrapMutator;
@@ -234,7 +237,9 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         for (String fqn : new String[]{GETTER_FQN, SETTER_FQN}) {
             TypeElement annotation = processingEnv.getElementUtils().getTypeElement(fqn);
             if (annotation == null) continue;
+            boolean getter = GETTER_FQN.equals(fqn);
             for (Element annotated : roundEnv.getElementsAnnotatedWith(annotation)) {
+                validateAccessorName(annotated, getter, messager);
                 Element owner = annotated instanceof TypeElement
                     ? annotated
                     : annotated.getEnclosingElement();
@@ -274,6 +279,47 @@ public class ClassBuilderProcessor extends AbstractProcessor {
                 messager.printMessage(Diagnostic.Kind.ERROR,
                     "Failed to process accessors on " + target + ": " + e.getMessage(), target);
             }
+        }
+    }
+
+    /**
+     * Reports a {@code name} pattern on {@code @Getter} or {@code @Setter} that
+     * cannot expand into a distinct accessor.
+     *
+     * <p>Checked on a type-level annotation as well as a field-level one, and
+     * the placeholder is mandatory in both. It matters more on the type, where a
+     * pattern without it gives every field on the class the same accessor name;
+     * on a field it only collides with whatever else claims that name.
+     *
+     * <p>The suppression sentinel is rejected rather than honoured. These
+     * annotations suppress through {@link AccessLevel#NONE}, so nothing on this
+     * path reads it as an opt-out and it would be minted verbatim as the method
+     * name.
+     *
+     * @param annotated the type or field carrying the annotation
+     * @param getter whether the annotation is {@code @Getter} rather than
+     *        {@code @Setter}
+     * @param messager the reporting sink
+     */
+    private void validateAccessorName(Element annotated, boolean getter, Messager messager) {
+        Getter get = getter ? annotated.getAnnotation(Getter.class) : null;
+        Setter set = getter ? null : annotated.getAnnotation(Setter.class);
+        if (get == null && set == null) return;
+        String written = getter ? get.name() : set.name();
+        // Empty is INHERIT, where the style supplies the pattern.
+        if (written.isEmpty()) return;
+
+        String annotation = getter ? "@Getter" : "@Setter";
+        if (SetterNames.NONE.equals(written)) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                annotation + " naming pattern for 'name' cannot be '" + SetterNames.NONE
+                    + "' - write AccessLevel.NONE to generate nothing", annotated);
+            return;
+        }
+        String error = NamePattern.patternError(written, true);
+        if (error != null) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                annotation + " naming pattern for 'name' " + error, annotated);
         }
     }
 

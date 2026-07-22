@@ -149,6 +149,22 @@ public class UtilityClassMutatorTest {
         assertThat(c).hadErrorContaining("method 'count' is not");
     }
 
+    /**
+     * The error lands on the member that has to change rather than on the class
+     * declaration, so a class with several of them produces several errors a
+     * reader can tell apart.
+     */
+    @Test
+    public void instanceMemberErrorPointsAtTheMember() {
+        JavaFileObject source = util("@UtilityClass",
+            "    public int count;",
+            "    public int count() { return count; }");
+        Compilation c = compile(source);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("field 'count' is not").inFile(source).onLine(5);
+        assertThat(c).hadErrorContaining("method 'count' is not").inFile(source).onLine(6);
+    }
+
     @Test
     public void makeStaticRewritesInsteadOfReporting() throws Exception {
         Compilation c = compile(util("@UtilityClass(members = dev.simplified.annotations.UtilityClass.Members.MAKE_STATIC)",

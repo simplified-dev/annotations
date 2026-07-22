@@ -19,6 +19,7 @@ import dev.simplified.shared.javac.JavacTypeFactory;
 import dev.simplified.utility.apt.UtilityConfig;
 
 import javax.annotation.processing.Messager;
+import javax.lang.model.element.Element;
 import javax.lang.model.element.TypeElement;
 import javax.tools.Diagnostic;
 
@@ -181,13 +182,13 @@ public final class UtilityClassMutator {
                 if (m.name.contentEquals("<init>")) continue;
                 if ((m.mods.flags & Flags.STATIC) != 0) continue;
                 if (rewrite) markStatic(m.mods, m.sym);
-                else reportInstanceMember(targetElement, "method", m.name.toString());
+                else reportInstanceMember(anchor(m.sym, targetElement), "method", m.name.toString());
                 continue;
             }
             if (def instanceof JCVariableDecl f) {
                 if ((f.mods.flags & Flags.STATIC) != 0) continue;
                 if (rewrite) markStatic(f.mods, f.sym);
-                else reportInstanceMember(targetElement, "field", f.name.toString());
+                else reportInstanceMember(anchor(f.sym, targetElement), "field", f.name.toString());
             }
         }
     }
@@ -197,12 +198,30 @@ public final class UtilityClassMutator {
         if (sym != null) sym.flags_field |= Flags.STATIC;
     }
 
-    private void reportInstanceMember(TypeElement targetElement, String kind, String name) {
+    /**
+     * The element an instance-member error is reported against.
+     *
+     * <p>The member itself wherever javac has entered it, so the caret lands on
+     * the declaration that has to change and a class with several of them
+     * produces several distinguishable errors rather than a stack of messages on
+     * one line. The enclosing type is the fallback for the case where the symbol
+     * is not yet available, which still reports rather than dropping the error.
+     *
+     * @param symbol the member's symbol, or {@code null} when unentered
+     * @param targetElement the enclosing type
+     * @return the element to anchor the diagnostic on
+     */
+    private static Element anchor(com.sun.tools.javac.code.Symbol symbol,
+                                  TypeElement targetElement) {
+        return symbol == null ? targetElement : symbol;
+    }
+
+    private void reportInstanceMember(Element member, String kind, String name) {
         messager.printMessage(Diagnostic.Kind.ERROR,
             "@UtilityClass requires every member to be static - " + kind + " '" + name
                 + "' is not. Add static, or write @UtilityClass(members = MAKE_STATIC) to have it "
                 + "added implicitly",
-            targetElement);
+            member);
     }
 
 }

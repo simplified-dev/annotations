@@ -302,6 +302,98 @@ public class AccessorMutatorTest {
         assertThat(c).hadErrorContaining("final field 'id'");
     }
 
+    // ------------------------------------------------------------------
+    // The name pattern
+    // ------------------------------------------------------------------
+
+    @Test
+    public void typeLevelNameWithoutThePlaceholderIsAnError() {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.Widget",
+            "package demo;",
+            "import dev.simplified.annotations.Getter;",
+            "@Getter(name = \"value\")",
+            "public class Widget {",
+            "    private String label;",
+            "    private String other;",
+            "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@Getter naming pattern for 'name'");
+        assertThat(c).hadErrorContaining("must contain the '{}' placeholder");
+    }
+
+    @Test
+    public void fieldLevelNameWithoutThePlaceholderIsAnError() {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.Widget",
+            "package demo;",
+            "import dev.simplified.annotations.Setter;",
+            "public class Widget {",
+            "    @Setter(name = \"assign\") private String label;",
+            "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@Setter naming pattern for 'name'");
+    }
+
+    /**
+     * The error is reported against the field, not the enclosing type, so a
+     * class with several offending fields produces several distinguishable
+     * errors.
+     */
+    @Test
+    public void nameErrorPointsAtTheAnnotatedElement() {
+        JavaFileObject source = JavaFileObjects.forSourceLines("demo.Widget",
+            "package demo;",
+            "import dev.simplified.annotations.Getter;",
+            "public class Widget {",
+            "    @Getter(name = \"value\") private String label;",
+            "}");
+        Compilation c = compile(source);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@Getter naming pattern for 'name'")
+            .inFile(source).onLine(4);
+    }
+
+    /**
+     * These annotations suppress through {@code AccessLevel.NONE}, so nothing
+     * reads the sentinel as an opt-out and it would otherwise be minted verbatim
+     * as the method name.
+     */
+    @Test
+    public void nameCannotBeTheSuppressionSentinel() {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.Widget",
+            "package demo;",
+            "import dev.simplified.annotations.Getter;",
+            "public class Widget {",
+            "    @Getter(name = \"-\") private String label;",
+            "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("cannot be '-'");
+        assertThat(c).hadErrorContaining("write AccessLevel.NONE to generate nothing");
+    }
+
+    @Test
+    public void aPlaceholderPatternIsAccepted() throws Exception {
+        Class<?> t = compileAndLoad("demo.Widget",
+            "package demo;",
+            "import dev.simplified.annotations.Getter;",
+            "@Getter(name = \"read{}\")",
+            "public class Widget {",
+            "    private String label;",
+            "}");
+        assertEquals("readLabel", methodNames(t));
+    }
+
+    @Test
+    public void anEmptyNameStillInheritsTheStyle() throws Exception {
+        Class<?> t = compileAndLoad("demo.Widget",
+            "package demo;",
+            "import dev.simplified.annotations.Getter;",
+            "@Getter(name = \"\")",
+            "public class Widget {",
+            "    private String label;",
+            "}");
+        assertEquals("getLabel", methodNames(t));
+    }
+
     @Test
     public void recordsAndInterfacesAreRejected() {
         assertThat(compile(JavaFileObjects.forSourceLines("demo.R",
