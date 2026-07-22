@@ -1,9 +1,9 @@
 package dev.simplified.enumlookup.apt;
 
 import dev.simplified.annotations.KeyField;
+import dev.simplified.enumlookup.mutate.EnumLookupMutator;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.compat.JavacAccessFactory;
-import dev.simplified.enumlookup.mutate.EnumLookupMutator;
 
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.Messager;

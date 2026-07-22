@@ -1,11 +1,5 @@
 package dev.simplified.classbuilder.mutate;
-import dev.simplified.shared.javac.ContractAnnotations;
-import dev.simplified.shared.javac.AstMarkers;
-import dev.simplified.shared.javac.JavacBridge;
-import dev.simplified.shared.javac.JavacTypeFactory;
-
 import com.sun.tools.javac.code.Flags;
-import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.JCTree.JCBlock;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import com.sun.tools.javac.tree.JCTree.JCExpression;
@@ -13,12 +7,17 @@ import com.sun.tools.javac.tree.JCTree.JCMethodDecl;
 import com.sun.tools.javac.tree.JCTree.JCModifiers;
 import com.sun.tools.javac.tree.JCTree.JCStatement;
 import com.sun.tools.javac.tree.JCTree.JCVariableDecl;
+import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.TreeMaker;
 import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
 import dev.simplified.classbuilder.apt.BuilderConfig;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.shared.javac.AstMarkers;
+import dev.simplified.shared.javac.ContractAnnotations;
+import dev.simplified.shared.javac.JavacBridge;
+import dev.simplified.shared.javac.JavacTypeFactory;
 
 /**
  * Builds the nested {@code Builder} {@link JCClassDecl} that gets appended to

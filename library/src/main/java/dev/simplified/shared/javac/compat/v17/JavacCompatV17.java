@@ -1,7 +1,7 @@
 package dev.simplified.shared.javac.compat.v17;
 
-import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
+import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.util.List;
 import dev.simplified.shared.javac.compat.JavacCompat;
 

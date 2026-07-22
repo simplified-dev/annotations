@@ -1,9 +1,9 @@
 package dev.simplified.classbuilder.mutate;
 
 import com.sun.source.tree.Tree;
-import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.JCTree.JCFieldAccess;
 import com.sun.tools.javac.tree.JCTree.JCIdent;
+import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.TreeScanner;
 import dev.simplified.classbuilder.apt.FieldSpec;
 

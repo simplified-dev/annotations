@@ -1,8 +1,4 @@
 package dev.simplified.classbuilder.mutate;
-import dev.simplified.shared.javac.ContractAnnotations;
-import dev.simplified.shared.javac.JavacBridge;
-import dev.simplified.shared.javac.JavacTypeFactory;
-
 import com.sun.tools.javac.code.Flags;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import com.sun.tools.javac.tree.JCTree.JCExpression;
@@ -13,6 +9,9 @@ import com.sun.tools.javac.util.Names;
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.classbuilder.apt.BuilderConfig;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.shared.javac.ContractAnnotations;
+import dev.simplified.shared.javac.JavacBridge;
+import dev.simplified.shared.javac.JavacTypeFactory;
 
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.TypeParameterElement;
