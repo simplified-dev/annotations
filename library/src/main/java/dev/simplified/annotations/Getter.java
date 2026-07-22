@@ -57,10 +57,7 @@ public @interface Getter {
      * Name pattern overriding the style's, where {@code {}} expands to the
      * field name. Empty inherits from {@link #style()}.
      *
-     * <p>Overrides the boolean and non-boolean patterns together: no site has
-     * ever wanted {@code get{}} for objects and something other than
-     * {@code is{}} for booleans independently, and two attributes would only
-     * invite the mismatch.
+     * <p>Overrides the boolean and non-boolean patterns together.
      */
     @NotNull String name() default "";
 
