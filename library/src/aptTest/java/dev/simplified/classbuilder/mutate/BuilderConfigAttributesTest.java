@@ -71,16 +71,16 @@ public class BuilderConfigAttributesTest {
     }
 
     // ------------------------------------------------------------------
-    // names / style - every generated method name comes from a role pattern
+    // style / setters / builder - every generated name comes from the scheme
     // ------------------------------------------------------------------
 
     @Test
-    public void names_setPatternAppliedToSetters() throws Exception {
+    public void setterNames_setPatternAppliedToSetters() throws Exception {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.Cfg",
             "package demo;",
             "import dev.simplified.annotations.ClassBuilder;",
-            "import dev.simplified.annotations.MethodNames;",
-            "@ClassBuilder(names = @MethodNames(set = \"set{}\"), validate = false)",
+            "import dev.simplified.annotations.SetterNames;",
+            "@ClassBuilder(setters = @SetterNames(set = \"set{}\"), validate = false)",
             "public class Cfg {",
             "    String name;",
             "    public Cfg(String name) { this.name = name; }",
@@ -99,12 +99,12 @@ public class BuilderConfigAttributesTest {
     }
 
     @Test
-    public void names_suffixPatternIsExpressible() throws Exception {
+    public void setterNames_suffixPatternIsExpressible() throws Exception {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.Suffixed",
             "package demo;",
             "import dev.simplified.annotations.ClassBuilder;",
-            "import dev.simplified.annotations.MethodNames;",
-            "@ClassBuilder(names = @MethodNames(set = \"{}Value\"), validate = false)",
+            "import dev.simplified.annotations.SetterNames;",
+            "@ClassBuilder(setters = @SetterNames(set = \"{}Value\"), validate = false)",
             "public class Suffixed {",
             "    String name;",
             "    public Suffixed(String name) { this.name = name; }",
@@ -171,23 +171,24 @@ public class BuilderConfigAttributesTest {
         Class<?> card = Class.forName("demo.Card", true, cl);
         Class<?> builder = nested(card, "CardBuilder");
 
-        assertTrue("builderName takes the {} pattern", builder.getSimpleName().equals("CardBuilder"));
+        assertEquals("builder type takes the style's pattern", "CardBuilder", builder.getSimpleName());
         assertTrue("bare-name boolean setter", hasMethod(builder, "shiny", boolean.class));
         assertFalse("no zero-arg boolean form under LOMBOK", hasMethod(builder, "isShiny"));
         assertTrue("singular add takes the bare singular", hasMethod(builder, "tag", String.class));
         assertFalse("addX is the SIMPLIFIED name, not Lombok's", hasMethod(builder, "addTag", String.class));
         assertTrue("clear keeps its name across styles", hasMethod(builder, "clearTags"));
-        assertTrue("toBuilderMethodName follows the style", hasMethod(card, "toBuilder"));
+        assertTrue("toBuilder name follows the style", hasMethod(card, "toBuilder"));
         assertFalse("mutate is the SIMPLIFIED name", hasMethod(card, "mutate"));
     }
 
     @Test
-    public void namingStyle_explicitAttributeBeatsTheStyle() throws Exception {
+    public void namingStyle_explicitNameBeatsTheStyle() throws Exception {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.Token",
             "package demo;",
             "import dev.simplified.annotations.ClassBuilder;",
             "import dev.simplified.annotations.NamingStyle;",
-            "@ClassBuilder(style = NamingStyle.LOMBOK, toBuilderMethodName = \"respawn\", validate = false)",
+            "import dev.simplified.annotations.BuilderNames;",
+            "@ClassBuilder(style = NamingStyle.LOMBOK, builder = @BuilderNames(toBuilder = \"respawn\"), validate = false)",
             "public class Token {",
             "    String id;",
             "    public Token(String id) { this.id = id; }",
@@ -205,12 +206,12 @@ public class BuilderConfigAttributesTest {
     }
 
     @Test
-    public void names_suppressedFlagRoleDropsTheZeroArgSetter() throws Exception {
+    public void setterNames_noneDropsTheZeroArgSetter() throws Exception {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.Switch",
             "package demo;",
             "import dev.simplified.annotations.ClassBuilder;",
-            "import dev.simplified.annotations.MethodNames;",
-            "@ClassBuilder(names = @MethodNames(flag = MethodNames.NONE), validate = false)",
+            "import dev.simplified.annotations.SetterNames;",
+            "@ClassBuilder(setters = @SetterNames(flag = SetterNames.NONE), validate = false)",
             "public class Switch {",
             "    boolean on;",
             "    public Switch(boolean on) { this.on = on; }",
@@ -226,12 +227,12 @@ public class BuilderConfigAttributesTest {
     }
 
     @Test
-    public void names_malformedPatternIsRejectedAtTheAnnotation() {
+    public void setterNames_malformedPatternIsRejectedAtTheAnnotation() {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.Broken",
             "package demo;",
             "import dev.simplified.annotations.ClassBuilder;",
-            "import dev.simplified.annotations.MethodNames;",
-            "@ClassBuilder(names = @MethodNames(set = \"set\"), validate = false)",
+            "import dev.simplified.annotations.SetterNames;",
+            "@ClassBuilder(setters = @SetterNames(set = \"set\"), validate = false)",
             "public class Broken {",
             "    String name;",
             "    public Broken(String name) { this.name = name; }",
@@ -243,12 +244,12 @@ public class BuilderConfigAttributesTest {
     }
 
     @Test
-    public void names_suppressedSetRoleIsRejected() {
+    public void setterNames_suppressedSetRoleIsRejected() {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.NoSetter",
             "package demo;",
             "import dev.simplified.annotations.ClassBuilder;",
-            "import dev.simplified.annotations.MethodNames;",
-            "@ClassBuilder(names = @MethodNames(set = MethodNames.NONE), validate = false)",
+            "import dev.simplified.annotations.SetterNames;",
+            "@ClassBuilder(setters = @SetterNames(set = SetterNames.NONE), validate = false)",
             "public class NoSetter {",
             "    String name;",
             "    public NoSetter(String name) { this.name = name; }",
@@ -256,19 +257,81 @@ public class BuilderConfigAttributesTest {
             "}");
         Compilation c = compile(src);
         assertThat(c).failed();
-        assertThat(c).hadErrorContaining("cannot suppress the 'set' naming role");
+        assertThat(c).hadErrorContaining("cannot suppress the 'set' role");
+    }
+
+    /**
+     * The once-per-target names are the group the placeholder is optional for,
+     * every default being a plain literal - so a name without one is correct
+     * here where the same text would be rejected on a setter role.
+     */
+    @Test
+    public void builderNames_plainLiteralIsAccepted() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Widget",
+            "package demo;",
+            "import dev.simplified.annotations.BuilderNames;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(builder = @BuilderNames(type = \"Assembler\", builder = \"assemble\"), validate = false)",
+            "public class Widget {",
+            "    String name;",
+            "    public Widget(String name) { this.name = name; }",
+            "    public String getName() { return name; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+        ClassLoader cl = loadClasses(c);
+        Class<?> widget = Class.forName("demo.Widget", true, cl);
+
+        assertNotNull(nested(widget, "Assembler"));
+        assertTrue(hasMethod(widget, "assemble"));
+        assertFalse(hasMethod(widget, "builder"));
+    }
+
+    @Test
+    public void builderNames_suppressedTypeIsRejected() {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.NoType",
+            "package demo;",
+            "import dev.simplified.annotations.BuilderNames;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(builder = @BuilderNames(type = BuilderNames.NONE), validate = false)",
+            "public class NoType {",
+            "    String name;",
+            "    public NoType(String name) { this.name = name; }",
+            "    public String getName() { return name; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("cannot suppress 'type'");
+    }
+
+    @Test
+    public void builderNames_suppressedBuildIsRejected() {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.NoBuild",
+            "package demo;",
+            "import dev.simplified.annotations.BuilderNames;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(builder = @BuilderNames(build = BuilderNames.NONE), validate = false)",
+            "public class NoBuild {",
+            "    String name;",
+            "    public NoBuild(String name) { this.name = name; }",
+            "    public String getName() { return name; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("cannot suppress 'build'");
     }
 
     // ------------------------------------------------------------------
-    // buildMethodName - build() should use the configured name
+    // BuilderNames.build - the terminal method should use the configured name
     // ------------------------------------------------------------------
 
     @Test
-    public void buildMethodName_customNameReplacesBuild() throws Exception {
+    public void builderNames_buildRenamesTheTerminalMethod() throws Exception {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.Part",
             "package demo;",
             "import dev.simplified.annotations.ClassBuilder;",
-            "@ClassBuilder(buildMethodName = \"make\", validate = false)",
+            "import dev.simplified.annotations.BuilderNames;",
+            "@ClassBuilder(builder = @BuilderNames(build = \"make\"), validate = false)",
             "public class Part {",
             "    int id;",
             "    public Part(int id) { this.id = id; }",
@@ -323,15 +386,16 @@ public class BuilderConfigAttributesTest {
     }
 
     // ------------------------------------------------------------------
-    // generateBuilder / generateFrom / generateMutate - opt-out gates
+    // BuilderNames.NONE - the single opt-out for each entry point
     // ------------------------------------------------------------------
 
     @Test
-    public void generateBuilder_falseSkipsBuilderBootstrap() throws Exception {
+    public void builderNames_noneSuppressesTheBuilderFactory() throws Exception {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.NoBuilder",
             "package demo;",
+            "import dev.simplified.annotations.BuilderNames;",
             "import dev.simplified.annotations.ClassBuilder;",
-            "@ClassBuilder(generateBuilder = false, validate = false)",
+            "@ClassBuilder(builder = @BuilderNames(builder = BuilderNames.NONE), validate = false)",
             "public class NoBuilder {",
             "    int x;",
             "    public NoBuilder(int x) { this.x = x; }",
@@ -342,7 +406,7 @@ public class BuilderConfigAttributesTest {
         ClassLoader cl = loadClasses(c);
         Class<?> target = Class.forName("demo.NoBuilder", true, cl);
 
-        assertFalse("generateBuilder=false must skip the static builder() factory",
+        assertFalse("builder = NONE must skip the static builder() factory",
             hasMethod(target, "builder"));
         // from and mutate should still be present
         assertTrue("from(T) remains when only builder is disabled",
@@ -350,11 +414,12 @@ public class BuilderConfigAttributesTest {
     }
 
     @Test
-    public void generateFrom_falseSkipsFromButKeepsMutateInlined() throws Exception {
+    public void builderNames_noneSuppressesFromButKeepsMutateInlined() throws Exception {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.NoFrom",
             "package demo;",
+            "import dev.simplified.annotations.BuilderNames;",
             "import dev.simplified.annotations.ClassBuilder;",
-            "@ClassBuilder(generateFrom = false, validate = false)",
+            "@ClassBuilder(builder = @BuilderNames(from = BuilderNames.NONE), validate = false)",
             "public class NoFrom {",
             "    int x;",
             "    public NoFrom(int x) { this.x = x; }",
@@ -365,12 +430,12 @@ public class BuilderConfigAttributesTest {
         ClassLoader cl = loadClasses(c);
         Class<?> target = Class.forName("demo.NoFrom", true, cl);
 
-        assertFalse("generateFrom=false must skip the static from(T) factory",
+        assertFalse("from = NONE must skip the static from(T) factory",
             hasMethod(target, "from", target));
         assertTrue("builder() remains when only from is disabled",
             hasMethod(target, "builder"));
         // mutate() is decoupled from from(): it seeds inline off `this`, so it
-        // survives generateFrom=false rather than dangling a from(this) call.
+        // survives a suppressed from rather than dangling a from(this) call.
         assertTrue("mutate() remains when only from is disabled",
             hasMethod(target, "mutate"));
 
@@ -388,11 +453,12 @@ public class BuilderConfigAttributesTest {
     }
 
     @Test
-    public void generateMutate_falseSkipsMutateBootstrap() throws Exception {
+    public void builderNames_noneSuppressesMutate() throws Exception {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.NoMutate",
             "package demo;",
+            "import dev.simplified.annotations.BuilderNames;",
             "import dev.simplified.annotations.ClassBuilder;",
-            "@ClassBuilder(generateMutate = false, validate = false)",
+            "@ClassBuilder(builder = @BuilderNames(toBuilder = BuilderNames.NONE), validate = false)",
             "public class NoMutate {",
             "    int x;",
             "    public NoMutate(int x) { this.x = x; }",
@@ -403,7 +469,7 @@ public class BuilderConfigAttributesTest {
         ClassLoader cl = loadClasses(c);
         Class<?> target = Class.forName("demo.NoMutate", true, cl);
 
-        assertFalse("generateMutate=false must skip the instance mutate() method",
+        assertFalse("toBuilder = NONE must skip the instance mutate() method",
             hasMethod(target, "mutate"));
         assertTrue("builder() remains when only mutate is disabled",
             hasMethod(target, "builder"));

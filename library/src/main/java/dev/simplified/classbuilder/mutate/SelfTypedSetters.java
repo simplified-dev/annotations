@@ -14,7 +14,7 @@ import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
 import dev.simplified.classbuilder.apt.FieldSpec;
-import dev.simplified.classbuilder.apt.NamingScheme;
+import dev.simplified.classbuilder.apt.SetterScheme;
 import dev.simplified.classbuilder.validate.Strings;
 import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.ContractAnnotations;
@@ -65,10 +65,10 @@ final class SelfTypedSetters {
         if (field.isBoolean) {
             // Typed setter is the ordinary `set` role; the zero-arg form is the
             // separate `flag` role and drops out when a style suppresses it.
-            if (naming().emitsFlag()) out.append(booleanZeroArg(field, field.name, false));
+            if (setters().emitsFlag()) out.append(booleanZeroArg(field, field.name, false));
             out.append(booleanTyped(field, field.name, false));
             if (field.negateName != null && !field.negateName.isEmpty()) {
-                if (naming().emitsFlag()) out.append(booleanZeroArg(field, field.negateName, true));
+                if (setters().emitsFlag()) out.append(booleanZeroArg(field, field.negateName, true));
                 out.append(booleanTyped(field, field.negateName, true));
             }
         } else if (field.isOptional) {
@@ -87,14 +87,14 @@ final class SelfTypedSetters {
             } else {
                 if (field.isMap) {
                     out.append(singularMapReplace(field));
-                    if (field.singular && naming().emitsPut()) out.append(singularMapPut(field));
-                    if (field.compute && naming().emitsCompute()) out.append(singularMapPutIfAbsent(field));
+                    if (field.singular && setters().emitsPut()) out.append(singularMapPut(field));
+                    if (field.compute && setters().emitsCompute()) out.append(singularMapPutIfAbsent(field));
                 } else {
                     out.append(singularCollectionVarargsReplace(field));
                     out.append(singularCollectionIterableReplace(field));
-                    if (field.singular && naming().emitsAdd()) out.append(singularCollectionAdd(field));
+                    if (field.singular && setters().emitsAdd()) out.append(singularCollectionAdd(field));
                 }
-                if (field.clearable && naming().emitsClear()) out.append(singularClear(field));
+                if (field.clearable && setters().emitsClear()) out.append(singularClear(field));
             }
         } else if (field.isString && field.formattable) {
             out.append(plainSetter(field));
@@ -111,7 +111,7 @@ final class SelfTypedSetters {
 
     /** {@code B withFoo(T value)} - eager value form, stores {@code () -> value}. */
     private JCMethodDecl lazyValueSetter(FieldSpec field) {
-        String setterName = naming().setName(field.name);
+        String setterName = setters().setName(field.name);
         JCExpression valueType = types.parseType(field.typeDisplay);
         JCVariableDecl p = param(field.name, valueType);
         JCExpression lambda = make.Lambda(List.nil(), make.Ident(names.fromString(field.name)));
@@ -124,7 +124,7 @@ final class SelfTypedSetters {
 
     /** {@code B withFoo(Supplier<T> supplier)} - true lazy form, stores the supplier. */
     private JCMethodDecl lazySupplierSetter(FieldSpec field) {
-        String setterName = naming().setName(field.name);
+        String setterName = setters().setName(field.name);
         JCExpression supplierType = make.TypeApply(
             types.qualIdent("java.util.function.Supplier"),
             List.of(types.parseType(field.typeDisplay))
@@ -140,7 +140,7 @@ final class SelfTypedSetters {
     private JCMethodDecl plainSetter(FieldSpec field) {
         JCExpression fieldType = types.parseType(field.typeDisplay);
         JCVariableDecl p = nullnessParam(field.name, fieldType, field);
-        return method(naming().setName(field.name), List.of(p), assignAndReturnSelf(field));
+        return method(setters().setName(field.name), List.of(p), assignAndReturnSelf(field));
     }
 
     private JCMethodDecl arrayVarargs(FieldSpec field) {
@@ -151,17 +151,17 @@ final class SelfTypedSetters {
             make.TypeArray(elemType),
             null
         );
-        return method(naming().setName(field.name), List.of(p), assignAndReturnSelf(field));
+        return method(setters().setName(field.name), List.of(p), assignAndReturnSelf(field));
     }
 
     private JCMethodDecl booleanZeroArg(FieldSpec field, String methodBase, boolean inverse) {
-        String setterName = naming().flagName(methodBase);
+        String setterName = setters().flagName(methodBase);
         JCStatement assign = slotAssign(field, make.Literal(!inverse));
         return method(setterName, List.nil(), List.of(assign, returnSelf()));
     }
 
     private JCMethodDecl booleanTyped(FieldSpec field, String methodBase, boolean inverse) {
-        String setterName = naming().setName(methodBase);
+        String setterName = setters().setName(methodBase);
         JCExpression paramRef = make.Ident(names.fromString(methodBase));
         JCExpression value = inverse ? make.Unary(JCTree.Tag.NOT, paramRef) : paramRef;
         JCStatement assign = slotAssign(field, value);
@@ -175,7 +175,7 @@ final class SelfTypedSetters {
 
     /** {@code B withX(T x)} - inner-type overload that wraps via {@code Optional.ofNullable}. */
     private JCMethodDecl optionalNullableRaw(FieldSpec field) {
-        String setterName = naming().setName(field.name);
+        String setterName = setters().setName(field.name);
         JCExpression inner = types.parseType(field.optionalInner);
         JCVariableDecl p = param(field.name, inner);
 
@@ -195,7 +195,7 @@ final class SelfTypedSetters {
 
     /** {@code B withX(Optional<T> x)} - direct Optional assignment. */
     private JCMethodDecl optionalWrapped(FieldSpec field) {
-        String setterName = naming().setName(field.name);
+        String setterName = setters().setName(field.name);
         JCExpression optType = make.TypeApply(
             types.qualIdent("java.util.Optional"),
             List.of(types.parseType(field.optionalInner))
@@ -214,7 +214,7 @@ final class SelfTypedSetters {
      * field carries {@code @Nullable}.
      */
     private JCMethodDecl stringFormattable(FieldSpec field) {
-        String setterName = naming().setName(field.name);
+        String setterName = setters().setName(field.name);
         boolean nullable = field.nullable;
         JCExpression stringType = types.qualIdent("java.lang.String");
         JCVariableDecl formatParam = annotatedParam(
@@ -262,7 +262,7 @@ final class SelfTypedSetters {
      * is preserved.
      */
     private JCMethodDecl optionalFormattable(FieldSpec field) {
-        String setterName = naming().setName(field.name);
+        String setterName = setters().setName(field.name);
         JCExpression stringType = types.qualIdent("java.lang.String");
         JCVariableDecl formatParam = annotatedParam(
             field.name, stringType,
@@ -293,7 +293,7 @@ final class SelfTypedSetters {
 
     /** {@code B withEntries(T... entries)} - reset-and-copy varargs replace. */
     private JCMethodDecl singularCollectionVarargsReplace(FieldSpec field) {
-        String setterName = naming().setName(field.name);
+        String setterName = setters().setName(field.name);
         JCExpression elemType = types.parseType(field.collectionElement);
         JCVariableDecl varargs = make.VarDef(
             make.Modifiers(Flags.PARAMETER | Flags.VARARGS),
@@ -322,7 +322,7 @@ final class SelfTypedSetters {
 
     /** {@code B withEntries(Iterable<T> entries)} - reset-and-forEach replace. */
     private JCMethodDecl singularCollectionIterableReplace(FieldSpec field) {
-        String setterName = naming().setName(field.name);
+        String setterName = setters().setName(field.name);
         JCExpression elemType = types.parseType(field.collectionElement);
         JCExpression iterableType = make.TypeApply(
             types.qualIdent("java.lang.Iterable"),
@@ -351,7 +351,7 @@ final class SelfTypedSetters {
 
     /** {@code B addEntry(T entry)} - append one element to the existing collection. */
     private JCMethodDecl singularCollectionAdd(FieldSpec field) {
-        String addName = naming().addName(field.singularName);
+        String addName = setters().addName(field.singularName);
         JCExpression elemType = types.parseType(field.collectionElement);
         JCVariableDecl entryParam = param(field.singularName, elemType);
         JCStatement add = make.Exec(make.Apply(
@@ -366,7 +366,7 @@ final class SelfTypedSetters {
 
     /** {@code B withEntries(Map<K, V> entries)} - replace with a fresh LinkedHashMap. */
     private JCMethodDecl singularMapReplace(FieldSpec field) {
-        String setterName = naming().setName(field.name);
+        String setterName = setters().setName(field.name);
         JCExpression keyType = types.parseType(field.mapKey);
         JCExpression valueType = types.parseType(field.mapValue);
         JCExpression mapType = make.TypeApply(
@@ -403,7 +403,7 @@ final class SelfTypedSetters {
 
     /** {@code B putEntry(K key, V value)} - put one entry into the existing map. */
     private JCMethodDecl singularMapPut(FieldSpec field) {
-        String putName = naming().putName(field.singularName);
+        String putName = setters().putName(field.singularName);
         JCExpression keyType = types.parseType(field.mapKey);
         JCExpression valueType = types.parseType(field.mapValue);
         JCVariableDecl keyParam = param("key", keyType);
@@ -426,7 +426,7 @@ final class SelfTypedSetters {
      * Gated on {@code @Collector(compute = true)}.
      */
     private JCMethodDecl singularMapPutIfAbsent(FieldSpec field) {
-        String putName = naming().computeName(field.singularName);
+        String putName = setters().computeName(field.singularName);
         JCExpression keyType = types.parseType(field.mapKey);
         JCExpression supplierType = make.TypeApply(
             types.qualIdent("java.util.function.Supplier"),
@@ -460,7 +460,7 @@ final class SelfTypedSetters {
 
     /** {@code B clearEntries()} - empty the underlying collection or map. */
     private JCMethodDecl singularClear(FieldSpec field) {
-        String clearName = naming().clearName(field.name);
+        String clearName = setters().clearName(field.name);
         JCStatement clear = make.Exec(make.Apply(
             List.nil(),
             make.Select(
@@ -642,8 +642,8 @@ final class SelfTypedSetters {
         return m;
     }
 
-    private NamingScheme naming() {
-        return ctx.config().naming();
+    private SetterScheme setters() {
+        return ctx.config().setters();
     }
 
 }

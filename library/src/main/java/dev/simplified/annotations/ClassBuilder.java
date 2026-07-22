@@ -73,12 +73,16 @@ import java.lang.annotation.Target;
  * </ul>
  *
  * <h2>Naming</h2>
- * Every generated method name comes from one of six roles - the value-taking
- * setter, the zero-arg boolean setter, and the collector's add, put,
- * put-if-absent, and clear - each holding a pattern whose {@code {}} placeholder
- * expands to the field name, {@link Negate} stem, or {@link Collector} singular.
- * {@link #style()} sets all six at once (plus {@link #builderName()} and
- * {@link #toBuilderMethodName()}); {@link #names()} overrides individual roles.
+ * The generated surface splits by how often a member appears. The setters are
+ * generated once per field and are named by a pattern whose {@code {}}
+ * placeholder expands to the field name, {@link Negate} stem, or
+ * {@link Collector} singular - six roles covering the value-taking setter, the
+ * zero-arg boolean setter, and the collector's add, put, put-if-absent, and
+ * clear. The builder class and the methods that enter and leave it are
+ * generated exactly once and carry plain names.
+ *
+ * <p>{@link #style()} sets the whole surface at once; {@link #setters()} and
+ * {@link #builder()} override individual names.
  *
  * <h2>Examples</h2>
  * <pre><code>
@@ -101,26 +105,29 @@ import java.lang.annotation.Target;
  *
  * // Builder on a static factory method
  * public final class Range {
- *     &#64;ClassBuilder(builderName = "RangeBuilder")
+ *     &#64;ClassBuilder(builder = &#64;BuilderNames(type = "RangeBuilder"))
  *     public static Range of(int min, int max) { ... }
  * }
  *
  * // Custom naming
  * &#64;ClassBuilder(
- *     builderName = "MyBuilder",
- *     builderMethodName = "newBuilder",
- *     toBuilderMethodName = "toBuilder",
- *     names = &#64;MethodNames(set = "set{}")
+ *     builder = &#64;BuilderNames(type = "MyBuilder", builder = "newBuilder", toBuilder = "toBuilder"),
+ *     setters = &#64;SetterNames(set = "set{}")
  * )
  * public final class Config { ... }
  *
  * // A drop-in for Lombok &#64;Builder: ConfigBuilder, toBuilder(), bare-name setters
  * &#64;ClassBuilder(style = NamingStyle.LOMBOK)
  * public final class Config { ... }
+ *
+ * // Suppress the static copy factory
+ * &#64;ClassBuilder(builder = &#64;BuilderNames(from = BuilderNames.NONE))
+ * public final class Config { ... }
  * </code></pre>
  *
  * @see NamingStyle
- * @see MethodNames
+ * @see SetterNames
+ * @see BuilderNames
  * @see BuilderDefault
  * @see BuilderIgnore
  * @see BuildFlag
@@ -134,63 +141,38 @@ import java.lang.annotation.Target;
 public @interface ClassBuilder {
 
     /**
-     * The simple name of the generated builder class, as a pattern whose
-     * {@code {}} placeholder expands to the target's simple name. A literal
-     * such as the default carries no placeholder and is used verbatim;
-     * {@code "{}Builder"} produces Lombok's {@code <Type>Builder}. Left
-     * unwritten it comes from {@link #style()}. Lombok parity:
-     * {@code builderClassName}.
-     */
-    @NotNull String builderName() default "Builder";
-
-    /**
-     * The name of the static factory method returning a fresh builder. Lombok
-     * parity: {@code builderMethodName}.
-     */
-    @NotNull String builderMethodName() default "builder";
-
-    /**
-     * The name of the {@code build} method on the generated builder. Lombok
-     * parity: {@code buildMethodName}.
-     */
-    @NotNull String buildMethodName() default "build";
-
-    /**
-     * The name of the static copy factory seeding a builder from an existing
-     * instance. Empty string suppresses the factory.
-     */
-    @NotNull String fromMethodName() default "from";
-
-    /**
-     * The name of the instance method returning a builder seeded from
-     * {@code this}. Left unwritten it comes from {@link #style()}, which is
-     * {@code mutate} per project convention and {@code toBuilder} under
-     * {@link NamingStyle#LOMBOK}. Empty string suppresses the method.
-     */
-    @NotNull String toBuilderMethodName() default "mutate";
-
-    /**
-     * The naming patterns every generated method takes its name from. Selecting
-     * a style sets the default for all six method roles at once, and also
-     * supplies the defaults for {@link #builderName()} and
-     * {@link #toBuilderMethodName()} - which is what makes
-     * {@code style = NamingStyle.LOMBOK} a complete drop-in for Lombok
-     * {@code @Builder} naming rather than a set of overrides repeated per type.
+     * The naming style every generated member takes its name from. Selecting a
+     * style sets the default for the whole surface at once - the six per-field
+     * setter roles, the builder class, and the methods that enter and leave it -
+     * which is what makes {@code style = NamingStyle.LOMBOK} a complete drop-in
+     * for Lombok {@code @Builder} naming rather than a set of overrides repeated
+     * per type.
      *
-     * <p>Anything written explicitly wins over the style, whether it is a role
-     * in {@link #names()} or one of the flat name attributes here.
+     * <p>Anything written in {@link #setters()} or {@link #builder()} wins over
+     * the style.
      *
      * @see NamingStyle
      */
     @NotNull NamingStyle style() default NamingStyle.SIMPLIFIED;
 
     /**
-     * Per-role overrides of the patterns {@link #style()} supplies. Every
-     * unwritten role inherits, so only the roles that differ need naming.
+     * Overrides of the setter patterns {@link #style()} supplies, for the
+     * members generated once per field. Every unwritten role inherits, so only
+     * the roles that differ need naming.
      *
-     * @see MethodNames
+     * @see SetterNames
      */
-    @NotNull MethodNames names() default @MethodNames;
+    @NotNull SetterNames setters() default @SetterNames;
+
+    /**
+     * Overrides of the names {@link #style()} supplies for the members
+     * generated exactly once - the builder class and the methods that enter and
+     * leave it. Every unwritten name inherits, and
+     * {@link BuilderNames#NONE} suppresses an entry point.
+     *
+     * @see BuilderNames
+     */
+    @NotNull BuilderNames builder() default @BuilderNames;
 
     /**
      * The access level of the generated bootstrap methods and the generated
@@ -222,23 +204,6 @@ public @interface ClassBuilder {
      * @see BuilderDefault
      */
     boolean retainInit() default true;
-
-    /**
-     * Whether to generate the static {@code builder()} factory on the annotated
-     * type.
-     */
-    boolean generateBuilder() default true;
-
-    /**
-     * Whether to generate the static copy factory on the annotated type.
-     */
-    boolean generateFrom() default true;
-
-    /**
-     * Whether to generate the instance {@code mutate()} method on the annotated
-     * type.
-     */
-    boolean generateMutate() default true;
 
     /**
      * Whether the annotation processor should inject a protected copy

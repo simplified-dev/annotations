@@ -3,13 +3,14 @@ package dev.simplified.classbuilder.showcase;
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.BuildFlag;
 import dev.simplified.annotations.BuilderIgnore;
+import dev.simplified.annotations.BuilderNames;
 import dev.simplified.annotations.ClassBuilder;
 import dev.simplified.annotations.Collector;
 import dev.simplified.annotations.Formattable;
-import dev.simplified.annotations.MethodNames;
 import dev.simplified.annotations.NamingStyle;
 import dev.simplified.annotations.Negate;
 import dev.simplified.annotations.ObtainVia;
+import dev.simplified.annotations.SetterNames;
 import dev.simplified.classbuilder.validate.BuilderValidationException;
 import lombok.Getter;
 
@@ -62,9 +63,8 @@ public final class ClassBuilderShowcase {
     }
 
     @ClassBuilder(
-        builderMethodName = "newBuilder",
-        buildMethodName = "construct",
-        names = @MethodNames(set = "set{}")
+        builder = @BuilderNames(builder = "newBuilder", build = "construct"),
+        setters = @SetterNames(set = "set{}")
     )
     public static final class Renamed {
         private final String value;
@@ -97,11 +97,10 @@ public final class ClassBuilderShowcase {
         @Override public String toString() { return "ValidationDisabled[required=" + required + "]"; }
     }
 
-    // generateFrom = false suppresses the static from(T) factory while
-    // mutate() stays: mutate() seeds a fresh Builder inline off `this` rather
-    // than delegating to from(this), so the instance-seed method no longer
-    // dangles when the factory is off.
-    @ClassBuilder(generateFrom = false)
+    // Suppressing from(T) leaves mutate() standing: mutate() seeds a fresh
+    // Builder inline off `this` rather than delegating to from(this), so the
+    // instance-seed method no longer dangles when the factory is off.
+    @ClassBuilder(builder = @BuilderNames(from = BuilderNames.NONE))
     public static final class NoFrom {
         private final String label;
         private final int size;
@@ -378,8 +377,8 @@ public final class ClassBuilderShowcase {
         public List<String> getTags() { return tags; }
     }
 
-    /** Per-role overrides reaching names {@code methodPrefix} never governed. */
-    @ClassBuilder(names = @MethodNames(add = "append{}", clear = "reset{}"))
+    /** Per-role overrides on the collector's add and clear. */
+    @ClassBuilder(setters = @SetterNames(add = "append{}", clear = "reset{}"))
     public static final class Basket {
         @Collector(singular = true, clearable = true) private final List<String> items;
         public Basket(List<String> items) { this.items = items; }
@@ -427,7 +426,7 @@ public final class ClassBuilderShowcase {
             })
             .asSuccess("mutate() returned new instance with age=2");
 
-        report.expect("classBuilder.generateFrom.false.mutate")
+        report.expect("classBuilder.suppressedFrom.mutate")
             .runVoid(() -> {
                 // mutate() round-trips even though from(T) is suppressed - it
                 // seeds inline off `this`, not via from(this).
@@ -435,10 +434,10 @@ public final class ClassBuilderShowcase {
                 NoFrom mutated = base.mutate().size(2).build();
                 if (!"a".equals(mutated.getLabel()) || mutated.getSize() != 2)
                     throw new AssertionError("mutate() round-trip failed: " + mutated);
-                // generateFrom = false must leave no static from(T) factory.
+                // A suppressed from must leave no static from(T) factory.
                 for (Method m : NoFrom.class.getDeclaredMethods()) {
                     if (m.getName().equals("from"))
-                        throw new AssertionError("from() must not exist when generateFrom = false");
+                        throw new AssertionError("from() must not exist when from is suppressed");
                 }
             })
             .asSuccess("mutate() round-trips inline; no static from() emitted");

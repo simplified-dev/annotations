@@ -86,17 +86,39 @@ public class AnnotationSurfaceTest {
     }
 
     @Test
-    public void methodNames_metadata() {
+    public void setterNames_metadata() {
         // Only ever an attribute value on @ClassBuilder, so an empty @Target is
         // what stops it being written anywhere else.
-        assertRetention(MethodNames.class, RetentionPolicy.CLASS);
-        assertTargets(MethodNames.class);
+        assertRetention(SetterNames.class, RetentionPolicy.CLASS);
+        assertTargets(SetterNames.class);
+    }
+
+    @Test
+    public void builderNames_metadata() {
+        assertRetention(BuilderNames.class, RetentionPolicy.CLASS);
+        assertTargets(BuilderNames.class);
     }
 
     /**
-     * Every role of every style must expand to something usable, and only
-     * {@code builderName} may omit the placeholder. A typo in the style table
-     * would otherwise surface as a compile error in consumer code.
+     * The two suppression sentinels must agree, since a scheme resolves both
+     * groups through the same emptiness test.
+     */
+    @Test
+    public void namingSentinels_areShared() {
+        assertEquals(SetterNames.INHERIT, BuilderNames.INHERIT);
+        assertEquals(SetterNames.NONE, BuilderNames.NONE);
+        assertEquals("INHERIT must be the empty string so an unwritten attribute inherits",
+            "", SetterNames.INHERIT);
+        assertFalse("NONE must not be a legal identifier, or it could collide with a real name",
+            isJavaIdentifier(SetterNames.NONE));
+    }
+
+    /**
+     * Every name of every style must expand to something usable. The per-field
+     * setters need the placeholder - without it every field would generate the
+     * same method - while the once-per-target names default to plain literals.
+     * A typo in the style table would otherwise surface as a compile error in
+     * consumer code.
      */
     @Test
     public void namingStyle_everyPatternIsWellFormed() {
@@ -107,14 +129,24 @@ public class AnnotationSurfaceTest {
             assertPattern(style, "put", style.put(), true);
             assertPattern(style, "compute", style.compute(), true);
             assertPattern(style, "clear", style.clear(), true);
-            assertPattern(style, "builderName", style.builderName(), false);
+            assertPattern(style, "builderType", style.builderType(), false);
+            assertPattern(style, "builderMethod", style.builderMethod(), false);
+            assertPattern(style, "buildMethod", style.buildMethod(), false);
+            assertPattern(style, "fromMethod", style.fromMethod(), false);
+            assertPattern(style, "toBuilderMethod", style.toBuilderMethod(), false);
             assertNotEquals(style + " must be able to assign a field",
-                MethodNames.NONE, style.set());
+                SetterNames.NONE, style.set());
+            // A style cannot ship a builder with no class to name or no way to
+            // finish, the two names @BuilderNames also refuses to suppress.
+            assertNotEquals(style + " must name its builder class",
+                SetterNames.NONE, style.builderType());
+            assertNotEquals(style + " must name its build method",
+                SetterNames.NONE, style.buildMethod());
         }
     }
 
     private static void assertPattern(NamingStyle style, String role, String pattern, boolean placeholderRequired) {
-        if (MethodNames.NONE.equals(pattern)) return;
+        if (SetterNames.NONE.equals(pattern)) return;
         String subject = "sample";
         String expanded = placeholderRequired || pattern.contains("{}")
             ? pattern.replace("{}", pattern.startsWith("{}") ? subject : "Sample")
@@ -145,20 +177,15 @@ public class AnnotationSurfaceTest {
 
     @Test
     public void classBuilder_defaults() throws Exception {
-        assertDefault(ClassBuilder.class, "builderName", "Builder");
-        assertDefault(ClassBuilder.class, "builderMethodName", "builder");
-        assertDefault(ClassBuilder.class, "buildMethodName", "build");
-        assertDefault(ClassBuilder.class, "fromMethodName", "from");
-        assertDefault(ClassBuilder.class, "toBuilderMethodName", "mutate");
+        // Every generated name now comes from the style, so it is the one
+        // naming default worth pinning here; the per-name defaults are the
+        // style table, asserted by namingStyle_everyPatternIsWellFormed.
         assertDefault(ClassBuilder.class, "style", NamingStyle.SIMPLIFIED);
         assertDefault(ClassBuilder.class, "access", AccessLevel.PUBLIC);
         assertDefault(ClassBuilder.class, "constructorAccess", AccessLevel.PACKAGE);
         // Retain-all is the default: a field written `String x = "v"` keeps "v"
         // as its builder default without any per-field annotation.
         assertDefault(ClassBuilder.class, "retainInit", true);
-        assertDefault(ClassBuilder.class, "generateBuilder", true);
-        assertDefault(ClassBuilder.class, "generateFrom", true);
-        assertDefault(ClassBuilder.class, "generateMutate", true);
         assertDefault(ClassBuilder.class, "validate", true);
         assertDefault(ClassBuilder.class, "emitContracts", true);
         assertDefault(ClassBuilder.class, "generateImpl", true);
@@ -231,12 +258,12 @@ public class AnnotationSurfaceTest {
     static final class FixtureOnClass { }
 
     static final class FixtureOnConstructor {
-        @ClassBuilder(builderName = "CtorBuilder")
+        @ClassBuilder(builder = @BuilderNames(type = "CtorBuilder"))
         FixtureOnConstructor(String x) {}
     }
 
     static final class FixtureOnMethod {
-        @ClassBuilder(builderName = "MethodBuilder")
+        @ClassBuilder(builder = @BuilderNames(type = "MethodBuilder"))
         static FixtureOnMethod of(String x) { return new FixtureOnMethod(); }
     }
 

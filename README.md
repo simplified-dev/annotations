@@ -243,30 +243,26 @@ When the enclosing class also carries `@ClassBuilder`, the generated builder rec
 
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `builderName` | `String` | from `style` | Name pattern for the generated builder class; `{}` expands to the target's simple name |
-| `builderMethodName` | `String` | `"builder"` | Static factory method returning a fresh builder |
-| `buildMethodName` | `String` | `"build"` | Terminal method on the builder |
-| `fromMethodName` | `String` | `"from"` | Static copy-factory seeding a builder from an existing instance |
-| `toBuilderMethodName` | `String` | from `style` | Instance method returning a pre-seeded builder |
-| `style` | `NamingStyle` | `SIMPLIFIED` | Naming patterns for every generated method (see below) |
-| `names` | `@MethodNames` | inherit | Per-role overrides of the style's patterns |
+| `style` | `NamingStyle` | `SIMPLIFIED` | Naming for the whole generated surface (see below) |
+| `setters` | `@SetterNames` | inherit | Overrides for the members generated once per field |
+| `builder` | `@BuilderNames` | inherit | Overrides for the members generated exactly once |
 | `access` | `AccessLevel` | `PUBLIC` | Access level of generated bootstrap methods and builder class |
 | `validate` | `boolean` | `true` | Whether `build()` calls `BuildFlagValidator.validate(target)` |
 | `emitContracts` | `boolean` | `true` | Whether to emit `@XContract` annotations on generated methods |
-| `generateBuilder` | `boolean` | `true` | Whether to emit the static `builder()` factory |
-| `generateFrom` | `boolean` | `true` | Whether to emit the static copy factory |
-| `generateMutate` | `boolean` | `true` | Whether to emit the instance `mutate()` method |
 | `generateImpl` | `boolean` | `true` | Interface targets only: whether to generate `<Name>Impl` |
 | `factoryMethod` | `String` | `""` | Static factory method `build()` delegates to instead of `new` |
 | `exclude` | `String[]` | `{}` | Field names to exclude from the builder |
 
-### Method Naming
+### Naming
 
-Every generated method name comes from one of six **roles**, each holding a **pattern** with one `{}`
-placeholder. The placeholder expands to the name the method is built from - the field name, the
+The generated surface splits by how often a member appears, and each half has its own annotation.
+
+**`@SetterNames` - generated once per field.** Six **roles**, each holding a **pattern** with one `{}`
+placeholder. The placeholder expands to the name the setter is built from - the field name, the
 `@Negate` stem, or the `@Collector` singular - capitalised unless it opens the pattern. Because the
 placeholder may sit anywhere, a pattern expresses a suffix (`{}Value`) or a wrapped form
-(`put{}IfAbsent`) as readily as a prefix.
+(`put{}IfAbsent`) as readily as a prefix, and it is mandatory: without it every field would generate
+the same method name.
 
 | Role | What it names | `SIMPLIFIED` | `LOMBOK` | `BEAN` |
 |------|---------------|--------------|----------|--------|
@@ -276,23 +272,34 @@ placeholder may sit anywhere, a pattern expresses a suffix (`{}Value`) or a wrap
 | `put` | `@Collector` single-entry put (maps) | `put{}` | `{}` | `put{}` |
 | `compute` | `@Collector` put-if-absent (maps) | `put{}IfAbsent` | *none* | `put{}IfAbsent` |
 | `clear` | `@Collector` clear | `clear{}` | `clear{}` | `clear{}` |
-| | `builderName` | `Builder` | `{}Builder` | `Builder` |
-| | `toBuilderMethodName` | `mutate` | `toBuilder` | `mutate` |
 
-`style` sets all of them at once; `names` overrides individual roles; anything written explicitly on
-`@ClassBuilder` wins over the style.
+**`@BuilderNames` - generated exactly once.** The builder class and the methods that enter and leave
+it, named by plain literals.
+
+| Name | What it names | `SIMPLIFIED` | `LOMBOK` | `BEAN` |
+|------|---------------|--------------|----------|--------|
+| `type` | The generated builder class | `Builder` | `<Type>Builder` | `Builder` |
+| `builder` | Static factory returning a fresh builder | `builder` | `builder` | `builder` |
+| `build` | Terminal method returning the instance | `build` | `build` | `build` |
+| `from` | Static copy factory | `from` | `from` | `from` |
+| `toBuilder` | Instance method seeding from `this` | `mutate` | `toBuilder` | `mutate` |
+
+`style` sets both halves at once; `setters` and `builder` override individual names.
 
 ```java
 @ClassBuilder                                              // fluent: animated(boolean) + isAnimated()
 @ClassBuilder(style = NamingStyle.LOMBOK)                  // drop-in for Lombok @Builder
-@ClassBuilder(names = @MethodNames(set = "set{}"))         // JavaBean setters, rest unchanged
-@ClassBuilder(names = @MethodNames(add = "append{}"))      // rename one role only
-@ClassBuilder(names = @MethodNames(flag = MethodNames.NONE))   // drop the zero-arg boolean form
+@ClassBuilder(setters = @SetterNames(set = "set{}"))       // JavaBean setters, rest unchanged
+@ClassBuilder(setters = @SetterNames(add = "append{}"))    // rename one role only
+@ClassBuilder(setters = @SetterNames(flag = SetterNames.NONE))  // drop the zero-arg boolean form
+@ClassBuilder(builder = @BuilderNames(build = "construct"))     // rename the terminal method
+@ClassBuilder(builder = @BuilderNames(from = BuilderNames.NONE))  // suppress the copy factory
 ```
 
-`MethodNames.NONE` suppresses a role; `MethodNames.INHERIT` (the default, `""`) takes it from the
-style. `set` may not be suppressed, and every other pattern must contain the placeholder exactly once -
-both are rejected at the annotation by the processor and by the IDE inspection.
+`NONE` suppresses a member; `INHERIT` (the default, `""`) takes it from the style. Four members
+cannot be suppressed - `set`, because the field would have no way to be assigned, and `type` /
+`build`, because a builder with no class to name or no way to finish is not a builder. Those, and any
+malformed pattern, are rejected at the annotation by both the processor and the IDE inspection.
 
 ### Field Annotations
 

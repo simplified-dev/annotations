@@ -45,7 +45,7 @@ public class ClassBuilderShowcaseIntegrationTest {
         "classBuilder.plain",
         "classBuilder.plain.from",
         "classBuilder.plain.mutate",
-        "classBuilder.generateFrom.false.mutate",
+        "classBuilder.suppressedFrom.mutate",
         "classBuilder.renamed",
         "classBuilder.exclude",
         "classBuilder.access.package",

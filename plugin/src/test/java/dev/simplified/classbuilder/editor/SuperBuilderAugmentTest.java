@@ -46,12 +46,9 @@ public class SuperBuilderAugmentTest extends LightJavaCodeInsightFixtureTestCase
             import java.lang.annotation.*;
             @Retention(RetentionPolicy.CLASS) @Target(ElementType.TYPE)
             public @interface ClassBuilder {
-                String builderName() default "Builder";
-                String builderMethodName() default "builder";
-                String fromMethodName() default "from";
-                String toBuilderMethodName() default "mutate";
+                BuilderNames builder() default @BuilderNames;
                 NamingStyle style() default NamingStyle.SIMPLIFIED;
-                MethodNames names() default @MethodNames;
+                SetterNames setters() default @SetterNames;
                 String factoryMethod() default "";
                 AccessLevel access() default AccessLevel.PUBLIC;
                 AccessLevel constructorAccess() default AccessLevel.PACKAGE;
@@ -63,12 +60,12 @@ public class SuperBuilderAugmentTest extends LightJavaCodeInsightFixtureTestCase
             package dev.simplified.annotations;
             public enum NamingStyle { SIMPLIFIED, LOMBOK, BEAN }
             """);
-        myFixture.addFileToProject("dev/simplified/annotations/MethodNames.java",
+        myFixture.addFileToProject("dev/simplified/annotations/SetterNames.java",
             """
             package dev.simplified.annotations;
             import java.lang.annotation.*;
             @Retention(RetentionPolicy.CLASS) @Target({})
-            public @interface MethodNames {
+            public @interface SetterNames {
                 String INHERIT = "";
                 String NONE = "-";
                 String set() default INHERIT;
@@ -77,6 +74,21 @@ public class SuperBuilderAugmentTest extends LightJavaCodeInsightFixtureTestCase
                 String put() default INHERIT;
                 String compute() default INHERIT;
                 String clear() default INHERIT;
+            }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/BuilderNames.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target({})
+            public @interface BuilderNames {
+                String INHERIT = "";
+                String NONE = "-";
+                String type() default INHERIT;
+                String builder() default INHERIT;
+                String build() default INHERIT;
+                String from() default INHERIT;
+                String toBuilder() default INHERIT;
             }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/AccessLevel.java",

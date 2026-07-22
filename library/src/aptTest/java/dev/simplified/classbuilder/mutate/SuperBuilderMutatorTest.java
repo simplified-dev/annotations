@@ -652,11 +652,11 @@ public class SuperBuilderMutatorTest {
     }
 
     // ------------------------------------------------------------------
-    // generateFrom = false on a concrete link keeps mutate() inlined
+    // a suppressed from on a concrete link keeps mutate() inlined
     // ------------------------------------------------------------------
 
     @Test
-    public void generateFromFalse_concreteChildMutateInlinesInheritedFields() throws Exception {
+    public void suppressedFrom_concreteChildMutateInlinesInheritedFields() throws Exception {
         JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Doc",
             "package demo;",
             "import dev.simplified.annotations.ClassBuilder;",
@@ -667,8 +667,9 @@ public class SuperBuilderMutatorTest {
             "}");
         JavaFileObject child = JavaFileObjects.forSourceLines("demo.Article",
             "package demo;",
+            "import dev.simplified.annotations.BuilderNames;",
             "import dev.simplified.annotations.ClassBuilder;",
-            "@ClassBuilder(generateFrom = false, validate = false)",
+            "@ClassBuilder(builder = @BuilderNames(from = BuilderNames.NONE), validate = false)",
             "public class Article extends Doc {",
             "    int words;",
             "    public int getWords() { return words; }",
@@ -683,7 +684,7 @@ public class SuperBuilderMutatorTest {
 
         // from(T) is suppressed on the concrete link ...
         for (Method m : articleCls.getDeclaredMethods()) {
-            assertFalse("generateFrom=false must skip from(T) on the concrete link; found " + m,
+            assertFalse("a suppressed from must skip from(T) on the concrete link; found " + m,
                 m.getName().equals("from"));
         }
 

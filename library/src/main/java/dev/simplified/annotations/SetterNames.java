@@ -7,12 +7,12 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Per-role naming patterns for the methods a {@link ClassBuilder} target
- * generates. Used only as the value of {@link ClassBuilder#names()}; every
+ * Naming patterns for the setters a {@link ClassBuilder} target generates once
+ * per field. Used only as the value of {@link ClassBuilder#setters()}; every
  * attribute left unwritten inherits from {@link ClassBuilder#style()}.
  *
  * <p>A pattern contains exactly one {@code {}} placeholder, which expands to the
- * name the method is built from - the field name for {@link #set} and
+ * name the setter is built from - the field name for {@link #set} and
  * {@link #clear}, the {@link Negate} stem for the inverse {@link #flag}, and the
  * {@link Collector} singular for {@link #add}, {@link #put}, and
  * {@link #compute}. The expansion is capitalised unless the placeholder opens
@@ -21,23 +21,28 @@ import java.lang.annotation.Target;
  * anywhere, a pattern expresses a suffix ({@code {}Value}) or a wrapped form
  * ({@code put{}IfAbsent}) as readily as a prefix.
  *
+ * <p>The placeholder is mandatory here: these setters are generated once per
+ * field, so a pattern without one would give every field the same method name.
+ * Contrast {@link BuilderNames}, whose members exist exactly once per target.
+ *
  * <pre><code>
  * // JavaBean setters, every other role left at the style's default
- * &#64;ClassBuilder(names = &#64;MethodNames(set = "set{}"))
+ * &#64;ClassBuilder(setters = &#64;SetterNames(set = "set{}"))
  *
  * // Lombok surface, but with a differently named clear
- * &#64;ClassBuilder(style = NamingStyle.LOMBOK, names = &#64;MethodNames(clear = "reset{}"))
+ * &#64;ClassBuilder(style = NamingStyle.LOMBOK, setters = &#64;SetterNames(clear = "reset{}"))
  *
  * // Drop the zero-arg boolean convenience entirely
- * &#64;ClassBuilder(names = &#64;MethodNames(flag = MethodNames.NONE))
+ * &#64;ClassBuilder(setters = &#64;SetterNames(flag = SetterNames.NONE))
  * </code></pre>
  *
  * @see NamingStyle
- * @see ClassBuilder#names()
+ * @see BuilderNames
+ * @see ClassBuilder#setters()
  */
 @Retention(RetentionPolicy.CLASS)
 @Target({})
-public @interface MethodNames {
+public @interface SetterNames {
 
     /**
      * Pattern value meaning "take this role from {@link ClassBuilder#style()}".
@@ -46,7 +51,7 @@ public @interface MethodNames {
     String INHERIT = "";
 
     /**
-     * Pattern value suppressing a role, so no method is generated for it. Not a
+     * Pattern value suppressing a role, so no setter is generated for it. Not a
      * valid Java identifier, so it can never collide with a real pattern.
      * Rejected on {@link #set}, which has no other way to assign the field.
      */

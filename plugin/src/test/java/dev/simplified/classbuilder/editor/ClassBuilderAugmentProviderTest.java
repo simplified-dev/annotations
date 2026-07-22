@@ -54,12 +54,9 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
             import java.lang.annotation.*;
             @Retention(RetentionPolicy.CLASS) @Target(ElementType.TYPE)
             public @interface ClassBuilder {
-                String builderName() default "Builder";
-                String builderMethodName() default "builder";
-                String fromMethodName() default "from";
-                String toBuilderMethodName() default "mutate";
+                BuilderNames builder() default @BuilderNames;
                 NamingStyle style() default NamingStyle.SIMPLIFIED;
-                MethodNames names() default @MethodNames;
+                SetterNames setters() default @SetterNames;
                 String factoryMethod() default "";
                 AccessLevel access() default AccessLevel.PUBLIC;
                 AccessLevel constructorAccess() default AccessLevel.PACKAGE;
@@ -71,12 +68,12 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
             package dev.simplified.annotations;
             public enum NamingStyle { SIMPLIFIED, LOMBOK, BEAN }
             """);
-        myFixture.addFileToProject("dev/simplified/annotations/MethodNames.java",
+        myFixture.addFileToProject("dev/simplified/annotations/SetterNames.java",
             """
             package dev.simplified.annotations;
             import java.lang.annotation.*;
             @Retention(RetentionPolicy.CLASS) @Target({})
-            public @interface MethodNames {
+            public @interface SetterNames {
                 String INHERIT = "";
                 String NONE = "-";
                 String set() default INHERIT;
@@ -85,6 +82,21 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
                 String put() default INHERIT;
                 String compute() default INHERIT;
                 String clear() default INHERIT;
+            }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/BuilderNames.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target({})
+            public @interface BuilderNames {
+                String INHERIT = "";
+                String NONE = "-";
+                String type() default INHERIT;
+                String builder() default INHERIT;
+                String build() default INHERIT;
+                String from() default INHERIT;
+                String toBuilder() default INHERIT;
             }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/AccessLevel.java",
@@ -518,7 +530,7 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
         PsiFile file = myFixture.configureByText("Named.java",
             """
             import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder(builderMethodName = "make", fromMethodName = "of", toBuilderMethodName = "edit")
+            @ClassBuilder(builder = @BuilderNames(builder = "make", from = "of", toBuilder = "edit"))
             public class Named {
                 String tag;
             }
@@ -591,15 +603,15 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
         assertEquals("clear is unchanged", 1, builder.findMethodsByName("clearTags", false).length);
     }
 
-    /** A per-role override reaches a name the retired {@code methodPrefix} never governed. */
-    public void testMethodNamesRoleOverride() {
+    /** A per-role override renames the collector's add and clear independently. */
+    public void testSetterNamesRoleOverride() {
         PsiClass builder = builderFor("Basket",
             """
             import dev.simplified.annotations.ClassBuilder;
             import dev.simplified.annotations.Collector;
-            import dev.simplified.annotations.MethodNames;
+            import dev.simplified.annotations.SetterNames;
             import java.util.List;
-            @ClassBuilder(names = @MethodNames(add = "append{}", clear = "reset{}"))
+            @ClassBuilder(setters = @SetterNames(add = "append{}", clear = "reset{}"))
             public class Basket {
                 @Collector(singular = true, clearable = true) List<String> items;
             }

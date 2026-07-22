@@ -14,8 +14,8 @@ import com.intellij.psi.PsiPrimitiveType;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypes;
 import com.intellij.psi.util.InheritanceUtil;
-import dev.simplified.annotations.MethodNames;
-import dev.simplified.classbuilder.apt.NamingScheme;
+import dev.simplified.annotations.SetterNames;
+import dev.simplified.classbuilder.apt.NamePattern;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -35,7 +35,7 @@ import java.util.Map;
  *       non-{@link CharSequence} field</li>
  *   <li>{@code @BuildFlag(limit = N)} on a type where the
  *       limit is not meaningful</li>
- *   <li>a {@code @MethodNames} pattern that cannot expand to a Java
+ *   <li>a {@code @SetterNames} pattern that cannot expand to a Java
  *       identifier, or that suppresses the setter role</li>
  * </ul>
  */
@@ -45,9 +45,8 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
     private static final String NEGATE_FQN = "dev.simplified.annotations.Negate";
     private static final String COLLECTOR_FQN = "dev.simplified.annotations.Collector";
     private static final String BUILD_FLAG_FQN = "dev.simplified.annotations.BuildFlag";
-    private static final String METHOD_NAMES_FQN = "dev.simplified.annotations.MethodNames";
-
-    private static final String[] NAMING_ROLES = {"set", "flag", "add", "put", "compute", "clear"};
+    private static final String SETTER_NAMES_FQN = "dev.simplified.annotations.SetterNames";
+    private static final String BUILDER_NAMES_FQN = "dev.simplified.annotations.BuilderNames";
 
     @Override
     public @NotNull PsiElementVisitor buildVisitor(@NotNull ProblemsHolder holder, boolean isOnTheFly) {
@@ -56,14 +55,24 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
             public void visitAnnotation(@NotNull PsiAnnotation annotation) {
                 super.visitAnnotation(annotation);
                 String qualifiedName = annotation.getQualifiedName();
-                if (METHOD_NAMES_FQN.equals(qualifiedName)) {
-                    for (String role : NAMING_ROLES) checkPattern(holder, annotation, role, true);
-                    checkSetSuppressed(holder, annotation);
-                } else if (ClassBuilderConstants.ANNOTATION_FQN.equals(qualifiedName)) {
-                    // builderName expands against the target's simple name and
-                    // defaults to a placeholder-free literal, so it is the one
-                    // pattern allowed to carry no placeholder.
-                    checkPattern(holder, annotation, ClassBuilderConstants.ATTR_BUILDER_NAME, false);
+                if (SETTER_NAMES_FQN.equals(qualifiedName)) {
+                    // Generated once per field, so a pattern without the
+                    // placeholder would name every field's setter the same.
+                    for (String role : ClassBuilderConstants.SETTER_ROLES) {
+                        checkPattern(holder, annotation, role, true);
+                    }
+                    checkNotSuppressed(holder, annotation, "set",
+                        "a field would then have no way to be assigned on the builder");
+                } else if (BUILDER_NAMES_FQN.equals(qualifiedName)) {
+                    // Generated exactly once, so every default is a plain
+                    // literal and the placeholder is not required.
+                    for (String role : ClassBuilderConstants.BUILDER_ROLES) {
+                        checkPattern(holder, annotation, role, false);
+                    }
+                    checkNotSuppressed(holder, annotation, "type",
+                        "a builder with no class to name is not a builder");
+                    checkNotSuppressed(holder, annotation, "build",
+                        "a builder with no way to finish is not a builder");
                 }
             }
 
@@ -122,21 +131,29 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
         PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(attr);
         if (!(value instanceof PsiLiteralExpression literal)) return;
         if (!(literal.getValue() instanceof String pattern)) return;
-        String error = NamingScheme.patternError(pattern, placeholderRequired);
+        String error = NamePattern.patternError(pattern, placeholderRequired);
         if (error != null) {
             holder.registerProblem(value, "Naming pattern for '" + attr + "' " + error,
                 ProblemHighlightType.GENERIC_ERROR);
         }
     }
 
-    /** Reports a suppressed setter role, which leaves a field unassignable. */
-    private static void checkSetSuppressed(@NotNull ProblemsHolder holder, @NotNull PsiAnnotation annotation) {
-        PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue("set");
+    /**
+     * Reports a role suppressed with {@code NONE} that the generator cannot do
+     * without.
+     *
+     * @param holder the problems holder
+     * @param annotation the naming annotation to read
+     * @param attr the attribute that may not be suppressed
+     * @param because why the member is mandatory, appended to the message
+     */
+    private static void checkNotSuppressed(@NotNull ProblemsHolder holder, @NotNull PsiAnnotation annotation,
+                                           @NotNull String attr, @NotNull String because) {
+        PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(attr);
         if (!(value instanceof PsiLiteralExpression literal)) return;
-        if (!MethodNames.NONE.equals(literal.getValue())) return;
+        if (!SetterNames.NONE.equals(literal.getValue())) return;
         holder.registerProblem(value,
-            "The 'set' naming role cannot be suppressed - a field would then have no way to be "
-                + "assigned on the builder",
+            "'" + attr + "' cannot be suppressed - " + because,
             ProblemHighlightType.GENERIC_ERROR);
     }
 

@@ -1,7 +1,6 @@
 package dev.simplified.classbuilder.mutate;
 
 import com.sun.tools.javac.code.Flags;
-import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.JCTree.JCBlock;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import com.sun.tools.javac.tree.JCTree.JCExpression;
@@ -9,6 +8,7 @@ import com.sun.tools.javac.tree.JCTree.JCMethodDecl;
 import com.sun.tools.javac.tree.JCTree.JCStatement;
 import com.sun.tools.javac.tree.JCTree.JCTypeParameter;
 import com.sun.tools.javac.tree.JCTree.JCVariableDecl;
+import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.TreeMaker;
 import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.ListBuffer;
@@ -79,13 +79,13 @@ public final class InterfaceBootstrapMutator {
         String fromMethod = config.fromMethodName();
         String mutateMethod = config.toBuilderMethodName();
 
-        if (config.generateBuilder() && !builderMethod.isEmpty() && absent(builderMethod, 0)) {
+        if (!builderMethod.isEmpty() && absent(builderMethod, 0)) {
             append(builderFactory(builderMethod));
         }
-        if (config.generateFrom() && !fromMethod.isEmpty() && absent(fromMethod, 1)) {
+        if (!fromMethod.isEmpty() && absent(fromMethod, 1)) {
             append(fromFactory(fromMethod));
         }
-        if (config.generateMutate() && !mutateMethod.isEmpty() && absent(mutateMethod, 0)) {
+        if (!mutateMethod.isEmpty() && absent(mutateMethod, 0)) {
             append(mutateMethod(mutateMethod));
         }
     }

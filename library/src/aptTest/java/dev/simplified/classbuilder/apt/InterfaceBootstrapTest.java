@@ -160,12 +160,13 @@ public class InterfaceBootstrapTest {
 
     /** The opt-out gates apply on an interface exactly as on a class. */
     @Test
-    public void generateFlags_suppressTheBootstraps() {
+    public void suppressedNames_dropTheBootstraps() {
         Compilation c = compile(
             JavaFileObjects.forSourceLines("demo.Bare",
                 "package demo;",
+                "import dev.simplified.annotations.BuilderNames;",
                 "import dev.simplified.annotations.ClassBuilder;",
-                "@ClassBuilder(validate = false, generateBuilder = false, generateMutate = false)",
+                "@ClassBuilder(validate = false, builder = @BuilderNames(builder = BuilderNames.NONE, toBuilder = BuilderNames.NONE))",
                 "public interface Bare {",
                 "    String name();",
                 "}"),

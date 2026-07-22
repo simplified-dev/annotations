@@ -1,11 +1,5 @@
 package dev.simplified.classbuilder.mutate;
-import dev.simplified.shared.javac.ContractAnnotations;
-import dev.simplified.shared.javac.AstMarkers;
-import dev.simplified.shared.javac.JavacBridge;
-import dev.simplified.shared.javac.JavacTypeFactory;
-
 import com.sun.tools.javac.code.Flags;
-import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.JCTree.JCBlock;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import com.sun.tools.javac.tree.JCTree.JCExpression;
@@ -13,11 +7,16 @@ import com.sun.tools.javac.tree.JCTree.JCMethodDecl;
 import com.sun.tools.javac.tree.JCTree.JCModifiers;
 import com.sun.tools.javac.tree.JCTree.JCStatement;
 import com.sun.tools.javac.tree.JCTree.JCVariableDecl;
+import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.TreeMaker;
 import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.shared.javac.AstMarkers;
+import dev.simplified.shared.javac.ContractAnnotations;
+import dev.simplified.shared.javac.JavacBridge;
+import dev.simplified.shared.javac.JavacTypeFactory;
 
 import javax.annotation.processing.Messager;
 import javax.lang.model.element.ElementKind;
@@ -32,7 +31,7 @@ import java.util.Collection;
  *       instance into a fresh {@code Builder}.</li>
  *   <li>instance {@code Builder mutate()} - seeds a fresh {@code Builder}
  *       inline from {@code this} (not by delegating to {@code from(this)}), so
- *       {@code generateFrom = false} suppresses {@code from(T)} without
+ *       {@code @BuilderNames(from = NONE)} suppresses {@code from(T)} without
  *       dangling this method.</li>
  * </ul>
  *
@@ -81,13 +80,14 @@ final class BootstrapMethodFactory {
         String fromMethod = config.fromMethodName();
         String mutateMethod = config.toBuilderMethodName();
 
-        // Each bootstrap honours BOTH its opt-out gate and name non-emptiness.
-        // An empty name is treated as "don't emit" per the annotation Javadoc.
-        if (config.generateBuilder() && !builderMethod.isEmpty())
+        // An empty name is the single opt-out signal: BuilderScheme resolves a
+        // @BuilderNames(x = NONE) to the empty string, so there is no second
+        // generate-flag to consult.
+        if (!builderMethod.isEmpty())
             appendIfAbsent(target, builderMethod, 0, this::builderFactory);
-        if (config.generateFrom() && !fromMethod.isEmpty())
+        if (!fromMethod.isEmpty())
             appendIfAbsent(target, fromMethod, 1, this::fromFactory);
-        if (config.generateMutate() && !mutateMethod.isEmpty())
+        if (!mutateMethod.isEmpty())
             appendIfAbsent(target, mutateMethod, 0, this::mutateMethod);
     }
 
@@ -273,8 +273,8 @@ final class BootstrapMethodFactory {
         // Seed each field directly off `this` through the builder's public
         // setters - the SAME field set (fromFields, inherited fields included
         // for SuperBuilder subclasses) and accessor logic from(T) uses. Inlined
-        // here rather than delegating to from(this) so generateFrom = false can
-        // suppress the static factory without dangling this method.
+        // here rather than delegating to from(this) so a suppressed from can
+        // drop the static factory without dangling this method.
         for (FieldSpec f : fromFields) {
             body.append(make.Exec(make.Apply(
                 List.nil(),
@@ -309,7 +309,7 @@ final class BootstrapMethodFactory {
      * one called here.
      */
     private String setterName(FieldSpec f) {
-        return ctx.config().naming().setName(f.name);
+        return ctx.config().setters().setName(f.name);
     }
 
     private static String capitalise(String s) {

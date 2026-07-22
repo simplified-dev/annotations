@@ -230,7 +230,7 @@ final class BuilderEmitter {
     private void emitPlainSetter(FieldSpec f) {
         emitContract("_ -> this", false, "this");
         body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ')
-            .append(config.naming().setName(f.name)).append('(').append(nullabilityPrefix(f)).append(typeName(f.typeDisplay)).append(' ').append(f.name).append(") {\n");
+            .append(config.setters().setName(f.name)).append('(').append(nullabilityPrefix(f)).append(typeName(f.typeDisplay)).append(' ').append(f.name).append(") {\n");
         body.append("        this.").append(f.name).append(" = ").append(f.name).append(";\n");
         body.append("        return this;\n    }\n\n");
     }
@@ -245,7 +245,7 @@ final class BuilderEmitter {
         boolean nullable = f.nullable;
         emitContract("_, _ -> this", false, "this");
         body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ')
-            .append(config.naming().setName(f.name))
+            .append(config.setters().setName(f.name))
             .append("(@PrintFormat ").append(nullable ? "@Nullable " : "@NotNull ").append("String ").append(f.name)
             .append(", @Nullable Object... args) {\n");
         if (nullable) {
@@ -270,17 +270,17 @@ final class BuilderEmitter {
         // The typed setter is the ordinary `set` role, so a boolean is named
         // like every other field; the zero-arg form is the separate `flag` role
         // and drops out entirely when a style suppresses it.
-        if (config.naming().emitsFlag()) {
+        if (config.setters().emitsFlag()) {
             emitContract("-> this", false, "this");
             body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ')
-                .append(config.naming().flagName(methodBase)).append("() {\n");
+                .append(config.setters().flagName(methodBase)).append("() {\n");
             body.append("        this.").append(f.name).append(" = ").append(inverse ? "false" : "true").append(";\n");
             body.append("        return this;\n    }\n\n");
         }
 
         emitContract("_ -> this", false, "this");
         body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ')
-            .append(config.naming().setName(methodBase)).append("(boolean ").append(methodBase).append(") {\n");
+            .append(config.setters().setName(methodBase)).append("(boolean ").append(methodBase).append(") {\n");
         if (inverse) {
             body.append("        this.").append(f.name).append(" = !").append(methodBase).append(";\n");
         } else {
@@ -294,7 +294,7 @@ final class BuilderEmitter {
         imports.add("org.jetbrains.annotations.Nullable");
 
         String inner = typeName(f.optionalInner);
-        String setterName = config.naming().setName(f.name);
+        String setterName = config.setters().setName(f.name);
 
         // (@Nullable T) wrapper - for Optional<String> with @Formattable, this is the raw-nullable variant
         emitContract("_ -> this", false, "this");
@@ -323,8 +323,8 @@ final class BuilderEmitter {
     }
 
     private void emitCollectorSetters(FieldSpec f) {
-        String whole = config.naming().setName(f.name);
-        String clear = config.naming().clearName(f.name);
+        String whole = config.setters().setName(f.name);
+        String clear = config.setters().clearName(f.name);
 
         if (f.isMap) {
             imports.add("java.util.LinkedHashMap");
@@ -339,8 +339,8 @@ final class BuilderEmitter {
             body.append("        this.").append(f.name).append(" = new LinkedHashMap<>(").append(f.name).append(");\n");
             body.append("        return this;\n    }\n\n");
 
-            if (f.singular && config.naming().emitsPut()) {
-                String putName = config.naming().putName(f.singularName);
+            if (f.singular && config.setters().emitsPut()) {
+                String putName = config.setters().putName(f.singularName);
                 emitContract("_, _ -> this", false, "this");
                 body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(putName)
                     .append("(@NotNull ").append(k).append(" key, ").append(v).append(" value) {\n");
@@ -348,9 +348,9 @@ final class BuilderEmitter {
                 body.append("        return this;\n    }\n\n");
             }
 
-            if (f.compute && config.naming().emitsCompute()) {
+            if (f.compute && config.setters().emitsCompute()) {
                 imports.add("java.util.function.Supplier");
-                String putName = config.naming().computeName(f.singularName);
+                String putName = config.setters().computeName(f.singularName);
                 emitContract("_, _ -> this", false, "this");
                 body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(putName)
                     .append("(@NotNull ").append(k).append(" key, @NotNull Supplier<").append(v).append("> valueSupplier) {\n");
@@ -358,7 +358,7 @@ final class BuilderEmitter {
                 body.append("        return this;\n    }\n\n");
             }
 
-            if (f.clearable && config.naming().emitsClear()) {
+            if (f.clearable && config.setters().emitsClear()) {
                 emitContract("-> this", false, "this");
                 body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(clear).append("() {\n");
                 body.append("        this.").append(f.name).append(".clear();\n");
@@ -387,8 +387,8 @@ final class BuilderEmitter {
         body.append("        ").append(f.name).append(".forEach(this.").append(f.name).append("::add);\n");
         body.append("        return this;\n    }\n\n");
 
-        if (f.singular && config.naming().emitsAdd()) {
-            String single = config.naming().addName(f.singularName);
+        if (f.singular && config.setters().emitsAdd()) {
+            String single = config.setters().addName(f.singularName);
             emitContract("_ -> this", false, "this");
             body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(single)
                 .append("(@NotNull ").append(elem).append(' ').append(f.singularName).append(") {\n");
@@ -396,7 +396,7 @@ final class BuilderEmitter {
             body.append("        return this;\n    }\n\n");
         }
 
-        if (f.clearable && config.naming().emitsClear()) {
+        if (f.clearable && config.setters().emitsClear()) {
             emitContract("-> this", false, "this");
             body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(clear).append("() {\n");
             body.append("        this.").append(f.name).append(".clear();\n");
@@ -406,7 +406,7 @@ final class BuilderEmitter {
 
     private void emitArraySetter(FieldSpec f) {
         String elem = typeName(f.collectionElement);
-        String setter = config.naming().setName(f.name);
+        String setter = config.setters().setName(f.name);
         emitContract("_ -> this", false, "this");
         body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(setter)
             .append("(@NotNull ").append(elem).append("... ").append(f.name).append(") {\n");
@@ -419,7 +419,6 @@ final class BuilderEmitter {
     // ------------------------------------------------------------------
 
     private void emitFromMethod() {
-        if (!config.generateFrom()) return;
         if (config.fromMethodName().isEmpty()) return;
 
         emitContract("_ -> new", true, null);
