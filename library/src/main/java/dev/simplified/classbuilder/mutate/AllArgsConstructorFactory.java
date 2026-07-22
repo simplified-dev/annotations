@@ -98,7 +98,7 @@ final class AllArgsConstructorFactory {
             block,
             null
         );
-        AstMarkers.markGenerated(ctor);
+        AstMarkers.markGenerated(ctor, ctx.generated());
         return ctor;
     }
 

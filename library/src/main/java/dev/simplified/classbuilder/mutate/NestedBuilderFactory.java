@@ -45,11 +45,11 @@ final class NestedBuilderFactory {
         // Fields
         for (FieldSpec f : ctx.fields()) {
             JCVariableDecl decl = fieldMutators.fieldDecl(f);
-            AstMarkers.markGenerated(decl);
+            AstMarkers.markGenerated(decl, ctx.generated());
             defs.append(decl);
             JCVariableDecl marker = fieldMutators.replacedMarkerDecl(f);
             if (marker != null) {
-                AstMarkers.markGenerated(marker);
+                AstMarkers.markGenerated(marker, ctx.generated());
                 defs.append(marker);
             }
         }
@@ -73,7 +73,7 @@ final class NestedBuilderFactory {
             List.nil(),
             defs.toList()
         );
-        AstMarkers.markGenerated(nested);
+        AstMarkers.markGenerated(nested, ctx.generated());
         return nested;
     }
 
@@ -158,7 +158,7 @@ final class NestedBuilderFactory {
             block,
             null
         );
-        AstMarkers.markGenerated(method);
+        AstMarkers.markGenerated(method, ctx.generated());
         return method;
     }
 

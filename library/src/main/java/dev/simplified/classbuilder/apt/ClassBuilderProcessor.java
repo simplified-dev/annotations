@@ -241,7 +241,8 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         String implName = target.getSimpleName().toString() + "Impl";
         if (config.generateImpl()) {
             // Impl class first
-            String implSource = InterfaceImplEmitter.emit(target, packageName, implName, fields);
+            String implSource = InterfaceImplEmitter.emit(
+                target, packageName, implName, fields, config.emitGenerated());
             String implQn = packageName.isEmpty() ? implName : packageName + "." + implName;
             JavaFileObject implFile = processingEnv.getFiler().createSourceFile(implQn, target);
             try (Writer w = implFile.openWriter()) { w.write(implSource); }
@@ -298,12 +299,14 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         boolean generateImpl = lookup.booleanAttr(target, ANNOTATION_FQN, "generateImpl", true);
         boolean validate = lookup.booleanAttr(target, ANNOTATION_FQN, "validate", true);
         boolean emitContracts = lookup.booleanAttr(target, ANNOTATION_FQN, "emitContracts", true);
+        boolean emitGenerated = lookup.booleanAttr(target, ANNOTATION_FQN, "emitGenerated", true);
         String factoryMethod = lookup.stringAttr(target, ANNOTATION_FQN, "factoryMethod", "");
         Set<String> excludeSet = new HashSet<>(Arrays.asList(lookup.stringArrayAttr(target, ANNOTATION_FQN, "exclude")));
         return new BuilderConfig(
             extractBuilderNames(target, style), extractSetterNames(target, style),
             access, constructorAccess, retainInit,
-            generateCopyConstructor, generateImpl, validate, emitContracts, factoryMethod, excludeSet
+            generateCopyConstructor, generateImpl, validate, emitContracts, emitGenerated,
+            factoryMethod, excludeSet
         );
     }
 

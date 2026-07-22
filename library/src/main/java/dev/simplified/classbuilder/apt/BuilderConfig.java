@@ -24,6 +24,7 @@ public record BuilderConfig(
     boolean generateImpl,
     boolean validate,
     boolean emitContracts,
+    boolean emitGenerated,
     String factoryMethod,
     Set<String> excludeSet
 ) {

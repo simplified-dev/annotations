@@ -197,7 +197,7 @@ final class RetainedInitFactory {
             body,
             null
         );
-        AstMarkers.markGenerated(method);
+        AstMarkers.markGenerated(method, ctx.generated());
         return method;
     }
 
@@ -263,7 +263,7 @@ final class RetainedInitFactory {
             body,
             null
         );
-        AstMarkers.markGenerated(method);
+        AstMarkers.markGenerated(method, ctx.generated());
         return method;
     }
 
@@ -309,7 +309,7 @@ final class RetainedInitFactory {
             body,
             null
         );
-        AstMarkers.markGenerated(method);
+        AstMarkers.markGenerated(method, ctx.generated());
         return method;
     }
 

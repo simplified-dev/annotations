@@ -134,6 +134,13 @@ final class BuilderEmitter {
     // ------------------------------------------------------------------
 
     private void emitClassHeader() {
+        // Marked on the type rather than on each member: every member of this
+        // file is generated, so one annotation takes the whole class out of a
+        // coverage report. The per-member form matters only where generated
+        // members sit on a class the author also wrote, which is the
+        // AST-mutation path, not this one. Fully qualified so no import is
+        // needed and a target using javax/jakarta @Generated cannot collide.
+        if (config.emitGenerated()) body.append("@dev.simplified.annotations.Generated\n");
         body.append(accessKeyword()).append("class ").append(builderName).append(typeParamDecl).append(" {\n\n");
     }
 

@@ -842,7 +842,7 @@ final class FieldMutators {
         JCExpression returnType = ctx.builderType();
         JCBlock block = make.Block(0, body);
         JCMethodDecl method = make.MethodDef(mods, name, returnType, List.nil(), params, List.nil(), block, null);
-        AstMarkers.markGenerated(method);
+        AstMarkers.markGenerated(method, ctx.generated());
         return method;
     }
 

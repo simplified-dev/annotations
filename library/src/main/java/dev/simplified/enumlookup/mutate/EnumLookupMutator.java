@@ -19,6 +19,7 @@ import com.sun.tools.javac.util.Names;
 import dev.simplified.enumlookup.apt.EnumKeySpec;
 import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.ContractAnnotations;
+import dev.simplified.shared.javac.GeneratedAnnotations;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.JavacTypeFactory;
 
@@ -59,6 +60,7 @@ public final class EnumLookupMutator {
     private final Names names;
     private final JavacTypeFactory types;
     private final ContractAnnotations contracts;
+    private final GeneratedAnnotations generated;
 
     public EnumLookupMutator(JavacBridge bridge, Messager messager) {
         this.bridge = bridge;
@@ -68,6 +70,8 @@ public final class EnumLookupMutator {
         this.types = new JavacTypeFactory(make, names);
         // EnumLookup always emits contracts - no per-target opt-out attribute.
         this.contracts = new ContractAnnotations(make, names, types, true);
+        // Same for @Generated: the members below are ours whoever asked for them.
+        this.generated = GeneratedAnnotations.always(make, types);
     }
 
     /**
@@ -90,14 +94,14 @@ public final class EnumLookupMutator {
         // Fields.
         if (!hasFieldNamed(target, CACHED_VALUES)) {
             JCVariableDecl values = cachedValuesField(enumName);
-            AstMarkers.markGenerated(values);
+            AstMarkers.markGenerated(values, generated);
             bridge.compat().appendDef(target, values);
         }
         for (EnumKeySpec spec : keys) {
             String name = CACHED_KEYS_PREFIX + spec.fieldName();
             if (hasFieldNamed(target, name)) continue;
             JCVariableDecl keysArr = cachedKeysField(spec, name);
-            AstMarkers.markGenerated(keysArr);
+            AstMarkers.markGenerated(keysArr, generated);
             bridge.compat().appendDef(target, keysArr);
         }
 
@@ -545,7 +549,7 @@ public final class EnumLookupMutator {
             body,
             null
         );
-        AstMarkers.markGenerated(method);
+        AstMarkers.markGenerated(method, generated);
         return method;
     }
 

@@ -2,7 +2,9 @@ package dev.simplified.classbuilder.mutate;
 import com.sun.tools.javac.code.Flags;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import com.sun.tools.javac.tree.JCTree.JCExpression;
+import com.sun.tools.javac.tree.JCTree.JCMethodDecl;
 import com.sun.tools.javac.tree.JCTree.JCTypeParameter;
+import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.TreeMaker;
 import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
@@ -10,9 +12,14 @@ import dev.simplified.annotations.AccessLevel;
 import dev.simplified.classbuilder.apt.BuilderConfig;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.shared.javac.ContractAnnotations;
+import dev.simplified.shared.javac.GeneratedAnnotations;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.JavacTypeFactory;
 
+import javax.lang.model.element.Element;
+import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.TypeParameterElement;
 import javax.lang.model.type.TypeMirror;
@@ -36,7 +43,9 @@ public final class MutationContext {
     private final String builderName;
     private final JavacTypeFactory types;
     private final ContractAnnotations contracts;
+    private final GeneratedAnnotations generated;
     private final Set<String> instanceDefaults;
+    private final Set<String> declaredAccessors;
     private final String selfTypeName;
     private final String selfBuilderName;
 
@@ -55,7 +64,15 @@ public final class MutationContext {
         this.types = new JavacTypeFactory(bridge.treeMaker(), bridge.names());
         this.contracts = new ContractAnnotations(
             bridge.treeMaker(), bridge.names(), this.types, config.emitContracts());
+        this.generated = new GeneratedAnnotations(
+            bridge.treeMaker(), this.types, config.emitGenerated());
         this.instanceDefaults = InstanceDefaultDetector.detect(targetElement, fields, bridge.elements());
+        // Snapshotted here, before any mutator has appended anything, because
+        // this is the only point at which "declared by the author" and "present
+        // on the tree" are the same set. @Lazy synthesises a getter onto the
+        // target moments later, and reading target.defs after that would count
+        // our own output as the author's.
+        this.declaredAccessors = collectZeroArgMethods(target, targetElement, bridge);
         // A generic target could itself declare a parameter called T or B, so
         // the SuperBuilder self-type names dodge whatever it uses. Resolved
         // once here because the chain mutator declares them while the
@@ -182,6 +199,50 @@ public final class MutationContext {
         return selfBuilderName;
     }
 
+    /**
+     * Whether the author's own source, or any supertype already on the
+     * classpath, offers a zero-argument method by this name for
+     * {@code from(T)} / {@code mutate()} to read a field through.
+     *
+     * @param name the candidate accessor name
+     * @return whether a call to it will resolve
+     */
+    public boolean declaresAccessor(String name) {
+        return declaredAccessors.contains(name);
+    }
+
+    /**
+     * Zero-argument methods visible on the target: those written in its own
+     * source, plus those inherited from a supertype that is already compiled.
+     *
+     * <p>Both halves are needed and neither subsumes the other. The tree scan
+     * is the only view of members declared in this compilation round, and
+     * {@code getAllMembers} is the only view of an inherited accessor - which
+     * matters for a SuperBuilder subclass, whose {@code from(T)} reads the
+     * parent's fields too. {@link Object}'s own methods are dropped: they are
+     * inherited by everything and would make a field named {@code class} or
+     * {@code hashCode} resolve to something unrelated.
+     */
+    private static Set<String> collectZeroArgMethods(JCClassDecl target,
+                                                     TypeElement targetElement,
+                                                     JavacBridge bridge) {
+        Set<String> out = new HashSet<>();
+        for (JCTree def : target.defs) {
+            if (def instanceof JCMethodDecl m && m.params.isEmpty()) out.add(m.name.toString());
+        }
+        for (Element member : bridge.elements().getAllMembers(targetElement)) {
+            if (member.getKind() != ElementKind.METHOD) continue;
+            if (member.getModifiers().contains(Modifier.STATIC)) continue;
+            ExecutableElement method = (ExecutableElement) member;
+            if (!method.getParameters().isEmpty()) continue;
+            Element owner = method.getEnclosingElement();
+            if (owner instanceof TypeElement t
+                && "java.lang.Object".contentEquals(t.getQualifiedName())) continue;
+            out.add(method.getSimpleName().toString());
+        }
+        return out;
+    }
+
     /** Appends {@code $} until the name is not one the target already declares. */
     private static String freeTypeParamName(String preferred, Set<String> taken) {
         String candidate = preferred;
@@ -263,6 +324,7 @@ public final class MutationContext {
     public Names names() { return bridge.names(); }
     public JavacTypeFactory types() { return types; }
     public ContractAnnotations contracts() { return contracts; }
+    public GeneratedAnnotations generated() { return generated; }
     public TypeElement targetElement() { return targetElement; }
     public JCClassDecl target() { return target; }
     public BuilderConfig config() { return config; }

@@ -131,11 +131,11 @@ final class SuperBuilderMutator {
         FieldMutators fm = new FieldMutators(ctx);
         for (FieldSpec f : ctx.fields()) {
             JCVariableDecl fd = fm.fieldDecl(f);
-            AstMarkers.markGenerated(fd);
+            AstMarkers.markGenerated(fd, ctx.generated());
             defs.append(fd);
             JCVariableDecl marker = fm.replacedMarkerDecl(f);
             if (marker != null) {
-                AstMarkers.markGenerated(marker);
+                AstMarkers.markGenerated(marker, ctx.generated());
                 defs.append(marker);
             }
         }
@@ -159,7 +159,7 @@ final class SuperBuilderMutator {
             List.nil(),
             defs.toList()
         );
-        AstMarkers.markGenerated(nested);
+        AstMarkers.markGenerated(nested, ctx.generated());
         return nested;
     }
 
@@ -177,11 +177,11 @@ final class SuperBuilderMutator {
         FieldMutators fm = new FieldMutators(ctx);
         for (FieldSpec f : ctx.fields()) {
             JCVariableDecl fd = fm.fieldDecl(f);
-            AstMarkers.markGenerated(fd);
+            AstMarkers.markGenerated(fd, ctx.generated());
             defs.append(fd);
             JCVariableDecl marker = fm.replacedMarkerDecl(f);
             if (marker != null) {
-                AstMarkers.markGenerated(marker);
+                AstMarkers.markGenerated(marker, ctx.generated());
                 defs.append(marker);
             }
         }
@@ -218,7 +218,7 @@ final class SuperBuilderMutator {
             List.nil(),
             defs.toList()
         );
-        AstMarkers.markGenerated(nested);
+        AstMarkers.markGenerated(nested, ctx.generated());
         return nested;
     }
 
@@ -231,11 +231,11 @@ final class SuperBuilderMutator {
         FieldMutators fm = new FieldMutators(ctx);
         for (FieldSpec f : ctx.fields()) {
             JCVariableDecl fd = fm.fieldDecl(f);
-            AstMarkers.markGenerated(fd);
+            AstMarkers.markGenerated(fd, ctx.generated());
             defs.append(fd);
             JCVariableDecl marker = fm.replacedMarkerDecl(f);
             if (marker != null) {
-                AstMarkers.markGenerated(marker);
+                AstMarkers.markGenerated(marker, ctx.generated());
                 defs.append(marker);
             }
         }
@@ -260,7 +260,7 @@ final class SuperBuilderMutator {
             List.nil(),
             defs.toList()
         );
-        AstMarkers.markGenerated(nested);
+        AstMarkers.markGenerated(nested, ctx.generated());
         return nested;
     }
 
@@ -335,7 +335,7 @@ final class SuperBuilderMutator {
             null,
             null
         );
-        AstMarkers.markGenerated(m);
+        AstMarkers.markGenerated(m, ctx.generated());
         return m;
     }
 
@@ -353,7 +353,7 @@ final class SuperBuilderMutator {
             block,
             null
         );
-        AstMarkers.markGenerated(m);
+        AstMarkers.markGenerated(m, ctx.generated());
         return m;
     }
 

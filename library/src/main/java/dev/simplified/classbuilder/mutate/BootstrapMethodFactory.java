@@ -19,8 +19,12 @@ import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.JavacTypeFactory;
 
 import javax.annotation.processing.Messager;
+import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.Modifier;
+import javax.lang.model.element.TypeElement;
 import javax.tools.Diagnostic;
+import java.util.ArrayList;
 import java.util.Collection;
 
 /**
@@ -142,7 +146,7 @@ final class BootstrapMethodFactory {
             body,
             null
         );
-        AstMarkers.markGenerated(method);
+        AstMarkers.markGenerated(method, ctx.generated());
         return method;
     }
 
@@ -190,47 +194,130 @@ final class BootstrapMethodFactory {
             make.Block(0, body.toList()),
             null
         );
-        AstMarkers.markGenerated(method);
+        AstMarkers.markGenerated(method, ctx.generated());
         return method;
     }
 
     /**
-     * Builds the accessor expression that reads a field off {@code receiver}.
-     * Shared by {@code from(T)} (receiver = the {@code instance} parameter) and
-     * {@code mutate()} (receiver = {@code this}). Honours {@link
-     * FieldSpec#obtainViaMethod} / {@link FieldSpec#obtainViaField} / {@link
-     * FieldSpec#obtainViaStatic}; otherwise uses the record/interface {@code
-     * name()} form, the {@code isX()} form for booleans, or {@code getX()}.
-     * Wraps mutable collection reads in defensive copies. {@code receiver} is
-     * consumed exactly once, so callers must pass a fresh node per field.
+     * Builds the expression that reads a field off {@code receiver}. Shared by
+     * {@code from(T)} (receiver = the {@code instance} parameter) and
+     * {@code mutate()} (receiver = {@code this}). Wraps mutable collection
+     * reads in defensive copies. {@code receiver} is consumed exactly once, so
+     * callers must pass a fresh node per field.
+     *
+     * <p>The read is resolved through an ordered ladder rather than by
+     * assuming a bean accessor exists. That assumption is what forced every
+     * target to carry a getter-generating annotation whether or not it wanted
+     * public accessors: the emitted {@code instance.getX()} named a method
+     * nobody had written, and the failure surfaced as {@code cannot find
+     * symbol} inside generated code.
+     *
+     * <ol>
+     *   <li>{@link FieldSpec#obtainViaMethod} / {@link FieldSpec#obtainViaField}
+     *       / {@link FieldSpec#obtainViaStatic} - the author's explicit
+     *       override, which outranks everything.</li>
+     *   <li>A record component, read through its canonical accessor.</li>
+     *   <li>A {@code @Lazy} field, pinned to the getter that unwraps its
+     *       storage.</li>
+     *   <li>An author-declared zero-argument accessor, in any spelling a getter
+     *       generator produces. Above the direct field read on purpose: when
+     *       the author wrote the accessor, a normalising or defensive-copying
+     *       body is the behaviour they asked for, and calling it preserves
+     *       that.</li>
+     *   <li>A direct field read, where one is legal.</li>
+     *   <li>The bean accessor, as before, with a note naming the field.</li>
+     * </ol>
+     *
+     * <p>Steps 1 to 4 are what this method already did, so the ladder only
+     * changes behaviour where the old form did not compile.
      */
     private JCExpression readFrom(FieldSpec f, JCExpression receiver) {
-        JCExpression raw;
+        return wrapDefensiveCopy(f, resolveRead(f, receiver));
+    }
+
+    private JCExpression resolveRead(FieldSpec f, JCExpression receiver) {
         if (f.obtainViaStatic && f.obtainViaMethod != null) {
-            raw = make.Apply(List.nil(),
+            return make.Apply(List.nil(),
                 make.Select(make.Ident(names.fromString(ctx.targetSimpleName())),
                     names.fromString(f.obtainViaMethod)),
                 List.of(receiver));
-        } else if (f.obtainViaMethod != null) {
-            raw = make.Apply(List.nil(),
-                make.Select(receiver, names.fromString(f.obtainViaMethod)),
-                List.nil());
-        } else if (f.obtainViaField != null) {
-            raw = make.Select(receiver, names.fromString(f.obtainViaField));
-        } else if (isRecord) {
-            raw = make.Apply(List.nil(),
-                make.Select(receiver, names.fromString(f.name)),
-                List.nil());
-        } else if (f.isBoolean) {
-            raw = make.Apply(List.nil(),
-                make.Select(receiver, names.fromString("is" + capitalise(f.name))),
-                List.nil());
-        } else {
-            raw = make.Apply(List.nil(),
-                make.Select(receiver, names.fromString("get" + capitalise(f.name))),
-                List.nil());
         }
-        return wrapDefensiveCopy(f, raw);
+        if (f.obtainViaMethod != null) return call(receiver, f.obtainViaMethod);
+        if (f.obtainViaField != null) return make.Select(receiver, names.fromString(f.obtainViaField));
+
+        // A record component's accessor is the contract, and it is always
+        // present - there is nothing to probe for.
+        if (isRecord) return call(receiver, f.name);
+
+        // @Lazy rewrites storage to Lazy<T>, so the synthesised getter is the
+        // only read that yields the field's declared type. Pinned rather than
+        // probed because LazyFieldMutator appends that getter after this
+        // context snapshotted the target's methods.
+        if (f.lazy) return call(receiver, "get" + capitalise(f.name));
+
+        for (String candidate : accessorCandidates(f)) {
+            if (ctx.declaresAccessor(candidate)) return call(receiver, candidate);
+        }
+
+        if (isDirectlyReadable(f)) return make.Select(receiver, names.fromString(f.name));
+
+        // Nothing resolvable: an inherited field this class cannot reach, with
+        // no accessor visible either. Emitting the bean call keeps whatever
+        // made this compile before - an accessor generated later in the same
+        // round, which no scan of the model can see - so the note is a NOTE
+        // rather than an error. It costs nothing when the build succeeds and
+        // names the field when javac is about to fail on generated code.
+        String fallback = (f.isBoolean ? "is" : "get") + capitalise(f.name);
+        messager.printMessage(Diagnostic.Kind.NOTE,
+            "@ClassBuilder cannot reach field '" + f.name + "' to seed "
+                + ctx.config().fromMethodName() + "/" + ctx.config().toBuilderMethodName()
+                + " - it is inherited and not accessible here, and no zero-arg accessor was found. "
+                + "Emitting '" + fallback + "()'; annotate the field with @ObtainVia if that is wrong",
+            ctx.targetElement());
+        return call(receiver, fallback);
+    }
+
+    private JCExpression call(JCExpression receiver, String method) {
+        return make.Apply(List.nil(), make.Select(receiver, names.fromString(method)), List.nil());
+    }
+
+    /**
+     * Accessor spellings to probe for, in the order a call should prefer them.
+     * The boolean {@code isX} form comes first so a target carrying both
+     * {@code isX()} and {@code getX()} resolves the way javac's own bean
+     * conventions read it, and the bare field name is tried last so a fluent
+     * accessor is found rather than bypassed.
+     */
+    private java.util.List<String> accessorCandidates(FieldSpec f) {
+        java.util.List<String> out = new ArrayList<>(3);
+        if (f.isBoolean) out.add("is" + capitalise(f.name));
+        out.add("get" + capitalise(f.name));
+        out.add(f.name);
+        return out;
+    }
+
+    /**
+     * Whether {@code receiver.<field>} compiles from inside the target.
+     *
+     * <p>{@code from(T)} and {@code mutate()} are members of the target
+     * itself, so a field the target declares is readable whatever its
+     * modifiers - which covers every standalone target. Only a SuperBuilder
+     * subclass reads fields it did not declare, and there the modifier
+     * decides: {@code protected} is reachable because the receiver is typed as
+     * the subclass (JLS 6.6.2), package-private is reachable from the same
+     * package, and {@code private} is not reachable at all.
+     */
+    private boolean isDirectlyReadable(FieldSpec f) {
+        if (f.element == null) return false;
+        Element owner = f.element.getEnclosingElement();
+        if (!(owner instanceof TypeElement declaring)) return false;
+        if (declaring.equals(ctx.targetElement())) return true;
+
+        var modifiers = f.element.getModifiers();
+        if (modifiers.contains(Modifier.PRIVATE)) return false;
+        if (modifiers.contains(Modifier.PUBLIC) || modifiers.contains(Modifier.PROTECTED)) return true;
+        var elements = ctx.bridge().elements();
+        return elements.getPackageOf(declaring).equals(elements.getPackageOf(ctx.targetElement()));
     }
 
     private JCExpression wrapDefensiveCopy(FieldSpec f, JCExpression raw) {
@@ -298,7 +385,7 @@ final class BootstrapMethodFactory {
             make.Block(0, body.toList()),
             null
         );
-        AstMarkers.markGenerated(method);
+        AstMarkers.markGenerated(method, ctx.generated());
         return method;
     }
 

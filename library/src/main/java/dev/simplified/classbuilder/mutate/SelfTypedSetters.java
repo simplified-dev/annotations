@@ -638,7 +638,7 @@ final class SelfTypedSetters {
             block,
             null
         );
-        AstMarkers.markGenerated(m);
+        AstMarkers.markGenerated(m, ctx.generated());
         return m;
     }
 

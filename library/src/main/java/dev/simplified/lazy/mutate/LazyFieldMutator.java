@@ -22,6 +22,7 @@ import com.sun.tools.javac.util.Position;
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.shared.javac.AstMarkers;
+import dev.simplified.shared.javac.GeneratedAnnotations;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.JavacTypeFactory;
 
@@ -94,6 +95,7 @@ public final class LazyFieldMutator {
     private final TreeMaker make;
     private final Names names;
     private final JavacTypeFactory types;
+    private final GeneratedAnnotations generated;
 
     public LazyFieldMutator(JavacBridge bridge,
                             TypeElement targetElement,
@@ -110,6 +112,8 @@ public final class LazyFieldMutator {
         this.make = bridge.treeMaker();
         this.names = bridge.names();
         this.types = new JavacTypeFactory(make, names);
+        // @Lazy has no opt-out attribute, so the marker is unconditional.
+        this.generated = GeneratedAnnotations.always(make, types);
     }
 
     /**
@@ -198,6 +202,10 @@ public final class LazyFieldMutator {
             JCExpression cleaned = cloneAndReset(decl.init);
             decl.init = lazyOfLambda(cleaned);
         }
+        // Marked, but deliberately not annotated: this is the author's own
+        // field declaration rewritten in place, not a member we introduced.
+        // The mark exists for downstream collision detection; @Generated on it
+        // would claim authorship of a field the author wrote.
         AstMarkers.markGenerated(decl);
     }
 
@@ -290,7 +298,7 @@ public final class LazyFieldMutator {
             body,
             null
         );
-        AstMarkers.markGenerated(getter);
+        AstMarkers.markGenerated(getter, generated);
         return getter;
     }
 

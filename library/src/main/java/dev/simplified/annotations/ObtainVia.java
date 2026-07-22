@@ -11,10 +11,14 @@ import java.lang.annotation.Target;
  * Overrides how the generated {@code from(T)} and {@code mutate()} methods
  * read a field's value off an existing instance.
  *
- * <p>By default the plugin reads {@code instance.field} directly (or
- * {@code instance.getField()} when a matching getter exists). When the value
+ * <p>By default the read is resolved in order: a record component's canonical
+ * accessor, then an author-declared zero-argument accessor in any spelling a
+ * getter generator produces ({@code getField()}, {@code isField()} for a
+ * boolean, or the bare {@code field()}), then {@code instance.field} directly.
+ * A declared accessor outranks the field so that a normalising or
+ * defensive-copying body is honoured rather than bypassed. When the value
  * lives behind a differently named accessor, a different field, or a static
- * helper, this annotation redirects the read.
+ * helper, this annotation redirects the read ahead of all of that.
  *
  * <p>Lombok parity: {@code @Builder.ObtainVia}. Exactly one of {@link #method}
  * or {@link #field} should be non-empty.

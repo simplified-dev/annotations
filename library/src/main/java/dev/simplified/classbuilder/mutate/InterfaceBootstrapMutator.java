@@ -15,6 +15,7 @@ import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
 import dev.simplified.classbuilder.apt.BuilderConfig;
 import dev.simplified.shared.javac.AstMarkers;
+import dev.simplified.shared.javac.GeneratedAnnotations;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.JavacTypeFactory;
 
@@ -58,6 +59,7 @@ public final class InterfaceBootstrapMutator {
     private final JCClassDecl targetTree;
     private final BuilderConfig config;
     private final String builderName;
+    private final GeneratedAnnotations generated;
 
     public InterfaceBootstrapMutator(JavacBridge bridge, Messager messager, TypeElement target,
                                      JCClassDecl targetTree, BuilderConfig config, String builderName) {
@@ -65,6 +67,7 @@ public final class InterfaceBootstrapMutator {
         this.make = bridge.treeMaker();
         this.names = bridge.names();
         this.types = new JavacTypeFactory(this.make, this.names);
+        this.generated = new GeneratedAnnotations(this.make, this.types, config.emitGenerated());
         this.messager = messager;
         this.target = target;
         this.targetTree = targetTree;
@@ -202,7 +205,7 @@ public final class InterfaceBootstrapMutator {
             block,
             null
         );
-        AstMarkers.markGenerated(m);
+        AstMarkers.markGenerated(m, generated);
         return m;
     }
 

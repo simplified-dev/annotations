@@ -237,6 +237,17 @@ public @interface ClassBuilder {
     boolean emitContracts() default true;
 
     /**
+     * Whether to emit {@link Generated} on the members and types this
+     * annotation synthesises, so coverage tools exclude them from their
+     * reports.
+     *
+     * <p>Independent of {@link #emitContracts()} - the two answer different
+     * questions, and dropping {@code @XContract} from decompiled output is no
+     * reason to lose coverage filtering.
+     */
+    boolean emitGenerated() default true;
+
+    /**
      * For {@code interface} targets only: whether to generate a concrete
      * {@code <TypeName>Impl} that the builder's {@code build()} returns.
      * Ignored for concrete class, record, and abstract-class targets.
