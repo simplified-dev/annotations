@@ -2,7 +2,6 @@ package dev.simplified.classbuilder.mutate;
 
 import com.sun.tools.javac.code.Flags;
 import com.sun.tools.javac.code.TypeTag;
-import com.sun.tools.javac.tree.JCTree.JCBlock;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import com.sun.tools.javac.tree.JCTree.JCExpression;
 import com.sun.tools.javac.tree.JCTree.JCMethodDecl;
@@ -13,11 +12,14 @@ import com.sun.tools.javac.tree.TreeMaker;
 import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
+import dev.simplified.annotations.AccessLevel;
+import dev.simplified.args.mutate.ArgsConstructorFactory;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.shared.javac.AstMarkers;
 
 /**
- * Produces the all-args constructor the generated {@code build()} invokes:
+ * Shapes the parameters of the constructor the generated {@code build()}
+ * invokes - the one a target would spell {@code @BuilderArgsConstructor}:
  *
  * <pre>{@code
  * Target(String name, int count) { this.name = name; this.count = count; }
@@ -28,6 +30,14 @@ import dev.simplified.shared.javac.AstMarkers;
  * up. Synthesis is suppressed when the target already declares a constructor of
  * its own, mirroring Lombok {@code @Builder}, which supplies its implicit
  * constructor only in the absence of an explicit one.
+ *
+ * <p>Only the shaping lives here; the declaration itself is minted by
+ * {@link ArgsConstructorFactory}, shared with the constructor annotations. Two
+ * fields are not a plain one-parameter-per-field translation and are why this
+ * class exists at all: a field whose default reads instance state arrives as a
+ * {@code Supplier<T>} so an unfilled slot is distinguishable from a filled one,
+ * and a collected default arrives as its container plus a marker saying whether
+ * the caller replaced it wholesale.
  *
  * <p>Runs before {@code LazyFieldMutator} so {@code @Lazy} fields get the same
  * parameter and assignment rewrite a hand-written constructor receives.
@@ -47,8 +57,12 @@ final class AllArgsConstructorFactory {
     /**
      * Builds the all-args constructor, assigning every builder-visible field
      * from a like-named parameter.
+     *
+     * @param access visibility of the generated constructor, already resolved
+     *        against a written {@code @BuilderArgsConstructor}
+     * @return the constructor declaration
      */
-    JCMethodDecl build() {
+    JCMethodDecl build(AccessLevel access) {
         ListBuffer<JCVariableDecl> params = new ListBuffer<>();
         ListBuffer<JCStatement> body = new ListBuffer<>();
         for (FieldSpec f : ctx.fields()) {
@@ -86,20 +100,10 @@ final class AllArgsConstructorFactory {
             JCExpression lhs = make.Select(make.Ident(names._this), names.fromString(f.name));
             body.append(make.Exec(make.Assign(lhs, instanceDefault ? defaultingRhs(f) : make.Ident(names.fromString(f.name)))));
         }
-        JCBlock block = make.Block(0, body.toList());
-        // Javac spells the constructor name as <init>.
-        JCMethodDecl ctor = make.MethodDef(
-            make.Modifiers(MutationContext.accessFlagFor(ctx.config().constructorAccess())),
-            names.init,
-            null,
-            List.nil(),
-            params.toList(),
-            List.nil(),
-            block,
-            null
-        );
-        AstMarkers.markGenerated(ctor, ctx.generated());
-        return ctor;
+        // A @ClassBuilder target is never an enum - the processor rejects the
+        // kind before reaching here - so the enum access override is moot.
+        return new ArgsConstructorFactory(make, names)
+            .mint(access, false, params.toList(), body.toList(), ctx.generated());
     }
 
     /**
@@ -172,6 +176,12 @@ final class AllArgsConstructorFactory {
      * carries {@link Flags#GENERATEDCONSTR} and is not treated as explicit, so a
      * class declaring no constructor at all still qualifies for synthesis.
      *
+     * <p>Nor is one this pipeline synthesised. The constructor annotations run
+     * an earlier pass over the same tree, so by the time the builder asks, a
+     * {@code @NoArgsConstructor} on the same target has already appended one -
+     * counting that as the author's would leave {@code build()} calling a
+     * constructor nobody emits.
+     *
      * @param target the class declaration to scan
      * @return whether the target declares a constructor of its own
      */
@@ -180,6 +190,7 @@ final class AllArgsConstructorFactory {
             if (!(def instanceof JCMethodDecl m)) continue;
             if (!m.name.toString().equals("<init>")) continue;
             if ((m.mods.flags & Flags.GENERATEDCONSTR) != 0) continue;
+            if (AstMarkers.isGenerated(m)) continue;
             return true;
         }
         return false;

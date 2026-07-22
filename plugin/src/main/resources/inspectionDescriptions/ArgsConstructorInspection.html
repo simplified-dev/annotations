@@ -1,0 +1,44 @@
+<html>
+<body>
+Flags misuse of <code>@AllArgsConstructor</code>,
+<code>@RequiredArgsConstructor</code>, <code>@NoArgsConstructor</code> and
+<code>@BuilderArgsConstructor</code>:
+
+<ul>
+  <li>Applied to a record, interface or annotation type. A record's canonical
+      constructor is its declared contract, and an interface has no constructor
+      to generate.</li>
+  <li><code>access = AccessLevel.NONE</code>, which is the absence of a member -
+      leaving an annotation whose only job is to generate one with nothing to
+      do. Delete the annotation instead.</li>
+  <li><code>@NoArgsConstructor</code> on a class with a <code>final</code> field
+      that has no initializer, which the generated constructor would leave
+      unassigned. Give the field an initializer, or write
+      <code>force = true</code> to accept the JVM zero value.</li>
+  <li><code>force = true</code> where no <code>final</code> field is unassigned,
+      making the attribute pure noise.</li>
+  <li><code>@BuilderArgsConstructor</code> on a class carrying no
+      <code>@ClassBuilder</code>. It names the field set of a generated builder,
+      so without one it names nothing.</li>
+  <li>Two annotations that resolve to the same signature - most often
+      <code>@NoArgsConstructor</code> beside a
+      <code>@RequiredArgsConstructor</code> that selects no field at all.</li>
+</ul>
+
+<!-- tooltip end -->
+
+<p>
+Every check mirrors a diagnostic the annotation processor already emits. What
+this adds is timing and position: the processor can only report against the
+type, while the inspection underlines the offending attribute as it is typed.
+</p>
+
+<p>
+Note that these annotations <b>add</b> a constructor rather than backing off
+when the class declares one of its own, so a hand-written constructor beside
+them is not reported. That is deliberate - an enum whose constants bind to a
+generated constructor relies on it.
+</p>
+
+</body>
+</html>

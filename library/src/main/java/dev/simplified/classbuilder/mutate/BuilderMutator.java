@@ -1,5 +1,8 @@
 package dev.simplified.classbuilder.mutate;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
+import com.sun.tools.javac.tree.JCTree.JCMethodDecl;
+import dev.simplified.annotations.AccessLevel;
+import dev.simplified.args.mutate.ArgsConstructorMutator;
 import dev.simplified.classbuilder.apt.BuilderConfig;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.lazy.mutate.LazyFieldMutator;
@@ -66,7 +69,20 @@ public final class BuilderMutator {
         // LazyFieldMutator so a @Lazy field's parameter and assignment are
         // rewritten here exactly as they would be in a hand-written ctor.
         if (needsAllArgsConstructor(targetElement, target, ctx, isAbstract, annotatedSuper)) {
-            bridge.compat().appendDef(target, new AllArgsConstructorFactory(ctx).build());
+            JCMethodDecl ctor = new AllArgsConstructorFactory(ctx).build(
+                constructorAccess(targetElement, ctx));
+            // A written @AllArgsConstructor whose field set happens to coincide
+            // with the builder's has already produced this exact signature in
+            // the constructor pass. build() binds to it, and emitting a second
+            // would be a duplicate rather than an override.
+            if (ArgsConstructorMutator.hasGeneratedConstructor(target, ctor.params)) {
+                messager.printMessage(Diagnostic.Kind.NOTE,
+                    "@ClassBuilder used the constructor a written annotation already generates on "
+                        + ctx.targetSimpleName() + "; constructorAccess is not applied",
+                    targetElement);
+            } else {
+                bridge.compat().appendDef(target, ctor);
+            }
         }
 
         // @Lazy fields: rewrite storage type to Lazy<T>, wrap initialisers,
@@ -111,6 +127,30 @@ public final class BuilderMutator {
 
         new BootstrapMethodFactory(ctx, messager).appendAll();
         return true;
+    }
+
+    /**
+     * Resolves the visibility of the constructor {@code build()} calls.
+     *
+     * <p>A value written on {@code @BuilderArgsConstructor} wins, then one
+     * written as {@code @ClassBuilder(constructorAccess)}, then package-private.
+     * Both steps read the written value rather than the effective one - a bare
+     * {@code @BuilderArgsConstructor} states nothing about visibility and must
+     * not silently overrule a {@code constructorAccess} beside it.
+     *
+     * @param targetElement the annotated type
+     * @param ctx the per-target mutation context
+     * @return the resolved access level
+     */
+    private static AccessLevel constructorAccess(TypeElement targetElement, MutationContext ctx) {
+        String written = new AnnotationLookup().stringAttr(
+            targetElement, "dev.simplified.annotations.BuilderArgsConstructor", "access", null);
+        if (written == null) return ctx.config().constructorAccess();
+        try {
+            return AccessLevel.valueOf(written);
+        } catch (IllegalArgumentException e) {
+            return ctx.config().constructorAccess();
+        }
     }
 
     /**

@@ -3,6 +3,7 @@ import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import dev.simplified.accessor.mutate.AccessorMutator;
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.NamingStyle;
+import dev.simplified.args.mutate.ArgsConstructorMutator;
 import dev.simplified.classbuilder.mutate.BuilderMutator;
 import dev.simplified.classbuilder.mutate.InterfaceBootstrapMutator;
 import dev.simplified.lazy.mutate.LazyFieldMutator;
@@ -45,7 +46,11 @@ import java.util.Set;
     "dev.simplified.annotations.ClassBuilder",
     "dev.simplified.annotations.Lazy",
     "dev.simplified.annotations.Getter",
-    "dev.simplified.annotations.Setter"
+    "dev.simplified.annotations.Setter",
+    "dev.simplified.annotations.AllArgsConstructor",
+    "dev.simplified.annotations.RequiredArgsConstructor",
+    "dev.simplified.annotations.NoArgsConstructor",
+    "dev.simplified.annotations.BuilderArgsConstructor"
 })
 @SupportedSourceVersion(SourceVersion.RELEASE_17)
 public class ClassBuilderProcessor extends AbstractProcessor {
@@ -68,6 +73,18 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     private static final String GETTER_FQN = "dev.simplified.annotations.Getter";
     private static final String SETTER_FQN = "dev.simplified.annotations.Setter";
 
+    /**
+     * The constructor annotations, dispatched here rather than from a processor
+     * of their own. Ordering against {@code @Lazy} and the builder pass has to
+     * be a guarantee, and processor order within a round is unspecified.
+     */
+    private static final String[] ARGS_FQNS = {
+        "dev.simplified.annotations.AllArgsConstructor",
+        "dev.simplified.annotations.RequiredArgsConstructor",
+        "dev.simplified.annotations.NoArgsConstructor",
+        "dev.simplified.annotations.BuilderArgsConstructor"
+    };
+
     private final AnnotationLookup lookup = new AnnotationLookup();
     private SourceIntrospector introspector;
     private Optional<JavacBridge> javacBridge = Optional.empty();
@@ -87,6 +104,14 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     @Override
     public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
         Messager messager = processingEnv.getMessager();
+
+        // Constructors first, for every target in the round. Two passes read
+        // what this one writes: LazyFieldMutator retypes a @Lazy parameter in
+        // whatever constructor it finds, and the builder pass declines to
+        // synthesise its own when a written annotation already produced that
+        // signature. Neither can be satisfied afterwards.
+        processConstructors(roundEnv, messager);
+
         TypeElement annotationElement = lookupAnnotationElement();
         Set<TypeElement> classBuilderTargets = new java.util.LinkedHashSet<>();
         if (annotationElement != null) {
@@ -149,6 +174,55 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         // unspecified, and a @Getter racing @Lazy emits a duplicate method.
         processAccessors(roundEnv, messager);
         return false;
+    }
+
+    /**
+     * Runs {@link ArgsConstructorMutator} over every type carrying one of the
+     * four constructor annotations.
+     *
+     * @param roundEnv the round being processed
+     * @param messager sink for diagnostics
+     */
+    private void processConstructors(RoundEnvironment roundEnv, Messager messager) {
+        Set<TypeElement> targets = new java.util.LinkedHashSet<>();
+        for (String fqn : ARGS_FQNS) {
+            TypeElement annotation = processingEnv.getElementUtils().getTypeElement(fqn);
+            if (annotation == null) continue;
+            for (Element annotated : roundEnv.getElementsAnnotatedWith(annotation)) {
+                if (annotated instanceof TypeElement type) targets.add(type);
+            }
+        }
+        if (targets.isEmpty()) return;
+
+        for (TypeElement target : targets) {
+            if (javacBridge.isEmpty()) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "The constructor annotations require javac for AST mutation - current "
+                        + "environment is not a JavacProcessingEnvironment. Run your build under "
+                        + "OpenJDK javac (no ecj).",
+                    target);
+                return;
+            }
+            try {
+                boolean hasClassBuilder = lookup.hasAnnotation(target, ANNOTATION_FQN);
+                Set<String> exclude = hasClassBuilder
+                    ? new HashSet<>(Arrays.asList(
+                        lookup.stringArrayAttr(target, ANNOTATION_FQN, "exclude")))
+                    : Set.of();
+                if (!new ArgsConstructorMutator(javacBridge.get(), messager)
+                    .mutate(target, hasClassBuilder, exclude)) {
+                    messager.printMessage(Diagnostic.Kind.ERROR,
+                        "A constructor annotation could not resolve a source tree for " + target
+                            + "; mutation requires the annotated element to have a source "
+                            + "declaration.",
+                        target);
+                }
+            } catch (Exception e) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "Failed to synthesise a constructor on " + target + ": " + e.getMessage(),
+                    target);
+            }
+        }
     }
 
     /**

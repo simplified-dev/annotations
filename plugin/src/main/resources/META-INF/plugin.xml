@@ -178,12 +178,23 @@
                 displayName="@KeyField duplicate / null key"
                 groupName="Simplified Annotations"
         />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.args.inspect.ArgsConstructorInspection"
+                enabledByDefault="true"
+                level="ERROR"
+                shortName="ArgsConstructorInspection"
+                displayName="Constructor annotation misuse"
+                groupName="Simplified Annotations"
+        />
         <lang.inferredAnnotationProvider implementation="dev.simplified.xcontract.XContractInferredAnnotationProvider"/>
         <lang.inferredAnnotationProvider implementation="dev.simplified.classbuilder.editor.ClassBuilderInferredAnnotationProvider"/>
+        <lang.inferredAnnotationProvider implementation="dev.simplified.args.editor.ArgsInferredAnnotationProvider"/>
         <lang.psiAugmentProvider implementation="dev.simplified.classbuilder.editor.ClassBuilderAugmentProvider"/>
         <lang.psiAugmentProvider implementation="dev.simplified.lazy.editor.LazyAugmentProvider"/>
         <lang.psiAugmentProvider implementation="dev.simplified.enumlookup.editor.EnumLookupAugmentProvider"/>
         <lang.psiAugmentProvider implementation="dev.simplified.accessor.editor.AccessorAugmentProvider"/>
+        <lang.psiAugmentProvider implementation="dev.simplified.args.editor.ArgsAugmentProvider"/>
         <java.elementFinder implementation="dev.simplified.classbuilder.editor.ClassBuilderElementFinder" order="last"/>
         <codeInsight.lineMarkerProvider
                 language="JAVA"

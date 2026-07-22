@@ -237,6 +237,35 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         return true;
     }
 
+    /**
+     * Whether {@code @ClassBuilder} synthesises a constructor on this target.
+     *
+     * <p>The one public reading of that gate. The inferred-annotation surface
+     * and the gutter tooltip both have to answer the same question - "is there
+     * a constructor here, and what does it look like" - and a second copy of a
+     * six-clause predicate is exactly how the signature in the gutter comes to
+     * contradict the one javac emits.
+     *
+     * @param target the class to test
+     * @return whether a constructor is synthesised for it
+     */
+    public static boolean synthesisesConstructor(@NotNull PsiClass target) {
+        PsiAnnotation annotation = findClassBuilderAnnotation(target);
+        if (annotation == null) return false;
+        return needsAllArgsConstructor(target,
+            GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(annotation));
+    }
+
+    /**
+     * The target's {@code @ClassBuilder}, or {@code null}.
+     *
+     * @param target the class to read
+     * @return the annotation, when present
+     */
+    public static @Nullable PsiAnnotation classBuilderAnnotation(@NotNull PsiClass target) {
+        return findClassBuilderAnnotation(target);
+    }
+
     private static PsiAnnotation findClassBuilderAnnotation(PsiClass target) {
         for (PsiAnnotation a : target.getAnnotations()) {
             if (ClassBuilderConstants.ANNOTATION_FQN.equals(a.getQualifiedName())) return a;
