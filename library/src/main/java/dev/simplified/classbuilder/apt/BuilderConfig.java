@@ -14,7 +14,7 @@ public record BuilderConfig(
     String buildMethodName,
     String fromMethodName,
     String toBuilderMethodName,
-    String methodPrefix,
+    NamingScheme naming,
     AccessLevel access,
     AccessLevel constructorAccess,
     boolean retainInit,

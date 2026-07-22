@@ -1,8 +1,4 @@
 package dev.simplified.classbuilder.editor;
-import dev.simplified.shared.psi.DocProxyingLightMethodBuilder;
-import dev.simplified.shared.psi.AnnotatedLightModifierList;
-import dev.simplified.shared.psi.GeneratedMemberMarker;
-
 import com.intellij.lang.java.JavaLanguage;
 import com.intellij.openapi.project.Project;
 import com.intellij.psi.JavaPsiFacade;
@@ -13,8 +9,8 @@ import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiClassType;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiElementFactory;
-import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiEllipsisType;
+import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiManager;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
@@ -29,10 +25,16 @@ import com.intellij.psi.impl.light.LightModifierList;
 import com.intellij.psi.impl.light.LightParameter;
 import com.intellij.psi.impl.light.LightPsiClassBuilder;
 import com.intellij.psi.impl.light.LightTypeParameterBuilder;
+import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.util.IncorrectOperationException;
+import dev.simplified.annotations.NamingStyle;
+import dev.simplified.classbuilder.apt.NamingScheme;
+import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
+import dev.simplified.shared.psi.AnnotatedLightModifierList;
+import dev.simplified.shared.psi.DocProxyingLightMethodBuilder;
+import dev.simplified.shared.psi.GeneratedMemberMarker;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -567,10 +569,12 @@ final class GeneratedMemberFactory {
             return out;
         }
         if (field.isBoolean) {
-            out.add(booleanZeroArg(ctx, field, field.name, false));
+            // Typed setter is the ordinary `set` role; the zero-arg form is the
+            // separate `flag` role and drops out when a style suppresses it.
+            if (ctx.config.naming().emitsFlag()) out.add(booleanZeroArg(ctx, field, field.name, false));
             out.add(booleanTyped(ctx, field, field.name));
             if (field.negateName != null && !field.negateName.isEmpty()) {
-                out.add(booleanZeroArg(ctx, field, field.negateName, true));
+                if (ctx.config.naming().emitsFlag()) out.add(booleanZeroArg(ctx, field, field.negateName, true));
                 out.add(booleanTyped(ctx, field, field.negateName));
             }
         } else if (field.isOptional) {
@@ -584,14 +588,14 @@ final class GeneratedMemberFactory {
         } else if ((field.isListLike || field.isMap) && field.collector) {
             if (field.isMap) {
                 out.add(singularMapReplace(ctx, field));
-                if (field.singular) out.add(singularMapPut(ctx, field));
-                if (field.compute) out.add(singularMapPutIfAbsent(ctx, field));
+                if (field.singular && ctx.config.naming().emitsPut()) out.add(singularMapPut(ctx, field));
+                if (field.compute && ctx.config.naming().emitsCompute()) out.add(singularMapPutIfAbsent(ctx, field));
             } else {
                 out.add(singularCollectionVarargsReplace(ctx, field));
                 out.add(singularCollectionIterableReplace(ctx, field));
-                if (field.singular) out.add(singularCollectionAdd(ctx, field));
+                if (field.singular && ctx.config.naming().emitsAdd()) out.add(singularCollectionAdd(ctx, field));
             }
-            if (field.clearable) out.add(singularClear(ctx, field));
+            if (field.clearable && ctx.config.naming().emitsClear()) out.add(singularClear(ctx, field));
         } else if (field.isString && field.formattable) {
             out.add(plainSetter(ctx, field));
             out.add(stringFormattable(ctx, field));
@@ -607,7 +611,7 @@ final class GeneratedMemberFactory {
 
     /** {@code Builder withFoo(T value)} - eager value form for a @Lazy field. */
     private static PsiMethod lazyValueSetter(SetterCtx ctx, PsiFieldShape field) {
-        LightMethodBuilder m = newSetter(ctx, field, methodName(ctx, field.name, false));
+        LightMethodBuilder m = newSetter(ctx, field, ctx.config.naming().setName(field.name));
         m.addParameter(buildParam(m, field.name, field.type, false, primaryNullability(field)));
         return m;
     }
@@ -616,7 +620,7 @@ final class GeneratedMemberFactory {
     private static PsiMethod lazySupplierSetter(SetterCtx ctx, PsiFieldShape field) {
         PsiType supplierType = ctx.elements.createTypeFromText(
             "java.util.function.Supplier<" + field.type.getCanonicalText() + ">", ctx.target);
-        LightMethodBuilder m = newSetter(ctx, field, methodName(ctx, field.name, false));
+        LightMethodBuilder m = newSetter(ctx, field, ctx.config.naming().setName(field.name));
         m.addParameter(buildParam(m, field.name, supplierType, false, NOT_NULL_FQN));
         return m;
     }
@@ -626,7 +630,7 @@ final class GeneratedMemberFactory {
     // ------------------------------------------------------------------
 
     private static PsiMethod plainSetter(SetterCtx ctx, PsiFieldShape field) {
-        LightMethodBuilder m = newSetter(ctx, field, methodName(ctx, field.name, false));
+        LightMethodBuilder m = newSetter(ctx, field, ctx.config.naming().setName(field.name));
         m.addParameter(buildParam(m, field.name, field.type, false, primaryNullability(field)));
         return m;
     }
@@ -634,17 +638,17 @@ final class GeneratedMemberFactory {
     private static PsiMethod arrayVarargs(SetterCtx ctx, PsiFieldShape field) {
         // fall back to plain setter if the component type is unknown
         PsiType component = field.arrayComponent != null ? field.arrayComponent : PsiTypes.nullType();
-        LightMethodBuilder m = newSetter(ctx, field, methodName(ctx, field.name, false));
+        LightMethodBuilder m = newSetter(ctx, field, ctx.config.naming().setName(field.name));
         m.addParameter(buildParam(m, field.name, component, true, primaryNullability(field)));
         return m;
     }
 
     private static PsiMethod booleanZeroArg(SetterCtx ctx, PsiFieldShape field, String methodBase, boolean inverse) {
-        return newSetter(ctx, field, "is" + capitalise(methodBase));
+        return newSetter(ctx, field, ctx.config.naming().flagName(methodBase));
     }
 
     private static PsiMethod booleanTyped(SetterCtx ctx, PsiFieldShape field, String methodBase) {
-        LightMethodBuilder m = newSetter(ctx, field, "is" + capitalise(methodBase));
+        LightMethodBuilder m = newSetter(ctx, field, ctx.config.naming().setName(methodBase));
         m.addParameter(buildParam(m, methodBase, PsiTypes.booleanType(), false));
         return m;
     }
@@ -660,14 +664,14 @@ final class GeneratedMemberFactory {
             : ctx.elements.createTypeFromText("java.lang.Object", ctx.target);
         // Raw overload wraps via Optional.ofNullable - null is explicitly allowed
         // regardless of whether the field carries @BuildFlag(nonNull).
-        LightMethodBuilder m = newSetter(ctx, field, methodName(ctx, field.name, false));
+        LightMethodBuilder m = newSetter(ctx, field, ctx.config.naming().setName(field.name));
         m.addParameter(buildParam(m, field.name, inner, false, NULLABLE_FQN));
         return m;
     }
 
     /** {@code Builder withX(Optional<T> x)} - wrapped overload for an Optional field. */
     private static PsiMethod optionalWrapped(SetterCtx ctx, PsiFieldShape field) {
-        LightMethodBuilder m = newSetter(ctx, field, methodName(ctx, field.name, false));
+        LightMethodBuilder m = newSetter(ctx, field, ctx.config.naming().setName(field.name));
         m.addParameter(buildParam(m, field.name, field.type, false, NOT_NULL_FQN));
         return m;
     }
@@ -685,7 +689,7 @@ final class GeneratedMemberFactory {
         // @Nullable when field-level @Nullable, otherwise neither (neutral
         // default - don't impose a nullability the user didn't ask for).
         // Varargs always @Nullable.
-        LightMethodBuilder m = newSetter(ctx, field, methodName(ctx, field.name, false));
+        LightMethodBuilder m = newSetter(ctx, field, ctx.config.naming().setName(field.name));
         String[] formatAnnotations = prepend(PRINT_FORMAT_FQN, primaryNullability(field));
         m.addParameter(buildParam(m, field.name, stringType, false, formatAnnotations));
         m.addParameter(buildParam(m, "args", objectType, true, NULLABLE_FQN));
@@ -698,7 +702,7 @@ final class GeneratedMemberFactory {
         PsiType objectType = ctx.elements.createTypeFromText("java.lang.Object", ctx.target);
         // Mirrors library FieldMutators.optionalFormattable: format is always
         // @Nullable because the runtime routes through Strings.formatNullable.
-        LightMethodBuilder m = newSetter(ctx, field, methodName(ctx, field.name, false));
+        LightMethodBuilder m = newSetter(ctx, field, ctx.config.naming().setName(field.name));
         m.addParameter(buildParam(m, field.name, stringType, false, PRINT_FORMAT_FQN, NULLABLE_FQN));
         m.addParameter(buildParam(m, "args", objectType, true, NULLABLE_FQN));
         return m;
@@ -713,7 +717,7 @@ final class GeneratedMemberFactory {
         PsiType element = field.collectionElement != null
             ? field.collectionElement
             : ctx.elements.createTypeFromText("java.lang.Object", ctx.target);
-        LightMethodBuilder m = newSetter(ctx, field, methodName(ctx, field.name, false));
+        LightMethodBuilder m = newSetter(ctx, field, ctx.config.naming().setName(field.name));
         m.addParameter(buildParam(m, field.name, element, true, primaryNullability(field)));
         return m;
     }
@@ -725,15 +729,14 @@ final class GeneratedMemberFactory {
             : "java.lang.Object";
         PsiType iterableType = ctx.elements.createTypeFromText(
             "java.lang.Iterable<" + elementText + ">", ctx.target);
-        LightMethodBuilder m = newSetter(ctx, field, methodName(ctx, field.name, false));
+        LightMethodBuilder m = newSetter(ctx, field, ctx.config.naming().setName(field.name));
         m.addParameter(buildParam(m, field.name, iterableType, false, primaryNullability(field)));
         return m;
     }
 
     /** {@code Builder addEntry(T entry)} - append one element to the existing collection. */
     private static PsiMethod singularCollectionAdd(SetterCtx ctx, PsiFieldShape field) {
-        String prefix = ctx.config.methodPrefix().isEmpty() ? "add" : ctx.config.methodPrefix();
-        String name = prefix + capitalise(field.singularName);
+        String name = ctx.config.naming().addName(field.singularName);
         PsiType element = field.collectionElement != null
             ? field.collectionElement
             : ctx.elements.createTypeFromText("java.lang.Object", ctx.target);
@@ -744,14 +747,14 @@ final class GeneratedMemberFactory {
 
     /** {@code Builder withEntries(Map<K, V> entries)} - replace with fresh LinkedHashMap. */
     private static PsiMethod singularMapReplace(SetterCtx ctx, PsiFieldShape field) {
-        LightMethodBuilder m = newSetter(ctx, field, methodName(ctx, field.name, false));
+        LightMethodBuilder m = newSetter(ctx, field, ctx.config.naming().setName(field.name));
         m.addParameter(buildParam(m, field.name, field.type, false, primaryNullability(field)));
         return m;
     }
 
     /** {@code Builder putEntry(K key, V value)} - put a single entry into the existing map. */
     private static PsiMethod singularMapPut(SetterCtx ctx, PsiFieldShape field) {
-        String name = "put" + capitalise(field.singularName);
+        String name = ctx.config.naming().putName(field.singularName);
         PsiType keyType = field.mapKey != null
             ? field.mapKey
             : ctx.elements.createTypeFromText("java.lang.Object", ctx.target);
@@ -770,7 +773,7 @@ final class GeneratedMemberFactory {
      * supplier lazily for the value. Gated on {@code @Collector(compute = true)}.
      */
     private static PsiMethod singularMapPutIfAbsent(SetterCtx ctx, PsiFieldShape field) {
-        String name = "put" + capitalise(field.singularName) + "IfAbsent";
+        String name = ctx.config.naming().computeName(field.singularName);
         PsiType keyType = field.mapKey != null
             ? field.mapKey
             : ctx.elements.createTypeFromText("java.lang.Object", ctx.target);
@@ -787,7 +790,7 @@ final class GeneratedMemberFactory {
 
     /** {@code Builder clearEntries()} - empties the underlying collection or map. */
     private static PsiMethod singularClear(SetterCtx ctx, PsiFieldShape field) {
-        String name = "clear" + capitalise(field.name);
+        String name = ctx.config.naming().clearName(field.name);
         return newSetter(ctx, field, name);
     }
 
@@ -844,17 +847,6 @@ final class GeneratedMemberFactory {
         return out;
     }
 
-    private static String methodName(SetterCtx ctx, String fieldName, boolean forceBoolean) {
-        String prefix = forceBoolean ? "is" : ctx.config.methodPrefix();
-        if (prefix.isEmpty()) return fieldName;
-        return prefix + capitalise(fieldName);
-    }
-
-    private static String capitalise(String s) {
-        if (s == null || s.isEmpty()) return s;
-        return Character.toUpperCase(s.charAt(0)) + s.substring(1);
-    }
-
     private static Set<String> excludedNames(PsiClass target) {
         Set<String> out = new HashSet<>();
         PsiAnnotation annotation = PsiFieldShapeExtractor.classBuilderAnnotation(target);
@@ -890,23 +882,27 @@ final class GeneratedMemberFactory {
      */
     record EditorBuilderConfig(String builderName, String builderMethodName,
                                String buildMethodName, String fromMethodName,
-                               String toBuilderMethodName, String methodPrefix,
+                               String toBuilderMethodName, NamingScheme naming,
                                String access, String constructorAccess,
                                String factoryMethod, boolean generateBuilder,
                                boolean generateFrom, boolean generateMutate) {
         static EditorBuilderConfig fromAnnotation(PsiAnnotation annotation) {
-            String builderName = ClassBuilderConstants.stringAttr(annotation,
-                ClassBuilderConstants.ATTR_BUILDER_NAME, ClassBuilderConstants.DEFAULT_BUILDER_NAME);
+            NamingStyle style = ClassBuilderConstants.namingStyle(annotation);
+            NamingScheme naming = ClassBuilderConstants.namingScheme(annotation, style);
+            // Unwritten takes the style's pattern; written wins, so an explicit
+            // empty string keeps meaning "suppress" rather than "inherit".
+            String builderName = NamingScheme.expand(
+                ClassBuilderConstants.declaredStringAttr(annotation,
+                    ClassBuilderConstants.ATTR_BUILDER_NAME, style.builderName()),
+                targetSimpleName(annotation));
             String builderMethodName = ClassBuilderConstants.stringAttr(annotation,
                 ClassBuilderConstants.ATTR_BUILDER_METHOD_NAME, ClassBuilderConstants.DEFAULT_BUILDER_METHOD);
             String buildMethodName = ClassBuilderConstants.stringAttr(annotation,
                 ClassBuilderConstants.ATTR_BUILD_METHOD_NAME, ClassBuilderConstants.DEFAULT_BUILD_METHOD);
             String fromMethodName = ClassBuilderConstants.stringAttr(annotation,
                 ClassBuilderConstants.ATTR_FROM_METHOD_NAME, ClassBuilderConstants.DEFAULT_FROM_METHOD);
-            String toBuilderMethodName = ClassBuilderConstants.stringAttr(annotation,
-                ClassBuilderConstants.ATTR_TO_BUILDER_METHOD_NAME, ClassBuilderConstants.DEFAULT_TO_BUILDER_METHOD);
-            String methodPrefix = ClassBuilderConstants.stringAttr(annotation,
-                ClassBuilderConstants.ATTR_METHOD_PREFIX, ClassBuilderConstants.DEFAULT_METHOD_PREFIX);
+            String toBuilderMethodName = ClassBuilderConstants.declaredStringAttr(annotation,
+                ClassBuilderConstants.ATTR_TO_BUILDER_METHOD_NAME, style.toBuilderMethodName());
             String access = ClassBuilderConstants.accessKeyword(annotation);
             // Package-private default, matching the ctor Lombok @Builder supplies.
             String constructorAccess = ClassBuilderConstants.accessKeyword(annotation,
@@ -920,9 +916,21 @@ final class GeneratedMemberFactory {
             boolean generateMutate = ClassBuilderConstants.booleanAttr(annotation,
                 ClassBuilderConstants.ATTR_GENERATE_MUTATE, true);
             return new EditorBuilderConfig(builderName, builderMethodName, buildMethodName,
-                fromMethodName, toBuilderMethodName, methodPrefix, access,
+                fromMethodName, toBuilderMethodName, naming, access,
                 constructorAccess, factoryMethod,
                 generateBuilder, generateFrom, generateMutate);
+        }
+
+        /**
+         * Simple name of the type the annotation sits on, the subject
+         * {@code builderName} expands against. Falls back to the empty string
+         * for an annotation not attached to a class, where the pattern is
+         * almost certainly a placeholder-free literal anyway.
+         */
+        private static String targetSimpleName(PsiAnnotation annotation) {
+            PsiClass owner = PsiTreeUtil.getParentOfType(annotation, PsiClass.class);
+            String name = owner == null ? null : owner.getName();
+            return name == null ? "" : name;
         }
     }
 

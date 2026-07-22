@@ -6,6 +6,8 @@ import dev.simplified.annotations.BuilderIgnore;
 import dev.simplified.annotations.ClassBuilder;
 import dev.simplified.annotations.Collector;
 import dev.simplified.annotations.Formattable;
+import dev.simplified.annotations.MethodNames;
+import dev.simplified.annotations.NamingStyle;
 import dev.simplified.annotations.Negate;
 import dev.simplified.annotations.ObtainVia;
 import dev.simplified.classbuilder.validate.BuilderValidationException;
@@ -62,7 +64,7 @@ public final class ClassBuilderShowcase {
     @ClassBuilder(
         builderMethodName = "newBuilder",
         buildMethodName = "construct",
-        methodPrefix = "set"
+        names = @MethodNames(set = "set{}")
     )
     public static final class Renamed {
         private final String value;
@@ -349,6 +351,40 @@ public final class ClassBuilderShowcase {
     // ==================================================================
     // @Formattable
     // ==================================================================
+
+    // ==================================================================
+    // Naming: style + per-role patterns
+    // ==================================================================
+
+    /**
+     * Default naming. The typed boolean setter is the ordinary {@code set}
+     * role, so it takes the bare field name; the zero-arg convenience is the
+     * separate {@code flag} role and keeps the {@code is} prefix.
+     */
+    @ClassBuilder
+    public static final class Sprite {
+        private final boolean animated;
+        public Sprite(boolean animated) { this.animated = animated; }
+        public boolean isAnimated() { return animated; }
+    }
+
+    /** Lombok's exact surface: {@code CardBuilder}, {@code toBuilder()}, bare-name everything. */
+    @ClassBuilder(style = NamingStyle.LOMBOK)
+    public static final class Card {
+        private final boolean shiny;
+        @Collector(singular = true, clearable = true) private final List<String> tags;
+        public Card(boolean shiny, List<String> tags) { this.shiny = shiny; this.tags = tags; }
+        public boolean isShiny() { return shiny; }
+        public List<String> getTags() { return tags; }
+    }
+
+    /** Per-role overrides reaching names {@code methodPrefix} never governed. */
+    @ClassBuilder(names = @MethodNames(add = "append{}", clear = "reset{}"))
+    public static final class Basket {
+        @Collector(singular = true, clearable = true) private final List<String> items;
+        public Basket(List<String> items) { this.items = items; }
+        public List<String> getItems() { return items; }
+    }
 
     @ClassBuilder
     public static final class FormattedString {
@@ -767,6 +803,45 @@ public final class ClassBuilderShowcase {
                     throw new AssertionError("expected 'n: 42', got " + built.getMessage());
             })
             .asSuccess("format overload produced formatted string");
+
+        // --- Naming ------------------------------------------------------
+
+        report.expect("naming.boolean.bareTypedSetter")
+            .runVoid(() -> {
+                Sprite built = Sprite.builder().animated(true).build();
+                if (!built.isAnimated())
+                    throw new AssertionError("expected animated=true via animated(boolean)");
+                // The zero-arg convenience survives alongside it.
+                if (!Sprite.builder().isAnimated().build().isAnimated())
+                    throw new AssertionError("expected animated=true via isAnimated()");
+            })
+            .asSuccess("animated(boolean) is the set role, isAnimated() the flag role");
+
+        report.expect("naming.style.lombok")
+            .runVoid(() -> {
+                Card built = Card.builder().shiny(true).tag("holo").tag("rare").build();
+                if (!built.isShiny())
+                    throw new AssertionError("expected shiny=true via shiny(boolean)");
+                if (!built.getTags().equals(List.of("holo", "rare")))
+                    throw new AssertionError("expected [holo, rare], got " + built.getTags());
+                Card round = built.toBuilder().clearTags().build();
+                if (!round.getTags().isEmpty())
+                    throw new AssertionError("expected clearTags() to empty the list, got " + round.getTags());
+                String builderName = Card.builder().getClass().getSimpleName();
+                if (!"CardBuilder".equals(builderName))
+                    throw new AssertionError("expected builderName pattern {}Builder, got " + builderName);
+            })
+            .asSuccess("CardBuilder / shiny(boolean) / tag(T) / clearTags() / toBuilder()");
+
+        report.expect("naming.roles.override")
+            .runVoid(() -> {
+                Basket built = Basket.builder().appendItem("a").appendItem("b").build();
+                if (!built.getItems().equals(List.of("a", "b")))
+                    throw new AssertionError("expected [a, b], got " + built.getItems());
+                if (!built.mutate().resetItems().build().getItems().isEmpty())
+                    throw new AssertionError("expected resetItems() to empty the list");
+            })
+            .asSuccess("appendItem(T) / resetItems() from per-role patterns");
 
         report.finish();
     }

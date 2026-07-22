@@ -77,10 +77,10 @@ public class EmitContractsTest {
         // Nested Builder: one setter per field + build()
         assertContract(builder, "name", "(Ljava/lang/String;)Ldemo/Pizza$Builder;",
             "_ -> this", null, "this");
-        // boolean pair: isVegetarian() + isVegetarian(boolean)
+        // boolean pair: the `flag` role isVegetarian() + the `set` role vegetarian(boolean)
         assertContract(builder, "isVegetarian", "()Ldemo/Pizza$Builder;",
             "-> this", null, "this");
-        assertContract(builder, "isVegetarian", "(Z)Ldemo/Pizza$Builder;",
+        assertContract(builder, "vegetarian", "(Z)Ldemo/Pizza$Builder;",
             "_ -> this", null, "this");
         assertContract(builder, "slices", "(I)Ldemo/Pizza$Builder;",
             "_ -> this", null, "this");

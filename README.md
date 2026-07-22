@@ -29,7 +29,8 @@ Four Java annotations with matching IntelliJ IDEA tooling - covering static reso
 - **`@ResourcePath`** - validates that string expressions at annotated sites resolve to files that exist in the project's source or resource roots. Supports an optional `base` directory prefix and a caller-side inspection that catches `base` mismatches across method boundaries.
 - **`@XContract`** - a superset of JetBrains `@Contract` with relational comparisons, `&&`/`||` grouping, named-parameter references, `instanceof` checks, typed `throws` returns, and chained comparisons. A synthetic `@Contract` is inferred so IntelliJ's data-flow analysis works from a single annotation.
 - **`@ClassBuilder`** - generates a `public static class Builder` via javac AST mutation, covering classes, records, and interfaces. Full Lombok `@Builder` parity plus richer setter shapes:
-  - Boolean zero-arg + typed pair with `@Negate` inverse
+  - Boolean typed setter plus a zero-arg convenience, with `@Negate` inverse
+  - Every generated name driven by a per-role pattern, with a `NamingStyle.LOMBOK` drop-in profile
   - `Optional<T>` dual setters (raw nullable + wrapped)
   - `@Collector` varargs/iterable bulk overloads with opt-in single-element add/put, clear, and lazy put-if-absent
   - `@Formattable` `@PrintFormat` string overload
@@ -153,7 +154,7 @@ Generates a `Pizza.Builder` with:
 - `name(String)` - chained `@BuildFlag` enforcement at `build()` time
 - `toppings(String...)`, `toppings(Iterable<String>)`, `addTopping(String)`, `clearToppings()`
 - `description(String)`, `description(Optional<String>)`, `description(String fmt, Object... args)` with null-safe `String.format`
-- `isContainsMeat()`, `isContainsMeat(boolean)`, `isVegetarian()`, `isVegetarian(boolean)` (booleans always use `is` prefix)
+- `containsMeat(boolean)`, `vegetarian(boolean)` plus the zero-arg `isContainsMeat()` / `isVegetarian()` convenience
 
 Plus bootstrap methods on `Pizza` itself: `static Pizza.Builder builder()`, `static Pizza.Builder from(Pizza)`, and `Pizza.Builder mutate()`.
 
@@ -242,12 +243,13 @@ When the enclosing class also carries `@ClassBuilder`, the generated builder rec
 
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `builderName` | `String` | `"Builder"` | Simple name of the generated builder class |
+| `builderName` | `String` | from `style` | Name pattern for the generated builder class; `{}` expands to the target's simple name |
 | `builderMethodName` | `String` | `"builder"` | Static factory method returning a fresh builder |
 | `buildMethodName` | `String` | `"build"` | Terminal method on the builder |
 | `fromMethodName` | `String` | `"from"` | Static copy-factory seeding a builder from an existing instance |
-| `toBuilderMethodName` | `String` | `"mutate"` | Instance method returning a pre-seeded builder |
-| `methodPrefix` | `String` | `""` | Setter method prefix (booleans always use `is`) |
+| `toBuilderMethodName` | `String` | from `style` | Instance method returning a pre-seeded builder |
+| `style` | `NamingStyle` | `SIMPLIFIED` | Naming patterns for every generated method (see below) |
+| `names` | `@MethodNames` | inherit | Per-role overrides of the style's patterns |
 | `access` | `AccessLevel` | `PUBLIC` | Access level of generated bootstrap methods and builder class |
 | `validate` | `boolean` | `true` | Whether `build()` calls `BuildFlagValidator.validate(target)` |
 | `emitContracts` | `boolean` | `true` | Whether to emit `@XContract` annotations on generated methods |
@@ -257,6 +259,40 @@ When the enclosing class also carries `@ClassBuilder`, the generated builder rec
 | `generateImpl` | `boolean` | `true` | Interface targets only: whether to generate `<Name>Impl` |
 | `factoryMethod` | `String` | `""` | Static factory method `build()` delegates to instead of `new` |
 | `exclude` | `String[]` | `{}` | Field names to exclude from the builder |
+
+### Method Naming
+
+Every generated method name comes from one of six **roles**, each holding a **pattern** with one `{}`
+placeholder. The placeholder expands to the name the method is built from - the field name, the
+`@Negate` stem, or the `@Collector` singular - capitalised unless it opens the pattern. Because the
+placeholder may sit anywhere, a pattern expresses a suffix (`{}Value`) or a wrapped form
+(`put{}IfAbsent`) as readily as a prefix.
+
+| Role | What it names | `SIMPLIFIED` | `LOMBOK` | `BEAN` |
+|------|---------------|--------------|----------|--------|
+| `set` | The value-taking setter, booleans included | `{}` | `{}` | `set{}` |
+| `flag` | The zero-arg boolean setter and its `@Negate` inverse | `is{}` | *none* | `is{}` |
+| `add` | `@Collector` single-element add | `add{}` | `{}` | `add{}` |
+| `put` | `@Collector` single-entry put (maps) | `put{}` | `{}` | `put{}` |
+| `compute` | `@Collector` put-if-absent (maps) | `put{}IfAbsent` | *none* | `put{}IfAbsent` |
+| `clear` | `@Collector` clear | `clear{}` | `clear{}` | `clear{}` |
+| | `builderName` | `Builder` | `{}Builder` | `Builder` |
+| | `toBuilderMethodName` | `mutate` | `toBuilder` | `mutate` |
+
+`style` sets all of them at once; `names` overrides individual roles; anything written explicitly on
+`@ClassBuilder` wins over the style.
+
+```java
+@ClassBuilder                                              // fluent: animated(boolean) + isAnimated()
+@ClassBuilder(style = NamingStyle.LOMBOK)                  // drop-in for Lombok @Builder
+@ClassBuilder(names = @MethodNames(set = "set{}"))         // JavaBean setters, rest unchanged
+@ClassBuilder(names = @MethodNames(add = "append{}"))      // rename one role only
+@ClassBuilder(names = @MethodNames(flag = MethodNames.NONE))   // drop the zero-arg boolean form
+```
+
+`MethodNames.NONE` suppresses a role; `MethodNames.INHERIT` (the default, `""`) takes it from the
+style. `set` may not be suppressed, and every other pattern must contain the placeholder exactly once -
+both are rejected at the annotation by the processor and by the IDE inspection.
 
 ### Field Annotations
 
@@ -356,7 +392,7 @@ reconstructed from the declared type. No inference is done on the initializer at
 | Annotation | Target | Description |
 |------------|--------|-------------|
 | `@Collector` | `Collection`, `List`, `Set`, `Map` | Emits varargs + `Iterable` bulk setters; opt-in `singular`, `clearable`, `compute` (maps: `putIfAbsent(K, Supplier<V>)`) |
-| `@Negate("inverse")` | `boolean` | Emits an inverse setter pair (`isInverse()` / `isInverse(boolean)`) alongside the direct pair |
+| `@Negate("inverse")` | `boolean` | Emits an inverse setter pair (`inverse(boolean)` plus the zero-arg `isInverse()`) alongside the direct pair |
 | `@Formattable` | `String`, `Optional<String>` | Emits a `@PrintFormat` overload (`withField(String fmt, Object... args)`) with null-safe `String.format` |
 | `@Lazy` | any reference-typed field | Rewrites storage to `Lazy<T>`, wraps the initializer as a supplier, and synthesises a memoizing getter; with `@ClassBuilder` adds a dual `field(T)` / `field(Supplier<T>)` setter pair |
 

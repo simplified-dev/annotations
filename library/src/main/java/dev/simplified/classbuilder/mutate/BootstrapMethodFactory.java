@@ -303,14 +303,13 @@ final class BootstrapMethodFactory {
     }
 
     /**
-     * Resolves the setter method name for a field using the same rules as the
-     * mutation-side {@link FieldMutators#setters}: {@code isX} for booleans,
-     * {@code <prefix>X} otherwise.
+     * Resolves the setter method name for a field. Booleans go through the same
+     * {@code set} role as every other field kind, so seeding needs no special
+     * case; the zero-arg {@code flag} setter takes no argument and is never the
+     * one called here.
      */
     private String setterName(FieldSpec f) {
-        String prefix = f.isBoolean ? "is" : ctx.config().methodPrefix();
-        if (prefix.isEmpty()) return f.name;
-        return prefix + capitalise(f.name);
+        return ctx.config().naming().setName(f.name);
     }
 
     private static String capitalise(String s) {

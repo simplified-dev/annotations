@@ -58,11 +58,33 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
                 String builderMethodName() default "builder";
                 String fromMethodName() default "from";
                 String toBuilderMethodName() default "mutate";
-                String methodPrefix() default "";
+                NamingStyle style() default NamingStyle.SIMPLIFIED;
+                MethodNames names() default @MethodNames;
                 String factoryMethod() default "";
                 AccessLevel access() default AccessLevel.PUBLIC;
                 AccessLevel constructorAccess() default AccessLevel.PACKAGE;
                 String[] exclude() default {};
+            }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/NamingStyle.java",
+            """
+            package dev.simplified.annotations;
+            public enum NamingStyle { SIMPLIFIED, LOMBOK, BEAN }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/MethodNames.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target({})
+            public @interface MethodNames {
+                String INHERIT = "";
+                String NONE = "-";
+                String set() default INHERIT;
+                String flag() default INHERIT;
+                String add() default INHERIT;
+                String put() default INHERIT;
+                String compute() default INHERIT;
+                String clear() default INHERIT;
             }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/AccessLevel.java",
@@ -520,15 +542,15 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
             @ClassBuilder
             public class Toggle { boolean active; }
             """);
-        PsiMethod[] isActive = builder.findMethodsByName("isActive", false);
-        assertEquals("zero-arg + typed pair", 2, isActive.length);
-        boolean sawZeroArg = false, sawTyped = false;
-        for (PsiMethod m : isActive) {
-            if (m.getParameterList().getParametersCount() == 0) sawZeroArg = true;
-            else sawTyped = true;
-        }
-        assertTrue("zero-arg isActive()", sawZeroArg);
-        assertTrue("typed isActive(boolean)", sawTyped);
+        // The typed setter is the ordinary `set` role, so it takes the bare
+        // field name; only the zero-arg convenience keeps the `is` prefix.
+        PsiMethod[] zeroArg = builder.findMethodsByName("isActive", false);
+        assertEquals("zero-arg flag setter", 1, zeroArg.length);
+        assertEquals("isActive() takes no argument", 0, zeroArg[0].getParameterList().getParametersCount());
+
+        PsiMethod[] typed = builder.findMethodsByName("active", false);
+        assertEquals("typed setter", 1, typed.length);
+        assertEquals("active(boolean) takes one argument", 1, typed[0].getParameterList().getParametersCount());
     }
 
     /** {@code @Negate("name")} on a boolean field produces a second zero-arg + typed pair. */
@@ -542,8 +564,50 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
                 @Negate("closed") boolean open;
             }
             """);
-        assertEquals("primary pair", 2, builder.findMethodsByName("isOpen", false).length);
-        assertEquals("inverse pair", 2, builder.findMethodsByName("isClosed", false).length);
+        assertEquals("primary flag", 1, builder.findMethodsByName("isOpen", false).length);
+        assertEquals("primary typed", 1, builder.findMethodsByName("open", false).length);
+        assertEquals("inverse flag", 1, builder.findMethodsByName("isClosed", false).length);
+        assertEquals("inverse typed", 1, builder.findMethodsByName("closed", false).length);
+    }
+
+    /** {@code style = LOMBOK} renames the builder, the seed method, and the collector shapes. */
+    public void testLombokStyleNaming() {
+        PsiClass builder = builderFor("Card",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Collector;
+            import dev.simplified.annotations.NamingStyle;
+            import java.util.List;
+            @ClassBuilder(style = NamingStyle.LOMBOK)
+            public class Card {
+                boolean shiny;
+                @Collector(singular = true, clearable = true) List<String> tags;
+            }
+            """, "CardBuilder");
+        assertEquals("bare-name boolean setter", 1, builder.findMethodsByName("shiny", false).length);
+        assertEquals("no zero-arg boolean form", 0, builder.findMethodsByName("isShiny", false).length);
+        assertEquals("bare singular add", 1, builder.findMethodsByName("tag", false).length);
+        assertEquals("addX is the SIMPLIFIED name", 0, builder.findMethodsByName("addTag", false).length);
+        assertEquals("clear is unchanged", 1, builder.findMethodsByName("clearTags", false).length);
+    }
+
+    /** A per-role override reaches a name the retired {@code methodPrefix} never governed. */
+    public void testMethodNamesRoleOverride() {
+        PsiClass builder = builderFor("Basket",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Collector;
+            import dev.simplified.annotations.MethodNames;
+            import java.util.List;
+            @ClassBuilder(names = @MethodNames(add = "append{}", clear = "reset{}"))
+            public class Basket {
+                @Collector(singular = true, clearable = true) List<String> items;
+            }
+            """);
+        assertEquals(1, builder.findMethodsByName("appendItem", false).length);
+        assertEquals(1, builder.findMethodsByName("resetItems", false).length);
+        assertEquals(0, builder.findMethodsByName("addItem", false).length);
+        assertEquals(0, builder.findMethodsByName("clearItems", false).length);
     }
 
     /** {@code Optional<T>} fields get nullable-raw + wrapped setters. */
@@ -804,6 +868,13 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
         PsiClass[] inner = target.getInnerClasses();
         assertEquals("expected exactly one synthesised Builder", 1, inner.length);
         return inner[0];
+    }
+
+    /** As {@link #builderFor(String, String)}, additionally pinning the builder's simple name. */
+    private PsiClass builderFor(String className, String source, String expectedBuilderName) {
+        PsiClass builder = builderFor(className, source);
+        assertEquals("builder class name", expectedBuilderName, builder.getName());
+        return builder;
     }
 
 }

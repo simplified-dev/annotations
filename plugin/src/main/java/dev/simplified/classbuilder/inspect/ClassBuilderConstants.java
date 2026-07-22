@@ -4,6 +4,8 @@ import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationMemberValue;
 import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiReferenceExpression;
+import dev.simplified.annotations.NamingStyle;
+import dev.simplified.classbuilder.apt.NamingScheme;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -68,7 +70,8 @@ public final class ClassBuilderConstants {
     public static final @NotNull String ATTR_BUILD_METHOD_NAME = "buildMethodName";
     public static final @NotNull String ATTR_FROM_METHOD_NAME = "fromMethodName";
     public static final @NotNull String ATTR_TO_BUILDER_METHOD_NAME = "toBuilderMethodName";
-    public static final @NotNull String ATTR_METHOD_PREFIX = "methodPrefix";
+    public static final @NotNull String ATTR_STYLE = "style";
+    public static final @NotNull String ATTR_NAMES = "names";
     public static final @NotNull String ATTR_GENERATE_BUILDER = "generateBuilder";
     public static final @NotNull String ATTR_GENERATE_FROM = "generateFrom";
     public static final @NotNull String ATTR_GENERATE_MUTATE = "generateMutate";
@@ -82,7 +85,6 @@ public final class ClassBuilderConstants {
     public static final @NotNull String DEFAULT_BUILD_METHOD = "build";
     public static final @NotNull String DEFAULT_FROM_METHOD = "from";
     public static final @NotNull String DEFAULT_TO_BUILDER_METHOD = "mutate";
-    public static final @NotNull String DEFAULT_METHOD_PREFIX = "";
 
     private ClassBuilderConstants() {}
 
@@ -91,6 +93,79 @@ public final class ClassBuilderConstants {
         PsiAnnotationMemberValue value = annotation.findAttributeValue(attr);
         if (value instanceof PsiLiteralExpression literal && literal.getValue() instanceof String s && !s.isEmpty()) return s;
         return fallback;
+    }
+
+    /**
+     * Reads a string attribute only when it is written at the annotation,
+     * mirroring the processor's {@code getElementValues()} view. Unlike
+     * {@link #stringAttr} an explicit empty string is returned rather than
+     * folded into the fallback, which is what lets an empty
+     * {@code toBuilderMethodName} keep meaning "suppress" while an unwritten
+     * one inherits from the style.
+     *
+     * @param annotation the annotation to read, or {@code null}
+     * @param attr the attribute name
+     * @param fallback value to return when the attribute is not written
+     * @return the written value, or {@code fallback}
+     */
+    public static @NotNull String declaredStringAttr(@Nullable PsiAnnotation annotation,
+                                                     @NotNull String attr,
+                                                     @NotNull String fallback) {
+        String written = writtenStringAttr(annotation, attr);
+        return written == null ? fallback : written;
+    }
+
+    /**
+     * Reads a written string attribute, or {@code null} when it is absent.
+     *
+     * @param annotation the annotation to read, or {@code null}
+     * @param attr the attribute name
+     * @return the written value, or {@code null}
+     */
+    public static @Nullable String writtenStringAttr(@Nullable PsiAnnotation annotation, @NotNull String attr) {
+        if (annotation == null) return null;
+        PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(attr);
+        if (value instanceof PsiLiteralExpression literal && literal.getValue() instanceof String s) return s;
+        return null;
+    }
+
+    /** Reads the {@code style} attribute, defaulting to {@link NamingStyle#SIMPLIFIED}. */
+    public static @NotNull NamingStyle namingStyle(@Nullable PsiAnnotation annotation) {
+        if (annotation == null) return NamingStyle.SIMPLIFIED;
+        PsiAnnotationMemberValue value = annotation.findAttributeValue(ATTR_STYLE);
+        if (value instanceof PsiReferenceExpression ref) {
+            String name = ref.getReferenceName();
+            if (name != null) {
+                try {
+                    return NamingStyle.valueOf(name);
+                } catch (IllegalArgumentException ignored) {
+                    // Unresolvable or mid-typing reference - fall through.
+                }
+            }
+        }
+        return NamingStyle.SIMPLIFIED;
+    }
+
+    /**
+     * Resolves the naming scheme from the nested {@code names} attribute over
+     * the given style. An unwritten attribute leaves every role inheriting.
+     *
+     * @param annotation the annotation to read, or {@code null}
+     * @param style the style supplying every unwritten role
+     * @return the resolved scheme
+     */
+    public static @NotNull NamingScheme namingScheme(@Nullable PsiAnnotation annotation,
+                                                     @NotNull NamingStyle style) {
+        if (annotation == null) return NamingScheme.of(style);
+        PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(ATTR_NAMES);
+        if (!(value instanceof PsiAnnotation names)) return NamingScheme.of(style);
+        return NamingScheme.resolve(style,
+            writtenStringAttr(names, "set"),
+            writtenStringAttr(names, "flag"),
+            writtenStringAttr(names, "add"),
+            writtenStringAttr(names, "put"),
+            writtenStringAttr(names, "compute"),
+            writtenStringAttr(names, "clear"));
     }
 
     public static boolean booleanAttr(@Nullable PsiAnnotation annotation, @NotNull String attr, boolean fallback) {

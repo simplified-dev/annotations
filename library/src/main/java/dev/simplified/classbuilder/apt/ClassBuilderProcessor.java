@@ -1,13 +1,13 @@
 package dev.simplified.classbuilder.apt;
-import dev.simplified.shared.apt.SourceIntrospector;
-import dev.simplified.shared.apt.AnnotationLookup;
-
-import dev.simplified.annotations.AccessLevel;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
+import dev.simplified.annotations.AccessLevel;
+import dev.simplified.annotations.NamingStyle;
 import dev.simplified.classbuilder.mutate.BuilderMutator;
 import dev.simplified.classbuilder.mutate.InterfaceBootstrapMutator;
-import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.lazy.mutate.LazyFieldMutator;
+import dev.simplified.shared.apt.AnnotationLookup;
+import dev.simplified.shared.apt.SourceIntrospector;
+import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.compat.JavacAccessFactory;
 
 import javax.annotation.processing.AbstractProcessor;
@@ -17,6 +17,7 @@ import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.annotation.processing.SupportedSourceVersion;
 import javax.lang.model.SourceVersion;
+import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.Modifier;
@@ -144,6 +145,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
 
     private void processClass(TypeElement target, Messager messager) {
         BuilderConfig config = extractConfig(target);
+        validateNaming(target, config, messager);
         List<FieldSpec> fields = collectFields(target, config);
 
         if (javacBridge.isEmpty()) {
@@ -219,6 +221,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
 
     private void processInterface(TypeElement target, Messager messager) throws IOException {
         BuilderConfig config = extractConfig(target);
+        validateNaming(target, config, messager);
 
         // generateImpl=false means the user takes responsibility for producing
         // the instance build() constructs. That only works if factoryMethod is
@@ -286,12 +289,18 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     }
 
     private BuilderConfig extractConfig(TypeElement target) {
-        String builderName = lookup.stringAttr(target, ANNOTATION_FQN, "builderName", "Builder");
+        NamingStyle style = parseStyle(lookup.stringAttr(target, ANNOTATION_FQN, "style", "SIMPLIFIED"));
+        NamingScheme naming = extractNaming(target, style);
+        // Unwritten takes the style's pattern; written wins, which is what keeps
+        // an explicit empty string meaning "suppress" rather than "inherit".
+        String builderName = NamingScheme.expand(
+            lookup.stringAttr(target, ANNOTATION_FQN, "builderName", style.builderName()),
+            target.getSimpleName().toString());
         String builderMethodName = lookup.stringAttr(target, ANNOTATION_FQN, "builderMethodName", "builder");
         String buildMethodName = lookup.stringAttr(target, ANNOTATION_FQN, "buildMethodName", "build");
         String fromMethodName = lookup.stringAttr(target, ANNOTATION_FQN, "fromMethodName", "from");
-        String toBuilderMethodName = lookup.stringAttr(target, ANNOTATION_FQN, "toBuilderMethodName", "mutate");
-        String methodPrefix = lookup.stringAttr(target, ANNOTATION_FQN, "methodPrefix", "");
+        String toBuilderMethodName =
+            lookup.stringAttr(target, ANNOTATION_FQN, "toBuilderMethodName", style.toBuilderMethodName());
         AccessLevel access = parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, "access", "PUBLIC"));
         AccessLevel constructorAccess =
             parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, "constructorAccess", "PACKAGE"));
@@ -307,7 +316,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         Set<String> excludeSet = new HashSet<>(Arrays.asList(lookup.stringArrayAttr(target, ANNOTATION_FQN, "exclude")));
         return new BuilderConfig(
             builderName, builderMethodName, buildMethodName, fromMethodName, toBuilderMethodName,
-            methodPrefix, access, constructorAccess, retainInit,
+            naming, access, constructorAccess, retainInit,
             generateBuilder, generateFrom, generateMutate,
             generateCopyConstructor, generateImpl, validate, emitContracts, factoryMethod, excludeSet
         );
@@ -381,6 +390,70 @@ public class ClassBuilderProcessor extends AbstractProcessor {
             return AccessLevel.valueOf(raw);
         } catch (IllegalArgumentException e) {
             return AccessLevel.PUBLIC;
+        }
+    }
+
+    private static NamingStyle parseStyle(String raw) {
+        try {
+            return NamingStyle.valueOf(raw);
+        } catch (IllegalArgumentException e) {
+            return NamingStyle.SIMPLIFIED;
+        }
+    }
+
+    /**
+     * Reads the nested {@code names} attribute. An unwritten attribute leaves
+     * every role inheriting from the style, which is exactly what a mirror with
+     * no entries produces, so the absent and empty cases need no distinction.
+     */
+    private NamingScheme extractNaming(TypeElement target, NamingStyle style) {
+        AnnotationMirror names =
+            lookup.nestedAnnotationValue(lookup.findMirror(target, ANNOTATION_FQN), "names");
+        if (names == null) return NamingScheme.of(style);
+        return NamingScheme.resolve(style,
+            lookup.stringAttr(names, "set", null),
+            lookup.stringAttr(names, "flag", null),
+            lookup.stringAttr(names, "add", null),
+            lookup.stringAttr(names, "put", null),
+            lookup.stringAttr(names, "compute", null),
+            lookup.stringAttr(names, "clear", null));
+    }
+
+    /**
+     * Reports naming patterns that cannot produce a compilable member, at the
+     * annotation rather than on generated code the author cannot see. A pattern
+     * missing its placeholder would give every field the same method name, and a
+     * suppressed {@code set} role would leave the field unassignable.
+     *
+     * <p>Cross-role name collisions are deliberately not checked: within one
+     * field the roles that can share a name differ in arity or parameter type
+     * ({@code animated()} against {@code animated(boolean)}, a varargs replace
+     * against a single-element add), so the overlap is legal and sometimes
+     * intended. A genuine duplicate is javac's own error to raise.
+     */
+    private void validateNaming(TypeElement target, BuilderConfig config, Messager messager) {
+        NamingScheme naming = config.naming();
+        String[][] roles = {
+            {"set", naming.set()}, {"flag", naming.flag()}, {"add", naming.add()},
+            {"put", naming.put()}, {"compute", naming.compute()}, {"clear", naming.clear()}
+        };
+        for (String[] role : roles) {
+            String error = NamingScheme.patternError(role[1], true);
+            if (error != null) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@ClassBuilder naming pattern for '" + role[0] + "' " + error, target);
+            }
+        }
+        if (!naming.emitsSet()) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@ClassBuilder cannot suppress the 'set' naming role - a field would then have "
+                    + "no way to be assigned on the builder", target);
+        }
+        String builderError = NamingScheme.patternError(
+            lookup.stringAttr(target, ANNOTATION_FQN, "builderName", "Builder"), false);
+        if (builderError != null) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@ClassBuilder builderName " + builderError, target);
         }
     }
 

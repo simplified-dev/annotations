@@ -72,6 +72,14 @@ import java.lang.annotation.Target;
  *   <li>{@link Formattable} - emit a {@code @PrintFormat} string overload</li>
  * </ul>
  *
+ * <h2>Naming</h2>
+ * Every generated method name comes from one of six roles - the value-taking
+ * setter, the zero-arg boolean setter, and the collector's add, put,
+ * put-if-absent, and clear - each holding a pattern whose {@code {}} placeholder
+ * expands to the field name, {@link Negate} stem, or {@link Collector} singular.
+ * {@link #style()} sets all six at once (plus {@link #builderName()} and
+ * {@link #toBuilderMethodName()}); {@link #names()} overrides individual roles.
+ *
  * <h2>Examples</h2>
  * <pre><code>
  * // Simplest case
@@ -102,11 +110,17 @@ import java.lang.annotation.Target;
  *     builderName = "MyBuilder",
  *     builderMethodName = "newBuilder",
  *     toBuilderMethodName = "toBuilder",
- *     methodPrefix = "set"
+ *     names = &#64;MethodNames(set = "set{}")
  * )
+ * public final class Config { ... }
+ *
+ * // A drop-in for Lombok &#64;Builder: ConfigBuilder, toBuilder(), bare-name setters
+ * &#64;ClassBuilder(style = NamingStyle.LOMBOK)
  * public final class Config { ... }
  * </code></pre>
  *
+ * @see NamingStyle
+ * @see MethodNames
  * @see BuilderDefault
  * @see BuilderIgnore
  * @see BuildFlag
@@ -120,7 +134,11 @@ import java.lang.annotation.Target;
 public @interface ClassBuilder {
 
     /**
-     * The simple name of the generated builder class. Lombok parity:
+     * The simple name of the generated builder class, as a pattern whose
+     * {@code {}} placeholder expands to the target's simple name. A literal
+     * such as the default carries no placeholder and is used verbatim;
+     * {@code "{}Builder"} produces Lombok's {@code <Type>Builder}. Left
+     * unwritten it comes from {@link #style()}. Lombok parity:
      * {@code builderClassName}.
      */
     @NotNull String builderName() default "Builder";
@@ -145,16 +163,34 @@ public @interface ClassBuilder {
 
     /**
      * The name of the instance method returning a builder seeded from
-     * {@code this}. Lombok parity: {@code toBuilder} (renamed to {@code mutate}
-     * by default per project convention). Empty string suppresses the method.
+     * {@code this}. Left unwritten it comes from {@link #style()}, which is
+     * {@code mutate} per project convention and {@code toBuilder} under
+     * {@link NamingStyle#LOMBOK}. Empty string suppresses the method.
      */
     @NotNull String toBuilderMethodName() default "mutate";
 
     /**
-     * The setter method prefix. Booleans always use {@code "is"} unless this
-     * attribute is set to a non-default value.
+     * The naming patterns every generated method takes its name from. Selecting
+     * a style sets the default for all six method roles at once, and also
+     * supplies the defaults for {@link #builderName()} and
+     * {@link #toBuilderMethodName()} - which is what makes
+     * {@code style = NamingStyle.LOMBOK} a complete drop-in for Lombok
+     * {@code @Builder} naming rather than a set of overrides repeated per type.
+     *
+     * <p>Anything written explicitly wins over the style, whether it is a role
+     * in {@link #names()} or one of the flat name attributes here.
+     *
+     * @see NamingStyle
      */
-    @NotNull String methodPrefix() default "";
+    @NotNull NamingStyle style() default NamingStyle.SIMPLIFIED;
+
+    /**
+     * Per-role overrides of the patterns {@link #style()} supplies. Every
+     * unwritten role inherits, so only the roles that differ need naming.
+     *
+     * @see MethodNames
+     */
+    @NotNull MethodNames names() default @MethodNames;
 
     /**
      * The access level of the generated bootstrap methods and the generated

@@ -139,15 +139,15 @@ public class BuilderMutatorTest {
         Class<?> flag = Class.forName("demo.Flag", true, cl);
         Class<?> builder = nested(flag, "Builder");
 
-        // zero-arg setter flips to true
+        // zero-arg `flag` role setter flips to true
         Object b1 = builder.getDeclaredConstructor().newInstance();
         builder.getMethod("isEnabled").invoke(b1);
         Object r1 = builder.getMethod("build").invoke(b1);
         assertEquals(Boolean.TRUE, flag.getMethod("isEnabled").invoke(r1));
 
-        // typed setter with false
+        // typed setter is the ordinary `set` role, so it takes the bare name
         Object b2 = builder.getDeclaredConstructor().newInstance();
-        builder.getMethod("isEnabled", boolean.class).invoke(b2, false);
+        builder.getMethod("enabled", boolean.class).invoke(b2, false);
         Object r2 = builder.getMethod("build").invoke(b2);
         assertEquals(Boolean.FALSE, flag.getMethod("isEnabled").invoke(r2));
     }

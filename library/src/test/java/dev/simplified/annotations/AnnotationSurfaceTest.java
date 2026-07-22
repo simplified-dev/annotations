@@ -86,6 +86,52 @@ public class AnnotationSurfaceTest {
     }
 
     @Test
+    public void methodNames_metadata() {
+        // Only ever an attribute value on @ClassBuilder, so an empty @Target is
+        // what stops it being written anywhere else.
+        assertRetention(MethodNames.class, RetentionPolicy.CLASS);
+        assertTargets(MethodNames.class);
+    }
+
+    /**
+     * Every role of every style must expand to something usable, and only
+     * {@code builderName} may omit the placeholder. A typo in the style table
+     * would otherwise surface as a compile error in consumer code.
+     */
+    @Test
+    public void namingStyle_everyPatternIsWellFormed() {
+        for (NamingStyle style : NamingStyle.values()) {
+            assertPattern(style, "set", style.set(), true);
+            assertPattern(style, "flag", style.flag(), true);
+            assertPattern(style, "add", style.add(), true);
+            assertPattern(style, "put", style.put(), true);
+            assertPattern(style, "compute", style.compute(), true);
+            assertPattern(style, "clear", style.clear(), true);
+            assertPattern(style, "builderName", style.builderName(), false);
+            assertNotEquals(style + " must be able to assign a field",
+                MethodNames.NONE, style.set());
+        }
+    }
+
+    private static void assertPattern(NamingStyle style, String role, String pattern, boolean placeholderRequired) {
+        if (MethodNames.NONE.equals(pattern)) return;
+        String subject = "sample";
+        String expanded = placeholderRequired || pattern.contains("{}")
+            ? pattern.replace("{}", pattern.startsWith("{}") ? subject : "Sample")
+            : pattern;
+        assertTrue(style + "." + role + " must expand to a Java identifier, got '" + expanded + "'",
+            isJavaIdentifier(expanded));
+    }
+
+    private static boolean isJavaIdentifier(String s) {
+        if (s.isEmpty() || !Character.isJavaIdentifierStart(s.charAt(0))) return false;
+        for (int i = 1; i < s.length(); i++) {
+            if (!Character.isJavaIdentifierPart(s.charAt(i))) return false;
+        }
+        return true;
+    }
+
+    @Test
     public void obtainVia_metadata() {
         // Consumed by the processor when emitting from(T) / mutate(), so CLASS
         // retention suffices.
@@ -104,7 +150,7 @@ public class AnnotationSurfaceTest {
         assertDefault(ClassBuilder.class, "buildMethodName", "build");
         assertDefault(ClassBuilder.class, "fromMethodName", "from");
         assertDefault(ClassBuilder.class, "toBuilderMethodName", "mutate");
-        assertDefault(ClassBuilder.class, "methodPrefix", "");
+        assertDefault(ClassBuilder.class, "style", NamingStyle.SIMPLIFIED);
         assertDefault(ClassBuilder.class, "access", AccessLevel.PUBLIC);
         assertDefault(ClassBuilder.class, "constructorAccess", AccessLevel.PACKAGE);
         // Retain-all is the default: a field written `String x = "v"` keeps "v"

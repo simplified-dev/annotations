@@ -46,9 +46,31 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
                 String builderMethodName() default "builder";
                 String fromMethodName() default "from";
                 String toBuilderMethodName() default "mutate";
-                String methodPrefix() default "";
+                NamingStyle style() default NamingStyle.SIMPLIFIED;
+                MethodNames names() default @MethodNames;
                 String[] exclude() default {};
                 boolean emitContracts() default true;
+            }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/NamingStyle.java",
+            """
+            package dev.simplified.annotations;
+            public enum NamingStyle { SIMPLIFIED, LOMBOK, BEAN }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/MethodNames.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target({})
+            public @interface MethodNames {
+                String INHERIT = "";
+                String NONE = "-";
+                String set() default INHERIT;
+                String flag() default INHERIT;
+                String add() default INHERIT;
+                String put() default INHERIT;
+                String compute() default INHERIT;
+                String clear() default INHERIT;
             }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/Formattable.java",

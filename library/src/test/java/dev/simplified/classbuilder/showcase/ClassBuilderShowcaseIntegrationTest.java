@@ -89,7 +89,10 @@ public class ClassBuilderShowcaseIntegrationTest {
         "collector.map.compute",
         "negate.direct",
         "negate.inverse",
-        "formattable.string"
+        "formattable.string",
+        "naming.boolean.bareTypedSetter",
+        "naming.style.lombok",
+        "naming.roles.override"
     );
 
     private static Map<String, CaseLine> cases;

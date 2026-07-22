@@ -325,13 +325,14 @@ public class SuperBuilderMutatorTest {
         assertEquals(Boolean.FALSE,
             switchCls.getMethod("isOpen").invoke(gateBuilder.getMethod("build").invoke(b2)));
 
-        // Typed forms: isClosed(true) -> open=false; isClosed(false) -> open=true
+        // Typed forms take the `set` role over the negate stem:
+        // closed(true) -> open=false; closed(false) -> open=true
         Object b3 = gateCls.getMethod("builder").invoke(null);
-        gateBuilder.getMethod("isClosed", boolean.class).invoke(b3, true);
+        gateBuilder.getMethod("closed", boolean.class).invoke(b3, true);
         assertEquals(Boolean.FALSE,
             switchCls.getMethod("isOpen").invoke(gateBuilder.getMethod("build").invoke(b3)));
         Object b4 = gateCls.getMethod("builder").invoke(null);
-        gateBuilder.getMethod("isClosed", boolean.class).invoke(b4, false);
+        gateBuilder.getMethod("closed", boolean.class).invoke(b4, false);
         assertEquals(Boolean.TRUE,
             switchCls.getMethod("isOpen").invoke(gateBuilder.getMethod("build").invoke(b4)));
     }

@@ -307,7 +307,7 @@ public class RetainedInitExpressionTest {
         // The setters still win over the default, in both forms.
         Class<?> target = Class.forName("demo.Expr", true, loadClasses(c));
         Object b1 = target.getMethod("builder").invoke(null);
-        b1.getClass().getMethod("isEnabled", boolean.class).invoke(b1, false);
+        b1.getClass().getMethod("enabled", boolean.class).invoke(b1, false);
         assertEquals(false, target.getMethod("isEnabled")
             .invoke(b1.getClass().getMethod("build").invoke(b1)));
 

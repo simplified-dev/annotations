@@ -230,7 +230,7 @@ final class BuilderEmitter {
     private void emitPlainSetter(FieldSpec f) {
         emitContract("_ -> this", false, "this");
         body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ')
-            .append(methodName(f.name, false)).append('(').append(nullabilityPrefix(f)).append(typeName(f.typeDisplay)).append(' ').append(f.name).append(") {\n");
+            .append(config.naming().setName(f.name)).append('(').append(nullabilityPrefix(f)).append(typeName(f.typeDisplay)).append(' ').append(f.name).append(") {\n");
         body.append("        this.").append(f.name).append(" = ").append(f.name).append(";\n");
         body.append("        return this;\n    }\n\n");
     }
@@ -245,7 +245,7 @@ final class BuilderEmitter {
         boolean nullable = f.nullable;
         emitContract("_, _ -> this", false, "this");
         body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ')
-            .append(methodName(f.name, false))
+            .append(config.naming().setName(f.name))
             .append("(@PrintFormat ").append(nullable ? "@Nullable " : "@NotNull ").append("String ").append(f.name)
             .append(", @Nullable Object... args) {\n");
         if (nullable) {
@@ -267,15 +267,20 @@ final class BuilderEmitter {
     }
 
     private void emitBooleanSetterPair(FieldSpec f, String methodBase, boolean inverse) {
-        String methodCap = "is" + capitalise(methodBase);
-        emitContract("-> this", false, "this");
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(methodCap).append("() {\n");
-        body.append("        this.").append(f.name).append(" = ").append(inverse ? "false" : "true").append(";\n");
-        body.append("        return this;\n    }\n\n");
+        // The typed setter is the ordinary `set` role, so a boolean is named
+        // like every other field; the zero-arg form is the separate `flag` role
+        // and drops out entirely when a style suppresses it.
+        if (config.naming().emitsFlag()) {
+            emitContract("-> this", false, "this");
+            body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ')
+                .append(config.naming().flagName(methodBase)).append("() {\n");
+            body.append("        this.").append(f.name).append(" = ").append(inverse ? "false" : "true").append(";\n");
+            body.append("        return this;\n    }\n\n");
+        }
 
         emitContract("_ -> this", false, "this");
         body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ')
-            .append(methodCap).append("(boolean ").append(methodBase).append(") {\n");
+            .append(config.naming().setName(methodBase)).append("(boolean ").append(methodBase).append(") {\n");
         if (inverse) {
             body.append("        this.").append(f.name).append(" = !").append(methodBase).append(";\n");
         } else {
@@ -289,7 +294,7 @@ final class BuilderEmitter {
         imports.add("org.jetbrains.annotations.Nullable");
 
         String inner = typeName(f.optionalInner);
-        String setterName = methodName(f.name, false);
+        String setterName = config.naming().setName(f.name);
 
         // (@Nullable T) wrapper - for Optional<String> with @Formattable, this is the raw-nullable variant
         emitContract("_ -> this", false, "this");
@@ -318,8 +323,8 @@ final class BuilderEmitter {
     }
 
     private void emitCollectorSetters(FieldSpec f) {
-        String whole = methodName(f.name, false);
-        String clear = "clear" + capitalise(f.name);
+        String whole = config.naming().setName(f.name);
+        String clear = config.naming().clearName(f.name);
 
         if (f.isMap) {
             imports.add("java.util.LinkedHashMap");
@@ -334,8 +339,8 @@ final class BuilderEmitter {
             body.append("        this.").append(f.name).append(" = new LinkedHashMap<>(").append(f.name).append(");\n");
             body.append("        return this;\n    }\n\n");
 
-            if (f.singular) {
-                String putName = "put" + capitalise(f.singularName);
+            if (f.singular && config.naming().emitsPut()) {
+                String putName = config.naming().putName(f.singularName);
                 emitContract("_, _ -> this", false, "this");
                 body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(putName)
                     .append("(@NotNull ").append(k).append(" key, ").append(v).append(" value) {\n");
@@ -343,9 +348,9 @@ final class BuilderEmitter {
                 body.append("        return this;\n    }\n\n");
             }
 
-            if (f.compute) {
+            if (f.compute && config.naming().emitsCompute()) {
                 imports.add("java.util.function.Supplier");
-                String putName = "put" + capitalise(f.singularName) + "IfAbsent";
+                String putName = config.naming().computeName(f.singularName);
                 emitContract("_, _ -> this", false, "this");
                 body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(putName)
                     .append("(@NotNull ").append(k).append(" key, @NotNull Supplier<").append(v).append("> valueSupplier) {\n");
@@ -353,7 +358,7 @@ final class BuilderEmitter {
                 body.append("        return this;\n    }\n\n");
             }
 
-            if (f.clearable) {
+            if (f.clearable && config.naming().emitsClear()) {
                 emitContract("-> this", false, "this");
                 body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(clear).append("() {\n");
                 body.append("        this.").append(f.name).append(".clear();\n");
@@ -382,8 +387,8 @@ final class BuilderEmitter {
         body.append("        ").append(f.name).append(".forEach(this.").append(f.name).append("::add);\n");
         body.append("        return this;\n    }\n\n");
 
-        if (f.singular) {
-            String single = (config.methodPrefix().isEmpty() ? "add" : config.methodPrefix()) + capitalise(f.singularName);
+        if (f.singular && config.naming().emitsAdd()) {
+            String single = config.naming().addName(f.singularName);
             emitContract("_ -> this", false, "this");
             body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(single)
                 .append("(@NotNull ").append(elem).append(' ').append(f.singularName).append(") {\n");
@@ -391,7 +396,7 @@ final class BuilderEmitter {
             body.append("        return this;\n    }\n\n");
         }
 
-        if (f.clearable) {
+        if (f.clearable && config.naming().emitsClear()) {
             emitContract("-> this", false, "this");
             body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(clear).append("() {\n");
             body.append("        this.").append(f.name).append(".clear();\n");
@@ -401,7 +406,7 @@ final class BuilderEmitter {
 
     private void emitArraySetter(FieldSpec f) {
         String elem = typeName(f.collectionElement);
-        String setter = methodName(f.name, false);
+        String setter = config.naming().setName(f.name);
         emitContract("_ -> this", false, "this");
         body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(setter)
             .append("(@NotNull ").append(elem).append("... ").append(f.name).append(") {\n");
@@ -515,12 +520,6 @@ final class BuilderEmitter {
     private String accessKeyword() {
         String k = config.access().toKeyword();
         return k.isEmpty() ? "" : k + " ";
-    }
-
-    private String methodName(String fieldName, boolean forceBoolean) {
-        String prefix = forceBoolean ? "is" : config.methodPrefix();
-        if (prefix.isEmpty()) return fieldName;
-        return prefix + capitalise(fieldName);
     }
 
     private static String capitalise(String s) {

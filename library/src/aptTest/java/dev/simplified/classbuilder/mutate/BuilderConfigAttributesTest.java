@@ -71,15 +71,16 @@ public class BuilderConfigAttributesTest {
     }
 
     // ------------------------------------------------------------------
-    // methodPrefix - setters should honour the configured prefix
+    // names / style - every generated method name comes from a role pattern
     // ------------------------------------------------------------------
 
     @Test
-    public void methodPrefix_customPrefixAppliedToSetters() throws Exception {
+    public void names_setPatternAppliedToSetters() throws Exception {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.Cfg",
             "package demo;",
             "import dev.simplified.annotations.ClassBuilder;",
-            "@ClassBuilder(methodPrefix = \"set\", validate = false)",
+            "import dev.simplified.annotations.MethodNames;",
+            "@ClassBuilder(names = @MethodNames(set = \"set{}\"), validate = false)",
             "public class Cfg {",
             "    String name;",
             "    public Cfg(String name) { this.name = name; }",
@@ -91,10 +92,171 @@ public class BuilderConfigAttributesTest {
         Class<?> cfg = Class.forName("demo.Cfg", true, cl);
         Class<?> builder = nested(cfg, "Builder");
 
-        assertTrue("setter must use configured prefix 'set'",
+        assertTrue("setter must use the configured 'set' pattern",
             hasMethod(builder, "setName", String.class));
-        assertFalse("default 'with' prefix must not leak through",
-            hasMethod(builder, "withName", String.class));
+        assertFalse("bare-name setter must not leak through",
+            hasMethod(builder, "name", String.class));
+    }
+
+    @Test
+    public void names_suffixPatternIsExpressible() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Suffixed",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.MethodNames;",
+            "@ClassBuilder(names = @MethodNames(set = \"{}Value\"), validate = false)",
+            "public class Suffixed {",
+            "    String name;",
+            "    public Suffixed(String name) { this.name = name; }",
+            "    public String getName() { return name; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+        ClassLoader cl = loadClasses(c);
+        Class<?> builder = nested(Class.forName("demo.Suffixed", true, cl), "Builder");
+
+        // A placeholder in the leading position leaves the subject uncapitalised,
+        // which is what makes a suffix pattern read as a fluent setter.
+        assertTrue(hasMethod(builder, "nameValue", String.class));
+    }
+
+    /**
+     * The core of the boolean-naming fix: the typed setter is the ordinary
+     * {@code set} role, so a boolean is named like every other field, while the
+     * zero-arg convenience stays on the separate {@code flag} role.
+     */
+    @Test
+    public void booleanSetter_typedUsesSetRoleAndZeroArgUsesFlagRole() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Sprite",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Sprite {",
+            "    boolean animated;",
+            "    public Sprite(boolean animated) { this.animated = animated; }",
+            "    public boolean isAnimated() { return animated; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+        ClassLoader cl = loadClasses(c);
+        Class<?> builder = nested(Class.forName("demo.Sprite", true, cl), "Builder");
+
+        assertTrue("typed boolean setter takes the bare field name",
+            hasMethod(builder, "animated", boolean.class));
+        assertTrue("zero-arg convenience keeps the is-prefixed flag name",
+            hasMethod(builder, "isAnimated"));
+        assertFalse("the is-prefixed typed overload is gone",
+            hasMethod(builder, "isAnimated", boolean.class));
+    }
+
+    @Test
+    public void namingStyle_lombokMatchesBuilderSurface() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Card",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Collector;",
+            "import dev.simplified.annotations.NamingStyle;",
+            "import java.util.List;",
+            "@ClassBuilder(style = NamingStyle.LOMBOK, validate = false)",
+            "public class Card {",
+            "    boolean shiny;",
+            "    @Collector(singular = true, clearable = true) List<String> tags;",
+            "    public Card(boolean shiny, List<String> tags) { this.shiny = shiny; this.tags = tags; }",
+            "    public boolean isShiny() { return shiny; }",
+            "    public List<String> getTags() { return tags; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+        ClassLoader cl = loadClasses(c);
+        Class<?> card = Class.forName("demo.Card", true, cl);
+        Class<?> builder = nested(card, "CardBuilder");
+
+        assertTrue("builderName takes the {} pattern", builder.getSimpleName().equals("CardBuilder"));
+        assertTrue("bare-name boolean setter", hasMethod(builder, "shiny", boolean.class));
+        assertFalse("no zero-arg boolean form under LOMBOK", hasMethod(builder, "isShiny"));
+        assertTrue("singular add takes the bare singular", hasMethod(builder, "tag", String.class));
+        assertFalse("addX is the SIMPLIFIED name, not Lombok's", hasMethod(builder, "addTag", String.class));
+        assertTrue("clear keeps its name across styles", hasMethod(builder, "clearTags"));
+        assertTrue("toBuilderMethodName follows the style", hasMethod(card, "toBuilder"));
+        assertFalse("mutate is the SIMPLIFIED name", hasMethod(card, "mutate"));
+    }
+
+    @Test
+    public void namingStyle_explicitAttributeBeatsTheStyle() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Token",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.NamingStyle;",
+            "@ClassBuilder(style = NamingStyle.LOMBOK, toBuilderMethodName = \"respawn\", validate = false)",
+            "public class Token {",
+            "    String id;",
+            "    public Token(String id) { this.id = id; }",
+            "    public String getId() { return id; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+        ClassLoader cl = loadClasses(c);
+        Class<?> token = Class.forName("demo.Token", true, cl);
+
+        assertTrue(hasMethod(token, "respawn"));
+        assertFalse(hasMethod(token, "toBuilder"));
+        // The rest of the style still applies.
+        assertNotNull(nested(token, "TokenBuilder"));
+    }
+
+    @Test
+    public void names_suppressedFlagRoleDropsTheZeroArgSetter() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Switch",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.MethodNames;",
+            "@ClassBuilder(names = @MethodNames(flag = MethodNames.NONE), validate = false)",
+            "public class Switch {",
+            "    boolean on;",
+            "    public Switch(boolean on) { this.on = on; }",
+            "    public boolean isOn() { return on; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+        ClassLoader cl = loadClasses(c);
+        Class<?> builder = nested(Class.forName("demo.Switch", true, cl), "Builder");
+
+        assertTrue(hasMethod(builder, "on", boolean.class));
+        assertFalse(hasMethod(builder, "isOn"));
+    }
+
+    @Test
+    public void names_malformedPatternIsRejectedAtTheAnnotation() {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Broken",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.MethodNames;",
+            "@ClassBuilder(names = @MethodNames(set = \"set\"), validate = false)",
+            "public class Broken {",
+            "    String name;",
+            "    public Broken(String name) { this.name = name; }",
+            "    public String getName() { return name; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("placeholder");
+    }
+
+    @Test
+    public void names_suppressedSetRoleIsRejected() {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.NoSetter",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.MethodNames;",
+            "@ClassBuilder(names = @MethodNames(set = MethodNames.NONE), validate = false)",
+            "public class NoSetter {",
+            "    String name;",
+            "    public NoSetter(String name) { this.name = name; }",
+            "    public String getName() { return name; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("cannot suppress the 'set' naming role");
     }
 
     // ------------------------------------------------------------------
