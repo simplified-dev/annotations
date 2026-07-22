@@ -1,10 +1,14 @@
 package dev.simplified.classbuilder.apt;
 
+import javax.lang.model.element.AnnotationMirror;
+import javax.lang.model.element.AnnotationValue;
+import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.TypeParameterElement;
 import javax.lang.model.type.TypeMirror;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.TreeSet;
 
 /**
@@ -14,8 +18,15 @@ import java.util.TreeSet;
  * accessors; the class is package-private, final, and provides an all-args
  * constructor, accessor methods that satisfy the interface contract, and
  * {@code equals}/{@code hashCode}/{@code toString} based on the fields.
+ *
+ * <p>An accessor's {@code @BuildFlag} is copied onto the field it produces.
+ * That copy is what makes constraints work on an interface target at all: the
+ * validator reads the declared fields of the instance {@code build()}
+ * constructs, and this class is that instance.
  */
 final class InterfaceImplEmitter {
+
+    private static final String BUILD_FLAG_FQN = "dev.simplified.annotations.BuildFlag";
 
     private InterfaceImplEmitter() {}
 
@@ -28,6 +39,12 @@ final class InterfaceImplEmitter {
         imports.add("java.util.Objects");
         List<String> fieldTypes = new ArrayList<>(fields.size());
         for (FieldSpec f : fields) fieldTypes.add(simplifyType(f.typeDisplay, packageName, imports));
+        // Copied off the accessor, because the validator reads the constructed
+        // instance's declared fields and this class holds them. Rendered here
+        // rather than at the field loop below for the same reason the type
+        // parameters are - emitting one adds its own import.
+        List<String> fieldFlags = new ArrayList<>(fields.size());
+        for (FieldSpec f : fields) fieldFlags.add(renderBuildFlag(f.buildFlag, packageName, imports));
         // A generic interface propagates its parameters onto the impl, which is
         // a separate top-level class and so cannot see the interface's. Resolved
         // before the import block is written, since a bound can import types.
@@ -42,7 +59,8 @@ final class InterfaceImplEmitter {
 
         // Fields
         for (int i = 0; i < fields.size(); i++) {
-            sb.append("    private final ").append(fieldTypes.get(i)).append(' ').append(fields.get(i).name).append(";\n");
+            sb.append("    ").append(fieldFlags.get(i)).append("private final ")
+                .append(fieldTypes.get(i)).append(' ').append(fields.get(i).name).append(";\n");
         }
         sb.append('\n');
 
@@ -90,6 +108,84 @@ final class InterfaceImplEmitter {
 
         sb.append("}\n");
         return sb.toString();
+    }
+
+    /**
+     * Renders {@code mirror} back to source as a trailing-space-terminated
+     * annotation prefix, or {@code ""} when the accessor carried none.
+     *
+     * <p>Only the attributes the author actually wrote are emitted -
+     * {@code getElementValues()} excludes defaulted ones - so the generated
+     * field reads as the accessor did rather than spelling out all five.
+     *
+     * @param mirror the {@code @BuildFlag} mirror, or null
+     * @param packageName the impl's package, for deciding whether to import
+     * @param imports collector the annotation's own import is added to
+     * @return the rendered prefix, empty when there is nothing to copy
+     */
+    private static String renderBuildFlag(AnnotationMirror mirror, String packageName, TreeSet<String> imports) {
+        if (mirror == null) return "";
+        StringBuilder sb = new StringBuilder(64);
+        sb.append('@').append(considerImport(BUILD_FLAG_FQN, packageName, imports));
+        Map<? extends ExecutableElement, ? extends AnnotationValue> written = mirror.getElementValues();
+        if (!written.isEmpty()) {
+            sb.append('(');
+            boolean first = true;
+            for (Map.Entry<? extends ExecutableElement, ? extends AnnotationValue> e : written.entrySet()) {
+                if (!first) sb.append(", ");
+                first = false;
+                sb.append(e.getKey().getSimpleName()).append(" = ").append(renderValue(e.getValue().getValue()));
+            }
+            sb.append(')');
+        }
+        return sb.append(' ').toString();
+    }
+
+    /**
+     * Renders an annotation attribute value as a Java source literal. Covers
+     * the shapes {@code @BuildFlag} can carry - boolean, int, String, and
+     * String array - with anything else falling through to its own
+     * {@code toString}.
+     *
+     * @param value the unwrapped attribute value
+     * @return the source literal
+     */
+    private static String renderValue(Object value) {
+        if (value instanceof String s) return quote(s);
+        if (value instanceof List<?> list) {
+            StringBuilder sb = new StringBuilder("{");
+            for (int i = 0; i < list.size(); i++) {
+                if (i > 0) sb.append(", ");
+                Object element = list.get(i);
+                sb.append(renderValue(element instanceof AnnotationValue av ? av.getValue() : element));
+            }
+            return sb.append('}').toString();
+        }
+        return String.valueOf(value);
+    }
+
+    /**
+     * Quotes a string as a Java literal, escaping everything outside printable
+     * ASCII. A {@code pattern} regex routinely carries backslashes, so passing
+     * the raw text through would produce source that fails to compile - or,
+     * worse, compiles to a different regex.
+     *
+     * @param s the raw attribute value
+     * @return the quoted literal
+     */
+    private static String quote(String s) {
+        StringBuilder sb = new StringBuilder(s.length() + 2).append('"');
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '\\') sb.append("\\\\");
+            else if (c == '"') sb.append("\\\"");
+            else if (c == '\n') sb.append("\\n");
+            else if (c == '\r') sb.append("\\r");
+            else if (c == '\t') sb.append("\\t");
+            else if (c >= 0x20 && c < 0x7f) sb.append(c);
+            else sb.append(String.format("\\u%04x", (int) c));
+        }
+        return sb.append('"').toString();
     }
 
     /**

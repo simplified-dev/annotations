@@ -39,12 +39,10 @@ import java.lang.annotation.Target;
  * {@code mutate} is a {@code default}, both legal since Java 8, so implementors
  * need no change.
  *
- * <p>An interface target cannot carry {@link BuildFlag} constraints. The
- * annotation targets fields, an interface declares none, and the generated
- * {@code <Name>Impl} copies no annotations onto the ones it synthesises - so
- * there is nothing for the validator to find. Constraints on an interface-shaped
- * type go on a hand-written implementation reached through
- * {@link #factoryMethod()}, whose fields the validator does read.
+ * <p>An interface target declares {@link BuildFlag} constraints on the accessor
+ * rather than on a field, having none of its own. The generated
+ * {@code <Name>Impl} carries the annotation onto the field it synthesises, so
+ * the validator finds it on the instance {@code build()} returns.
  *
  * <h2>Generic targets</h2>
  * A target may declare type parameters, on any supported shape. The generated
@@ -107,7 +105,7 @@ import java.lang.annotation.Target;
  * // Interface - plugin generates ShapeImpl + ShapeBuilder
  * &#64;ClassBuilder
  * public interface Shape {
- *     String name();
+ *     &#64;BuildFlag(nonNull = true) String name();
  * }
  *
  * // Builder on a static factory method

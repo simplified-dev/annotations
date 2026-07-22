@@ -64,7 +64,9 @@ public class AnnotationSurfaceTest {
         // The one annotation of the four that must survive to runtime:
         // BuildFlagValidator reads it reflectively inside the generated build().
         assertRetention(BuildFlag.class, RetentionPolicy.RUNTIME);
-        assertTargets(BuildFlag.class, ElementType.FIELD);
+        // METHOD is for interface targets, which declare no fields to carry a
+        // constraint - the processor copies it onto the generated Impl field.
+        assertTargets(BuildFlag.class, ElementType.FIELD, ElementType.METHOD);
     }
 
     @Test
@@ -279,6 +281,30 @@ public class AnnotationSurfaceTest {
         @ObtainVia(field = "other") String redirect;
         @ObtainVia(method = "stat", isStatic = true) String staticCall;
         @SuppressWarnings("unused") Optional<String> optionalString;
+    }
+
+    /**
+     * The interface-target surface: an accessor is the only place a constraint
+     * can be written when the type declares no fields. That this compiles is
+     * the target-compatibility proof; the copy onto the generated Impl field is
+     * covered by the processor's own tests.
+     *
+     * <p>Deliberately not {@code @ClassBuilder}-annotated. The processor does
+     * not run over this source set, but were it ever wired up it would try to
+     * emit a top-level {@code FixtureOnAccessorsImpl implements
+     * FixtureOnAccessors} - which does not resolve for a nested interface.
+     */
+    interface FixtureOnAccessors {
+        @BuildFlag(nonNull = true, notEmpty = true) String name();
+        @BuildFlag(limit = 25) List<String> tags();
+    }
+
+    @Test
+    public void buildFlag_visibleAtRuntime_onAccessor() throws Exception {
+        BuildFlag flag = FixtureOnAccessors.class.getDeclaredMethod("name").getAnnotation(BuildFlag.class);
+        assertNotNull("BuildFlag on an accessor should be readable", flag);
+        assertTrue(flag.nonNull());
+        assertTrue(flag.notEmpty());
     }
 
     @Test

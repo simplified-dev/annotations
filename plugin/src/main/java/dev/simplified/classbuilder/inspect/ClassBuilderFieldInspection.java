@@ -6,10 +6,13 @@ import com.intellij.codeInspection.ProblemsHolder;
 import com.intellij.psi.JavaElementVisitor;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationMemberValue;
+import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiClassType;
 import com.intellij.psi.PsiElementVisitor;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiLiteralExpression;
+import com.intellij.psi.PsiMethod;
+import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiPrimitiveType;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypes;
@@ -35,6 +38,8 @@ import java.util.Map;
  *       non-{@link CharSequence} field</li>
  *   <li>{@code @BuildFlag(limit = N)} on a type where the
  *       limit is not meaningful</li>
+ *   <li>{@code @BuildFlag} on a method that is not an interface target's
+ *       accessor, where nothing will read it</li>
  *   <li>a {@code @SetterNames} pattern that cannot expand to a Java
  *       identifier, or that suppresses the setter role</li>
  * </ul>
@@ -102,24 +107,72 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
                         ProblemHighlightType.GENERIC_ERROR);
                 }
 
-                PsiAnnotation flag = field.getAnnotation(BUILD_FLAG_FQN);
-                if (flag != null) {
-                    if (!ClassBuilderConstants.stringAttr(flag, "pattern", "").isEmpty()
-                            && !isCharSequenceLike(type)) {
-                        holder.registerProblem(flag,
-                            "@BuildFlag(pattern = ...) only applies to CharSequence or Optional<String> fields",
-                            ProblemHighlightType.WARNING);
-                    }
-                    int limit = intAttr(flag, "limit");
-                    if (limit >= 0 && !isLimitable(type)) {
-                        holder.registerProblem(flag,
-                            "@BuildFlag(limit = ...) only applies to CharSequence, Collection, Map, array, "
-                                + "or Optional<String>/Optional<Number> fields",
-                            ProblemHighlightType.WARNING);
-                    }
+                checkBuildFlag(holder, field.getAnnotation(BUILD_FLAG_FQN), type);
+            }
+
+            /**
+             * An interface target declares its constraints on the accessor, so
+             * the same applicability rules apply there against the return type.
+             */
+            @Override
+            public void visitMethod(@NotNull PsiMethod method) {
+                super.visitMethod(method);
+                PsiAnnotation flag = method.getAnnotation(BUILD_FLAG_FQN);
+                if (flag == null) return;
+                if (!isBuilderAccessor(method)) {
+                    holder.registerProblem(flag,
+                        "@BuildFlag is only read on an abstract zero-arg accessor of an interface "
+                            + "target - it has no effect here",
+                        ProblemHighlightType.WARNING);
+                    return;
                 }
+                checkBuildFlag(holder, flag, method.getReturnType());
             }
         };
+    }
+
+    /**
+     * Reports a {@code @BuildFlag} whose {@code pattern} or {@code limit} the
+     * annotated type cannot support. Shared by the field and accessor paths,
+     * which differ only in where the type comes from.
+     *
+     * @param holder sink for the diagnostics
+     * @param flag the annotation, or null when absent
+     * @param type the field's type or the accessor's return type
+     */
+    private static void checkBuildFlag(@NotNull ProblemsHolder holder, @Nullable PsiAnnotation flag,
+                                       @Nullable PsiType type) {
+        if (flag == null || type == null) return;
+        if (!ClassBuilderConstants.stringAttr(flag, "pattern", "").isEmpty() && !isCharSequenceLike(type)) {
+            holder.registerProblem(flag,
+                "@BuildFlag(pattern = ...) only applies to CharSequence or Optional<String> fields",
+                ProblemHighlightType.WARNING);
+        }
+        int limit = intAttr(flag, "limit");
+        if (limit >= 0 && !isLimitable(type)) {
+            holder.registerProblem(flag,
+                "@BuildFlag(limit = ...) only applies to CharSequence, Collection, Map, array, "
+                    + "or Optional<String>/Optional<Number> fields",
+                ProblemHighlightType.WARNING);
+        }
+    }
+
+    /**
+     * Whether the method is the shape an interface target turns into a builder
+     * field - abstract, zero-arg, and value-returning. Mirrors the filter in
+     * {@code ClassBuilderProcessor.collectFieldsFromInterface}.
+     *
+     * @param method the annotated method
+     * @return whether a {@code @BuildFlag} on it can reach the generated impl
+     */
+    private static boolean isBuilderAccessor(@NotNull PsiMethod method) {
+        PsiClass owner = method.getContainingClass();
+        if (owner == null || !owner.isInterface()) return false;
+        if (method.hasModifierProperty(PsiModifier.STATIC)) return false;
+        if (method.hasModifierProperty(PsiModifier.DEFAULT)) return false;
+        if (!method.getParameterList().isEmpty()) return false;
+        PsiType returnType = method.getReturnType();
+        return returnType != null && !PsiTypes.voidType().equals(returnType);
     }
 
     /**

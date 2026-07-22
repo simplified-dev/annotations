@@ -54,7 +54,7 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
             """
             package dev.simplified.annotations;
             import java.lang.annotation.*;
-            @Retention(RetentionPolicy.RUNTIME) @Target(ElementType.FIELD)
+            @Retention(RetentionPolicy.RUNTIME) @Target({ElementType.FIELD, ElementType.METHOD})
             public @interface BuildFlag {
                 boolean nonNull() default false;
                 String pattern() default "";
@@ -167,5 +167,58 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
             """);
         assertTrue(hasErrorContaining(
             "@BuildFlag(pattern = ...) only applies to CharSequence or Optional<String> fields"));
+    }
+
+    // ------------------------------------------------------------------
+    // Accessors - an interface target declares its constraints there
+    // ------------------------------------------------------------------
+
+    public void testBuildFlagOnInterfaceAccessor_notFlagged() {
+        myFixture.configureByText("Shape.java",
+            """
+            import dev.simplified.annotations.BuildFlag;
+            public interface Shape {
+                @BuildFlag(nonNull = true) String name();
+            }
+            """);
+        assertFalse(hasErrorContaining("@BuildFlag"));
+    }
+
+    public void testBuildFlagLimitOnNonLimitableAccessor_warned() {
+        myFixture.configureByText("Shape.java",
+            """
+            import dev.simplified.annotations.BuildFlag;
+            public interface Shape {
+                @BuildFlag(limit = 10) int sides();
+            }
+            """);
+        assertTrue(hasErrorContaining(
+            "@BuildFlag(limit = ...) only applies to CharSequence, Collection, Map, array, "
+                + "or Optional<String>/Optional<Number> fields"));
+    }
+
+    /** Widening the target to METHOD also widened the ways it can do nothing. */
+    public void testBuildFlagOnConcreteMethod_warnedAsNoEffect() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.BuildFlag;
+            public class Foo {
+                @BuildFlag(nonNull = true) String name() { return ""; }
+            }
+            """);
+        assertTrue(hasErrorContaining(
+            "@BuildFlag is only read on an abstract zero-arg accessor of an interface target"));
+    }
+
+    public void testBuildFlagOnAccessorWithParameters_warnedAsNoEffect() {
+        myFixture.configureByText("Shape.java",
+            """
+            import dev.simplified.annotations.BuildFlag;
+            public interface Shape {
+                @BuildFlag(nonNull = true) String name(int index);
+            }
+            """);
+        assertTrue(hasErrorContaining(
+            "@BuildFlag is only read on an abstract zero-arg accessor of an interface target"));
     }
 }

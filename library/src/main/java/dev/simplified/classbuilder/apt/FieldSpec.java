@@ -94,6 +94,14 @@ public final class FieldSpec {
     public final String obtainViaMethod;            // null if none
     public final String obtainViaField;
     public final boolean obtainViaStatic;
+    /**
+     * The {@code @BuildFlag} mirror to copy onto a generated field, or
+     * {@code null} when the accessor carries none. Populated only by
+     * {@link #fromInterfaceAccessor}: on a class or record the annotation is
+     * already written on the field the validator reads, and nothing re-emits
+     * that declaration, so there is nothing to carry.
+     */
+    public final AnnotationMirror buildFlag;
 
     private FieldSpec(Builder b) {
         this.name = b.name;
@@ -133,6 +141,7 @@ public final class FieldSpec {
         this.obtainViaMethod = b.obtainViaMethod;
         this.obtainViaField = b.obtainViaField;
         this.obtainViaStatic = b.obtainViaStatic;
+        this.buildFlag = b.buildFlag;
     }
 
     /** Whether this field uses {@code is*} setters (booleans) vs the configured prefix. */
@@ -150,6 +159,11 @@ public final class FieldSpec {
      * interface accessors (the annotations target fields only), so no
      * {@link SourceIntrospector} is threaded through this path - only
      * {@code @BuilderIgnore} is honoured here.
+     *
+     * <p>{@code @BuildFlag} does apply, and is kept as its raw mirror rather
+     * than as parsed attributes: it is not read here at all, only copied onto
+     * the generated {@code <Name>Impl} field, so preserving exactly what the
+     * author wrote beats round-tripping it through five typed accessors.
      */
     public static FieldSpec fromInterfaceAccessor(ExecutableElement method, AnnotationLookup lookup, Types typeUtils) {
         Builder b = new Builder();
@@ -173,6 +187,7 @@ public final class FieldSpec {
             b.singularName = v.isEmpty() ? defaultSingular(b.name) : v;
         }
         b.ignored = lookup.hasAnnotation(method, "dev.simplified.annotations.BuilderIgnore");
+        b.buildFlag = lookup.findMirror(method, "dev.simplified.annotations.BuildFlag");
 
         return new FieldSpec(b);
     }
@@ -382,6 +397,7 @@ public final class FieldSpec {
         com.sun.source.tree.Tree sourceInitializerTree;
         String obtainViaMethod, obtainViaField;
         boolean obtainViaStatic;
+        AnnotationMirror buildFlag;
     }
 
 }

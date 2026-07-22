@@ -12,8 +12,9 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Declares runtime-enforced constraints on a builder field that are verified by
- * {@code BuildFlagValidator.validate(this)} inside the builder's generated
+ * Declares runtime-enforced constraints on a builder field, or on the abstract
+ * accessor standing in for one on an interface target, verified by
+ * {@code BuildFlagValidator.validate($result)} inside the builder's generated
  * {@code build()} method.
  *
  * <p>Each attribute is independent and may be combined. When {@link #group()} is
@@ -29,10 +30,13 @@ import java.util.Optional;
  * scan walking the superclass chain, so an inherited constraint is enforced on
  * the subclass being built.
  *
- * <p>Fields only: this cannot go on an interface accessor, so an interface
- * {@link ClassBuilder} target has no way to declare constraints. Put them on a
- * hand-written implementation reached through
- * {@link ClassBuilder#factoryMethod()} instead.
+ * <p>On an interface {@link ClassBuilder} target the constraint goes on the
+ * abstract accessor instead, an interface declaring no fields of its own. The
+ * processor copies it onto the matching field of the generated
+ * {@code <Name>Impl} - the instance {@code build()} actually constructs, and
+ * the one the validator reads - so an accessor constraint is enforced exactly
+ * as a field constraint is. That is the only place a method target is read:
+ * written on any other method it has no effect.
  *
  * <h2>Examples</h2>
  * <pre><code>
@@ -51,11 +55,17 @@ import java.util.Optional;
  * // Limit applied to a collection
  * &#64;BuildFlag(limit = 25)
  * private List&lt;Field&gt; fields;
+ *
+ * // On an interface target, the accessor carries it
+ * &#64;ClassBuilder
+ * public interface Shape {
+ *     &#64;BuildFlag(nonNull = true) String name();
+ * }
  * </code></pre>
  *
  * @see ClassBuilder#validate
  */
-@Target(ElementType.FIELD)
+@Target({ElementType.FIELD, ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
 public @interface BuildFlag {
 

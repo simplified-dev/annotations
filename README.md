@@ -303,7 +303,8 @@ malformed pattern, are rejected at the annotation by both the processor and the 
 
 ### Field Annotations
 
-Each is written directly on the field. Only `@BuildFlag` is retained at runtime; the rest are consumed at
+Each is written directly on the field - or, for `@BuildFlag` on an interface target, on the accessor
+standing in for one. Only `@BuildFlag` is retained at runtime; the rest are consumed at
 annotation-processing time.
 
 | Annotation | Purpose |
@@ -385,6 +386,23 @@ reconstructed from the declared type. No inference is done on the initializer at
 | `pattern` | `String` | `""` | Regex the field value must match (CharSequence / Optional\<String\>) |
 | `limit` | `int` | `-1` | Maximum length/size (String/Collection/Map/array/Optional) |
 | `group` | `String[]` | `{}` | At-least-one-of group: all members null/empty throws |
+
+On an **interface** target the constraint goes on the accessor, the interface having no fields of its
+own. The processor copies it onto the matching `<Name>Impl` field, which is the instance `build()`
+constructs and the one the validator reads, so it is enforced identically:
+
+```java
+@ClassBuilder
+public interface Shape {
+    @BuildFlag(nonNull = true) String name();
+    int sides();
+}
+
+Shape.builder().sides(3).build();   // BuilderValidationException: Field 'name' in 'ShapeImpl' is required and is null/empty
+```
+
+`@BuildFlag` is the only companion whose target is wider than where it takes effect - written on any
+other method it is silently inert, which the IDE inspection warns about.
 
 #### `@ObtainVia` Attributes
 
