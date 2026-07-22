@@ -1,0 +1,52 @@
+<html>
+<body>
+Flags misuse of <code>@UtilityClass</code>:
+
+<ul>
+  <li>An instance field or method under the default
+      <code>members = REQUIRE_STATIC</code>. A utility class holds static
+      members only, and the default policy reports the member rather than
+      rewriting it. An <b>Add 'static'</b> fix is offered on the member.</li>
+  <li><code>constructorAccess = AccessLevel.NONE</code>. Every class has a
+      constructor, so there is no such thing as suppressing it - choose
+      <code>PRIVATE</code>, <code>PACKAGE</code>, <code>PROTECTED</code> or
+      <code>PUBLIC</code>.</li>
+  <li>A constructor the author declared. It keeps its body, so the throwing
+      constructor is never synthesised and the class stays instantiable.</li>
+  <li>A target the annotation cannot apply to: a record, whose canonical
+      constructor is its contract; an enum, already final with a private
+      constructor; an interface or annotation type, which cannot be
+      instantiated anyway; an abstract class, which would be made final; and a
+      nested class that is not <code>static</code> all the way out, since an
+      inner class carries a reference to its enclosing instance.</li>
+  <li><code>@ClassBuilder</code> on the same type. One builds instances, the
+      other declares the type uninstantiable.</li>
+</ul>
+
+<!-- tooltip end -->
+
+<p>
+Every check mirrors a diagnostic the annotation processor already emits. What
+the inspection adds is timing, position and a remedy: the processor can only
+report against the type and describe the fix in prose, while this underlines
+the offending member or attribute as it is typed and applies the fix in one
+keystroke.
+</p>
+
+<p>
+The instance-member check is the reason the inspection exists. The default
+policy deliberately reports rather than rewrites, so no declaration silently
+changes meaning - but that means annotating an existing class turns each of its
+instance members into a compile error at once, with nothing to click on.
+Writing <code>members = MAKE_STATIC</code> asks for the rewrite instead and
+silences the check entirely.
+</p>
+
+<p>
+The target-shape and attribute checks report at ERROR severity because the build
+cannot complete. A declared constructor reports at WARNING: the class still
+compiles, it just is not the utility class the annotation claims.
+</p>
+
+</body>
+</html>

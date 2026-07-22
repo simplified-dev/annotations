@@ -3,6 +3,7 @@ package dev.simplified.accessor.inspect;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationMemberValue;
 import com.intellij.psi.PsiArrayInitializerMemberValue;
+import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiReferenceExpression;
@@ -47,6 +48,17 @@ public final class AccessorConstants {
         };
     }
 
+    /**
+     * Whether the annotation generates a member at all.
+     *
+     * @param annotation the resolved {@code @Getter} or {@code @Setter}
+     * @return {@code false} for {@code AccessLevel.NONE}, which is how one
+     *         field opts out of a type-level fan-out
+     */
+    public static boolean generates(PsiAnnotation annotation) {
+        return accessKeyword(annotation) != null;
+    }
+
     /** The naming style the annotation asks for, defaulting to the annotation's own default. */
     public static NamingStyle style(PsiAnnotation annotation) {
         String name = enumConstant(annotation, "style");
@@ -65,6 +77,24 @@ public final class AccessorConstants {
     public static String name(PsiAnnotation annotation) {
         String written = stringAttr(annotation, "name");
         return written == null || written.isEmpty() ? null : written;
+    }
+
+    /**
+     * The {@code @Getter} governing a field's read accessor.
+     *
+     * <p>A field-level annotation beats the enclosing type's outright, exclude
+     * list included - a field that writes one has said what it wants.
+     *
+     * @param typeLevel the type's own {@code @Getter}, or {@code null}
+     * @param field the field to resolve
+     * @return the governing annotation, or {@code null} when no accessor is
+     *         generated for the field at all
+     */
+    public static PsiAnnotation effectiveGetter(PsiAnnotation typeLevel, PsiField field) {
+        PsiAnnotation fieldLevel = field.getAnnotation(GETTER_FQN);
+        if (fieldLevel != null) return fieldLevel;
+        if (typeLevel == null) return null;
+        return excludes(typeLevel, field.getName()) ? null : typeLevel;
     }
 
     /** Whether a type-level annotation excludes this field by name. */

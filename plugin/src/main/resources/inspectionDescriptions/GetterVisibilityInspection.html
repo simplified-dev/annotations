@@ -1,0 +1,56 @@
+<html>
+<body>
+Reviews the read accessors a class generates or hand-writes:
+
+<ul>
+  <li>A field whose <code>@Getter</code> generates a <b>public</b> accessor that
+      nothing outside the declaring class reads. Two fixes are offered, because
+      they are different intents: <code>@Getter(AccessLevel.NONE)</code> deletes
+      the accessor, <code>@Getter(AccessLevel.PRIVATE)</code> keeps it and stops
+      publishing it.</li>
+  <li>The same accessor where every reader sits in the declaring package, or in
+      a subclass - narrowed to <code>PACKAGE</code> or <code>PROTECTED</code>
+      respectively.</li>
+  <li>A class declaring two or more zero-arg methods whose <b>entire</b> body is
+      <code>return this.field;</code>, named as <code>@Getter</code> would mint
+      them. One type-level annotation generates all of them, and the fix deletes
+      only the methods it subsumes - every other field of the class is listed in
+      the annotation's <code>exclude</code>, so the generated set is exactly the
+      deleted one and no field the author never published gains an accessor.</li>
+</ul>
+
+<!-- tooltip end -->
+
+<p>
+The narrowing checks report at <b>weak warning</b> and will not be raised. A
+public accessor is part of what a module publishes, and this library ships to
+Maven Central - narrowing one is a downstream break that no amount of local
+evidence can rule out, since the search can only see this project. Treat the
+report as a review aid on a member nobody here reads, not as a cleanup sweep to
+run across a package.
+</p>
+
+<p>
+Every <b>narrowing</b> fix writes a field-level <code>@Getter</code>, never the
+type-level one. The field-level override is the mechanism the annotation surface
+provides for exactly this, and it is what keeps an edit about one field from
+moving every sibling. A field-level annotation replaces the type's outright, so
+the narrowing carries the type-level <code>style</code> and <code>name</code>
+across with it - otherwise narrowing an accessor would rename it. The
+trivial-accessor fix is the one that writes a type-level annotation, because
+proposing one for the whole class is what it is for.
+</p>
+
+<p>
+The trivial-accessor check reports at <b>warning</b> and its body test is exact:
+one statement, a return, over a field of the enclosing class, with the return
+type matching the field type. A null check, a defensive copy, a cast, a
+normalisation or a read of a different field is work the author wrote, and
+replacing it with a generated accessor would silently change behaviour. The fix
+additionally aborts, with an explanation rather than a silent no-op, when a
+method it would delete is reached through a method reference or declared by a
+supertype - neither of which a generated member can satisfy.
+</p>
+
+</body>
+</html>

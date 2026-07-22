@@ -1,5 +1,6 @@
 package dev.simplified.utility.apt;
 
+import dev.simplified.annotations.ClassBuilder;
 import dev.simplified.annotations.UtilityClass;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.compat.JavacAccessFactory;
@@ -79,7 +80,10 @@ public class UtilityClassProcessor extends AbstractProcessor {
      * constructor and finality, so there is nothing to retrofit. A nested class
      * has to be {@code static} all the way out: an inner class carries a
      * reference to its enclosing instance, so a private throwing constructor
-     * makes it unusable rather than uninstantiable.
+     * makes it unusable rather than uninstantiable. {@link ClassBuilder} on the
+     * same type asks for instances of a type this annotation declares
+     * uninstantiable, which nothing downstream can reconcile - the builder
+     * compiles and throws at the first {@code build()}.
      */
     private boolean isLegalTarget(Element element, Messager messager) {
         if (element.getKind() != ElementKind.CLASS) {
@@ -93,6 +97,14 @@ public class UtilityClassProcessor extends AbstractProcessor {
         if (type.getModifiers().contains(Modifier.ABSTRACT)) {
             messager.printMessage(Diagnostic.Kind.ERROR,
                 "@UtilityClass cannot be applied to an abstract class - it would be made final",
+                element);
+            return false;
+        }
+        if (type.getAnnotation(ClassBuilder.class) != null) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@ClassBuilder contradicts @UtilityClass - one builds instances of "
+                    + type.getSimpleName() + ", the other makes it uninstantiable. Drop whichever "
+                    + "is wrong",
                 element);
             return false;
         }

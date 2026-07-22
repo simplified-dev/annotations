@@ -261,6 +261,46 @@ public class UtilityClassMutatorTest {
         assertTrue(Modifier.isFinal(inner.getModifiers()));
     }
 
+    /**
+     * A local class is not an element of any round - the scan never descends
+     * into a method body - so the annotation is a silent no-op there and the
+     * nesting rule never reaches it. Pinned because the inspection has to match:
+     * an editor error on source the build accepts is the worse failure.
+     */
+    @Test
+    public void localClassInsideAnInnerClassIsNotProcessed() {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Outer",
+            "package demo;",
+            "import dev.simplified.annotations.UtilityClass;",
+            "public class Outer {",
+            "    public class Inner {",
+            "        void m() {",
+            "            @UtilityClass class Local { }",
+            "        }",
+            "    }",
+            "}");
+        assertThat(compile(src)).succeeded();
+    }
+
+    /**
+     * The builder builds instances of a type this annotation declares
+     * uninstantiable, so the build has to stop here rather than at the first
+     * {@code build()} call at runtime.
+     */
+    @Test
+    public void classBuilderOnTheSameTypeIsRejected() {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Config",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.UtilityClass;",
+            "@ClassBuilder",
+            "@UtilityClass",
+            "public class Config {",
+            "    private String name;",
+            "}");
+        assertThat(compile(src)).hadErrorContaining("@ClassBuilder contradicts @UtilityClass");
+    }
+
     @Test
     public void abstractClassIsRejected() {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.A",

@@ -66,6 +66,9 @@ final class ClassBuilderChangeService {
 
             private void handle(@Nullable PsiElement element) {
                 if (!(element instanceof PsiAnnotation annotation)) return;
+                // A replace hands back the node it swapped out, which is already
+                // detached - reading its reference element throws.
+                if (!annotation.isValid()) return;
                 if (!isTracked(annotation)) return;
 
                 PsiFile file = annotation.getContainingFile();

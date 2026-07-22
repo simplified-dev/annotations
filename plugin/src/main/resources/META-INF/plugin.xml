@@ -106,6 +106,7 @@
     <!-- Extension points defined by the plugin.
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
     <extensions defaultExtensionNs="com.intellij">
+        <notificationGroup id="Simplified Annotations" displayType="BALLOON"/>
         <localInspection
                 language="JAVA"
                 implementationClass="dev.simplified.resourcepath.ResourcePathInspection"
@@ -185,6 +186,33 @@
                 level="ERROR"
                 shortName="ArgsConstructorInspection"
                 displayName="Constructor annotation misuse"
+                groupName="Simplified Annotations"
+        />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.accessor.inspect.AccessorInspection"
+                enabledByDefault="true"
+                level="ERROR"
+                shortName="AccessorInspection"
+                displayName="@Getter / @Setter misuse"
+                groupName="Simplified Annotations"
+        />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.utility.inspect.UtilityClassInspection"
+                enabledByDefault="true"
+                level="ERROR"
+                shortName="UtilityClassInspection"
+                displayName="@UtilityClass misuse"
+                groupName="Simplified Annotations"
+        />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.classbuilder.inspect.GetterVisibilityInspection"
+                enabledByDefault="true"
+                level="WARNING"
+                shortName="GetterVisibilityInspection"
+                displayName="@Getter accessor width and hand-written accessors"
                 groupName="Simplified Annotations"
         />
         <lang.inferredAnnotationProvider implementation="dev.simplified.xcontract.XContractInferredAnnotationProvider"/>
