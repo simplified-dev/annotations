@@ -3,6 +3,10 @@ package dev.simplified.utility.editor;
 import com.intellij.codeInsight.daemon.impl.HighlightInfo;
 import com.intellij.lang.annotation.HighlightSeverity;
 import com.intellij.openapi.application.AccessToken;
+import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiField;
+import com.intellij.psi.PsiFile;
+import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiMethodCallExpression;
 import com.intellij.psi.PsiModifier;
@@ -18,21 +22,17 @@ import java.util.List;
 
 /**
  * Editor behaviour for a {@code @UtilityClass(members = MAKE_STATIC)} target,
- * whose members javac sees as {@code static} and the IDE does not.
+ * whose members javac sees as {@code static} however the author wrote them.
  *
- * <p>The processor adds {@code static} to every instance member of such a
- * target by mutating the javac AST, so a class-qualified call compiles. The
- * plugin contributes nothing for {@code @UtilityClass}, so the PSI still holds
- * the modifiers the author wrote and the editor reports the call as a static
- * reference to an instance member.
+ * <p>The processor adds the modifier by mutating the javac AST, which leaves
+ * nothing in the PSI to read. {@link UtilityClassAugmentProvider} contributes it
+ * back, so a class-qualified call is as clean in the editor as it is in the
+ * build; without it the call reads as an instance member referenced from a
+ * static context, on source that compiles.
  *
- * <p>These tests pin that divergence as it stands today rather than the
- * behaviour that is wanted. Closing it needs a {@code PsiAugmentProvider} that
- * overrides {@code transformModifiers} to add {@code static} to any member of a
- * {@code MAKE_STATIC} target - the one platform hook that alters an element the
- * platform already built. When that lands, {@link #testMemberIsNotStaticToThePsi}
- * and {@link #testStaticQualifiedCallIsFlaggedAsAStaticContextError} flip, and
- * the assertions below say so inline.
+ * <p>The control cases matter as much as the positive ones: a member the author
+ * wrote {@code static} must be unaffected, and the reference has to keep
+ * resolving, since only the modifier ever diverged.
  */
 public class UtilityClassMakeStaticTest extends LightJavaCodeInsightFixtureTestCase {
 
@@ -126,28 +126,18 @@ public class UtilityClassMakeStaticTest extends LightJavaCodeInsightFixtureTestC
         assertEquals("fromFile", resolved.getName());
     }
 
-    public void testMemberIsNotStaticToThePsi() {
+    public void testMemberIsStaticToThePsi() {
         configureCaller();
         PsiMethod resolved = singleCallIn().resolveMethod();
         assertNotNull(resolved);
-        // Current behaviour. javac sees this member as static because
-        // UtilityClassMutator sets the flag on the tree and the symbol; the PSI
-        // sees the source modifiers only. A transformModifiers-based augment
-        // provider for @UtilityClass would make this assertion read assertTrue.
-        assertFalse("no plugin hook contributes static to a MAKE_STATIC member",
+        assertTrue("the provider contributes static to a MAKE_STATIC member",
             resolved.hasModifierProperty(PsiModifier.STATIC));
     }
 
-    public void testStaticQualifiedCallIsFlaggedAsAStaticContextError() {
+    public void testStaticQualifiedCallIsClean() {
         configureCaller();
         List<String> errors = errorsIn();
-        // Current behaviour. The build is clean, the editor is not - the call
-        // reads as an instance member referenced from a static context. This
-        // assertion becomes assertTrue(errors.isEmpty()) once the modifier is
-        // contributed to the PSI.
-        assertFalse("expected the editor to disagree with javac, got no errors", errors.isEmpty());
-        boolean staticComplaint = errors.stream().anyMatch(e -> e.contains("static"));
-        assertTrue("expected a static-context error, got: " + errors, staticComplaint);
+        assertTrue("the editor must agree with javac, got: " + errors, errors.isEmpty());
     }
 
     // ------------------------------------------------------------------
@@ -174,6 +164,106 @@ public class UtilityClassMakeStaticTest extends LightJavaCodeInsightFixtureTestC
         List<String> errors = errorsIn();
         assertTrue("a member the author wrote static needs no contribution: " + errors,
             errors.isEmpty());
+    }
+
+    /** The class the fixture declares, by name, for reading members directly. */
+    private PsiClass configureClass(String name, String source) {
+        PsiFile file = myFixture.configureByText(name + ".java", source);
+        return ((PsiJavaFile) file).getClasses()[0];
+    }
+
+    public void testFieldIsStaticToThePsi() {
+        PsiClass target = configureClass("Registry",
+            """
+            import dev.simplified.annotations.UtilityClass;
+            @UtilityClass(members = UtilityClass.Members.MAKE_STATIC)
+            public class Registry {
+                private String cache = "";
+            }
+            """);
+        PsiField cache = target.findFieldByName("cache", false);
+        assertNotNull(cache);
+        assertTrue("a field is a member the policy rewrites too",
+            cache.hasModifierProperty(PsiModifier.STATIC));
+    }
+
+    public void testRequireStaticContributesNothing() {
+        PsiClass target = configureClass("Strict",
+            """
+            import dev.simplified.annotations.UtilityClass;
+            @UtilityClass
+            public class Strict {
+                public String read() { return ""; }
+            }
+            """);
+        PsiMethod read = target.findMethodsByName("read", false)[0];
+        assertFalse("the default mode reports an instance member rather than rewriting it",
+            read.hasModifierProperty(PsiModifier.STATIC));
+    }
+
+    public void testConstructorIsNeverStatic() {
+        PsiClass target = configureClass("Holder",
+            """
+            import dev.simplified.annotations.UtilityClass;
+            @UtilityClass(members = UtilityClass.Members.MAKE_STATIC)
+            public class Holder {
+                Holder() { }
+            }
+            """);
+        PsiMethod[] constructors = target.getConstructors();
+        assertEquals(1, constructors.length);
+        assertFalse("a static constructor does not exist",
+            constructors[0].hasModifierProperty(PsiModifier.STATIC));
+    }
+
+    public void testNestedTypeNeedsTheOptIn() {
+        PsiClass target = configureClass("Outer",
+            """
+            import dev.simplified.annotations.UtilityClass;
+            @UtilityClass(members = UtilityClass.Members.MAKE_STATIC)
+            public class Outer {
+                class Inner { }
+            }
+            """);
+        PsiClass inner = target.findInnerClassByName("Inner", false);
+        assertNotNull(inner);
+        assertFalse("nestedTypes is a separate opt-in, and the only one that can change "
+            + "a nested type's meaning", inner.hasModifierProperty(PsiModifier.STATIC));
+    }
+
+    public void testNestedTypeIsStaticUnderTheOptIn() {
+        PsiClass target = configureClass("Opted",
+            """
+            import dev.simplified.annotations.UtilityClass;
+            @UtilityClass(members = UtilityClass.Members.MAKE_STATIC, nestedTypes = true)
+            public class Opted {
+                class Inner { }
+            }
+            """);
+        PsiClass inner = target.findInnerClassByName("Inner", false);
+        assertNotNull(inner);
+        assertTrue(inner.hasModifierProperty(PsiModifier.STATIC));
+    }
+
+    /**
+     * A local class is declared in a method body, which javac's round scan never
+     * descends into, so the annotation is a no-op there on both sides.
+     */
+    public void testLocalClassIsUntouched() {
+        PsiClass target = configureClass("WithLocal",
+            """
+            import dev.simplified.annotations.UtilityClass;
+            @UtilityClass(members = UtilityClass.Members.MAKE_STATIC, nestedTypes = true)
+            public class WithLocal {
+                public void run() {
+                    class Local { }
+                }
+            }
+            """);
+        Collection<PsiClass> locals = PsiTreeUtil.findChildrenOfType(target, PsiClass.class);
+        assertEquals("the fixture declares exactly one local class", 1, locals.size());
+        assertFalse("a local class is not a member of the target",
+            locals.iterator().next().hasModifierProperty(PsiModifier.STATIC));
     }
 
 }
