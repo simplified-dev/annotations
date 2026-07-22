@@ -1,6 +1,7 @@
 package dev.simplified.classbuilder.editor;
-import dev.simplified.shared.psi.GeneratedMemberMarker;
-
+import com.intellij.codeInsight.daemon.impl.HighlightInfo;
+import com.intellij.codeInsight.intention.IntentionAction;
+import com.intellij.lang.annotation.HighlightSeverity;
 import com.intellij.openapi.application.AccessToken;
 import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiClass;
@@ -9,8 +10,12 @@ import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.testFramework.LightProjectDescriptor;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
+import dev.simplified.shared.psi.GeneratedMemberMarker;
 import dev.simplified.testutil.JSvgErrorSuppressor;
 import org.jetbrains.annotations.NotNull;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Exercises {@link ClassBuilderAugmentProvider}: a {@code @ClassBuilder}
@@ -633,6 +638,117 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
             """);
         PsiMethod[] withLabel = builder.findMethodsByName("label", false);
         assertEquals("nullable-raw + wrapped", 2, withLabel.length);
+    }
+
+    /**
+     * Pins the one call shape the dual setter cannot serve, and - just as
+     * importantly - the four it can.
+     *
+     * <p>A bare {@code label(null)} is ambiguous by the language rule, both
+     * {@code String} and {@code Optional<String>} accepting null with neither
+     * more specific (JLS 15.12.2.5). That is javac's verdict, and this test
+     * asserts the editor reaches the same one: the augment provider has to
+     * model both overloads faithfully for the resolver to see the ambiguity at
+     * all, so a regression that dropped or mistyped an overload would show up
+     * here as the error disappearing.
+     *
+     * <p>The ambiguity is a feature rather than a defect. On an
+     * {@code Optional} field, {@code label(null)} is ambiguous in intent too -
+     * absent, or present-and-null? - and telling those apart is the reason to
+     * declare the field {@code Optional} in the first place.
+     */
+    public void testOptionalDualSetter_onlyBareNullIsAmbiguous() {
+        myFixture.configureByText("Consumer.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import java.util.Optional;
+            @ClassBuilder
+            class Box { Optional<String> label; }
+            public class Consumer {
+                static void go(String s) {
+                    Box.builder().label(s);                 // nullable raw, by static type
+                    Box.builder().label(Optional.empty());  // explicitly absent
+                    Box.builder().label("x");               // literal value
+                    Box.builder().label((String) null);     // cast disambiguates
+                    Box.builder().label(null);              // the one ambiguous form
+                }
+            }
+            """);
+        List<String> errors = new ArrayList<>();
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            if (info.getSeverity().myVal >= HighlightSeverity.ERROR.myVal) {
+                errors.add(info.getText() + " :: " + info.getDescription());
+            }
+        }
+        assertEquals("only the bare null call may fail to resolve, got " + errors, 1, errors.size());
+        // The highlighted range is the argument list, so the text is "(null)".
+        assertTrue("the ambiguity must be reported on the null argument, got " + errors.get(0),
+            errors.get(0).startsWith("(null) ::"));
+        assertTrue("the editor must name both overloads, got " + errors.get(0),
+            errors.get(0).contains("Ambiguous method call")
+                && errors.get(0).contains("label(String)")
+                && errors.get(0).contains("label(Optional<String>)"));
+    }
+
+    /** The intention rewrites the one ambiguous form into the one worth writing. */
+    public void testOptionalNullIntention_rewritesToOptionalEmpty() {
+        myFixture.configureByText("Consumer.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import java.util.Optional;
+            @ClassBuilder
+            class Box { Optional<String> label; }
+            public class Consumer {
+                static void go() {
+                    Box.builder().label(nu<caret>ll);
+                }
+            }
+            """);
+        IntentionAction fix = myFixture.findSingleIntention("Replace 'null' with 'Optional.empty()'");
+        myFixture.launchAction(fix);
+        myFixture.checkResult(
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import java.util.Optional;
+            @ClassBuilder
+            class Box { Optional<String> label; }
+            public class Consumer {
+                static void go() {
+                    Box.builder().label(Optional.empty());
+                }
+            }
+            """);
+    }
+
+    /**
+     * The intention is keyed on the candidate shape, so it must stay off an
+     * ambiguity that has nothing to do with an Optional dual setter.
+     */
+    public void testOptionalNullIntention_absentOnUnrelatedAmbiguity() {
+        myFixture.configureByText("Other.java",
+            """
+            public class Other {
+                static void pick(String s) {}
+                static void pick(Integer i) {}
+                static void go() { pick(nu<caret>ll); }
+            }
+            """);
+        assertEmpty(myFixture.filterAvailableIntentions("Replace 'null' with 'Optional.empty()'"));
+    }
+
+    /** A resolvable call is not the intention's business either. */
+    public void testOptionalNullIntention_absentWhenTheCallResolves() {
+        myFixture.configureByText("Consumer.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import java.util.Optional;
+            @ClassBuilder
+            class Box { Optional<String> label; }
+            public class Consumer {
+                static void go(String s) { Box.builder().label(<caret>s); }
+            }
+            """);
+        assertEmpty(myFixture.filterAvailableIntentions("Replace 'null' with 'Optional.empty()'"));
     }
 
     /** {@code Optional<String>} with {@code @Formattable} gets a third overload. */

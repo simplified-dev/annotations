@@ -1,0 +1,34 @@
+<html>
+<body>
+Rewrites a bare <code>null</code> argument to <code>Optional.empty()</code> on
+the dual setter an <code>Optional</code> field generates.
+
+<p>
+An <code>Optional&lt;T&gt;</code> field on a <code>@ClassBuilder</code> target
+gets <code>x(T)</code> alongside <code>x(Optional&lt;T&gt;)</code>, so a caller
+holding a maybe-null <code>T</code> does not have to wrap it at the call site.
+The cost is that a literal <code>x(null)</code> is ambiguous: both parameter
+types accept null and neither is more specific, so the compiler cannot choose.
+Every other call shape resolves - including a null-valued variable, which
+carries a static type.
+</p>
+
+<p>
+<code>Optional.empty()</code> is the only replacement offered because it is the
+only one worth writing. The raw overload wraps its argument with
+<code>Optional.ofNullable</code>, so a disambiguating cast such as
+<code>x((String) null)</code> stores precisely the same empty value while
+saying less about what was meant.
+</p>
+
+<!-- tooltip end -->
+
+<p>
+Available on any <code>x(T)</code> / <code>x(Optional&lt;T&gt;)</code> pair,
+not only on generated builders - a builder read from a compiled dependency
+carries no synthesis marker, and a hand-written pair has the same ambiguity for
+the same reason.
+</p>
+
+</body>
+</html>

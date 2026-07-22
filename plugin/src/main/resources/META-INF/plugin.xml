@@ -188,6 +188,11 @@
                 language="JAVA"
                 implementationClass="dev.simplified.classbuilder.editor.ClassBuilderLineMarkerProvider"/>
         <iconProvider implementation="dev.simplified.classbuilder.editor.ClassBuilderIconProvider"/>
+        <intentionAction>
+            <language>JAVA</language>
+            <className>dev.simplified.classbuilder.editor.OptionalSetterNullIntention</className>
+            <category>Simplified Annotations</category>
+        </intentionAction>
         <postStartupActivity implementation="dev.simplified.resourcepath.ResourcePathStartupActivity"/>
         <postStartupActivity implementation="dev.simplified.classbuilder.editor.ClassBuilderStartupActivity"/>
     </extensions>

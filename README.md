@@ -31,7 +31,7 @@ Four Java annotations with matching IntelliJ IDEA tooling - covering static reso
 - **`@ClassBuilder`** - generates a `public static class Builder` via javac AST mutation, covering classes, records, and interfaces. Full Lombok `@Builder` parity plus richer setter shapes:
   - Boolean typed setter plus a zero-arg convenience, with `@Negate` inverse
   - Every generated name driven by a per-role pattern, with a `NamingStyle.LOMBOK` drop-in profile
-  - `Optional<T>` dual setters (raw nullable + wrapped)
+  - `Optional<T>` dual setters (raw nullable + wrapped), so a maybe-null value needs no wrapping at the call site
   - `@Collector` varargs/iterable bulk overloads with opt-in single-element add/put, clear, and lazy put-if-absent
   - `@Formattable` `@PrintFormat` string overload
   - Field initializers (`UUID.randomUUID()`, `List.of(...)`, etc.) carried into the builder as defaults evaluated fresh per `build()`, with no annotation required
@@ -401,6 +401,26 @@ reconstructed from the declared type. No inference is done on the initializer at
 | `@Collector` | `Collection`, `List`, `Set`, `Map` | Emits varargs + `Iterable` bulk setters; opt-in `singular`, `clearable`, `compute` (maps: `putIfAbsent(K, Supplier<V>)`) |
 | `@Negate("inverse")` | `boolean` | Emits an inverse setter pair (`inverse(boolean)` plus the zero-arg `isInverse()`) alongside the direct pair |
 | `@Formattable` | `String`, `Optional<String>` | Emits a `@PrintFormat` overload (`withField(String fmt, Object... args)`) with null-safe `String.format` |
+
+### `Optional<T>` fields
+
+An `Optional<T>` field gets a **dual setter** - `x(T)` alongside `x(Optional<T>)` - so a caller
+holding a maybe-null `T` hands it straight over and the wrapping stays inside the builder. This is a
+deliberate divergence from Lombok, which emits only the wrapped setter and so pushes
+`Optional.ofNullable(...)` onto every such call site.
+
+The one shape it cannot serve is a bare literal `x(null)`: both parameter types accept null and
+neither is more specific, so the call is ambiguous (JLS 15.12.2.5) and both javac and the IDE reject
+it. Everything else resolves, including a null-valued *variable*, which carries a static type.
+
+That is arguably the right error - on an `Optional` field, `x(null)` is ambiguous in intent too
+(absent, or present-and-null?) - so the plugin ships an Alt+Enter fix rather than a way to turn the
+overload off:
+
+```java
+Box.builder().label(null);              // ambiguous
+Box.builder().label(Optional.empty());  // ← Alt+Enter: Replace 'null' with 'Optional.empty()'
+```
 | `@Lazy` | any reference-typed field | Rewrites storage to `Lazy<T>`, wraps the initializer as a supplier, and synthesises a memoizing getter; with `@ClassBuilder` adds a dual `field(T)` / `field(Supplier<T>)` setter pair |
 
 ## Documentation
