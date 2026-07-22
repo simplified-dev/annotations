@@ -247,7 +247,7 @@ When the enclosing class also carries `@ClassBuilder`, the generated builder rec
 | `setters` | `@SetterNames` | inherit | Overrides for the members generated once per field |
 | `builder` | `@BuilderNames` | inherit | Overrides for the members generated exactly once |
 | `access` | `AccessLevel` | `PUBLIC` | Access level of generated bootstrap methods and builder class |
-| `validate` | `boolean` | `true` | Whether `build()` calls `BuildFlagValidator.validate(target)` |
+| `validate` | `boolean` | `true` | Whether `build()` validates the constructed instance against its `@BuildFlag` constraints |
 | `emitContracts` | `boolean` | `true` | Whether to emit `@XContract` annotations on generated methods |
 | `generateImpl` | `boolean` | `true` | Interface targets only: whether to generate `<Name>Impl` |
 | `factoryMethod` | `String` | `""` | Static factory method `build()` delegates to instead of `new` |

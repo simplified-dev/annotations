@@ -39,6 +39,13 @@ import java.lang.annotation.Target;
  * {@code mutate} is a {@code default}, both legal since Java 8, so implementors
  * need no change.
  *
+ * <p>An interface target cannot carry {@link BuildFlag} constraints. The
+ * annotation targets fields, an interface declares none, and the generated
+ * {@code <Name>Impl} copies no annotations onto the ones it synthesises - so
+ * there is nothing for the validator to find. Constraints on an interface-shaped
+ * type go on a hand-written implementation reached through
+ * {@link #factoryMethod()}, whose fields the validator does read.
+ *
  * <h2>Generic targets</h2>
  * A target may declare type parameters, on any supported shape. The generated
  * builder re-declares them, since a nested {@code Builder} is {@code static}
@@ -98,9 +105,9 @@ import java.lang.annotation.Target;
  * public record User(&#64;BuildFlag(nonNull = true, notEmpty = true) String name, int age) { }
  *
  * // Interface - plugin generates ShapeImpl + ShapeBuilder
- * &#64;ClassBuilder(generateImpl = true)
+ * &#64;ClassBuilder
  * public interface Shape {
- *     &#64;BuildFlag(nonNull = true) String name();
+ *     String name();
  * }
  *
  * // Builder on a static factory method
@@ -215,9 +222,12 @@ public @interface ClassBuilder {
     boolean generateCopyConstructor() default true;
 
     /**
-     * Whether the generated {@code build()} method should call
-     * {@code BuildFlagValidator.validate(this)} before invoking the
-     * constructor or factory.
+     * Whether the generated {@code build()} method should validate the
+     * constructed instance against its {@link BuildFlag} constraints.
+     *
+     * <p>A target that no {@code @BuildFlag} reaches costs only a cached no-op
+     * call - the validator resolves the flagged fields of the instance's
+     * runtime class once and returns immediately when there are none.
      */
     boolean validate() default true;
 

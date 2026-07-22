@@ -24,8 +24,13 @@ import java.util.stream.Collectors;
  *
  * <p>The list of flagged fields per class is cached on first invocation,
  * so subsequent calls for the same type skip all reflective discovery and
- * only read field values. Fields with a no-op flag (every attribute at its
- * default) are elided at cache-build time and never checked.
+ * only read field values. {@link #scan} walks the superclass chain, and elides
+ * fields whose flag is a no-op (every attribute at its default), so a class
+ * with nothing to enforce caches an empty list and every later call returns on
+ * the emptiness check. That is the only place a target with no reachable
+ * {@code @BuildFlag} is recognised as such - the generated {@code build()}
+ * calls unconditionally whenever {@code validate} is on, because only the
+ * instance's runtime class can answer the question.
  */
 public final class BuildFlagValidator {
 
@@ -41,6 +46,8 @@ public final class BuildFlagValidator {
      */
     public static void validate(@NotNull Object target) {
         List<FlaggedField> fields = CACHE.computeIfAbsent(target.getClass(), BuildFlagValidator::scan);
+        // The cheap path: a type with no enforceable flag caches an empty list, so every
+        // build() on it costs a map lookup. This is where "nothing to validate" is decided.
         if (fields.isEmpty()) return;
 
         Map<String, List<GroupMember>> groupResults = new HashMap<>();
@@ -110,7 +117,10 @@ public final class BuildFlagValidator {
                 try {
                     field.setAccessible(true);
                 } catch (RuntimeException ignored) {
-                    // Module access denied - skip silently; validation falls back to whatever is public
+                    // Module access denied. The field is kept rather than dropped, so the read
+                    // below fails loudly: silently validating a subset would let constraints
+                    // stop being enforced with no signal, which is the failure mode @BuildFlag
+                    // exists to prevent.
                 }
                 out.add(new FlaggedField(field, flag));
             }
@@ -135,8 +145,12 @@ public final class BuildFlagValidator {
         try {
             return field.get(target);
         } catch (IllegalAccessException e) {
+            // In practice this means the declaring module does not open its package to us, so
+            // setAccessible was refused during the scan. Say so: the constraint itself is fine
+            // and the reader needs an `opens` directive, not a change to their build() call.
             throw new BuilderValidationException(
-                e, "Unable to read field '%s' on '%s'",
+                e, "Unable to read field '%s' on '%s' - its module must open the package to "
+                    + "'dev.simplified.classbuilder.validate' for @BuildFlag validation to run",
                 field.getName(), target.getClass().getSimpleName()
             );
         }

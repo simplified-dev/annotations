@@ -25,7 +25,14 @@ import java.util.Optional;
  * label.
  *
  * <p>The validator is provided by this plugin's runtime support and has no
- * external dependencies. Fields are scanned once per class and cached.
+ * external dependencies. Fields are scanned once per class and cached - the
+ * scan walking the superclass chain, so an inherited constraint is enforced on
+ * the subclass being built.
+ *
+ * <p>Fields only: this cannot go on an interface accessor, so an interface
+ * {@link ClassBuilder} target has no way to declare constraints. Put them on a
+ * hand-written implementation reached through
+ * {@link ClassBuilder#factoryMethod()} instead.
  *
  * <h2>Examples</h2>
  * <pre><code>

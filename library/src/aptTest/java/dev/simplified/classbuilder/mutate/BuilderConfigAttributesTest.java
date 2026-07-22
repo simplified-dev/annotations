@@ -4,15 +4,18 @@ import com.google.testing.compile.Compilation;
 import com.google.testing.compile.Compiler;
 import com.google.testing.compile.JavaFileObjects;
 import dev.simplified.classbuilder.apt.ClassBuilderProcessor;
+import dev.simplified.classbuilder.validate.BuilderValidationException;
 import org.junit.Test;
 
 import javax.tools.JavaFileObject;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -51,6 +54,27 @@ public class BuilderConfigAttributesTest {
             }
         }
         return new URLClassLoader(new URL[]{tmp.toUri().toURL()}, BuilderConfigAttributesTest.class.getClassLoader());
+    }
+
+    /**
+     * Whether any generated class file mentions {@code needle} in its constant
+     * pool. Used to prove a reference is *absent* - which reflection cannot
+     * show, a skipped call leaving nothing to look up.
+     *
+     * @param compilation the finished compilation
+     * @param needle the constant-pool text to search for
+     * @return whether any generated class file contains it
+     */
+    private static boolean anyClassFileMentions(Compilation compilation, String needle) throws Exception {
+        for (JavaFileObject f : compilation.generatedFiles()) {
+            if (f.getKind() != JavaFileObject.Kind.CLASS) continue;
+            try (InputStream in = f.openInputStream()) {
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                in.transferTo(baos);
+                if (baos.toString(StandardCharsets.ISO_8859_1).contains(needle)) return true;
+            }
+        }
+        return false;
     }
 
     private static Class<?> nested(Class<?> outer, String simpleName) {
@@ -383,6 +407,216 @@ public class BuilderConfigAttributesTest {
         int methodMods = builderMethod.getModifiers();
         assertFalse("builder() must not be public under access=PACKAGE",
             Modifier.isPublic(methodMods));
+    }
+
+    // ------------------------------------------------------------------
+    // validate - the constraints the generated build() actually enforces
+    // ------------------------------------------------------------------
+
+    private static final String VALIDATOR = "dev/simplified/classbuilder/validate/BuildFlagValidator";
+
+    /**
+     * Builds and returns the {@link BuilderValidationException} the generated
+     * {@code build()} threw, failing the test when it built successfully.
+     *
+     * @param builder the generated builder class
+     * @param instance a builder instance ready to build
+     * @return the rejection
+     */
+    private static BuilderValidationException buildRejected(Class<?> builder, Object instance) throws Exception {
+        try {
+            builder.getMethod("build").invoke(instance);
+        } catch (InvocationTargetException e) {
+            if (e.getCause() instanceof BuilderValidationException rejection) return rejection;
+            throw new AssertionError("build() failed for something other than validation", e.getCause());
+        }
+        fail("expected build() to reject the instance");
+        return null;
+    }
+
+    /**
+     * Nothing is enforced on a target no {@code @BuildFlag} reaches: the
+     * validator caches an empty field list for its runtime class and returns.
+     */
+    @Test
+    public void validate_flagFreeTargetEnforcesNothing() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Loose",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder",
+            "public class Loose {",
+            "    String name;",
+            "    public Loose(String name) { this.name = name; }",
+            "    public String getName() { return name; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+        ClassLoader cl = loadClasses(c);
+        Class<?> loose = Class.forName("demo.Loose", true, cl);
+        Class<?> builder = nested(loose, "Builder");
+
+        Object built = builder.getMethod("build").invoke(loose.getMethod("builder").invoke(null));
+        assertNull("an unflagged field is left exactly as the builder set it",
+            loose.getMethod("getName").invoke(built));
+    }
+
+    @Test
+    public void validate_flaggedFieldRejectsTheBuild() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Strict",
+            "package demo;",
+            "import dev.simplified.annotations.BuildFlag;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder",
+            "public class Strict {",
+            "    @BuildFlag(nonNull = true) String name;",
+            "    public Strict(String name) { this.name = name; }",
+            "    public String getName() { return name; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+        ClassLoader cl = loadClasses(c);
+        Class<?> strict = Class.forName("demo.Strict", true, cl);
+        Class<?> builder = nested(strict, "Builder");
+
+        BuilderValidationException rejection =
+            buildRejected(builder, strict.getMethod("builder").invoke(null));
+        assertTrue("the message must name the offending field, got: " + rejection.getMessage(),
+            rejection.getMessage().contains("'name'"));
+
+        Object ok = builder.getMethod("build").invoke(
+            builder.getMethod("name", String.class).invoke(strict.getMethod("builder").invoke(null), "n"));
+        assertEquals("a satisfied constraint builds normally", "n", strict.getMethod("getName").invoke(ok));
+    }
+
+    /**
+     * The validator walks the superclass chain, so a flag on an unannotated
+     * parent is enforced on the child being built.
+     */
+    @Test
+    public void validate_inheritedFlaggedFieldRejectsTheBuild() throws Exception {
+        JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Base",
+            "package demo;",
+            "import dev.simplified.annotations.BuildFlag;",
+            "public class Base {",
+            "    @BuildFlag(nonNull = true) protected String id;",
+            "}");
+        JavaFileObject child = JavaFileObjects.forSourceLines("demo.Child",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder",
+            "public class Child extends Base {",
+            "    String label;",
+            "    public Child(String label) { this.label = label; }",
+            "    public String getLabel() { return label; }",
+            "}");
+        Compilation c = compile(parent, child);
+        assertThat(c).succeeded();
+        ClassLoader cl = loadClasses(c);
+        Class<?> childClass = Class.forName("demo.Child", true, cl);
+        Class<?> builder = nested(childClass, "Builder");
+
+        BuilderValidationException rejection =
+            buildRejected(builder, childClass.getMethod("builder").invoke(null));
+        assertTrue("the inherited constraint must be the one that fired, got: " + rejection.getMessage(),
+            rejection.getMessage().contains("'id'"));
+    }
+
+    /**
+     * A {@code @BuilderIgnore}d field is invisible to the builder but not to
+     * the validator, which reads every declared field off the built instance.
+     */
+    @Test
+    public void validate_ignoredFlaggedFieldRejectsTheBuild() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Hidden",
+            "package demo;",
+            "import dev.simplified.annotations.BuildFlag;",
+            "import dev.simplified.annotations.BuilderIgnore;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder",
+            "public class Hidden {",
+            "    String label;",
+            "    @BuilderIgnore @BuildFlag(nonNull = true) String secret;",
+            "    public Hidden(String label) { this.label = label; }",
+            "    public String getLabel() { return label; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+        ClassLoader cl = loadClasses(c);
+        Class<?> hidden = Class.forName("demo.Hidden", true, cl);
+        Class<?> builder = nested(hidden, "Builder");
+
+        assertFalse("the ignored field must stay off the builder",
+            hasMethod(builder, "secret", String.class));
+        BuilderValidationException rejection =
+            buildRejected(builder, hidden.getMethod("builder").invoke(null));
+        assertTrue("a builder-invisible field is still validated, got: " + rejection.getMessage(),
+            rejection.getMessage().contains("'secret'"));
+    }
+
+    /**
+     * The payoff for deciding at runtime: a factory may hand back a subtype
+     * carrying constraints of its own, which no annotation-processing-time
+     * analysis of the declared type could have seen.
+     */
+    @Test
+    public void validate_factorySubtypeFlagRejectsTheBuild() throws Exception {
+        JavaFileObject target = JavaFileObjects.forSourceLines("demo.Made",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(factoryMethod = \"of\")",
+            "public class Made {",
+            "    String name;",
+            "    protected Made(String name) { this.name = name; }",
+            "    public static Made of(String name) { return new Special(name); }",
+            "    public String getName() { return name; }",
+            "}");
+        JavaFileObject subtype = JavaFileObjects.forSourceLines("demo.Special",
+            "package demo;",
+            "import dev.simplified.annotations.BuildFlag;",
+            "public class Special extends Made {",
+            "    @BuildFlag(nonNull = true) String extra;",
+            "    Special(String name) { super(name); }",
+            "}");
+        Compilation c = compile(target, subtype);
+        assertThat(c).succeeded();
+        ClassLoader cl = loadClasses(c);
+        Class<?> made = Class.forName("demo.Made", true, cl);
+        Class<?> builder = nested(made, "Builder");
+
+        BuilderValidationException rejection =
+            buildRejected(builder, made.getMethod("builder").invoke(null));
+        assertTrue("the subtype's own constraint must fire, got: " + rejection.getMessage(),
+            rejection.getMessage().contains("'extra'"));
+        assertTrue("and it must be reported against the runtime class, got: " + rejection.getMessage(),
+            rejection.getMessage().contains("'Special'"));
+    }
+
+    /**
+     * The one case where nothing is emitted, so the claim is about the
+     * generated bytecode rather than about behaviour - a call that is not
+     * there leaves nothing to invoke.
+     */
+    @Test
+    public void validate_falseSkipsEvenWithAFlaggedField() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.OptedOut",
+            "package demo;",
+            "import dev.simplified.annotations.BuildFlag;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class OptedOut {",
+            "    @BuildFlag(nonNull = true) String name;",
+            "    public OptedOut(String name) { this.name = name; }",
+            "    public String getName() { return name; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+        assertFalse("an explicit opt-out still wins", anyClassFileMentions(c, VALIDATOR));
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> optedOut = Class.forName("demo.OptedOut", true, cl);
+        Class<?> builder = nested(optedOut, "Builder");
+        Object built = builder.getMethod("build").invoke(optedOut.getMethod("builder").invoke(null));
+        assertNull("the violated constraint goes unenforced", optedOut.getMethod("getName").invoke(built));
     }
 
     // ------------------------------------------------------------------
