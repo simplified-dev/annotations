@@ -183,6 +183,7 @@
         <lang.psiAugmentProvider implementation="dev.simplified.classbuilder.editor.ClassBuilderAugmentProvider"/>
         <lang.psiAugmentProvider implementation="dev.simplified.lazy.editor.LazyAugmentProvider"/>
         <lang.psiAugmentProvider implementation="dev.simplified.enumlookup.editor.EnumLookupAugmentProvider"/>
+        <lang.psiAugmentProvider implementation="dev.simplified.accessor.editor.AccessorAugmentProvider"/>
         <java.elementFinder implementation="dev.simplified.classbuilder.editor.ClassBuilderElementFinder" order="last"/>
         <codeInsight.lineMarkerProvider
                 language="JAVA"

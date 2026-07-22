@@ -28,7 +28,8 @@ public enum NamingStyle {
      */
     SIMPLIFIED(
         new Setters("{}", "is{}", "add{}", "put{}", "put{}IfAbsent", "clear{}"),
-        new Builder("Builder", "builder", "build", "from", "mutate")
+        new Builder("Builder", "builder", "build", "from", "mutate"),
+        Shared.BEAN_ACCESSORS
     ),
 
     /**
@@ -40,7 +41,8 @@ public enum NamingStyle {
      */
     LOMBOK(
         new Setters("{}", SetterNames.NONE, "{}", "{}", SetterNames.NONE, "clear{}"),
-        new Builder("{}Builder", "builder", "build", "from", "toBuilder")
+        new Builder("{}Builder", "builder", "build", "from", "toBuilder"),
+        Shared.BEAN_ACCESSORS
     ),
 
     /**
@@ -50,7 +52,26 @@ public enum NamingStyle {
      */
     BEAN(
         new Setters("set{}", "is{}", "add{}", "put{}", "put{}IfAbsent", "clear{}"),
-        new Builder("Builder", "builder", "build", "from", "mutate")
+        new Builder("Builder", "builder", "build", "from", "mutate"),
+        Shared.BEAN_ACCESSORS
+    ),
+
+    /**
+     * Accessors named for the field alone - {@code label()} rather than
+     * {@code getLabel()} - and otherwise identical to {@link #SIMPLIFIED}.
+     * Replaces Lombok's {@code @Accessors(fluent = true)}, which is the only
+     * form of that annotation this workspace has ever written.
+     *
+     * <p>It is a separate constant rather than a change to {@link #SIMPLIFIED}
+     * because a bare {@link Getter} has to keep minting {@code getLabel()}: the
+     * accessor surface and the builder-setter surface are independent choices,
+     * and a codebase pairing fluent builder setters with bean accessors is the
+     * common case here rather than a contradiction.
+     */
+    FLUENT(
+        new Setters("{}", "is{}", "add{}", "put{}", "put{}IfAbsent", "clear{}"),
+        new Builder("Builder", "builder", "build", "from", "mutate"),
+        new Accessors("{}", "{}", "{}")
     );
 
     /** The six patterns generated once per field. */
@@ -59,12 +80,37 @@ public enum NamingStyle {
     /** The five names generated exactly once per target. */
     private record Builder(String type, String builder, String build, String from, String toBuilder) { }
 
+    /** The three patterns {@link Getter} and {@link Setter} generate once per field. */
+    private record Accessors(String get, String is, String set) { }
+
+    /**
+     * Holder for values shared between constants. A plain {@code static final}
+     * field cannot be read from a constant's argument list - enum constants are
+     * initialised first - so the shared value lives in a nested class, which is
+     * initialised on demand.
+     */
+    private static final class Shared {
+
+        /**
+         * Every style but {@link NamingStyle#FLUENT}. Lombok's accessor surface
+         * is bean-shaped whatever its builder surface does, so the three styles
+         * that predate accessor support agree here rather than each picking.
+         */
+        private static final Accessors BEAN_ACCESSORS = new Accessors("get{}", "is{}", "set{}");
+
+        private Shared() {
+        }
+
+    }
+
     private final Setters setters;
     private final Builder builder;
+    private final Accessors accessors;
 
-    NamingStyle(Setters setters, Builder builder) {
+    NamingStyle(Setters setters, Builder builder, Accessors accessors) {
         this.setters = setters;
         this.builder = builder;
+        this.accessors = accessors;
     }
 
     /** Pattern for the value-taking setter every field kind emits, booleans included. */
@@ -120,6 +166,26 @@ public enum NamingStyle {
     /** Name of the instance method returning a builder seeded from {@code this}. */
     public @NotNull String toBuilderMethod() {
         return builder.toBuilder();
+    }
+
+    /**
+     * Pattern for a {@link Getter} on a non-boolean field.
+     *
+     * <p>Prefixed {@code accessor} to keep it clear of {@link #set()}, which is
+     * the builder's setter role and a different surface entirely.
+     */
+    public @NotNull String accessorGet() {
+        return accessors.get();
+    }
+
+    /** Pattern for a {@link Getter} on a {@code boolean} field. */
+    public @NotNull String accessorIs() {
+        return accessors.is();
+    }
+
+    /** Pattern for a {@link Setter} on any field. */
+    public @NotNull String accessorSet() {
+        return accessors.set();
     }
 
 }

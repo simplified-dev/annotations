@@ -1,5 +1,6 @@
 package dev.simplified.classbuilder.apt;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
+import dev.simplified.accessor.mutate.AccessorMutator;
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.NamingStyle;
 import dev.simplified.classbuilder.mutate.BuilderMutator;
@@ -42,7 +43,9 @@ import java.util.Set;
  */
 @SupportedAnnotationTypes({
     "dev.simplified.annotations.ClassBuilder",
-    "dev.simplified.annotations.Lazy"
+    "dev.simplified.annotations.Lazy",
+    "dev.simplified.annotations.Getter",
+    "dev.simplified.annotations.Setter"
 })
 @SupportedSourceVersion(SourceVersion.RELEASE_17)
 public class ClassBuilderProcessor extends AbstractProcessor {
@@ -62,6 +65,8 @@ public class ClassBuilderProcessor extends AbstractProcessor {
 
     private static final String ANNOTATION_FQN = "dev.simplified.annotations.ClassBuilder";
     private static final String LAZY_FQN = "dev.simplified.annotations.Lazy";
+    private static final String GETTER_FQN = "dev.simplified.annotations.Getter";
+    private static final String SETTER_FQN = "dev.simplified.annotations.Setter";
 
     private final AnnotationLookup lookup = new AnnotationLookup();
     private SourceIntrospector introspector;
@@ -136,7 +141,66 @@ public class ClassBuilderProcessor extends AbstractProcessor {
                 }
             }
         }
+
+        // Accessors last, so the collision snapshot sees every member the
+        // builder and @Lazy passes have already injected. Sharing this
+        // processor rather than registering a second one is what makes that
+        // ordering a guarantee - processor order within a round is otherwise
+        // unspecified, and a @Getter racing @Lazy emits a duplicate method.
+        processAccessors(roundEnv, messager);
         return false;
+    }
+
+    /**
+     * Runs {@link AccessorMutator} over every type that carries {@code @Getter}
+     * or {@code @Setter}, or declares a field that does.
+     */
+    private void processAccessors(RoundEnvironment roundEnv, Messager messager) {
+        Set<TypeElement> targets = new java.util.LinkedHashSet<>();
+        for (String fqn : new String[]{GETTER_FQN, SETTER_FQN}) {
+            TypeElement annotation = processingEnv.getElementUtils().getTypeElement(fqn);
+            if (annotation == null) continue;
+            for (Element annotated : roundEnv.getElementsAnnotatedWith(annotation)) {
+                Element owner = annotated instanceof TypeElement
+                    ? annotated
+                    : annotated.getEnclosingElement();
+                if (owner instanceof TypeElement type) targets.add(type);
+            }
+        }
+        if (targets.isEmpty()) return;
+
+        for (TypeElement target : targets) {
+            ElementKind kind = target.getKind();
+            if (kind != ElementKind.CLASS && kind != ElementKind.ENUM) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@Getter / @Setter are only supported on classes and enums - "
+                        + target.getSimpleName() + " is a " + kind.toString().toLowerCase()
+                        + (kind == ElementKind.RECORD
+                            ? ", whose components are accessors already" : ""),
+                    target);
+                continue;
+            }
+            if (javacBridge.isEmpty()) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@Getter / @Setter require javac for AST mutation - current environment is "
+                        + "not a JavacProcessingEnvironment. Run your build under OpenJDK javac "
+                        + "(no ecj).",
+                    target);
+                return;
+            }
+            try {
+                if (!new AccessorMutator(javacBridge.get(), messager).mutate(target)) {
+                    messager.printMessage(Diagnostic.Kind.ERROR,
+                        "@Getter / @Setter could not resolve a source tree for " + target
+                            + "; mutation requires the annotated element to have a source "
+                            + "declaration.",
+                        target);
+                }
+            } catch (Exception e) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "Failed to process accessors on " + target + ": " + e.getMessage(), target);
+            }
+        }
     }
 
     private TypeElement lookupAnnotationElement() {

@@ -1,2 +1,3 @@
 dev.simplified.classbuilder.apt.ClassBuilderProcessor
 dev.simplified.enumlookup.apt.EnumLookupProcessor
+dev.simplified.utility.apt.UtilityClassProcessor

@@ -349,6 +349,12 @@ public final class MutationContext {
             case PROTECTED -> Flags.PROTECTED;
             case PRIVATE -> Flags.PRIVATE;
             case PACKAGE -> 0L;
+            // The builder surface has @BuilderIgnore and exclude for "generate
+            // nothing", so NONE never reaches a flag. Throwing beats mapping it
+            // to 0L, which would quietly emit a package-private member where the
+            // author asked for none.
+            case NONE -> throw new IllegalStateException(
+                "AccessLevel.NONE has no modifier flag - callers must check emits() first");
         };
     }
 

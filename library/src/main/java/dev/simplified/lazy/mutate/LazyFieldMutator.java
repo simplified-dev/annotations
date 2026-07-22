@@ -320,6 +320,19 @@ public final class LazyFieldMutator {
                 String name = raw.toString();
                 int dot = name.lastIndexOf('.');
                 if (dot >= 0) name = name.substring(dot + 1);
+                // NONE is named explicitly rather than falling through to the
+                // default. A @Lazy field's storage is Lazy<T>, so the
+                // synthesised getter is the only read that yields the declared
+                // type - suppressing it leaves the field unreachable, and
+                // silently emitting a public getter instead hides that.
+                if ("NONE".equals(name)) {
+                    messager.printMessage(Diagnostic.Kind.ERROR,
+                        "@Lazy(access = NONE) would leave field '" + lazy.name
+                            + "' unreadable - its storage is Lazy<T> and the synthesised getter is "
+                            + "the only read that unwraps it",
+                        lazy.element);
+                    return Flags.PUBLIC;
+                }
                 return switch (name) {
                     case "PROTECTED" -> Flags.PROTECTED;
                     case "PRIVATE" -> Flags.PRIVATE;
