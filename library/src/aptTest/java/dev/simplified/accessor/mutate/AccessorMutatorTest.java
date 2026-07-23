@@ -498,6 +498,57 @@ public class AccessorMutatorTest {
     }
 
     @Test
+    public void wildcardFieldKeepsItsWildcard() throws Exception {
+        // A field whose type carries a wildcard argument - Class<?>, the array
+        // form, and the nested Predicate<Class<?>> - once made the getter's
+        // return type parse to a bare identifier named "?", which javac rejected
+        // as `cannot find symbol: class ?` at the enclosing declaration.
+        Class<?> t = compileAndLoad("demo.Holder",
+            "package demo;",
+            "import dev.simplified.annotations.Getter;",
+            "import java.util.function.Predicate;",
+            "@Getter",
+            "public class Holder {",
+            "    private Class<?> type;",
+            "    private Class<?>[] roots;",
+            "    private Predicate<Class<?>> filter;",
+            "}");
+        assertEquals("java.lang.Class<?>",
+            t.getDeclaredMethod("getType").getGenericReturnType().toString());
+        assertEquals(Class[].class, t.getDeclaredMethod("getRoots").getReturnType());
+        assertEquals("java.util.function.Predicate<java.lang.Class<?>>",
+            t.getDeclaredMethod("getFilter").getGenericReturnType().toString());
+    }
+
+    @Test
+    public void extendsBoundedWildcardKeepsItsBound() throws Exception {
+        Class<?> t = compileAndLoad("demo.Holder",
+            "package demo;",
+            "import dev.simplified.annotations.Getter;",
+            "import java.util.List;",
+            "@Getter",
+            "public class Holder {",
+            "    private List<? extends Number> nums;",
+            "}");
+        assertEquals("java.util.List<? extends java.lang.Number>",
+            t.getDeclaredMethod("getNums").getGenericReturnType().toString());
+    }
+
+    @Test
+    public void superBoundedWildcardKeepsItsBound() throws Exception {
+        Class<?> t = compileAndLoad("demo.Holder",
+            "package demo;",
+            "import dev.simplified.annotations.Getter;",
+            "import java.util.List;",
+            "@Getter",
+            "public class Holder {",
+            "    private List<? super Integer> sink;",
+            "}");
+        assertEquals("java.util.List<? super java.lang.Integer>",
+            t.getDeclaredMethod("getSink").getGenericReturnType().toString());
+    }
+
+    @Test
     public void arrayFieldKeepsItsType() throws Exception {
         Class<?> t = compileAndLoad("demo.Buf",
             "package demo;",

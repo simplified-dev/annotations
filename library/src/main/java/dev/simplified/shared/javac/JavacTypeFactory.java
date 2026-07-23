@@ -1,5 +1,6 @@
 package dev.simplified.shared.javac;
 
+import com.sun.tools.javac.code.BoundKind;
 import com.sun.tools.javac.code.TypeTag;
 import com.sun.tools.javac.tree.JCTree.JCExpression;
 import com.sun.tools.javac.tree.TreeMaker;
@@ -87,6 +88,22 @@ public final class JavacTypeFactory {
      */
     public JCExpression parseType(String display) {
         String s = stripTypeUseAnnotations(display.trim());
+        // Wildcard type arguments: "?", "? extends X", "? super X". A
+        // javax.lang.model DeclaredType with a wildcard argument renders it
+        // verbatim into the display string; without this branch "?" falls
+        // through to qualIdent and becomes an identifier named "?", which javac
+        // reports as `cannot find symbol: class ?` at the enclosing declaration.
+        if (s.equals("?")) {
+            return make.Wildcard(make.TypeBoundKind(BoundKind.UNBOUND), null);
+        }
+        if (s.startsWith("? extends ")) {
+            return make.Wildcard(make.TypeBoundKind(BoundKind.EXTENDS),
+                parseType(s.substring("? extends ".length())));
+        }
+        if (s.startsWith("? super ")) {
+            return make.Wildcard(make.TypeBoundKind(BoundKind.SUPER),
+                parseType(s.substring("? super ".length())));
+        }
         if (s.endsWith("[]")) {
             return make.TypeArray(parseType(s.substring(0, s.length() - 2)));
         }
