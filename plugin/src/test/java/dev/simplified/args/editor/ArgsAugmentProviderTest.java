@@ -5,6 +5,7 @@ import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
+import com.intellij.psi.PsiParameter;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
 
@@ -18,9 +19,28 @@ import java.util.List;
  */
 public class ArgsAugmentProviderTest extends LightJavaCodeInsightFixtureTestCase {
 
+    private static final String NOT_NULL_FQN = "org.jetbrains.annotations.NotNull";
+    private static final String NULLABLE_FQN = "org.jetbrains.annotations.Nullable";
+
     @Override
     protected void setUp() throws Exception {
         super.setUp();
+        myFixture.addFileToProject("org/jetbrains/annotations/NotNull.java",
+            """
+            package org.jetbrains.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS)
+            @Target({ElementType.TYPE_USE, ElementType.FIELD, ElementType.PARAMETER, ElementType.METHOD})
+            public @interface NotNull { }
+            """);
+        myFixture.addFileToProject("org/jetbrains/annotations/Nullable.java",
+            """
+            package org.jetbrains.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS)
+            @Target({ElementType.TYPE_USE, ElementType.FIELD, ElementType.PARAMETER, ElementType.METHOD})
+            public @interface Nullable { }
+            """);
         myFixture.addFileToProject("dev/simplified/annotations/AccessLevel.java",
             """
             package dev.simplified.annotations;
@@ -71,7 +91,14 @@ public class ArgsAugmentProviderTest extends LightJavaCodeInsightFixtureTestCase
         return ((PsiJavaFile) file).getClasses()[0];
     }
 
-    /** Parameter types of the constructor with the given arity. */
+    /**
+     * Parameter types of the constructor with the given arity.
+     *
+     * <p>{@code getPresentableText()} strips annotations, so nothing routed
+     * through here can see a parameter's nullness - which is why
+     * {@link #testFieldNullnessReachesConstructorParameters} reads the
+     * annotations off the parameter itself.
+     */
     private static List<String> paramTypes(PsiClass target, int arity) {
         for (PsiMethod ctor : target.getConstructors()) {
             if (ctor.getParameterList().getParametersCount() != arity) continue;
@@ -83,6 +110,14 @@ public class ArgsAugmentProviderTest extends LightJavaCodeInsightFixtureTestCase
         }
         fail("no " + arity + "-arg constructor on " + target.getName());
         return null;
+    }
+
+    /** The constructor with the given arity. */
+    private static PsiMethod ctor(PsiClass target, int arity) {
+        for (PsiMethod ctor : target.getConstructors()) {
+            if (ctor.getParameterList().getParametersCount() == arity) return ctor;
+        }
+        throw new AssertionError("no " + arity + "-arg constructor on " + target.getName());
     }
 
     public void testAllArgsConstructorResolves() {
@@ -221,6 +256,67 @@ public class ArgsAugmentProviderTest extends LightJavaCodeInsightFixtureTestCase
             }
             """);
         assertEquals(List.of("int"), paramTypes(deferred, 1));
+    }
+
+    /**
+     * The class file javac produces carries the field's nullness on the
+     * generated constructor parameter, so the PSI copy has to. Without it
+     * IntelliJ's own nullability inspections contradict the compiled result -
+     * a {@code null} passed to a {@code @NotNull} slot reads as fine in the
+     * editor and is flagged by every analysis that runs on the artifact.
+     *
+     * <p>Read off the parameter rather than through {@code paramTypes}: that
+     * helper's {@code getPresentableText()} drops annotations, which is exactly
+     * why the existing suite could not see this.
+     */
+    public void testFieldNullnessReachesConstructorParameters() {
+        PsiClass card = configure("Card",
+            """
+            import dev.simplified.annotations.AllArgsConstructor;
+            import org.jetbrains.annotations.NotNull;
+            import org.jetbrains.annotations.Nullable;
+            @AllArgsConstructor
+            public class Card {
+                @NotNull private final String id;
+                @Nullable private final String note;
+                private final int rank;
+            }
+            """);
+
+        PsiParameter[] params = ctor(card, 3).getParameterList().getParameters();
+        assertNotNull("a @NotNull field gives a @NotNull parameter",
+            params[0].getModifierList().findAnnotation(NOT_NULL_FQN));
+        assertNotNull("a @Nullable field gives a @Nullable parameter",
+            params[1].getModifierList().findAnnotation(NULLABLE_FQN));
+        assertNull("an unannotated field imposes no nullness",
+            params[2].getModifierList().findAnnotation(NOT_NULL_FQN));
+        assertNull("an unannotated field imposes no nullness",
+            params[2].getModifierList().findAnnotation(NULLABLE_FQN));
+    }
+
+    /**
+     * The brief-hover tooltip renders each parameter through
+     * {@code JavaDocInfoGenerator.generateType(..., annotated = true)}, which
+     * walks the type's annotations rather than the modifier list. A parameter
+     * annotated only on the modifier list analyses correctly and hovers blank.
+     */
+    public void testNullnessAlsoRidesTheParameterType() {
+        PsiClass card = configure("Tagged",
+            """
+            import dev.simplified.annotations.AllArgsConstructor;
+            import org.jetbrains.annotations.NotNull;
+            @AllArgsConstructor
+            public class Tagged {
+                @NotNull private final String id;
+            }
+            """);
+
+        PsiParameter id = ctor(card, 1).getParameterList().getParameters()[0];
+        boolean onType = false;
+        for (var a : id.getType().getAnnotations()) {
+            if (NOT_NULL_FQN.equals(a.getQualifiedName())) onType = true;
+        }
+        assertTrue("@NotNull must ride the parameter's type as well", onType);
     }
 
     public void testRecordContributesNothing() {

@@ -167,14 +167,19 @@ public final class AccessorAugmentProvider extends AbstractRecursionSafeAugmentP
 
         LightParameterListBuilder params =
             new LightParameterListBuilder(manager, JavaLanguage.INSTANCE);
+        LightMethodBuilder method = new LightMethodBuilder(manager, JavaLanguage.INSTANCE, methodName,
+            params, modifiers);
         // Nullness rides the parameter here, not the return type - the inverse
         // of the getter, and the reason the two shapes are built separately.
         PsiType paramType = annotate(field.getType(), nullness(elements, target, field));
+        // A LightParameter's declaration scope must be the method it belongs to,
+        // which is what LightMethodBuilder.addParameter(name, type) sets. Handing
+        // it the containing class instead makes IntelliJ 233+ drop the whole
+        // synthetic method during PSI enumeration - so the list is filled after
+        // the method exists rather than before.
         params.addParameter(new LightParameter(
-            field.getName(), paramType, target, JavaLanguage.INSTANCE));
+            field.getName(), paramType, method, JavaLanguage.INSTANCE));
 
-        LightMethodBuilder method = new LightMethodBuilder(manager, JavaLanguage.INSTANCE, methodName,
-            params, modifiers);
         method.setMethodReturnType(PsiTypes.voidType());
         method.setContainingClass(target);
         method.setNavigationElement(field);

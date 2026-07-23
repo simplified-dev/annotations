@@ -12,6 +12,7 @@ import com.intellij.psi.util.CachedValuesManager;
 import com.intellij.psi.util.PsiModificationTracker;
 import dev.simplified.args.apt.ArgsMode;
 import dev.simplified.args.inspect.ArgsConstants;
+import dev.simplified.classbuilder.editor.GeneratedMemberFactory;
 import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
 import org.jetbrains.annotations.NotNull;
@@ -38,6 +39,12 @@ import java.util.Set;
  * <p>{@code @BuilderArgsConstructor} is deliberately not handled: the builder's
  * own provider already synthesises that constructor, including the parameter
  * reshaping the builder does for defaulted fields.
+ *
+ * <p>Parameters are minted through {@code GeneratedMemberFactory.buildParam},
+ * the helper that provider uses, so the field nullness javac writes onto a
+ * generated constructor parameter reaches both PSI copies from one rule. Two
+ * copies deciding it separately is how the editor comes to report a nullability
+ * problem the compiled class does not have.
  */
 public final class ArgsAugmentProvider extends AbstractRecursionSafeAugmentProvider {
 
@@ -92,7 +99,17 @@ public final class ArgsAugmentProvider extends AbstractRecursionSafeAugmentProvi
                     .setContainingClass(target);
                 StringBuilder signature = new StringBuilder();
                 for (PsiField field : fields) {
-                    ctor.addParameter(field.getName(), field.getType());
+                    // Every parameter here takes the field's nullness, and this
+                    // is the one constructor path where that needs no exception.
+                    // The builder retypes - a Supplier for an instance default, a
+                    // java.util interface for a collected one, a marker with no
+                    // field behind it - and the field's nullness would then
+                    // describe the wrong type. These three annotations retype
+                    // nothing: a @Lazy field is dropped from the selection
+                    // outright, and force = true fills its finals in the body
+                    // rather than from a parameter.
+                    ctor.addParameter(GeneratedMemberFactory.buildParam(ctor, field.getName(),
+                        field.getType(), false, GeneratedMemberFactory.nullnessFqns(field)));
                     signature.append(field.getType().getCanonicalText()).append(',');
                 }
                 if (!emitted.add(signature.toString())) continue;

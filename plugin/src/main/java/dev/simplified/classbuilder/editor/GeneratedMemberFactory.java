@@ -10,10 +10,12 @@ import com.intellij.psi.PsiClassType;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiElementFactory;
 import com.intellij.psi.PsiEllipsisType;
+import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiManager;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
+import com.intellij.psi.PsiModifierList;
 import com.intellij.psi.PsiSubstitutor;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypeParameter;
@@ -25,6 +27,7 @@ import com.intellij.psi.impl.light.LightModifierList;
 import com.intellij.psi.impl.light.LightParameter;
 import com.intellij.psi.impl.light.LightPsiClassBuilder;
 import com.intellij.psi.impl.light.LightTypeParameterBuilder;
+import com.intellij.psi.impl.source.PsiExtensibleClass;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.util.IncorrectOperationException;
 import dev.simplified.annotations.NamingStyle;
@@ -69,12 +72,20 @@ import java.util.Set;
  * bearing annotations ({@code @XContract}, {@code @Contract}) are delivered at
  * query time by
  * {@link ClassBuilderInferredAnnotationProvider}.
+ *
+ * <p>The class is public for {@link #buildParam} and {@link #nullnessFqns}
+ * alone. Both are read by the constructor family's augment provider, which mints
+ * the other PSI copy of a generated constructor: one parameter-annotation
+ * mechanism serving both is what keeps the two copies from claiming different
+ * nullness for members javac emits identically. Everything else here stays
+ * package-private.
  */
-final class GeneratedMemberFactory {
+public final class GeneratedMemberFactory {
 
     private static final String PRINT_FORMAT_FQN = "org.intellij.lang.annotations.PrintFormat";
     private static final String NULLABLE_FQN = "org.jetbrains.annotations.Nullable";
     private static final String NOT_NULL_FQN = "org.jetbrains.annotations.NotNull";
+    private static final String[] NO_ANNOTATIONS = new String[0];
 
     private GeneratedMemberFactory() {
     }
@@ -117,6 +128,12 @@ final class GeneratedMemberFactory {
      * {@code AllArgsConstructorFactory}, including the {@code Supplier<T>}
      * rewrite {@code @Lazy} fields receive.
      *
+     * <p>Each parameter carries the backing field's nullness, because the class
+     * file javac produces does - a PSI copy without it puts IntelliJ's own
+     * nullability inspections at odds with the compiled result. The
+     * {@code @Lazy} parameter is the exception, and for the reason the processor
+     * makes it one: its type is no longer the field's.
+     *
      * @param target the annotated type
      * @param config resolved editor-side builder configuration
      * @return the synthesised constructor, or {@code null} when the target has
@@ -141,7 +158,13 @@ final class GeneratedMemberFactory {
                 ? elements.createTypeFromText(
                     "java.util.function.Supplier<" + field.type.getCanonicalText() + ">", target)
                 : field.type;
-            ctor.addParameter(buildParam(ctor, field.name, type, false));
+            // The field's nullness describes T. A @Lazy parameter is Supplier<T>,
+            // whose null is the slot's own sentinel for "never set", so copying
+            // @NotNull there would assert the opposite of what the slot means.
+            String[] nullness = field.lazy
+                ? NO_ANNOTATIONS
+                : nullnessFqns(ownField(target, field.name));
+            ctor.addParameter(buildParam(ctor, field.name, type, false, nullness));
         }
         applyAccess(ctor, config.constructorAccess());
         GeneratedMemberMarker.mark(ctor);
@@ -243,9 +266,17 @@ final class GeneratedMemberFactory {
      * {@code LightMethodBuilder.addParameter(name, type)} does internally).
      * Passing the containing class instead causes IntelliJ 233+ to silently
      * filter the whole synthetic method out during PSI enumeration.
+     *
+     * @param declarationScope the method the parameter belongs to
+     * @param name the parameter name
+     * @param type the parameter type, before any varargs wrapping
+     * @param varargs whether the parameter is the trailing varargs slot
+     * @param annotationFqns the no-attribute annotations to attach
+     * @return the parameter, carrying the annotations on its modifier list and,
+     *         for the nullness pair, on its type
      */
-    private static LightParameter buildParam(PsiMethod declarationScope, String name, PsiType type,
-                                             boolean varargs, String... annotationFqns) {
+    public static LightParameter buildParam(PsiMethod declarationScope, String name, PsiType type,
+                                            boolean varargs, String... annotationFqns) {
         PsiManager manager = declarationScope.getManager();
         AnnotatedLightModifierList modifiers = new AnnotatedLightModifierList(manager, JavaLanguage.INSTANCE);
         List<PsiAnnotation> typeUseAnnotations = new ArrayList<>(annotationFqns.length);
@@ -838,6 +869,53 @@ final class GeneratedMemberFactory {
         if (field.notNull) return new String[] {NOT_NULL_FQN};
         if (field.nullable) return new String[] {NULLABLE_FQN};
         return new String[0];
+    }
+
+    /**
+     * The nullness a generated constructor parameter inherits from its backing
+     * field, as FQNs {@link #buildParam} can attach.
+     *
+     * <p>Deliberately not {@link #primaryNullability}, which is the builder
+     * setter's rule and folds in {@code @BuildFlag(nonNull)}. That constraint is
+     * enforced by the validator {@code build()} calls on the finished object,
+     * not by the constructor, so the constructor's parameter carries nothing for
+     * it in the class file and must carry nothing here.
+     *
+     * <p>Matched on the two JetBrains names exactly, which is the set the
+     * processor copies. The wider {@code NullableNotNullManager} view
+     * {@link PsiFieldShape} carries also answers to the javax / jakarta /
+     * androidx spellings, none of which reach a class file through this
+     * pipeline.
+     *
+     * @param field the backing field, or {@code null} when there is none
+     * @return the annotation to attach, empty when the field carries neither
+     */
+    public static String[] nullnessFqns(@Nullable PsiField field) {
+        if (field == null) return NO_ANNOTATIONS;
+        PsiModifierList modifiers = field.getModifierList();
+        if (modifiers == null) return NO_ANNOTATIONS;
+        for (PsiAnnotation annotation : modifiers.getAnnotations()) {
+            String fqn = annotation.getQualifiedName();
+            if (NOT_NULL_FQN.equals(fqn)) return new String[] {NOT_NULL_FQN};
+            if (NULLABLE_FQN.equals(fqn)) return new String[] {NULLABLE_FQN};
+        }
+        return NO_ANNOTATIONS;
+    }
+
+    /**
+     * The field the target itself declares under this name.
+     *
+     * <p>{@code getOwnFields()} rather than {@code findFieldByName}: the latter
+     * is augment-aware and re-enters every provider, this one's caller included.
+     */
+    private static @Nullable PsiField ownField(PsiClass target, String name) {
+        Iterable<PsiField> declared = target instanceof PsiExtensibleClass ext
+            ? ext.getOwnFields()
+            : List.of(target.getFields());
+        for (PsiField field : declared) {
+            if (name.equals(field.getName())) return field;
+        }
+        return null;
     }
 
     /** Returns an array that prepends {@code head} to {@code tail}. */
