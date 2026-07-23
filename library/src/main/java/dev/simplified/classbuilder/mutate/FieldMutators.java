@@ -82,7 +82,7 @@ final class FieldMutators {
         } else if (field.isOptional) {
             out.append(optionalNullableRaw(field));
             out.append(optionalWrapped(field));
-            if (field.formattable && "java.lang.String".equals(field.optionalInner)) {
+            if (field.formattable && field.isOptionalString) {
                 out.append(optionalFormattable(field));
             }
         } else if (field.isArray) {

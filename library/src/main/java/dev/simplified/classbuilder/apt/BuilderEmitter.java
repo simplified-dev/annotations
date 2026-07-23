@@ -328,7 +328,7 @@ final class BuilderEmitter {
         body.append("        return this;\n    }\n\n");
 
         // @Formattable + Optional<String>: add format-nullable overload that assigns formatNullable(...) directly
-        if (f.formattable && "java.lang.String".equals(f.optionalInner)) {
+        if (f.formattable && f.isOptionalString) {
             emitContract("_, _ -> this", false, "this");
             body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ').append(setterName)
                 .append('(').append(printFormat()).append(nullable()).append(string()).append(' ').append(f.name)

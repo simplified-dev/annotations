@@ -209,6 +209,41 @@ public class NullnessParamTest {
             Optional.of("hi"), boxes.getField("note").get(built));
     }
 
+    /**
+     * The same defect one level down, on the type argument rather than on the
+     * field's own type. {@code optionalInner} is a display string, so
+     * {@code Optional<@NotNull String>} did not equal {@code "java.lang.String"}
+     * and the {@code @Formattable} overload was dropped from exactly the fields
+     * that carry a nullness annotation.
+     */
+    @Test
+    public void typeUseNullnessOnAnOptionalTypeArgument_keepsTheFormattableOverload() throws Exception {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.Fmt",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Formattable;",
+            "import org.jetbrains.annotations.NotNull;",
+            "import java.util.Optional;",
+            "@ClassBuilder(validate = false)",
+            "public class Fmt {",
+            "    @Formattable public final Optional<@NotNull String> annotated;",
+            "    @Formattable public final Optional<String> plain;",
+            "    public Fmt(Optional<String> annotated, Optional<String> plain) {",
+            "        this.annotated = annotated; this.plain = plain;",
+            "    }",
+            "}"));
+        assertThat(c).succeeded();
+
+        Class<?> fmt = loadClasses(c).loadClass("demo.Fmt");
+        Object builder = fmt.getMethod("builder").invoke(null);
+        // The annotated field must accept the printf shape its unannotated
+        // sibling does. Reverted, this throws NoSuchMethodException.
+        builder.getClass().getMethod("annotated", String.class, Object[].class)
+            .invoke(builder, new Object[]{"%s-%d", new Object[]{"a", 1}});
+        Object built = builder.getClass().getMethod("build").invoke(builder);
+        assertEquals(Optional.of("a-1"), fmt.getField("annotated").get(built));
+    }
+
     private static JavaFileObject boxesClass() {
         return JavaFileObjects.forSourceLines("demo.Boxes",
             "package demo;",

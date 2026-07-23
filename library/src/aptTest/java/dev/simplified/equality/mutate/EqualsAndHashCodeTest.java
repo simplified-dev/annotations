@@ -455,6 +455,77 @@ public class EqualsAndHashCodeTest {
     }
 
     /**
+     * The same supertype, written the way an annotated codebase writes it.
+     *
+     * <p>The parameter match read {@code asType().toString()}, which renders a
+     * type annotation inline, so {@code equals(@NotNull Object)} matched
+     * nothing and the {@code final} member went undetected. The generated
+     * override then reached javac as "overridden method is final", anchored on
+     * the class declaration - a line the author never wrote.
+     */
+    @Test
+    public void supertypeDeclaringTheMemberFinalWithAnAnnotatedParameterIsTheSameError() {
+        JavaFileObject sealedSuper = JavaFileObjects.forSourceLines("demo.Locked",
+            "package demo;",
+            "import org.jetbrains.annotations.NotNull;",
+            "public class Locked {",
+            "    @Override public final boolean equals(@NotNull Object o) { return this == o; }",
+            "}");
+        JavaFileObject target = JavaFileObjects.forSourceLines("demo.Below",
+            "package demo;",
+            "import dev.simplified.annotations.EqualsAndHashCode;",
+            "@EqualsAndHashCode",
+            "public final class Below extends Locked {",
+            "    private final int x;",
+            "    public Below(int x) { this.x = x; }",
+            "}");
+        Compilation c = compile(sealedSuper, target);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("demo.Locked declares it final");
+    }
+
+    /**
+     * The other half of the same read, failing in the opposite direction.
+     *
+     * <p>A supertype whose {@code equals} parameter is annotated declares both
+     * members, so {@code AUTO} must resolve to {@code YES}. It instead matched
+     * neither, saw one of the two, and failed the build claiming the supertype
+     * declares "some of the pair and not the rest" - of a type that declares
+     * all of it.
+     */
+    @Test
+    public void callSuperAutoSeesASupertypeWhoseEqualsParameterIsAnnotated() throws Exception {
+        JavaFileObject base = JavaFileObjects.forSourceLines("demo.Base",
+            "package demo;",
+            "import org.jetbrains.annotations.NotNull;",
+            "public class Base {",
+            "    public final int a;",
+            "    public Base(int a) { this.a = a; }",
+            "    @Override public boolean equals(@NotNull Object o) {",
+            "        return o instanceof Base && ((Base) o).a == a;",
+            "    }",
+            "    @Override public int hashCode() { return a; }",
+            "}");
+        JavaFileObject target = JavaFileObjects.forSourceLines("demo.Kid",
+            "package demo;",
+            "import dev.simplified.annotations.EqualsAndHashCode;",
+            "@EqualsAndHashCode",
+            "public class Kid extends Base {",
+            "    public final int b;",
+            "    public Kid(int a, int b) { super(a); this.b = b; }",
+            "}");
+        Compilation c = compile(base, target);
+        assertThat(c).succeeded();
+
+        Constructor<?> ctor = soleConstructor(Class.forName("demo.Kid", true, loadClasses(c)));
+        assertEquals(ctor.newInstance(1, 2), ctor.newInstance(1, 2));
+        assertNotEquals("the superclass state must be folded in - callSuper resolved to YES",
+            ctor.newInstance(1, 2), ctor.newInstance(9, 2));
+        assertNotEquals("and the subclass's own state still is",
+            ctor.newInstance(1, 2), ctor.newInstance(1, 9));
+    }
+
+    /**
      * The same overload read from the other side. A supertype's
      * {@code equals(Sup)} may be {@code final} without saying anything about the
      * {@code equals(Object)} beside it, so refusing there refuses over a member

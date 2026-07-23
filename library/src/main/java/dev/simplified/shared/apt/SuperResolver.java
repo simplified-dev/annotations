@@ -187,6 +187,15 @@ public final class SuperResolver {
      * nothing - would otherwise be read as supplying half the pair, and the
      * subclass's {@code callSuper = AUTO} would fail the build with a message
      * about an inconsistency the author never wrote.
+     *
+     * <p>That check reads the parameter's name through {@link TypeNames} rather
+     * than off {@code asType().toString()}, which renders a type annotation
+     * inline. A supertype declaring {@code equals(@NotNull Object)} - the way an
+     * annotated codebase writes it - otherwise matched nothing, and the two
+     * callers failed in opposite directions: {@code AUTO} reported the
+     * superclass as declaring half the pair when it declares both, and a
+     * {@code final} one went undetected, so the generated override reached javac
+     * as "overridden method is final" on a line the author never wrote.
      */
     private static boolean matches(Element element, Member member) {
         if (element.getKind() != ElementKind.METHOD) return false;
@@ -194,7 +203,7 @@ public final class SuperResolver {
         ExecutableElement method = (ExecutableElement) element;
         if (method.getParameters().size() != member.arity()) return false;
         return member.parameterType() == null
-            || member.parameterType().equals(method.getParameters().get(0).asType().toString());
+            || TypeNames.is(method.getParameters().get(0).asType(), member.parameterType());
     }
 
     private static void note(Messager messager, TypeElement target, String message) {

@@ -1,6 +1,7 @@
 package dev.simplified.classbuilder.apt;
 import dev.simplified.shared.apt.AnnotationLookup;
 import dev.simplified.shared.apt.SourceIntrospector;
+import dev.simplified.shared.apt.TypeNames;
 
 import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.Element;
@@ -59,6 +60,13 @@ public final class FieldSpec {
 
     public final boolean isOptional;
     public final String optionalInner;              // null unless isOptional
+    // Whether optionalInner is java.lang.String, decided from the TypeMirror
+    // rather than by comparing optionalInner itself. That string is a display
+    // form: it renders any type annotation on the argument inline, so
+    // Optional<@NotNull String> does not equal "java.lang.String" and the
+    // @Formattable overload silently went missing on exactly the fields that
+    // carry a nullness annotation.
+    public final boolean isOptionalString;
 
     public final boolean isListLike;                // List, Set, or Collection
     public final boolean isSet;
@@ -117,6 +125,7 @@ public final class FieldSpec {
         this.isFinal = b.isFinal;
         this.isOptional = b.isOptional;
         this.optionalInner = b.optionalInner;
+        this.isOptionalString = b.isOptionalString;
         this.isListLike = b.isListLike;
         this.isSet = b.isSet;
         this.isMap = b.isMap;
@@ -206,15 +215,13 @@ public final class FieldSpec {
         if (kind != TypeKind.DECLARED) return;
 
         DeclaredType declared = (DeclaredType) b.type;
-        // The FQN comes off the element, never off the rendered type. A
-        // TypeMirror renders its type annotations inline - a type-use @NotNull
-        // makes toString() read "java.util.@org.jetbrains.annotations.NotNull
-        // Optional<...>" - so every comparison below silently missed on the
+        // The FQN comes off the element, never off the rendered type - see
+        // TypeNames for why every comparison below silently missed on the
         // near-universal annotated shape. Optional lost its dual setters and
         // its empty default outright; a List or Map survived only by falling
         // through to the supertype walk, which then labelled a plain
         // java.util type a custom container.
-        String raw = ((TypeElement) declared.asElement()).getQualifiedName().toString();
+        String raw = TypeNames.fqn(declared);
         List<? extends TypeMirror> args = declared.getTypeArguments();
 
         if ("java.lang.String".equals(raw)) {
@@ -222,6 +229,7 @@ public final class FieldSpec {
         } else if (OPTIONAL_FQN.equals(raw)) {
             b.isOptional = true;
             b.optionalInner = arg(args, 0);
+            b.isOptionalString = args.size() == 1 && TypeNames.is(args.get(0), "java.lang.String");
         } else if (LIST_TYPES.contains(raw)) {
             b.isListLike = true;
             b.collectionElement = arg(args, 0);
@@ -299,6 +307,7 @@ public final class FieldSpec {
     private static String arg(List<? extends TypeMirror> args, int index) {
         return args.size() <= index ? "java.lang.Object" : args.get(index).toString();
     }
+
 
     public static FieldSpec from(VariableElement element, AnnotationLookup lookup, SourceIntrospector introspector,
                                  Types typeUtils, boolean classRetainInit) {
@@ -388,6 +397,7 @@ public final class FieldSpec {
         boolean isBoolean, isString, isPrimitive, isArray, isFinal;
         boolean isOptional;
         String optionalInner;
+        boolean isOptionalString;
         boolean isListLike, isSet, isMap, isCustomContainer;
         String collectionElement, mapKey, mapValue;
         boolean formattable;
