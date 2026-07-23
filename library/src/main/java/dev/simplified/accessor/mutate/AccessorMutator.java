@@ -23,6 +23,7 @@ import dev.simplified.shared.javac.ContractAnnotations;
 import dev.simplified.shared.javac.GeneratedAnnotations;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.JavacTypeFactory;
+import dev.simplified.shared.javac.NullnessAnnotations;
 
 import javax.annotation.processing.Messager;
 import javax.lang.model.element.Element;
@@ -58,7 +59,9 @@ import java.util.Set;
  *       error.</li>
  *   <li><b>Annotation propagation is an allowlist.</b> A denylist cannot
  *       enumerate Hibernate, Jackson and Spring, and one leaked annotation
- *       changes what a persistence provider does with the member.</li>
+ *       changes what a persistence provider does with the member. The list is
+ *       {@link NullnessAnnotations}, shared with every other pass that mints a
+ *       member from a field, so the allowlist cannot differ by pass.</li>
  * </ul>
  */
 public final class AccessorMutator {
@@ -82,16 +85,6 @@ public final class AccessorMutator {
         SET
 
     }
-
-    /**
-     * Annotations that may travel from a field onto its accessor. Nullness
-     * only, and JetBrains' spelling only: everything else either belongs to the
-     * field's storage contract or to a framework that reads it positionally.
-     */
-    private static final Set<String> PROPAGATED = Set.of(
-        "org.jetbrains.annotations.NotNull",
-        "org.jetbrains.annotations.Nullable"
-    );
 
     private final JavacBridge bridge;
     private final Messager messager;
@@ -259,8 +252,12 @@ public final class AccessorMutator {
             List<JCAnnotation> anno = notNull
                 ? contracts.pureReturnNonNull()
                 : contracts.pure();
+            // The return type is the field's own, so the field's nullness
+            // describes it verbatim - the condition NullnessAnnotations exists
+            // to state.
+            anno = anno.appendList(NullnessAnnotations.copy(element, make, types));
             method = make.MethodDef(
-                make.Modifiers(flags, anno.appendList(propagated(element))),
+                make.Modifiers(flags, anno),
                 names.fromString(methodName),
                 types.parseType(typeDisplay),
                 List.nil(),
@@ -270,8 +267,11 @@ public final class AccessorMutator {
                 null
             );
         } else {
+            // Same reasoning as the getter's return type: the write accessor
+            // takes the field's own type, so the field's nullness is a claim
+            // about this parameter and not about some retyped slot.
             JCVariableDecl param = make.VarDef(
-                make.Modifiers(Flags.PARAMETER, propagated(element)),
+                make.Modifiers(Flags.PARAMETER, NullnessAnnotations.copy(element, make, types)),
                 names.fromString(fieldName),
                 types.parseType(typeDisplay),
                 null
@@ -299,17 +299,6 @@ public final class AccessorMutator {
         // return type from the very field the body returns.
         AstMarkers.markPass(method, PASS);
         return method;
-    }
-
-    /** Nullness annotations copied off the field, as fresh nodes. */
-    private List<JCAnnotation> propagated(VariableElement element) {
-        List<JCAnnotation> out = List.nil();
-        for (var mirror : element.getAnnotationMirrors()) {
-            String fqn = mirror.getAnnotationType().toString();
-            if (!PROPAGATED.contains(fqn)) continue;
-            out = out.append(make.Annotation(types.qualIdent(fqn), List.nil()));
-        }
-        return out;
     }
 
     private static boolean hasAnnotation(VariableElement element, String fqn) {

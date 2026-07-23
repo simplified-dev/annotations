@@ -2,6 +2,7 @@ package dev.simplified.classbuilder.mutate;
 
 import com.sun.tools.javac.code.Flags;
 import com.sun.tools.javac.code.TypeTag;
+import com.sun.tools.javac.tree.JCTree.JCAnnotation;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import com.sun.tools.javac.tree.JCTree.JCExpression;
 import com.sun.tools.javac.tree.JCTree.JCMethodDecl;
@@ -16,6 +17,7 @@ import dev.simplified.annotations.AccessLevel;
 import dev.simplified.args.mutate.ArgsConstructorFactory;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.shared.javac.AstMarkers;
+import dev.simplified.shared.javac.NullnessAnnotations;
 
 /**
  * Shapes the parameters of the constructor the generated {@code build()}
@@ -69,6 +71,11 @@ final class AllArgsConstructorFactory {
             // A collected instance default arrives as the container the caller
             // contributed to plus the marker saying whether they replaced it
             // wholesale; the merge helper folds the two against the default.
+            // Neither carries the field's nullness: the container is typed as
+            // the java.util interface off the matched supertype rather than as
+            // the declared type, and the marker has no field behind it at all,
+            // so one annotation per field would shift onto the wrong slot for
+            // the whole rest of the list.
             if (ctx.isCollectedInstanceDefault(f)) {
                 String markerName = MutationContext.replacedMarker(f.name);
                 params.append(make.VarDef(make.Modifiers(Flags.PARAMETER),
@@ -91,8 +98,19 @@ final class AllArgsConstructorFactory {
                 ? make.TypeApply(ctx.types().qualIdent("java.util.function.Supplier"),
                     List.of(ctx.types().parseBoxedType(f.typeDisplay)))
                 : ctx.types().parseType(f.typeDisplay);
+            // Nullness travels only onto the slot that really holds T. Both
+            // ways of arriving at Supplier<T> are excluded, and the @Lazy half
+            // is the one no guard here can see: LazyFieldMutator replaces
+            // param.vartype in place afterwards and leaves param.mods alone, so
+            // an annotation attached now survives the retype and lands as
+            // @NotNull Supplier<T> - asserting non-null of the very slot whose
+            // null means "the builder was never told".
+            boolean retyped = instanceDefault || f.lazy;
+            List<JCAnnotation> nullness = retyped
+                ? List.nil()
+                : NullnessAnnotations.copy(f.element, make, ctx.types());
             params.append(make.VarDef(
-                make.Modifiers(Flags.PARAMETER),
+                make.Modifiers(Flags.PARAMETER, nullness),
                 names.fromString(f.name),
                 paramType,
                 null

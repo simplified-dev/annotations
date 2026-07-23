@@ -19,6 +19,7 @@ import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.GeneratedAnnotations;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.JavacTypeFactory;
+import dev.simplified.shared.javac.NullnessAnnotations;
 
 import javax.annotation.processing.Messager;
 import javax.lang.model.element.ElementKind;
@@ -100,12 +101,13 @@ public final class ArgsConstructorMutator {
         ArgsConstructorFactory factory = new ArgsConstructorFactory(make, names);
 
         // Reported rather than dropped quietly: the field is missing from a
-        // signature the author has every reason to read as "all args".
+        // signature the author has every reason to read as "all args". On a
+        // @ClassBuilder target that holds the field, the omission is not merely
+        // incomplete but fatal, so it is reported as an error naming both
+        // annotations rather than left to javac - see reportLazyOmission.
+        java.util.List<ArgsMode> emitting = emittingModes(configs);
         for (ArgsField lazy : ArgsFieldSelector.lazyFields(candidates)) {
-            messager.printMessage(Diagnostic.Kind.NOTE,
-                "'" + lazy.name() + "' is @Lazy, so it takes no constructor parameter - the field "
-                    + "holds a Lazy wrapper it initialises itself",
-                lazy.element());
+            reportLazyOmission(lazy, emitting, hasClassBuilder, builderExclude);
         }
 
         // Keyed on the parameter type list so two annotations that resolve to
@@ -156,6 +158,78 @@ public final class ArgsConstructorMutator {
             bridge.compat().appendDef(target, ctor);
         }
         return true;
+    }
+
+    // ------------------------------------------------------------------
+    // The @Lazy omission
+    // ------------------------------------------------------------------
+
+    /**
+     * Says what happens to a {@code @Lazy} field, as a note or as an error.
+     *
+     * <p>Without {@code @ClassBuilder} the omission is only an omission. The
+     * field then has to carry an initializer, so it is a {@code final} field
+     * that is already definitely assigned and a constructor skipping it is
+     * correct.
+     *
+     * <p>With one, and when the builder holds the field, the omission cannot
+     * compile. {@code @Lazy} makes the field {@code final}; the builder strips
+     * the declared initializer so its own constructor can hand the field a
+     * {@code Supplier}, which is the only shape that can assign it; and any
+     * constructor emitted here omits the field by construction. What reaches the
+     * author is javac's definite-assignment failure on the class-declaration
+     * brace, naming neither annotation. Synthesising an assignment instead is
+     * not an option - an unsupplied {@code @Lazy} field has to fail at
+     * {@code build()}, so a fabricated default would trade a diagnostic for a
+     * wrong value.
+     *
+     * @param lazy the {@code @Lazy} candidate
+     * @param emitting the modes about to put a constructor on the target
+     * @param hasClassBuilder whether the target also carries {@code @ClassBuilder}
+     * @param builderExclude the names {@code @ClassBuilder(exclude)} removes
+     */
+    private void reportLazyOmission(ArgsField lazy, java.util.List<ArgsMode> emitting,
+                                    boolean hasClassBuilder, Set<String> builderExclude) {
+        if (hasClassBuilder && !emitting.isEmpty()
+            && ArgsFieldSelector.builderManages(lazy, builderExclude)) {
+            String written = emitting.stream().map(ArgsMode::annotationName).distinct()
+                .collect(Collectors.joining(" and "));
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "'" + lazy.name() + "' is @Lazy and the generated builder owns it - only the "
+                    + "builder's own constructor can assign it, since @Lazy makes the field final "
+                    + "and the builder strips its initializer to pass a Supplier instead. "
+                    + written + " emits a second constructor that omits the field, leaving a blank "
+                    + "final javac rejects as unassigned. Write @BuilderArgsConstructor instead, or "
+                    + "take '" + lazy.name() + "' out of the builder with @BuilderIgnore and give "
+                    + "it an initializer",
+                lazy.element());
+            return;
+        }
+        messager.printMessage(Diagnostic.Kind.NOTE,
+            "'" + lazy.name() + "' is @Lazy, so it takes no constructor parameter - the field "
+                + "holds a Lazy wrapper it initialises itself",
+            lazy.element());
+    }
+
+    /**
+     * The modes that are about to put a constructor on the target.
+     *
+     * <p>{@link ArgsMode#BUILDER} is absent because the builder pass emits it,
+     * and a suppressed {@code access} because it is reported as an error and
+     * emits nothing - which is what makes {@code @BuilderArgsConstructor} the
+     * one member of the family that never triggers the {@code @Lazy} error.
+     *
+     * @param configs the target's resolved constructor annotations
+     * @return the emitting modes, in resolution order
+     */
+    private static java.util.List<ArgsMode> emittingModes(java.util.List<ArgsConfig> configs) {
+        java.util.List<ArgsMode> out = new java.util.ArrayList<>(configs.size());
+        for (ArgsConfig config : configs) {
+            if (config.mode() == ArgsMode.BUILDER) continue;
+            if (!config.access().emits()) continue;
+            out.add(config.mode());
+        }
+        return out;
     }
 
     // ------------------------------------------------------------------
@@ -225,8 +299,13 @@ public final class ArgsConstructorMutator {
         ListBuffer<JCVariableDecl> params = new ListBuffer<>();
         ListBuffer<JCStatement> body = new ListBuffer<>();
         for (ArgsField f : selected) {
+            // The parameter's type is the field's own, so the field's nullness
+            // describes it verbatim and travels. Nothing selected here is
+            // retyped: a @Lazy field, the one shape whose parameter becomes a
+            // Supplier<T> whose null is the "never set" sentinel, is never a
+            // parameter of this constructor at all.
             params.append(make.VarDef(
-                make.Modifiers(Flags.PARAMETER),
+                make.Modifiers(Flags.PARAMETER, NullnessAnnotations.copy(f.element(), make, types)),
                 names.fromString(f.name()),
                 types.parseType(f.typeDisplay()),
                 null));
