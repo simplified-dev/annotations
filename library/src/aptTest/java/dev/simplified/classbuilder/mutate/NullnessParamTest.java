@@ -106,6 +106,71 @@ public class NullnessParamTest {
             !nameParam.contains(NULLABLE));
     }
 
+    /**
+     * The interface target's twin of the first test, on the other emission
+     * path. {@code BuilderEmitter} writes source text rather than mutating a
+     * tree, and it wrote the nullability annotation twice: once as its own
+     * declaration prefix and once inside the rendered type, since javac records
+     * a {@code TYPE_USE}-targeting annotation in both places. Neither is
+     * repeatable, so the generated file did not compile.
+     */
+    @Test
+    public void typeUseNullnessAccessor_generatedBuilderCompilesAndKeepsTheHintOnce() throws Exception {
+        Compilation c = compile(cardInterface());
+        // The regression guard: this used to fail with "NotNull is not a
+        // repeatable annotation interface" on a line the consumer cannot edit.
+        assertThat(c).succeeded();
+
+        Map<String, Set<String>> params = readParamAnnotations(c, "demo.CardBuilder");
+        assertTrue("tags(List) setter must carry @NotNull on its parameter, saw " + params,
+            annotationsFor(params, "tags").contains(NOT_NULL));
+        assertTrue("subtitle(String) setter must carry @Nullable on its parameter, saw " + params,
+            annotationsFor(params, "subtitle").contains(NULLABLE));
+    }
+
+    /**
+     * Only the annotation the emitter is about to write itself is dropped, and
+     * only where it sits. One nested in a type argument says something about
+     * the element rather than about the parameter, so removing it would
+     * silently weaken the generated signature.
+     */
+    @Test
+    public void typeUseNullnessAccessor_keepsAnAnnotationNestedInATypeArgument() throws Exception {
+        Compilation c = compile(cardInterface());
+        assertThat(c).succeeded();
+        assertThat(c).generatedSourceFile("demo.CardBuilder")
+            .contentsAsUtf8String().contains("items(@NotNull List<@NotNull String> items)");
+    }
+
+    /**
+     * The varargs component of an array setter sits directly under the
+     * {@code @NotNull} that setter writes unconditionally, so the component's
+     * own copy is the second one.
+     */
+    @Test
+    public void typeUseNullnessAccessor_arraySetterComponentIsNotAnnotatedTwice() throws Exception {
+        Compilation c = compile(cardInterface());
+        assertThat(c).succeeded();
+        assertThat(c).generatedSourceFile("demo.CardBuilder")
+            .contentsAsUtf8String().contains("codes(@NotNull String... codes)");
+    }
+
+    private static JavaFileObject cardInterface() {
+        return JavaFileObjects.forSourceLines("demo.Card",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import org.jetbrains.annotations.NotNull;",
+            "import org.jetbrains.annotations.Nullable;",
+            "import java.util.List;",
+            "@ClassBuilder(validate = false)",
+            "public interface Card {",
+            "    @NotNull List<String> tags();",
+            "    @Nullable String subtitle();",
+            "    @NotNull List<@NotNull String> items();",
+            "    @NotNull String @NotNull [] codes();",
+            "}");
+    }
+
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------

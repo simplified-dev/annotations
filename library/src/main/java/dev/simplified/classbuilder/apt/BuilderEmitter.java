@@ -251,7 +251,8 @@ final class BuilderEmitter {
     private void emitPlainSetter(FieldSpec f) {
         emitContract("_ -> this", false, "this");
         body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ')
-            .append(config.setters().setName(f.name)).append('(').append(nullabilityPrefix(f)).append(typeName(f.typeDisplay)).append(' ').append(f.name).append(") {\n");
+            .append(config.setters().setName(f.name)).append('(').append(nullabilityPrefix(f))
+            .append(typeNameOwning(f.typeDisplay, nullabilityFqn(f))).append(' ').append(f.name).append(") {\n");
         body.append("        this.").append(f.name).append(" = ").append(f.name).append(";\n");
         body.append("        return this;\n    }\n\n");
     }
@@ -420,7 +421,9 @@ final class BuilderEmitter {
     }
 
     private void emitArraySetter(FieldSpec f) {
-        String elem = typeName(f.collectionElement);
+        // The varargs component sits directly under the @NotNull written below,
+        // so the component's own copy of it would be the second one.
+        String elem = typeNameOwning(f.collectionElement, NOT_NULL_FQN);
         String setter = config.setters().setName(f.name);
         emitContract("_ -> this", false, "this");
         body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ').append(setter)
@@ -541,10 +544,64 @@ final class BuilderEmitter {
     }
 
     private String nullabilityPrefix(FieldSpec f) {
-        if (f.isPrimitive) return "";
-        if (f.notNull) return notNull();
-        if (f.nullable) return nullable();
+        String fqn = nullabilityFqn(f);
+        if (NOT_NULL_FQN.equals(fqn)) return notNull();
+        if (NULLABLE_FQN.equals(fqn)) return nullable();
         return "";
+    }
+
+    /** The nullability annotation this emitter writes for {@code f}, or null for none. */
+    private static String nullabilityFqn(FieldSpec f) {
+        if (f.isPrimitive) return null;
+        if (f.notNull) return NOT_NULL_FQN;
+        if (f.nullable) return NULLABLE_FQN;
+        return null;
+    }
+
+    /**
+     * Renders a declared type for a position where this emitter writes
+     * {@code fqn} itself, with the type's own leading copy of that annotation
+     * removed.
+     *
+     * <p>A nullability annotation that targets {@code TYPE_USE} - which both of
+     * the ones written here do - is recorded by javac on the type as well as on
+     * the declaration it was written on, so the rendered type already carries
+     * what the prefix is about to write. Emitting both gives a parameter
+     * annotated twice, and neither annotation is repeatable, so the generated
+     * file fails to compile on a line the consumer cannot edit.
+     *
+     * <p>Only the leading occurrence goes. One nested in a type argument is a
+     * statement about the element rather than about this parameter - nothing
+     * here duplicates it, and dropping it would silently weaken the signature.
+     * A foreign type-use annotation is left alone for the same reason.
+     */
+    private String typeNameOwning(String typeDisplay, String fqn) {
+        return typeName(fqn == null ? typeDisplay : withoutLeading(typeDisplay, fqn));
+    }
+
+    /**
+     * Removes the first {@code @fqn} sitting outside any type argument list.
+     *
+     * @param typeDisplay the type as {@code javax.lang.model} renders it
+     * @param fqn the annotation type to drop
+     * @return the type with that one annotation removed, unchanged when absent
+     */
+    private static String withoutLeading(String typeDisplay, String fqn) {
+        String token = "@" + fqn;
+        int depth = 0;
+        for (int i = 0; i < typeDisplay.length(); i++) {
+            char c = typeDisplay.charAt(i);
+            if (c == '<') depth++;
+            else if (c == '>') depth--;
+            else if (c == '@' && depth == 0 && typeDisplay.startsWith(token, i)) {
+                int end = i + token.length();
+                // Only a whole token: @Foo must not match a prefix of @FooBar.
+                if (end < typeDisplay.length() && Character.isJavaIdentifierPart(typeDisplay.charAt(end))) continue;
+                while (end < typeDisplay.length() && typeDisplay.charAt(end) == ' ') end++;
+                return typeDisplay.substring(0, i) + typeDisplay.substring(end);
+            }
+        }
+        return typeDisplay;
     }
 
     // Every fixed name this file writes goes through the registry, including
