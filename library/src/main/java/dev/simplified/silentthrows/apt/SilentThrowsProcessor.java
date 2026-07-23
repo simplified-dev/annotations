@@ -68,9 +68,11 @@ public class SilentThrowsProcessor extends AbstractProcessor {
         for (Element element : roundEnv.getElementsAnnotatedWith(annotationElement)) {
             if (!(element instanceof ExecutableElement member)) continue;
             if (isBodyless(member)) {
-                messager.printMessage(Diagnostic.Kind.WARNING,
+                messager.printMessage(Diagnostic.Kind.ERROR,
                     "@SilentThrows has no body to wrap on " + member.getSimpleName()
-                        + " - an abstract or native declaration cannot throw anything itself",
+                        + " - an abstract or native declaration has nothing to catch, and the "
+                        + "annotation does not carry to an implementation. Move it onto the "
+                        + "declarations that have a body",
                     member);
                 continue;
             }
@@ -114,6 +116,22 @@ public class SilentThrowsProcessor extends AbstractProcessor {
             && LazyOwnership.declaresLazyField(tree, javacBridge.get().unitOf((TypeElement) top));
     }
 
+    /**
+     * Whether the declaration has no body for the wrap to take.
+     *
+     * <p>Reported as an error rather than tolerated, because such a declaration
+     * is inert forever: a method annotation is never inherited, so the
+     * annotation cannot reach an implementation later and start doing something.
+     * That puts it with the other cases where an annotation whose only job is to
+     * generate something is left with nothing to generate.
+     *
+     * <p>Keyed on the modifiers rather than on a null tree body, so a round that
+     * hands over half-parsed source cannot turn this into a second error stacked
+     * on the author's real one.
+     *
+     * @param member the annotated method or constructor
+     * @return whether the declaration is abstract or native
+     */
     private static boolean isBodyless(ExecutableElement member) {
         Set<Modifier> modifiers = member.getModifiers();
         return modifiers.contains(Modifier.ABSTRACT) || modifiers.contains(Modifier.NATIVE);

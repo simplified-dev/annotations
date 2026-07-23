@@ -289,8 +289,13 @@ public class SilentThrowsMutatorTest {
         assertEquals("the helper is emitted once per declaring class", 1, helpers);
     }
 
+    /**
+     * A method annotation is never inherited, so the annotation cannot reach an
+     * implementation later and start doing something - it is inert forever,
+     * which is what makes this an error rather than a warning.
+     */
     @Test
-    public void abstractMemberIsSkippedRatherThanCrashing() {
+    public void abstractMemberIsAnError() {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.Abstract",
             "package demo;",
             "import dev.simplified.annotations.SilentThrows;",
@@ -299,8 +304,46 @@ public class SilentThrowsMutatorTest {
             "    public abstract void run();",
             "}");
         Compilation c = compile(src);
-        assertThat(c).succeeded();
-        assertThat(c).hadWarningContaining("no body to wrap");
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("no body to wrap")
+            .inFile(src).onLine(5);
+        assertThat(c).hadErrorContaining("does not carry to an implementation");
+    }
+
+    @Test
+    public void nativeMemberIsAnError() {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.Native",
+            "package demo;",
+            "import dev.simplified.annotations.SilentThrows;",
+            "public class Native {",
+            "    @SilentThrows",
+            "    public native void run();",
+            "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("no body to wrap");
+    }
+
+    /**
+     * The error is reported against the offending member, so a concrete sibling
+     * in the same class is still wrapped rather than the whole type being
+     * abandoned.
+     */
+    @Test
+    public void aConcreteSiblingIsStillWrapped() throws Exception {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.Mixed",
+            "package demo;",
+            "import dev.simplified.annotations.SilentThrows;",
+            "import java.io.IOException;",
+            "public abstract class Mixed {",
+            "    @SilentThrows",
+            "    public abstract void run();",
+            "    @SilentThrows",
+            "    public void read() { throw new java.io.UncheckedIOException(new IOException(\"x\")); }",
+            "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("no body to wrap");
+        // One error, not two - the concrete member is processed normally.
+        assertThat(c).hadErrorCount(1);
     }
 
     /**

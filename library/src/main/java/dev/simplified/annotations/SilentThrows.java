@@ -1,5 +1,6 @@
 package dev.simplified.annotations;
 
+import java.io.IOException;
 import java.lang.annotation.Documented;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -19,7 +20,7 @@ import java.lang.annotation.Target;
  *
  * <p>The motivating shape is an implementation of an interface method that
  * declares nothing checked and so has nowhere to put an
- * {@link java.io.IOException}:
+ * {@link IOException}:
  *
  * <h2>Example</h2>
  * <pre><code>
@@ -57,8 +58,10 @@ import java.lang.annotation.Target;
  *       to handle or declare what it throws. A method reference is checked
  *       against the function type it is assigned to, which the wrap does not
  *       change either.</li>
- *   <li>Abstract, native and otherwise bodyless declarations have nothing to
- *       wrap and the annotation does nothing there.</li>
+ *   <li>Abstract, native and otherwise bodyless declarations are rejected. There
+ *       is nothing to wrap, and since a method annotation is never inherited the
+ *       annotation cannot reach an implementation later either - it would be
+ *       inert forever. Write it on the declarations that have a body.</li>
  *   <li>An initialiser block cannot carry an annotation at all. Move the code
  *       into an annotated method and call it.</li>
  * </ul>

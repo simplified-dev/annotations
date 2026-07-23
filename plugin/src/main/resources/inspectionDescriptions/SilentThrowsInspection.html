@@ -4,7 +4,9 @@ Flags <code>@SilentThrows</code> that cannot do what it was written for:
 
 <ul>
   <li>An abstract, native or otherwise bodyless declaration. There is no body to
-      wrap, so the annotation has no effect at all.</li>
+      wrap, and since a method annotation is never inherited the annotation
+      cannot reach an implementation later either, so it is inert forever. The
+      build rejects it too - this reports the same thing sooner.</li>
   <li>A narrowed <code>value</code> type the body cannot throw. The generated
       catch clause is unreachable and javac rejects it - against generated code
       the author cannot open, which is why it is named here instead.</li>
