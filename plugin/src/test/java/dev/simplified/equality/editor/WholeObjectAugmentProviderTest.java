@@ -167,6 +167,40 @@ public class WholeObjectAugmentProviderTest extends LightJavaCodeInsightFixtureT
         assertAbsent(owned, "hashCode");
     }
 
+    /**
+     * A typed convenience overload overrides nothing, so javac still generates
+     * the pair beside it. Reading it as a written {@code equals} would withhold
+     * both contributions from a class that ends up with both, leaving the
+     * platform's "does not override equals()/hashCode()" report standing over a
+     * build that succeeds.
+     */
+    public void testATypedEqualsOverloadStillLeavesThePairContributed() {
+        PsiClass vec = configure("Vec",
+            """
+            import dev.simplified.annotations.EqualsAndHashCode;
+            @EqualsAndHashCode
+            public final class Vec {
+                private final int x;
+                Vec(int x) { this.x = x; }
+                public boolean equals(Vec other) { return other != null && other.x == this.x; }
+            }
+            """);
+
+        PsiMethod[] found = vec.findMethodsByName("equals", false);
+        assertEquals("the author's overload beside the contributed equals(Object)", 2, found.length);
+
+        PsiMethod contributed = null;
+        for (PsiMethod method : found) {
+            if (GeneratedMemberMarker.isGenerated(method)) contributed = method;
+        }
+        assertNotNull("a typed overload is not the override, so the pair is still generated",
+            contributed);
+        assertEquals("java.lang.Object",
+            contributed.getParameterList().getParameters()[0].getType().getCanonicalText());
+        assertTrue("the other half has to arrive with it",
+            GeneratedMemberMarker.isGenerated(sole(vec, "hashCode")));
+    }
+
     // ------------------------------------------------------------------
     // canEqual
     // ------------------------------------------------------------------
@@ -217,6 +251,32 @@ public class WholeObjectAugmentProviderTest extends LightJavaCodeInsightFixtureT
                 """.formatted(identity, identity, identity));
             assertAbsent(target, "canEqual");
         }
+    }
+
+    /**
+     * The hook is reused by the generated {@code equals} on its name and arity
+     * alone - the emission calls {@code other.canEqual(this)} and never asks
+     * what the parameter is spelled - so a hook of the wrong shape suppresses
+     * the contribution exactly as a correct one does. Contributing beside it
+     * would put two one-argument {@code canEqual} methods on a class that ends
+     * up with one, and the extra would be the one autocompletion offers.
+     */
+    public void testAWrongShapedCanEqualStillSuppressesTheHook() {
+        PsiClass hooked = configure("Hooked",
+            """
+            import dev.simplified.annotations.EqualsAndHashCode;
+            @EqualsAndHashCode(identity = EqualsAndHashCode.Identity.INSTANCE_OF_CANEQUAL)
+            public class Hooked {
+                private final int sides;
+                Hooked(int sides) { this.sides = sides; }
+                protected boolean canEqual(String other) { return false; }
+            }
+            """);
+
+        PsiMethod[] found = hooked.findMethodsByName("canEqual", false);
+        assertEquals("the author's own hook must be the only one", 1, found.length);
+        assertFalse("nothing may be contributed beside it",
+            GeneratedMemberMarker.isGenerated(found[0]));
     }
 
     // ------------------------------------------------------------------

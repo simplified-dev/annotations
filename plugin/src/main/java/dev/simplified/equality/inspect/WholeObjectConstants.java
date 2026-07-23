@@ -1,6 +1,8 @@
 package dev.simplified.equality.inspect;
 
 import com.intellij.openapi.progress.ProgressManager;
+import com.intellij.openapi.util.TextRange;
+import com.intellij.psi.JavaTokenType;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationMemberValue;
 import com.intellij.psi.PsiArrayInitializerMemberValue;
@@ -10,22 +12,27 @@ import com.intellij.psi.PsiEnumConstant;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiJavaCodeReferenceElement;
 import com.intellij.psi.PsiLiteralExpression;
+import com.intellij.psi.PsiMember;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiModifierList;
 import com.intellij.psi.PsiModifierListOwner;
 import com.intellij.psi.PsiParameter;
+import com.intellij.psi.PsiPrefixExpression;
 import com.intellij.psi.PsiRecordComponent;
 import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypes;
 import com.intellij.psi.impl.source.PsiExtensibleClass;
+import com.intellij.psi.tree.IElementType;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -73,6 +80,15 @@ public final class WholeObjectConstants {
     public static final @NotNull String ATTR_OF = "of";
     public static final @NotNull String ATTR_EXCLUDE = "exclude";
     public static final @NotNull String ATTR_CACHE_HASH_CODE = "cacheHashCode";
+    public static final @NotNull String ATTR_USE_ACCESSORS = "useAccessors";
+    public static final @NotNull String ATTR_STYLE = "style";
+    public static final @NotNull String ATTR_INCLUDE_FIELD_NAMES = "includeFieldNames";
+
+    /** The printed name {@code @ToStringInclude} may write in place of the member's own. */
+    public static final @NotNull String ATTR_NAME = "name";
+
+    /** The print-order weight {@code @ToStringInclude} may write, higher first. */
+    public static final @NotNull String ATTR_RANK = "rank";
 
     /** The identity relation a bare {@code @EqualsAndHashCode} asks for. */
     public static final @NotNull String EXACT_CLASS = "EXACT_CLASS";
@@ -101,24 +117,33 @@ public final class WholeObjectConstants {
      * One annotation's selection rules, mirroring what the processor hands its
      * shared member selector.
      *
+     * <p>{@code honourRank} is the second of the two inputs the annotations
+     * differ on, and the asymmetry is deliberate rather than an omission.
+     * {@code @ToStringInclude} carries a printed name and a print-order weight
+     * because both are cosmetic and both are visible in the output;
+     * {@code @EqualsInclude} carries neither, since the same attribute on the
+     * equality pair would make an emitted hash depend on an ordering rule
+     * nothing in the source shows.
+     *
      * @param label the annotation as a diagnostic spells it
      * @param annotationFqn the type-level annotation
      * @param excludeFqn the marker removing a member
      * @param includeFqn the marker adding one back
      * @param keepTransient whether a {@code transient} field stays selected
+     * @param honourRank whether the include marker carries a printed name and a sort key
      */
     public record Policy(@NotNull String label, @NotNull String annotationFqn,
                          @NotNull String excludeFqn, @NotNull String includeFqn,
-                         boolean keepTransient) {
+                         boolean keepTransient, boolean honourRank) {
     }
 
     /** {@code @EqualsAndHashCode}'s rules, which drop {@code transient} state. */
     public static final @NotNull Policy EQUALITY_POLICY = new Policy("@EqualsAndHashCode",
-        EQUALS_AND_HASH_CODE_FQN, EQUALS_EXCLUDE_FQN, EQUALS_INCLUDE_FQN, false);
+        EQUALS_AND_HASH_CODE_FQN, EQUALS_EXCLUDE_FQN, EQUALS_INCLUDE_FQN, false, false);
 
     /** {@code @ToString}'s rules, which keep it - a field left out of serialization is still state a dump wants. */
     public static final @NotNull Policy TO_STRING_POLICY = new Policy("@ToString",
-        TO_STRING_FQN, TO_STRING_EXCLUDE_FQN, TO_STRING_INCLUDE_FQN, true);
+        TO_STRING_FQN, TO_STRING_EXCLUDE_FQN, TO_STRING_INCLUDE_FQN, true, true);
 
     /**
      * A member the resolution asks a supertype about.
@@ -153,13 +178,15 @@ public final class WholeObjectConstants {
     /**
      * One member a generated whole-object method reads.
      *
-     * @param name the member's own name
+     * @param name the member's own name, which is what {@code of} and {@code exclude} match
+     * @param label the name printed for it, which the include marker may rewrite
      * @param anchor the identifier a problem about it is registered on
      * @param type the declared type the emission row is chosen from
      * @param mutable whether the value can change after construction
+     * @param rank sort key, higher first, with declaration order inside one rank
      */
-    public record Selected(@NotNull String name, @Nullable PsiElement anchor, @Nullable PsiType type,
-                           boolean mutable) {
+    public record Selected(@NotNull String name, @NotNull String label, @Nullable PsiElement anchor,
+                           @Nullable PsiType type, boolean mutable, int rank) {
     }
 
     // ------------------------------------------------------------------
@@ -247,6 +274,39 @@ public final class WholeObjectConstants {
     }
 
     /**
+     * Reads an integer attribute as written, sign included.
+     *
+     * <p>The sign is part of reading the literal rather than a step towards
+     * evaluating an expression. There is no negative integer literal in the
+     * language: {@code rank = -1} always parses as a unary minus over the
+     * literal {@code 1}, so a reader accepting only the literal resolves every
+     * negative write to the attribute's default - and a negative rank is
+     * precisely how a member asks to be sorted last, which would put it where
+     * nothing asked for it. A unary plus is accepted with it because it is the
+     * same node for no extra cost.
+     *
+     * @param annotation the annotation to read
+     * @param attribute the attribute name
+     * @param fallback the annotation's own default
+     * @return the written value, or the fallback
+     */
+    public static int intAttr(@NotNull PsiAnnotation annotation, @NotNull String attribute,
+                              int fallback) {
+        PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(attribute);
+        PsiElement operand = value;
+        int sign = 1;
+        if (value instanceof PsiPrefixExpression prefix) {
+            IElementType operator = prefix.getOperationTokenType();
+            if (JavaTokenType.MINUS.equals(operator)) sign = -1;
+            else if (!JavaTokenType.PLUS.equals(operator)) return fallback;
+            operand = prefix.getOperand();
+        }
+        if (operand instanceof PsiLiteralExpression literal
+            && literal.getValue() instanceof Integer written) return sign * written;
+        return fallback;
+    }
+
+    /**
      * The entries of a string-array attribute, kept as values rather than
      * strings so a problem lands on the one entry it is about.
      *
@@ -320,12 +380,53 @@ public final class WholeObjectConstants {
     }
 
     /**
+     * Fields and methods the class itself declares, in one declaration-order
+     * walk.
+     *
+     * <p>Merged rather than read as two lists because the processor makes a
+     * single pass over the target's enclosed elements. An include-marked method
+     * declared between two fields is emitted between them, so a walk taking
+     * every field before every method describes it in a position it never
+     * occupies.
+     *
+     * @param target the class to read
+     * @return the declared fields and methods, in declaration order
+     */
+    private static @NotNull List<PsiMember> ownMembers(@NotNull PsiClass target) {
+        List<PsiMember> out = new ArrayList<>();
+        out.addAll(ownFields(target));
+        out.addAll(ownMethods(target));
+        // Stable, so a class with no source behind it - where every member
+        // reports the same offset - keeps the order the two lists arrived in
+        // rather than being shuffled into an arbitrary one.
+        out.sort(Comparator.comparingInt(WholeObjectConstants::declarationOffset));
+        return out;
+    }
+
+    private static int declarationOffset(@NotNull PsiElement member) {
+        TextRange range = member.getTextRange();
+        return range == null ? 0 : range.getStartOffset();
+    }
+
+    /** The canonical accessor names of a record's components, empty for anything else. */
+    private static @NotNull Set<String> recordComponentNames(@NotNull PsiClass target) {
+        if (!target.isRecord()) return Set.of();
+        Set<String> out = new LinkedHashSet<>();
+        for (PsiRecordComponent component : target.getRecordComponents()) {
+            String name = component.getName();
+            if (name != null) out.add(name);
+        }
+        return out;
+    }
+
+    /**
      * The members one annotation reads, before {@code of} or {@code exclude}
      * narrows them.
      *
-     * <p>Instance state in declaration order, then whatever the include marker
-     * adds. A record is walked through its components rather than its fields,
-     * which is where the PSI keeps a component's own annotations.
+     * <p>Instance state and include-marked methods in one declaration-order
+     * walk. A record is walked through its components rather than its fields,
+     * which is where the PSI keeps a component's own annotations, and its
+     * components lead because they are declared ahead of the body.
      *
      * @param target the annotated type
      * @param policy the annotation's selection rules
@@ -334,29 +435,51 @@ public final class WholeObjectConstants {
     public static @NotNull List<Selected> candidates(@NotNull PsiClass target,
                                                      @NotNull Policy policy) {
         List<Selected> out = new ArrayList<>();
-        if (target.isRecord()) {
+        boolean record = target.isRecord();
+        Set<String> components = recordComponentNames(target);
+        if (record) {
             for (PsiRecordComponent component : target.getRecordComponents()) {
-                if (skipped(component, component.getName(), policy, false)) continue;
-                out.add(new Selected(component.getName(), component.getNameIdentifier(),
-                    component.getType(), false));
+                PsiAnnotation include = find(component, policy.includeFqn());
+                if (skipped(component, component.getName(), policy, false, include)) continue;
+                out.add(new Selected(component.getName(),
+                    label(component.getName(), include, policy), component.getNameIdentifier(),
+                    component.getType(), false, rank(include, policy)));
             }
-        } else {
-            for (PsiField field : ownFields(target)) {
+        }
+        for (PsiMember member : ownMembers(target)) {
+            if (member instanceof PsiField field) {
+                // A record's state is its components, read above - a field it
+                // declares in its body can only be static.
+                if (record) continue;
                 // An enum's constants are fields of the enum type as far as the
                 // PSI is concerned, and are not per-instance state.
                 if (field instanceof PsiEnumConstant) continue;
                 if (field.hasModifierProperty(PsiModifier.STATIC)) continue;
                 boolean transientField = field.hasModifierProperty(PsiModifier.TRANSIENT);
-                if (skipped(field, field.getName(), policy, transientField)) continue;
-                out.add(new Selected(field.getName(), field.getNameIdentifier(), field.getType(),
-                    !field.hasModifierProperty(PsiModifier.FINAL)));
+                PsiAnnotation include = find(field, policy.includeFqn());
+                if (skipped(field, field.getName(), policy, transientField, include)) continue;
+                out.add(new Selected(field.getName(), label(field.getName(), include, policy),
+                    field.getNameIdentifier(), field.getType(),
+                    !field.hasModifierProperty(PsiModifier.FINAL), rank(include, policy)));
+            } else if (member instanceof PsiMethod method) {
+                // A record component's annotations are propagated onto both the
+                // backing field and the accessor whenever the target allows
+                // both - which the include marker does. Reading an explicitly
+                // declared canonical accessor as a second member would compare
+                // and print the one component twice. The zero-arg gate spares an
+                // unrelated overload of the component's name, which is not the
+                // accessor and is nothing to do with the component.
+                if (method.getParameterList().isEmpty()
+                    && components.contains(method.getName())) {
+                    continue;
+                }
+                if (!includable(method)) continue;
+                PsiAnnotation include = find(method, policy.includeFqn());
+                if (include == null) continue;
+                out.add(new Selected(method.getName(), label(method.getName(), include, policy),
+                    method.getNameIdentifier(), method.getReturnType(), true,
+                    rank(include, policy)));
             }
-        }
-        for (PsiMethod method : ownMethods(target)) {
-            if (!includable(method)) continue;
-            if (!has(method, policy.includeFqn())) continue;
-            out.add(new Selected(method.getName(), method.getNameIdentifier(),
-                method.getReturnType(), true));
         }
         return out;
     }
@@ -369,19 +492,36 @@ public final class WholeObjectConstants {
      * @param name its name
      * @param policy the annotation's selection rules
      * @param isTransient whether it is declared {@code transient}
+     * @param include the include marker written on it, or {@code null}
      * @return whether the member is skipped
      */
     private static boolean skipped(@NotNull PsiModifierListOwner owner, @Nullable String name,
-                                   @NotNull Policy policy, boolean isTransient) {
+                                   @NotNull Policy policy, boolean isTransient,
+                                   @Nullable PsiAnnotation include) {
         // A synthesised slot - an outer-instance link, a switch map, the hash
         // memo this feature emits itself. The test is on a '$' anywhere rather
         // than only in front, since the compiler's own names put it in the
         // middle.
         if (name == null || name.indexOf('$') >= 0) return true;
         if (has(owner, policy.excludeFqn())) return true;
-        boolean included = has(owner, policy.includeFqn());
         if (has(owner, LAZY_FQN)) return true;
-        return isTransient && !policy.keepTransient() && !included;
+        return isTransient && !policy.keepTransient() && include == null;
+    }
+
+    /** The printed name, which only an include marker that carries one can rewrite. */
+    private static @NotNull String label(@Nullable String name, @Nullable PsiAnnotation include,
+                                         @NotNull Policy policy) {
+        String own = name == null ? "" : name;
+        if (include == null || !policy.honourRank()) return own;
+        PsiAnnotationMemberValue value = written(include, ATTR_NAME);
+        String rewritten = value == null ? null : stringValue(value);
+        return rewritten == null || rewritten.isEmpty() ? own : rewritten;
+    }
+
+    /** The print-order weight, zero wherever the include marker carries none. */
+    private static int rank(@Nullable PsiAnnotation include, @NotNull Policy policy) {
+        if (include == null || !policy.honourRank()) return 0;
+        return intAttr(include, ATTR_RANK, 0);
     }
 
     /** Whether a method is the shape the include marker can add - zero-arg, value-returning, per-instance. */
@@ -414,6 +554,33 @@ public final class WholeObjectConstants {
     }
 
     /**
+     * The members the generated method reads, narrowed and in emission order.
+     *
+     * <p>The whole resolution in one call, because the two things reading it -
+     * the reports and the gutter describing the same annotation - drifting
+     * apart is a description that is confidently wrong and that nothing else
+     * contradicts.
+     *
+     * <p>The rank sort is applied where the processor applies it, after the
+     * narrowing and never before: a member the attributes remove cannot pull a
+     * later one forward. It is a stable sort on descending rank, so members
+     * sharing a rank keep declaration order.
+     *
+     * @param target the annotated type
+     * @param annotation the type-level annotation
+     * @param policy the annotation's selection rules
+     * @return the members the generated method reads, in the order it reads them
+     */
+    public static @NotNull List<Selected> selected(@NotNull PsiClass target,
+                                                   @NotNull PsiAnnotation annotation,
+                                                   @NotNull Policy policy) {
+        List<Selected> out = narrow(candidates(target, policy), names(annotation, ATTR_OF),
+            names(annotation, ATTR_EXCLUDE));
+        if (policy.honourRank()) out.sort((a, b) -> Integer.compare(b.rank(), a.rank()));
+        return out;
+    }
+
+    /**
      * Whether the generated member actually reads a named member of the type.
      *
      * <p>The whole resolution rather than any one of its steps, because a member
@@ -431,9 +598,7 @@ public final class WholeObjectConstants {
      */
     public static boolean reaches(@NotNull PsiClass owner, @NotNull PsiAnnotation annotation,
                                   @NotNull Policy policy, @NotNull String name) {
-        List<Selected> read = narrow(candidates(owner, policy), names(annotation, ATTR_OF),
-            names(annotation, ATTR_EXCLUDE));
-        for (Selected member : read) {
+        for (Selected member : selected(owner, annotation, policy)) {
             if (name.equals(member.name())) return true;
         }
         return false;
