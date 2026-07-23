@@ -132,6 +132,27 @@ public final class ArgsFieldSelector {
         return out;
     }
 
+    /**
+     * Whether a generated builder would hold this field.
+     *
+     * <p>Mirrors the builder's own field collection rather than the selection
+     * above: {@code transient}, {@code @BuilderIgnore} and
+     * {@code @ClassBuilder(exclude)} each take a field out of the builder, which
+     * leaves its declared initializer in place and its storage nobody else's to
+     * supply. Read for the one field kind where that distinction decides between
+     * a note and an error - a {@code @Lazy} field the builder holds is a blank
+     * {@code final} only the builder's constructor can assign.
+     *
+     * @param field a candidate from {@link #candidates}
+     * @param builderExclude field names {@code @ClassBuilder(exclude)} removes
+     * @return whether the builder models the field
+     */
+    public static boolean builderManages(ArgsField field, Set<String> builderExclude) {
+        if (field.element().getModifiers().contains(Modifier.TRANSIENT)) return false;
+        if (hasAnnotation(field.element(), BUILDER_IGNORE_FQN)) return false;
+        return !builderExclude.contains(field.name());
+    }
+
     private static boolean hasAnnotation(Element element, String fqn) {
         for (var mirror : element.getAnnotationMirrors()) {
             if (fqn.equals(mirror.getAnnotationType().toString())) return true;

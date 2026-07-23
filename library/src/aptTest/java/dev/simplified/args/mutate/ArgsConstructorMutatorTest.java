@@ -5,6 +5,14 @@ import com.google.testing.compile.Compiler;
 import com.google.testing.compile.JavaFileObjects;
 import dev.simplified.classbuilder.apt.ClassBuilderProcessor;
 import org.junit.Test;
+import org.objectweb.asm.AnnotationVisitor;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
+import org.objectweb.asm.TypePath;
+import org.objectweb.asm.TypeReference;
 
 import javax.tools.JavaFileObject;
 import java.io.ByteArrayOutputStream;
@@ -18,7 +26,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 import static com.google.testing.compile.CompilationSubject.assertThat;
 import static org.junit.Assert.assertEquals;
@@ -637,6 +647,297 @@ public class ArgsConstructorMutatorTest {
         assertThat(c).succeeded();
         assertFalse("opted out, so the constructor must not carry the marker",
             classFileText(c, "demo.Unmarked").contains(MARKER_DESCRIPTOR));
+    }
+
+    // ------------------------------------------------------------------
+    // Nullness on the generated parameters
+    // ------------------------------------------------------------------
+
+    /**
+     * The parameter's type is the field's own, so the field's nullness
+     * describes it verbatim and travels onto it. The plain field beside them is
+     * the other half of the claim: the copy restores what a field declared, it
+     * does not decorate every parameter.
+     *
+     * <p>Both JetBrains annotations are {@code @Retention(CLASS)}, so reflection
+     * cannot see them and the class-file bytes are the only place to look.
+     */
+    @Test
+    public void generatedParametersCarryTheFieldsNullness() throws Exception {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.Hinted",
+            "package demo;",
+            "import dev.simplified.annotations.AllArgsConstructor;",
+            "import org.jetbrains.annotations.NotNull;",
+            "import org.jetbrains.annotations.Nullable;",
+            "@AllArgsConstructor",
+            "public class Hinted {",
+            "    private @NotNull String required;",
+            "    private @Nullable String optional;",
+            "    private String plain;",
+            "}"));
+        assertThat(c).succeeded();
+
+        List<Set<String>> params = ctorParamAnnotations(c, "demo.Hinted", 3);
+        assertTrue("the @NotNull field's parameter must carry it, saw " + params,
+            params.get(0).contains(NOT_NULL));
+        assertTrue("the @Nullable field's parameter must carry it, saw " + params,
+            params.get(1).contains(NULLABLE));
+        assertTrue("a field declaring no nullness must not gain one, saw " + params,
+            params.get(2).isEmpty());
+    }
+
+    /**
+     * The same copy on the mode that selects a subset, and on a target that also
+     * carries {@code @ClassBuilder} - so the annotated constructor is emitted
+     * beside the builder's own rather than instead of it.
+     */
+    @Test
+    public void requiredArgsParametersCarryNullnessBesideABuilder() throws Exception {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.HintedReq",
+            "package demo;",
+            "import dev.simplified.annotations.AccessLevel;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.RequiredArgsConstructor;",
+            "import org.jetbrains.annotations.NotNull;",
+            "@ClassBuilder(validate = false, constructorAccess = AccessLevel.PRIVATE)",
+            "@RequiredArgsConstructor",
+            "public class HintedReq {",
+            "    private final @NotNull String id;",
+            "    private String mutable;",
+            "}"));
+        assertThat(c).succeeded();
+
+        List<Set<String>> params = ctorParamAnnotations(c, "demo.HintedReq", 1);
+        assertTrue("the required field's parameter must carry @NotNull, saw " + params,
+            params.get(0).contains(NOT_NULL));
+    }
+
+    // ------------------------------------------------------------------
+    // @Lazy beside a generated builder
+    // ------------------------------------------------------------------
+
+    /**
+     * The field is a blank {@code final} only the builder's constructor can
+     * assign, so a second constructor omitting it cannot compile. What javac
+     * says on its own is "variable v might not have been initialized" on the
+     * class-declaration brace, naming neither annotation and pointing at no
+     * remedy - the whole reason this is diagnosed here instead.
+     */
+    @Test
+    public void lazyFieldWithABuilderIsRejectedNamingBothAnnotations() {
+        Compilation c = compile(lazyTarget("demo.L1", "@ClassBuilder(validate = false)",
+            "@AllArgsConstructor", "private @Lazy String v = c();"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("'v' is @Lazy and the generated builder owns it");
+        assertThat(c).hadErrorContaining("@AllArgsConstructor emits a second constructor");
+        assertThat(c).hadErrorContaining("Write @BuilderArgsConstructor instead");
+    }
+
+    /**
+     * Two independent routes reach the same blank {@code final}: an initializer
+     * the builder strips so its own constructor can assign the field, and a
+     * field that declares none in the first place. Fixing one alone would leave
+     * the other reporting nothing.
+     */
+    @Test
+    public void lazyFieldWithNoInitializerIsRejectedTheSameWay() {
+        Compilation c = compile(lazyTarget("demo.L2", "@ClassBuilder(validate = false)",
+            "@AllArgsConstructor", "private @Lazy String v;"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("'v' is @Lazy and the generated builder owns it");
+    }
+
+    /** Retaining or dropping initializers is not the axis: the strip runs either way. */
+    @Test
+    public void lazyFieldIsRejectedWithRetainInitOff() {
+        Compilation c = compile(lazyTarget("demo.L3",
+            "@ClassBuilder(validate = false, retainInit = false)",
+            "@AllArgsConstructor", "private @Lazy String v = c();"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("'v' is @Lazy and the generated builder owns it");
+    }
+
+    @Test
+    public void lazyFieldWithABuilderRejectsRequiredArgs() {
+        Compilation c = compile(lazyTarget("demo.L4", "@ClassBuilder(validate = false)",
+            "@RequiredArgsConstructor", "private @Lazy String v = c();"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@RequiredArgsConstructor emits a second constructor");
+    }
+
+    @Test
+    public void lazyFieldWithABuilderRejectsNoArgs() {
+        Compilation c = compile(lazyTarget("demo.L5", "@ClassBuilder(validate = false)",
+            "@NoArgsConstructor", "private @Lazy String v = c();"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@NoArgsConstructor emits a second constructor");
+    }
+
+    /**
+     * {@code force} fills the {@code final} fields a zero-argument constructor
+     * would leave unassigned, and a {@code @Lazy} field is not one of them - its
+     * storage is a {@code Lazy<T>} wrapper, so there is no zero value to write.
+     */
+    @Test
+    public void lazyFieldWithABuilderRejectsNoArgsForce() {
+        Compilation c = compile(lazyTarget("demo.L6", "@ClassBuilder(validate = false)",
+            "@NoArgsConstructor(force = true)", "private @Lazy String v = c();"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@NoArgsConstructor emits a second constructor");
+    }
+
+    /** Every emitting annotation is named, since removing one of them is not the fix. */
+    @Test
+    public void stackedAnnotationsAreAllNamed() {
+        Compilation c = compile(lazyTarget("demo.L7", "@ClassBuilder(validate = false)",
+            "@AllArgsConstructor @NoArgsConstructor", "private @Lazy String v = c();"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@AllArgsConstructor and @NoArgsConstructor emits");
+    }
+
+    /**
+     * The one member of the family that is safe, and the remedy the error
+     * names. Its constructor is emitted by the builder pass, which alone knows
+     * how to shape the {@code Supplier} parameter a {@code @Lazy} field needs.
+     */
+    @Test
+    public void builderArgsConstructorIsSilentOnALazyField() {
+        Compilation c = compile(lazyTarget("demo.L8", "@ClassBuilder(validate = false)",
+            "@BuilderArgsConstructor", "private @Lazy String v = c();"));
+        assertThat(c).succeeded();
+    }
+
+    @Test
+    public void builderArgsConstructorIsSilentOnALazyFieldWithNoInitializer() {
+        Compilation c = compile(lazyTarget("demo.L9", "@ClassBuilder(validate = false)",
+            "@BuilderArgsConstructor", "private @Lazy String v;"));
+        assertThat(c).succeeded();
+    }
+
+    /**
+     * The three escapes, which have to stay compiling. Each takes the field out
+     * of the builder's field collection, so its declared initializer is never
+     * stripped and no constructor anywhere needs to assign it.
+     */
+    @Test
+    public void builderIgnoreOnTheLazyFieldStillCompiles() {
+        Compilation c = compile(lazyTarget("demo.L10", "@ClassBuilder(validate = false)",
+            "@AllArgsConstructor", "@BuilderIgnore private @Lazy String v = c();"));
+        assertThat(c).succeeded();
+    }
+
+    @Test
+    public void classBuilderExcludeNamingTheLazyFieldStillCompiles() {
+        Compilation c = compile(lazyTarget("demo.L11",
+            "@ClassBuilder(validate = false, exclude = \"v\")",
+            "@AllArgsConstructor", "private @Lazy String v = c();"));
+        assertThat(c).succeeded();
+    }
+
+    @Test
+    public void transientLazyFieldStillCompiles() {
+        Compilation c = compile(lazyTarget("demo.L12", "@ClassBuilder(validate = false)",
+            "@AllArgsConstructor", "private transient @Lazy String v = c();"));
+        assertThat(c).succeeded();
+    }
+
+    /**
+     * The other side of the gate, on source that differs only by the builder.
+     * Without {@code @ClassBuilder} a {@code @Lazy} field must carry an
+     * initializer, so it is a {@code final} field that is already definitely
+     * assigned and a constructor skipping it is correct - the omission is worth
+     * saying, not worth refusing.
+     */
+    @Test
+    public void withoutAClassBuilderTheSameFieldIsOnlyANote() {
+        Compilation c = compile(lazyTarget("demo.L13", "",
+            "@AllArgsConstructor", "private @Lazy String v = c();"));
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("'v' is @Lazy, so it takes no constructor parameter");
+    }
+
+    private static JavaFileObject lazyTarget(String fqn, String classBuilder, String argsAnnotation,
+                                             String fieldDecl) {
+        String simple = fqn.substring(fqn.lastIndexOf('.') + 1);
+        List<String> lines = new ArrayList<>(List.of(
+            "package demo;",
+            "import dev.simplified.annotations.*;"));
+        if (!classBuilder.isEmpty()) lines.add(classBuilder);
+        lines.add(argsAnnotation);
+        lines.add("public class " + simple + " {");
+        lines.add("    " + fieldDecl);
+        lines.add("    private int n;");
+        lines.add("    private static String c() { return \"x\"; }");
+        lines.add("}");
+        return JavaFileObjects.forSourceLines(fqn, lines.toArray(new String[0]));
+    }
+
+    // ------------------------------------------------------------------
+    // Class-file readers
+    // ------------------------------------------------------------------
+
+    private static final String NOT_NULL = "Lorg/jetbrains/annotations/NotNull;";
+    private static final String NULLABLE = "Lorg/jetbrains/annotations/Nullable;";
+
+    /**
+     * Per-parameter annotation descriptors on the constructor of the given
+     * arity, collected from both the declaration channel
+     * ({@code RuntimeInvisibleParameterAnnotations}) and the type-use channel
+     * ({@code RuntimeInvisibleTypeAnnotations}), since the JetBrains pair
+     * targets both and javac may route it either way.
+     */
+    private static List<Set<String>> ctorParamAnnotations(Compilation c, String binaryName,
+                                                          int arity) throws Exception {
+        byte[] bytes = classFileBytes(c, binaryName);
+        List<Set<String>> out = new ArrayList<>();
+        for (int i = 0; i < arity; i++) out.add(new LinkedHashSet<>());
+        new ClassReader(bytes).accept(new ClassVisitor(Opcodes.ASM9) {
+            @Override
+            public MethodVisitor visitMethod(int access, String name, String descriptor,
+                                             String signature, String[] exceptions) {
+                if (!name.equals("<init>")) return null;
+                if (Type.getArgumentTypes(descriptor).length != arity) return null;
+                return new MethodVisitor(Opcodes.ASM9) {
+                    @Override
+                    public AnnotationVisitor visitParameterAnnotation(int parameter, String desc,
+                                                                      boolean visible) {
+                        if (parameter < arity) out.get(parameter).add(desc);
+                        return null;
+                    }
+
+                    @Override
+                    public AnnotationVisitor visitTypeAnnotation(int typeRef, TypePath typePath,
+                                                                 String desc, boolean visible) {
+                        TypeReference ref = new TypeReference(typeRef);
+                        if (ref.getSort() != TypeReference.METHOD_FORMAL_PARAMETER) return null;
+                        // A nested type argument says something about the element
+                        // rather than about the parameter, so only the root path
+                        // counts as the parameter's own nullness.
+                        if (typePath != null) return null;
+                        int index = ref.getFormalParameterIndex();
+                        if (index < arity) out.get(index).add(desc);
+                        return null;
+                    }
+                };
+            }
+        }, ClassReader.SKIP_CODE | ClassReader.SKIP_FRAMES);
+        return out;
+    }
+
+    private static byte[] classFileBytes(Compilation compilation, String binaryName)
+        throws Exception {
+        String want = binaryName.replace('.', '/') + ".class";
+        for (JavaFileObject f : compilation.generatedFiles()) {
+            if (f.getKind() != JavaFileObject.Kind.CLASS) continue;
+            if (!f.toUri().toString().endsWith(want)) continue;
+            try (InputStream in = f.openInputStream()) {
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                in.transferTo(baos);
+                return baos.toByteArray();
+            }
+        }
+        fail("no generated class file for '" + binaryName + "'");
+        return null;
     }
 
     private static void assertArrayEquals(Class<?>[] expected, Class<?>[] actual) {
