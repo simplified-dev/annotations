@@ -8,8 +8,6 @@ import javax.lang.model.element.TypeParameterElement;
 import javax.lang.model.type.TypeMirror;
 import javax.tools.Diagnostic;
 import java.util.List;
-import java.util.Set;
-import java.util.TreeSet;
 
 /**
  * Emits the full Java source of a generated builder class. One instance per
@@ -20,26 +18,38 @@ final class BuilderEmitter {
 
     enum TargetKind { CLASS_OR_RECORD, INTERFACE }
 
+    private static final String NOT_NULL_FQN = "org.jetbrains.annotations.NotNull";
+    private static final String NULLABLE_FQN = "org.jetbrains.annotations.Nullable";
+    private static final String PRINT_FORMAT_FQN = "org.intellij.lang.annotations.PrintFormat";
+    private static final String X_CONTRACT_FQN = "dev.simplified.annotations.XContract";
+    private static final String STRINGS_FQN = "dev.simplified.classbuilder.validate.Strings";
+    private static final String VALIDATOR_FQN = "dev.simplified.classbuilder.validate.BuildFlagValidator";
+
     private final TypeElement target;
     private final String targetSimpleName;
     private final String packageName;
     private final String builderName;
     private final BuilderConfig config;
     private final List<FieldSpec> fields;
-    private final Set<String> imports = new TreeSet<>();
+    private final ImportRegistry imports;
     private final Messager messager;
     private final boolean isRecord;
     private final TargetKind targetKind;
     private String interfaceImplName;
 
+    // The four below are resolved in emit() rather than here, because resolving
+    // a type-parameter bound spends simple names and the impl name this file
+    // writes bare only arrives after construction, through
+    // setInterfaceImplName. A claim made second loses.
+
     /** {@code ""} or the declaration form {@code "<T extends Comparable<T>>"}. */
-    private final String typeParamDecl;
+    private String typeParamDecl = "";
     /** {@code ""} or the reference form {@code "<T>"}. */
-    private final String typeArgs;
+    private String typeArgs = "";
     /** The target with its type arguments applied - {@code "Repo"} or {@code "Repo<T>"}. */
-    private final String targetRef;
+    private String targetRef;
     /** The builder with its type arguments applied - the setter return type. */
-    private final String builderRef;
+    private String builderRef;
 
     private final StringBuilder body = new StringBuilder(2048);
 
@@ -52,18 +62,16 @@ final class BuilderEmitter {
         this.target = target;
         this.targetSimpleName = target.getSimpleName().toString();
         this.packageName = packageName;
+        this.imports = new ImportRegistry(packageName);
         this.config = config;
         this.builderName = targetSimpleName + "Builder";
         this.fields = fields;
         this.messager = messager;
         this.isRecord = isRecord;
         this.targetKind = targetKind;
-        // A generic target propagates its parameters onto the sibling builder,
-        // which is a separate top-level class and so cannot see the target's.
-        this.typeParamDecl = buildTypeParamDecl();
-        this.typeArgs = buildTypeArgs();
-        this.targetRef = targetSimpleName + typeArgs;
-        this.builderRef = builderName + typeArgs;
+        // Nothing here may spend a simple name. The impl name is written bare
+        // too and only arrives afterwards, through setInterfaceImplName, so
+        // every claim is made together at the top of emit().
     }
 
     /**
@@ -113,7 +121,25 @@ final class BuilderEmitter {
     }
 
     String emit() {
-        imports.add("org.jetbrains.annotations.NotNull");
+        // Every name this file writes bare, claimed before anything that can
+        // spend one. The target, the builder and the impl build() instantiates
+        // never pass through the registry at all, and each signature below
+        // carries a bare `@NotNull`. A type-parameter bound is the first thing
+        // that can take a spelling, so resolving it has to come after this
+        // block - otherwise a bound whose simple name is one of these four wins
+        // the claim and the generated file names the wrong type on a line no
+        // author can edit.
+        imports.declare(targetSimpleName);
+        imports.declare(builderName);
+        if (interfaceImplName != null) imports.declare(interfaceImplName);
+        imports.use(NOT_NULL_FQN);
+
+        // A generic target propagates its parameters onto the sibling builder,
+        // which is a separate top-level class and so cannot see the target's.
+        this.typeParamDecl = buildTypeParamDecl();
+        this.typeArgs = buildTypeArgs();
+        this.targetRef = targetSimpleName + typeArgs;
+        this.builderRef = builderName + typeArgs;
 
         emitClassHeader();
         emitFields();
@@ -171,25 +197,13 @@ final class BuilderEmitter {
             // names resolve in the generated builder. The expression text itself is emitted
             // verbatim - it is general expression syntax, not the FQN-typed form that
             // simplifyType() is built for.
-            for (String fqn : f.initializerImports) considerImport(fqn);
+            for (String fqn : f.initializerImports) imports.use(fqn);
             return f.sourceInitializer;
         }
-        if (f.isOptional) {
-            imports.add("java.util.Optional");
-            return "Optional.empty()";
-        }
-        if (f.isListLike && !f.isSet) {
-            imports.add("java.util.ArrayList");
-            return "new ArrayList<>()";
-        }
-        if (f.isSet) {
-            imports.add("java.util.LinkedHashSet");
-            return "new LinkedHashSet<>()";
-        }
-        if (f.isMap) {
-            imports.add("java.util.LinkedHashMap");
-            return "new LinkedHashMap<>()";
-        }
+        if (f.isOptional) return imports.use("java.util.Optional") + ".empty()";
+        if (f.isListLike && !f.isSet) return "new " + imports.use("java.util.ArrayList") + "<>()";
+        if (f.isSet) return "new " + imports.use("java.util.LinkedHashSet") + "<>()";
+        if (f.isMap) return "new " + imports.use("java.util.LinkedHashMap") + "<>()";
         // An array is a container like the rest, so an unset slot is empty
         // rather than null - matching the AST-mutation path. The zero-length
         // dimension has to come first, so a multi-dimensional component's own
@@ -236,7 +250,7 @@ final class BuilderEmitter {
 
     private void emitPlainSetter(FieldSpec f) {
         emitContract("_ -> this", false, "this");
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ')
+        body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ')
             .append(config.setters().setName(f.name)).append('(').append(nullabilityPrefix(f)).append(typeName(f.typeDisplay)).append(' ').append(f.name).append(") {\n");
         body.append("        this.").append(f.name).append(" = ").append(f.name).append(";\n");
         body.append("        return this;\n    }\n\n");
@@ -248,20 +262,17 @@ final class BuilderEmitter {
     }
 
     private void emitFormattableOverload(FieldSpec f) {
-        imports.add("org.intellij.lang.annotations.PrintFormat");
         boolean nullable = f.nullable;
         emitContract("_, _ -> this", false, "this");
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ')
+        body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ')
             .append(config.setters().setName(f.name))
-            .append("(@PrintFormat ").append(nullable ? "@Nullable " : "@NotNull ").append("String ").append(f.name)
-            .append(", @Nullable Object... args) {\n");
+            .append('(').append(printFormat()).append(nullable ? nullable() : notNull()).append(string()).append(' ').append(f.name)
+            .append(", ").append(nullable()).append(object()).append("... args) {\n");
         if (nullable) {
-            imports.add("dev.simplified.classbuilder.validate.Strings");
-            imports.add("org.jetbrains.annotations.Nullable");
-            body.append("        this.").append(f.name).append(" = Strings.formatNullable(").append(f.name).append(", args).orElse(null);\n");
+            body.append("        this.").append(f.name).append(" = ").append(imports.use(STRINGS_FQN))
+                .append(".formatNullable(").append(f.name).append(", args).orElse(null);\n");
         } else {
-            imports.add("org.jetbrains.annotations.Nullable");
-            body.append("        this.").append(f.name).append(" = String.format(").append(f.name).append(", args);\n");
+            body.append("        this.").append(f.name).append(" = ").append(string()).append(".format(").append(f.name).append(", args);\n");
         }
         body.append("        return this;\n    }\n\n");
     }
@@ -279,14 +290,14 @@ final class BuilderEmitter {
         // and drops out entirely when a style suppresses it.
         if (config.setters().emitsFlag()) {
             emitContract("-> this", false, "this");
-            body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ')
+            body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ')
                 .append(config.setters().flagName(methodBase)).append("() {\n");
             body.append("        this.").append(f.name).append(" = ").append(inverse ? "false" : "true").append(";\n");
             body.append("        return this;\n    }\n\n");
         }
 
         emitContract("_ -> this", false, "this");
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ')
+        body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ')
             .append(config.setters().setName(methodBase)).append("(boolean ").append(methodBase).append(") {\n");
         if (inverse) {
             body.append("        this.").append(f.name).append(" = !").append(methodBase).append(";\n");
@@ -297,34 +308,32 @@ final class BuilderEmitter {
     }
 
     private void emitOptionalSetters(FieldSpec f) {
-        imports.add("java.util.Optional");
-        imports.add("org.jetbrains.annotations.Nullable");
-
+        String optional = imports.use("java.util.Optional");
         String inner = typeName(f.optionalInner);
         String setterName = config.setters().setName(f.name);
 
         // (@Nullable T) wrapper - for Optional<String> with @Formattable, this is the raw-nullable variant
         emitContract("_ -> this", false, "this");
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ')
-            .append(setterName).append("(@Nullable ").append(inner).append(' ').append(f.name).append(") {\n");
-        body.append("        return this.").append(setterName).append("(Optional.ofNullable(").append(f.name).append("));\n");
+        body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ')
+            .append(setterName).append('(').append(nullable()).append(inner).append(' ').append(f.name).append(") {\n");
+        body.append("        return this.").append(setterName).append('(').append(optional).append(".ofNullable(").append(f.name).append("));\n");
         body.append("    }\n\n");
 
         // (Optional<T>) wrapped variant
         emitContract("_ -> this", false, "this");
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ')
-            .append(setterName).append("(@NotNull Optional<").append(inner).append("> ").append(f.name).append(") {\n");
+        body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ')
+            .append(setterName).append('(').append(notNull()).append(optional).append('<').append(inner).append("> ").append(f.name).append(") {\n");
         body.append("        this.").append(f.name).append(" = ").append(f.name).append(";\n");
         body.append("        return this;\n    }\n\n");
 
         // @Formattable + Optional<String>: add format-nullable overload that assigns formatNullable(...) directly
         if (f.formattable && "java.lang.String".equals(f.optionalInner)) {
-            imports.add("org.intellij.lang.annotations.PrintFormat");
-            imports.add("dev.simplified.classbuilder.validate.Strings");
             emitContract("_, _ -> this", false, "this");
-            body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(setterName)
-                .append("(@PrintFormat @Nullable String ").append(f.name).append(", @Nullable Object... args) {\n");
-            body.append("        this.").append(f.name).append(" = Strings.formatNullable(").append(f.name).append(", args);\n");
+            body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ').append(setterName)
+                .append('(').append(printFormat()).append(nullable()).append(string()).append(' ').append(f.name)
+                .append(", ").append(nullable()).append(object()).append("... args) {\n");
+            body.append("        this.").append(f.name).append(" = ").append(imports.use(STRINGS_FQN))
+                .append(".formatNullable(").append(f.name).append(", args);\n");
             body.append("        return this;\n    }\n\n");
         }
     }
@@ -334,40 +343,40 @@ final class BuilderEmitter {
         String clear = config.setters().clearName(f.name);
 
         if (f.isMap) {
-            imports.add("java.util.LinkedHashMap");
-            imports.add("java.util.Map");
+            String linkedHashMap = imports.use("java.util.LinkedHashMap");
+            String map = imports.use("java.util.Map");
             String k = typeName(f.mapKey);
             String v = typeName(f.mapValue);
 
             // whole: withFoo(Map<K,V>) - replace (always)
             emitContract("_ -> this", false, "this");
-            body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(whole)
-                .append("(@NotNull Map<").append(k).append(", ").append(v).append("> ").append(f.name).append(") {\n");
-            body.append("        this.").append(f.name).append(" = new LinkedHashMap<>(").append(f.name).append(");\n");
+            body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ').append(whole)
+                .append('(').append(notNull()).append(map).append('<').append(k).append(", ").append(v).append("> ").append(f.name).append(") {\n");
+            body.append("        this.").append(f.name).append(" = new ").append(linkedHashMap).append("<>(").append(f.name).append(");\n");
             body.append("        return this;\n    }\n\n");
 
             if (f.singular && config.setters().emitsPut()) {
                 String putName = config.setters().putName(f.singularName);
                 emitContract("_, _ -> this", false, "this");
-                body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(putName)
-                    .append("(@NotNull ").append(k).append(" key, ").append(v).append(" value) {\n");
+                body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ').append(putName)
+                    .append('(').append(notNull()).append(k).append(" key, ").append(v).append(" value) {\n");
                 body.append("        this.").append(f.name).append(".put(key, value);\n");
                 body.append("        return this;\n    }\n\n");
             }
 
             if (f.compute && config.setters().emitsCompute()) {
-                imports.add("java.util.function.Supplier");
+                String supplier = imports.use("java.util.function.Supplier");
                 String putName = config.setters().computeName(f.singularName);
                 emitContract("_, _ -> this", false, "this");
-                body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(putName)
-                    .append("(@NotNull ").append(k).append(" key, @NotNull Supplier<").append(v).append("> valueSupplier) {\n");
+                body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ').append(putName)
+                    .append('(').append(notNull()).append(k).append(" key, ").append(notNull()).append(supplier).append('<').append(v).append("> valueSupplier) {\n");
                 body.append("        if (!this.").append(f.name).append(".containsKey(key)) this.").append(f.name).append(".put(key, valueSupplier.get());\n");
                 body.append("        return this;\n    }\n\n");
             }
 
             if (f.clearable && config.setters().emitsClear()) {
                 emitContract("-> this", false, "this");
-                body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(clear).append("() {\n");
+                body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ').append(clear).append("() {\n");
                 body.append("        this.").append(f.name).append(".clear();\n");
                 body.append("        return this;\n    }\n\n");
             }
@@ -375,21 +384,20 @@ final class BuilderEmitter {
         }
 
         String elem = typeName(f.collectionElement);
-        String container = f.isSet ? "LinkedHashSet" : "ArrayList";
-        imports.add(f.isSet ? "java.util.LinkedHashSet" : "java.util.ArrayList");
+        String container = imports.use(f.isSet ? "java.util.LinkedHashSet" : "java.util.ArrayList");
 
         // varargs replace (always)
         emitContract("_ -> this", false, "this");
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(whole)
-            .append("(@NotNull ").append(elem).append("... ").append(f.name).append(") {\n");
+        body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ').append(whole)
+            .append('(').append(notNull()).append(elem).append("... ").append(f.name).append(") {\n");
         body.append("        this.").append(f.name).append(" = new ").append(container).append("<>();\n");
         body.append("        for (").append(elem).append(" e : ").append(f.name).append(") this.").append(f.name).append(".add(e);\n");
         body.append("        return this;\n    }\n\n");
 
         // Iterable replace (always)
         emitContract("_ -> this", false, "this");
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(whole)
-            .append("(@NotNull Iterable<").append(elem).append("> ").append(f.name).append(") {\n");
+        body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ').append(whole)
+            .append('(').append(notNull()).append(imports.use("java.lang.Iterable")).append('<').append(elem).append("> ").append(f.name).append(") {\n");
         body.append("        this.").append(f.name).append(" = new ").append(container).append("<>();\n");
         body.append("        ").append(f.name).append(".forEach(this.").append(f.name).append("::add);\n");
         body.append("        return this;\n    }\n\n");
@@ -397,15 +405,15 @@ final class BuilderEmitter {
         if (f.singular && config.setters().emitsAdd()) {
             String single = config.setters().addName(f.singularName);
             emitContract("_ -> this", false, "this");
-            body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(single)
-                .append("(@NotNull ").append(elem).append(' ').append(f.singularName).append(") {\n");
+            body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ').append(single)
+                .append('(').append(notNull()).append(elem).append(' ').append(f.singularName).append(") {\n");
             body.append("        this.").append(f.name).append(".add(").append(f.singularName).append(");\n");
             body.append("        return this;\n    }\n\n");
         }
 
         if (f.clearable && config.setters().emitsClear()) {
             emitContract("-> this", false, "this");
-            body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(clear).append("() {\n");
+            body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ').append(clear).append("() {\n");
             body.append("        this.").append(f.name).append(".clear();\n");
             body.append("        return this;\n    }\n\n");
         }
@@ -415,8 +423,8 @@ final class BuilderEmitter {
         String elem = typeName(f.collectionElement);
         String setter = config.setters().setName(f.name);
         emitContract("_ -> this", false, "this");
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(builderRef).append(' ').append(setter)
-            .append("(@NotNull ").append(elem).append("... ").append(f.name).append(") {\n");
+        body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ').append(setter)
+            .append('(').append(notNull()).append(elem).append("... ").append(f.name).append(") {\n");
         body.append("        this.").append(f.name).append(" = ").append(f.name).append(";\n");
         body.append("        return this;\n    }\n\n");
     }
@@ -433,8 +441,8 @@ final class BuilderEmitter {
         // re-declares them; the caller infers them from the argument.
         body.append("    ").append(accessKeyword()).append("static ").append(typeParamDecl)
             .append(typeParamDecl.isEmpty() ? "" : " ")
-            .append("@NotNull ").append(builderRef).append(' ').append(config.fromMethodName())
-            .append("(@NotNull ").append(targetRef).append(" instance) {\n");
+            .append(notNull()).append(builderRef).append(' ').append(config.fromMethodName())
+            .append('(').append(notNull()).append(targetRef).append(" instance) {\n");
         body.append("        ").append(builderRef).append(" b = new ").append(builderName).append(diamond()).append("();\n");
         for (FieldSpec f : fields) body.append("        b.").append(f.name).append(" = ").append(readFromInstance(f)).append(";\n");
         body.append("        return b;\n    }\n\n");
@@ -466,7 +474,7 @@ final class BuilderEmitter {
 
     private void emitBuildMethod() {
         emitContract("-> new", false, null);
-        body.append("    ").append(accessKeyword()).append("@NotNull ").append(targetRef).append(' ').append(config.buildMethodName()).append("() {\n");
+        body.append("    ").append(accessKeyword()).append(notNull()).append(targetRef).append(' ').append(config.buildMethodName()).append("() {\n");
         boolean useFactory = !config.factoryMethod().isEmpty();
         String constructorTarget;
         if (targetKind == TargetKind.INTERFACE && useFactory) {
@@ -490,8 +498,8 @@ final class BuilderEmitter {
         // not the Builder (whose fields are synthesised without annotations),
         // so we capture the new instance first, validate, then return.
         boolean emitValidation = config.validate();
+        String validator = emitValidation ? imports.use(VALIDATOR_FQN) : null;
         if (emitValidation) {
-            imports.add("dev.simplified.classbuilder.validate.BuildFlagValidator");
             body.append("        final ").append(targetRef).append(" $result = ").append(constructorTarget).append('(');
         } else {
             body.append("        return ").append(constructorTarget).append('(');
@@ -502,7 +510,7 @@ final class BuilderEmitter {
         }
         body.append(");\n");
         if (emitValidation) {
-            body.append("        BuildFlagValidator.validate($result);\n");
+            body.append("        ").append(validator).append(".validate($result);\n");
             body.append("        return $result;\n");
         }
         body.append("    }\n\n");
@@ -514,8 +522,7 @@ final class BuilderEmitter {
 
     private void emitContract(String value, boolean pure, String mutates) {
         if (!config.emitContracts()) return;
-        imports.add("dev.simplified.annotations.XContract");
-        body.append("    @XContract(");
+        body.append("    @").append(imports.use(X_CONTRACT_FQN)).append('(');
         boolean first = true;
         if (value != null) { body.append("value = \"").append(value).append('"'); first = false; }
         if (pure) { if (!first) body.append(", "); body.append("pure = true"); first = false; }
@@ -535,9 +542,39 @@ final class BuilderEmitter {
 
     private String nullabilityPrefix(FieldSpec f) {
         if (f.isPrimitive) return "";
-        if (f.notNull) { imports.add("org.jetbrains.annotations.NotNull"); return "@NotNull "; }
-        if (f.nullable) { imports.add("org.jetbrains.annotations.Nullable"); return "@Nullable "; }
+        if (f.notNull) return notNull();
+        if (f.nullable) return nullable();
         return "";
+    }
+
+    // Every fixed name this file writes goes through the registry, including
+    // the ones that need no import: a target field typed acme.String otherwise
+    // imports itself, and the java.lang.String this emitter meant is then
+    // silently that class everywhere below.
+
+    /** The {@code @NotNull} prefix, spelled as this file's import scope allows. */
+    private String notNull() {
+        return "@" + imports.use(NOT_NULL_FQN) + " ";
+    }
+
+    /** The {@code @Nullable} prefix, spelled as this file's import scope allows. */
+    private String nullable() {
+        return "@" + imports.use(NULLABLE_FQN) + " ";
+    }
+
+    /** The {@code @PrintFormat} prefix, spelled as this file's import scope allows. */
+    private String printFormat() {
+        return "@" + imports.use(PRINT_FORMAT_FQN) + " ";
+    }
+
+    /** {@code String}, spelled as this file's import scope allows. */
+    private String string() {
+        return imports.use("java.lang.String");
+    }
+
+    /** {@code Object}, spelled as this file's import scope allows. */
+    private String object() {
+        return imports.use("java.lang.Object");
     }
 
     /** Converts a full type display (e.g. "java.util.List<java.lang.String>") to a simpler form, adding imports. */
@@ -545,38 +582,62 @@ final class BuilderEmitter {
         return simplifyType(fullDisplay);
     }
 
+    /**
+     * Rewrites a fully qualified type rendering into the spelling this file's
+     * import scope allows, registering an import for every type name it
+     * shortens.
+     *
+     * <p><b>A type-use annotation is rendered inside the qualified name</b> -
+     * {@code java.util.@NotNull List<java.lang.String>} - so an identifier run
+     * ends at the {@code '@'} holding {@code "java.util."}, which is a package
+     * qualifier rather than a type. Left as a token it produces
+     * {@code import java.util.;} and the generated file does not parse. The
+     * qualifier is held back and rejoined onto the type name that follows the
+     * annotation, which is the one spelling that both imports the right type
+     * and leaves the annotation where javac put it.
+     *
+     * @param typeStr the type as {@code TypeMirror.toString} renders it
+     * @return the rewritten type reference
+     */
     private String simplifyType(String typeStr) {
         StringBuilder out = new StringBuilder(typeStr.length());
+        String qualifier = "";
         int i = 0;
         int n = typeStr.length();
         while (i < n) {
+            if (typeStr.charAt(i) == '@') {
+                out.append('@');
+                i++;
+                int nameStart = i;
+                while (i < n && (Character.isJavaIdentifierPart(typeStr.charAt(i)) || typeStr.charAt(i) == '.')) i++;
+                String name = typeStr.substring(nameStart, i);
+                out.append(name.indexOf('.') >= 0 ? imports.use(name) : name);
+                continue;
+            }
             int tokenStart = i;
             while (i < n && (Character.isJavaIdentifierPart(typeStr.charAt(i)) || typeStr.charAt(i) == '.')) i++;
             String token = typeStr.substring(tokenStart, i);
-            if (!token.isEmpty() && token.indexOf('.') >= 0 && Character.isJavaIdentifierStart(token.charAt(0))) {
-                out.append(considerImport(token));
-            } else {
-                out.append(token);
+            // The split qualifier, recognised by the '@' that ended it. Held
+            // rather than emitted; the loop re-enters on the annotation.
+            if (token.endsWith(".") && i < n && typeStr.charAt(i) == '@') {
+                qualifier = token;
+                continue;
+            }
+            if (!token.isEmpty()) {
+                token = qualifier + token;
+                qualifier = "";
+                if (token.indexOf('.') >= 0 && Character.isJavaIdentifierStart(token.charAt(0))) {
+                    out.append(imports.use(token));
+                } else {
+                    out.append(token);
+                }
             }
             if (i < n) {
                 out.append(typeStr.charAt(i));
                 i++;
             }
         }
-        return out.toString();
-    }
-
-    private String considerImport(String fqn) {
-        if (fqn.startsWith("java.lang.") && fqn.lastIndexOf('.') == "java.lang".length()) {
-            return fqn.substring("java.lang.".length());
-        }
-        int lastDot = fqn.lastIndexOf('.');
-        if (lastDot < 0) return fqn;
-        String pkg = fqn.substring(0, lastDot);
-        String simple = fqn.substring(lastDot + 1);
-        if (pkg.equals(packageName)) return simple;
-        imports.add(fqn);
-        return simple;
+        return out.append(qualifier).toString();
     }
 
     // ------------------------------------------------------------------
@@ -587,8 +648,7 @@ final class BuilderEmitter {
         StringBuilder sb = new StringBuilder(body.length() + 1024);
         sb.append("// Generated by @ClassBuilder - do not edit\n");
         if (!packageName.isEmpty()) sb.append("package ").append(packageName).append(";\n\n");
-        for (String imp : imports) sb.append("import ").append(imp).append(";\n");
-        if (!imports.isEmpty()) sb.append('\n');
+        sb.append(imports.block());
         sb.append(body);
         return sb.toString();
     }
