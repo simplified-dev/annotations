@@ -152,6 +152,7 @@ intellijPlatform {
             create(IntelliJPlatformType.IntellijIdeaCommunity, "2023.3")
             create(IntelliJPlatformType.IntellijIdeaCommunity, "2024.3")
             create(IntelliJPlatformType.IntellijIdea, "2025.3")
+            create(IntelliJPlatformType.IntellijIdea, "2026.1")
         }
     }
 }
