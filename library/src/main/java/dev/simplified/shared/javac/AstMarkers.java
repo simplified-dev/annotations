@@ -33,6 +33,10 @@ public final class AstMarkers {
     private static final java.util.Set<JCTree> GENERATED =
         Collections.newSetFromMap(new WeakHashMap<>());
 
+    /** Per-pass idempotency marks, keyed by the pass's own name. */
+    private static final java.util.Map<String, java.util.Set<JCTree>> PASSES =
+        new java.util.HashMap<>();
+
     private AstMarkers() {
     }
 
@@ -83,6 +87,43 @@ public final class AstMarkers {
     /** Returns {@code true} when the node was produced by the mutation pipeline. */
     public static boolean isGenerated(JCTree node) {
         return GENERATED.contains(node);
+    }
+
+    /**
+     * Records that the named pass has already rewritten the node.
+     *
+     * <p>Separate from {@link #isGenerated(JCTree)} because the two questions
+     * are different ones. "Generated" is about authorship and drives collision
+     * detection; this is one pass's own idempotency, so that whichever dispatch
+     * path reaches a node first wins and any later one is a no-op. Sharing the
+     * generated set for it makes two passes over the same node mutually
+     * exclusive: a body rewrite that marks the blocks it walked would silence
+     * every other pass that reads the same flag, and the symptom is an
+     * annotation that quietly does nothing.
+     *
+     * @param node the node the pass has finished with
+     * @param pass the pass's own key
+     */
+    public static void markPass(JCTree node, String pass) {
+        if (node != null) passMarks(pass).add(node);
+    }
+
+    /**
+     * Whether the named pass has already rewritten the node.
+     *
+     * @param node the node about to be rewritten
+     * @param pass the pass's own key
+     * @return {@code true} when the pass has already claimed this node
+     */
+    public static boolean isPassMarked(JCTree node, String pass) {
+        return node != null && passMarks(pass).contains(node);
+    }
+
+    private static java.util.Set<JCTree> passMarks(String pass) {
+        synchronized (PASSES) {
+            return PASSES.computeIfAbsent(pass,
+                key -> Collections.newSetFromMap(new WeakHashMap<>()));
+        }
     }
 
 }

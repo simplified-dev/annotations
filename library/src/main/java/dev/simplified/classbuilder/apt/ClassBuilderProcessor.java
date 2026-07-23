@@ -1,5 +1,6 @@
 package dev.simplified.classbuilder.apt;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
+import com.sun.tools.javac.tree.JCTree;
 import dev.simplified.accessor.mutate.AccessorMutator;
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.Getter;
@@ -9,11 +10,14 @@ import dev.simplified.annotations.SetterNames;
 import dev.simplified.args.mutate.ArgsConstructorMutator;
 import dev.simplified.classbuilder.mutate.BuilderMutator;
 import dev.simplified.classbuilder.mutate.InterfaceBootstrapMutator;
+import dev.simplified.cleanup.mutate.CleanupBlockMutator;
 import dev.simplified.lazy.mutate.LazyFieldMutator;
 import dev.simplified.shared.apt.AnnotationLookup;
 import dev.simplified.shared.apt.SourceIntrospector;
 import dev.simplified.shared.javac.JavacBridge;
+import dev.simplified.shared.javac.LazyOwnership;
 import dev.simplified.shared.javac.compat.JavacAccessFactory;
+import dev.simplified.silentthrows.mutate.SilentThrowsMutator;
 
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.Messager;
@@ -75,6 +79,8 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     private static final String LAZY_FQN = "dev.simplified.annotations.Lazy";
     private static final String GETTER_FQN = "dev.simplified.annotations.Getter";
     private static final String SETTER_FQN = "dev.simplified.annotations.Setter";
+    private static final String CLEANUP_FQN = "dev.simplified.annotations.Cleanup";
+    private static final String SILENT_THROWS_FQN = "dev.simplified.annotations.SilentThrows";
 
     /**
      * The constructor annotations, dispatched here rather than from a processor
@@ -176,7 +182,89 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         // ordering a guarantee - processor order within a round is otherwise
         // unspecified, and a @Getter racing @Lazy emits a duplicate method.
         processAccessors(roundEnv, messager);
+
+        // The two body rewrites last of all, after every member injection - a
+        // synthesised body carries neither annotation, so running last means
+        // neither pass has to re-scan a tree that later grows members. Each has
+        // its own processor owning every other tree; these dispatches exist for
+        // the trees they have to stand back from, where the @Lazy pass above
+        // must have finished first. Their order against each other is free.
+        processCleanup(roundEnv, messager);
+        processSilentThrows(roundEnv, messager);
         return false;
+    }
+
+    /**
+     * Runs {@link SilentThrowsMutator} over the round's root elements that
+     * declare a {@code @Lazy} field, nested types included.
+     *
+     * <p>{@code SilentThrowsProcessor} skips exactly those compilation units.
+     * The wrap re-parents a member's whole body one level down, so every
+     * {@code this.foo = foo} in a constructor sits inside the injected
+     * {@code try} - and {@link LazyFieldMutator} walks a body's statements flat,
+     * so it would rewrite none of them and javac would then reject the
+     * {@code Supplier} assignment against the retyped field.
+     *
+     * <p>The walk descends into nested types because the mutator does not: each
+     * class is its own target with its own rethrow helper.
+     *
+     * @param roundEnv the round being processed
+     * @param messager sink for diagnostics
+     */
+    private void processSilentThrows(RoundEnvironment roundEnv, Messager messager) {
+        if (javacBridge.isEmpty()) return;
+        if (processingEnv.getElementUtils().getTypeElement(SILENT_THROWS_FQN) == null) return;
+        for (Element root : roundEnv.getRootElements()) {
+            if (!(root instanceof TypeElement type)) continue;
+            JCClassDecl tree = javacBridge.get().treeOf(type);
+            if (tree == null) continue;
+            if (!LazyOwnership.declaresLazyField(tree, javacBridge.get().unitOf(type))) continue;
+            try {
+                mutateSilentThrows(tree);
+            } catch (Exception e) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "Failed to process @SilentThrows in " + type + ": " + e.getMessage(), type);
+            }
+        }
+    }
+
+    /** Applies the mutator to the declaration and to every type nested in it. */
+    private void mutateSilentThrows(JCClassDecl target) {
+        new SilentThrowsMutator(javacBridge.get()).mutate(target);
+        for (JCTree def : target.defs) {
+            if (def instanceof JCClassDecl nested) mutateSilentThrows(nested);
+        }
+    }
+
+    /**
+     * Runs {@link CleanupBlockMutator} over the round's root elements that
+     * declare a {@code @Lazy} field.
+     *
+     * <p>{@code CleanupProcessor} skips exactly those trees. The two passes are
+     * order-free against each other everywhere else, but relocating a
+     * constructor's tail into a {@code try} hides the {@code this.foo = foo}
+     * assignments {@link LazyFieldMutator} rewrites, which walks a body's
+     * statements flat. A type with a {@code @Lazy} field is a type this
+     * processor is invoked for, so the deferral always has somewhere to land.
+     *
+     * @param roundEnv the round being processed
+     * @param messager sink for diagnostics
+     */
+    private void processCleanup(RoundEnvironment roundEnv, Messager messager) {
+        if (javacBridge.isEmpty()) return;
+        if (processingEnv.getElementUtils().getTypeElement(CLEANUP_FQN) == null) return;
+        for (Element root : roundEnv.getRootElements()) {
+            if (!(root instanceof TypeElement type)) continue;
+            JCClassDecl tree = javacBridge.get().treeOf(type);
+            if (tree == null) continue;
+            if (!CleanupBlockMutator.declaresLazyField(tree, javacBridge.get().unitOf(type))) continue;
+            try {
+                new CleanupBlockMutator(javacBridge.get(), messager, type).mutate(tree);
+            } catch (Exception e) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "Failed to process @Cleanup in " + type + ": " + e.getMessage(), type);
+            }
+        }
     }
 
     /**

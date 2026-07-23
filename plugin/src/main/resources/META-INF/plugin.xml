@@ -215,6 +215,26 @@
                 displayName="@Getter accessor width and hand-written accessors"
                 groupName="Simplified Annotations"
         />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.silentthrows.inspect.SilentThrowsInspection"
+                enabledByDefault="true"
+                level="ERROR"
+                shortName="SilentThrowsInspection"
+                displayName="@SilentThrows misuse"
+                groupName="Simplified Annotations"
+        />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.cleanup.inspect.CleanupInspection"
+                enabledByDefault="true"
+                level="ERROR"
+                shortName="CleanupInspection"
+                displayName="@Cleanup misuse"
+                groupName="Simplified Annotations"
+        />
+        <custom.exception.handler implementation="dev.simplified.silentthrows.editor.SilentThrowsExceptionHandler"/>
+        <lang.inspectionSuppressor language="JAVA" implementationClass="dev.simplified.cleanup.inspect.CleanupSuppressor"/>
         <lang.inferredAnnotationProvider implementation="dev.simplified.xcontract.XContractInferredAnnotationProvider"/>
         <lang.inferredAnnotationProvider implementation="dev.simplified.classbuilder.editor.ClassBuilderInferredAnnotationProvider"/>
         <lang.inferredAnnotationProvider implementation="dev.simplified.args.editor.ArgsInferredAnnotationProvider"/>

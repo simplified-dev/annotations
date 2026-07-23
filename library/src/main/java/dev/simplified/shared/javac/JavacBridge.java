@@ -1,5 +1,7 @@
 package dev.simplified.shared.javac;
 
+import com.sun.source.tree.CompilationUnitTree;
+import com.sun.source.util.TreePath;
 import com.sun.source.util.Trees;
 import com.sun.tools.javac.code.Symtab;
 import com.sun.tools.javac.code.Types;
@@ -133,6 +135,20 @@ public final class JavacBridge {
     public JCClassDecl treeOf(TypeElement element) {
         var tree = trees.getTree(element);
         return tree instanceof JCClassDecl cls ? cls : null;
+    }
+
+    /**
+     * Resolves the compilation unit a type element was declared in. Needed
+     * wherever a written annotation name has to be resolved against the unit's
+     * imports rather than trusted as a simple name.
+     *
+     * @param element a javac-visible type element
+     * @return the compilation unit, or {@code null} when the element has no
+     *         backing source
+     */
+    public CompilationUnitTree unitOf(TypeElement element) {
+        TreePath path = trees.getPath(element);
+        return path == null ? null : path.getCompilationUnit();
     }
 
 }

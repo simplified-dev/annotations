@@ -1,0 +1,39 @@
+<html>
+<body>
+Flags a <code>@Cleanup</code> declaration the generated try-with-resources
+cannot be built from:
+
+<ul>
+  <li>A declaration with no initializer, which holds no resource to close.</li>
+  <li>A declared type that is not <code>AutoCloseable</code>. The annotation
+      expands to <code>try (name) { ... }</code>, and only an
+      <code>AutoCloseable</code> may appear there.</li>
+  <li>A <code>for</code> or <code>for</code>-each variable. There is no
+      remainder of an enclosing block for the resource to be closed at, so the
+      annotation would do nothing at all.</li>
+  <li>A variable assigned again after its declaration. The existing-variable
+      resource form requires it to be effectively final.</li>
+  <li>A variable declared by a try-with-resources, which already closes it.</li>
+</ul>
+
+<!-- tooltip end -->
+
+<p>
+These are checks the annotation processor is structurally unable to make. It
+runs before attribution, so it holds a syntax tree in which the local's declared
+type is a name and nothing more. Without the inspection a non-closeable type
+reaches the build as a type error on a <code>try</code> statement that appears
+in no source file, which is among the hardest diagnostics to connect back to the
+annotation that caused it.
+</p>
+
+<p>
+A type whose <code>close()</code> happens to do nothing is <b>not</b> reported.
+Whether a close is inert is a property of the library that declared it rather
+than of the annotation, and deciding it means reading through an override chain
+to a body that need not be on the classpath. Every other check here stands for
+something that fails to compile.
+</p>
+
+</body>
+</html>
