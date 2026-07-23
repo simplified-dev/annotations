@@ -72,8 +72,14 @@ public final class LazyFieldMutator {
     /**
      * Annotation FQNs (and their bare simple names) that must NOT propagate
      * from the {@code @Lazy} field declaration onto the synthesised getter.
-     * The {@code @Lazy} annotation itself is field-only by target; the
-     * {@code @ClassBuilder} companions are field-contract-specific.
+     *
+     * <p>This carries the <b>semantic</b> exclusions only - an annotation that
+     * would be legal on the getter but says something about the field's
+     * contract rather than about the accessor, {@code @BuildFlag} being the
+     * one that is not already excluded by its target. Legality itself is
+     * decided structurally by {@link #targetsMethod}, because a list that has
+     * to be extended by hand for every new field-level annotation is a list
+     * that will not be.
      */
     private static final Set<String> SKIP_ANNOTATIONS = Set.of(
         "dev.simplified.annotations.Lazy", "Lazy",
@@ -368,7 +374,7 @@ public final class LazyFieldMutator {
             if (SKIP_ANNOTATIONS.contains(fqn)) continue;
             String simple = fqn.substring(fqn.lastIndexOf('.') + 1);
             if (SKIP_ANNOTATIONS.contains(simple)) continue;
-            if (!hasDeclarationTarget(mirror)) continue;
+            if (!targetsMethod(mirror)) continue;
             out.append(make.Annotation(types.qualIdent(fqn), List.nil()));
         }
         return out.toList();
@@ -386,22 +392,39 @@ public final class LazyFieldMutator {
      * <p>An annotation with no {@code @Target} at all defaults to "any
      * declaration" (JLS 9.6.4.1), so it's safe to propagate.
      */
-    private boolean hasDeclarationTarget(AnnotationMirror mirror) {
+    /**
+     * Whether an annotation written on the field is legal on the getter this
+     * pass synthesises.
+     *
+     * <p>{@code METHOD} is required, not merely some declaration target. Asking
+     * only whether the annotation had <b>any</b> declaration target let a
+     * field-only one through - {@code @Setter} and {@code @Getter} are
+     * {@code @Target({TYPE, FIELD})} - and javac then rejected the synthesised
+     * getter with "annotation interface not applicable to this kind of
+     * declaration", anchored on the author's field. The denylist below cannot
+     * be the defence: it has to be extended by hand for every field-level
+     * annotation that is ever added, and it silently was not.
+     *
+     * <p>A {@code TYPE_USE} annotation is still refused outright even when it
+     * also targets {@code METHOD}. It belongs on the return type rather than in
+     * declaration position, and the type this pass emits is reconstructed from
+     * the field's own, so propagating it here would double it.
+     *
+     * @param mirror the annotation written on the field
+     * @return whether it may be copied onto the getter
+     */
+    private boolean targetsMethod(AnnotationMirror mirror) {
         Element annotationType = mirror.getAnnotationType().asElement();
         if (!(annotationType instanceof TypeElement te)) return true;
         Target target = te.getAnnotation(Target.class);
+        // No @Target at all means every declaration context, METHOD included.
         if (target == null) return true;
-        boolean hasDecl = false;
+        boolean method = false;
         for (ElementType e : target.value()) {
             if (e == ElementType.TYPE_USE) return false;
-            switch (e) {
-                case METHOD, FIELD, TYPE, ANNOTATION_TYPE, PACKAGE,
-                     CONSTRUCTOR, PARAMETER, LOCAL_VARIABLE, MODULE,
-                     RECORD_COMPONENT -> hasDecl = true;
-                default -> {}
-            }
+            if (e == ElementType.METHOD) method = true;
         }
-        return hasDecl;
+        return method;
     }
 
     // ------------------------------------------------------------------

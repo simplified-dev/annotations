@@ -658,4 +658,43 @@ public class LazyFieldMutatorTest {
         assertEquals("hi!", cls.getMethod("getName").invoke(instance));
     }
 
+    /**
+     * A field-only annotation beside {@code @Lazy} must not travel onto the
+     * synthesised getter.
+     *
+     * <p>The propagation filter asked whether an annotation had <b>any</b>
+     * declaration target rather than whether it targets {@code METHOD}, so
+     * {@code @Setter} and {@code @Getter} - both {@code @Target({TYPE, FIELD})} -
+     * were copied onto a method and javac rejected the result with "annotation
+     * interface not applicable to this kind of declaration", anchored on the
+     * author's own field.
+     *
+     * <p>These two spellings matter more than they look: {@code @Setter} and
+     * {@code @Getter} cannot be combined with {@code @Lazy}, and
+     * {@code AccessLevel.NONE} is the documented way for one field to opt out of
+     * a type-level fan-out - so this was the remedy for that refusal failing
+     * with an unrelated error.
+     */
+    @Test
+    public void fieldOnlyAnnotationsDoNotTravelOntoTheGetter() throws Exception {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.OptedOut",
+            "package demo;",
+            "import dev.simplified.annotations.AccessLevel;",
+            "import dev.simplified.annotations.Getter;",
+            "import dev.simplified.annotations.Lazy;",
+            "import dev.simplified.annotations.Setter;",
+            "@Getter",
+            "@Setter",
+            "public class OptedOut {",
+            "    private @Lazy @Getter(AccessLevel.NONE) @Setter(AccessLevel.NONE) String value = compute();",
+            "    private static String compute() { return \"hi\"; }",
+            "}"));
+        assertThat(c).succeeded();
+
+        Class<?> cls = Class.forName("demo.OptedOut", true, loadClasses(c));
+        Object instance = cls.getDeclaredConstructor().newInstance();
+        assertEquals("the @Lazy getter is still synthesised and still memoizes",
+            "hi", cls.getMethod("getValue").invoke(instance));
+    }
+
 }
