@@ -206,7 +206,15 @@ public final class FieldSpec {
         if (kind != TypeKind.DECLARED) return;
 
         DeclaredType declared = (DeclaredType) b.type;
-        String raw = stripTypeArgs(declared.toString());
+        // The FQN comes off the element, never off the rendered type. A
+        // TypeMirror renders its type annotations inline - a type-use @NotNull
+        // makes toString() read "java.util.@org.jetbrains.annotations.NotNull
+        // Optional<...>" - so every comparison below silently missed on the
+        // near-universal annotated shape. Optional lost its dual setters and
+        // its empty default outright; a List or Map survived only by falling
+        // through to the supertype walk, which then labelled a plain
+        // java.util type a custom container.
+        String raw = ((TypeElement) declared.asElement()).getQualifiedName().toString();
         List<? extends TypeMirror> args = declared.getTypeArguments();
 
         if ("java.lang.String".equals(raw)) {
@@ -362,11 +370,6 @@ public final class FieldSpec {
         }
 
         return new FieldSpec(b);
-    }
-
-    private static String stripTypeArgs(String typeName) {
-        int lt = typeName.indexOf('<');
-        return lt < 0 ? typeName : typeName.substring(0, lt);
     }
 
     private static String defaultSingular(String fieldName) {

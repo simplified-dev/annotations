@@ -16,12 +16,19 @@ import javax.tools.JavaFileObject;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import static com.google.testing.compile.CompilationSubject.assertThat;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -155,6 +162,72 @@ public class NullnessParamTest {
             .contentsAsUtf8String().contains("codes(@NotNull String... codes)");
     }
 
+    /**
+     * A type-use annotation must not change how the field is classified.
+     *
+     * <p>{@code FieldSpec} matched the container types against the rendered
+     * type, which carries the annotation inline, so an annotated field matched
+     * none of them. The visible half was that {@code Optional} lost its dual
+     * setters; the damaging half was that the builder's constructor emitted no
+     * container defaults at all, leaving an untouched list field null where the
+     * unannotated form gives an empty one - so {@code build()} handed the
+     * constructor a null nobody wrote.
+     */
+    @Test
+    public void typeUseNullnessOnContainerFields_keepsTheBuilderDefaults() throws Exception {
+        Compilation c = compile(boxesClass());
+        assertThat(c).succeeded();
+
+        Class<?> boxes = loadClasses(c).loadClass("demo.Boxes");
+        Object builder = boxes.getMethod("builder").invoke(null);
+        Object built = builder.getClass().getMethod("build").invoke(builder);
+
+        assertEquals("an untouched @NotNull List must default to an empty list, not null",
+            List.of(), boxes.getField("tags").get(built));
+        assertEquals("an untouched @NotNull Map must default to an empty map, not null",
+            Map.of(), boxes.getField("counts").get(built));
+        assertEquals("an untouched @NotNull Optional must default to empty, not null",
+            Optional.empty(), boxes.getField("note").get(built));
+    }
+
+    /**
+     * The other half of the same classification: an {@code Optional} field
+     * generates a raw setter beside the wrapped one, so that the wrapping lives
+     * inside the builder rather than at every call site.
+     */
+    @Test
+    public void typeUseNullnessOnAnOptionalField_stillGeneratesTheRawSetter() throws Exception {
+        Compilation c = compile(boxesClass());
+        assertThat(c).succeeded();
+
+        Class<?> boxes = loadClasses(c).loadClass("demo.Boxes");
+        Object builder = boxes.getMethod("builder").invoke(null);
+        builder.getClass().getMethod("note", String.class).invoke(builder, "hi");
+        Object built = builder.getClass().getMethod("build").invoke(builder);
+
+        assertEquals("the raw setter must wrap rather than store",
+            Optional.of("hi"), boxes.getField("note").get(built));
+    }
+
+    private static JavaFileObject boxesClass() {
+        return JavaFileObjects.forSourceLines("demo.Boxes",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import org.jetbrains.annotations.NotNull;",
+            "import java.util.List;",
+            "import java.util.Map;",
+            "import java.util.Optional;",
+            "@ClassBuilder(validate = false)",
+            "public class Boxes {",
+            "    public final @NotNull List<String> tags;",
+            "    public final @NotNull Map<String, Integer> counts;",
+            "    public final @NotNull Optional<String> note;",
+            "    public Boxes(List<String> tags, Map<String, Integer> counts, Optional<String> note) {",
+            "        this.tags = tags; this.counts = counts; this.note = note;",
+            "    }",
+            "}");
+    }
+
     private static JavaFileObject cardInterface() {
         return JavaFileObjects.forSourceLines("demo.Card",
             "package demo;",
@@ -177,6 +250,25 @@ public class NullnessParamTest {
 
     private static Compilation compile(JavaFileObject... sources) {
         return Compiler.javac().withProcessors(new ClassBuilderProcessor()).compile(sources);
+    }
+
+    private static ClassLoader loadClasses(Compilation compilation) throws IOException {
+        Path tmp = Files.createTempDirectory("nullness-param-test");
+        for (JavaFileObject f : compilation.generatedFiles()) {
+            if (f.getKind() != JavaFileObject.Kind.CLASS) continue;
+            String uri = f.toUri().toString();
+            int anchor = uri.indexOf("CLASS_OUTPUT/");
+            String rel = anchor >= 0 ? uri.substring(anchor + "CLASS_OUTPUT/".length()) : f.getName();
+            Path out = tmp.resolve(rel);
+            Files.createDirectories(out.getParent());
+            try (InputStream in = f.openInputStream()) {
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                in.transferTo(baos);
+                Files.write(out, baos.toByteArray());
+            }
+        }
+        return new URLClassLoader(new URL[]{tmp.toUri().toURL()},
+            NullnessParamTest.class.getClassLoader());
     }
 
     private static Set<String> annotationsFor(Map<String, Set<String>> params, String setterName) {
