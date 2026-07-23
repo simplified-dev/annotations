@@ -352,19 +352,15 @@ public final class LazyFieldMutator {
 
     /**
      * Builds a list of fresh {@link JCAnnotation} nodes for each non-skipped
-     * declaration-level annotation on the source field. Annotations whose
-     * {@link Target} is exclusively {@link ElementType#TYPE_USE} are
-     * skipped - propagating those onto the modifier list of a method whose
-     * return type is a qualified name causes javac to migrate them into
-     * the type tree's Select chain ({@code java.lang.@Foo String}), which
-     * breaks attribution. The IDE-side {@code LazyAugmentProvider} handles
-     * type-use cases for hover and DFA separately.
+     * declaration-level annotation on the source field. Legality is decided
+     * structurally by {@link #targetsMethod}, so an annotation that cannot
+     * appear on a method never reaches the getter's modifier list.
      *
-     * <p>Annotations with no {@code @Target} default to "any declaration"
-     * (JLS 9.6.4.1), so they propagate. {@code @Deprecated},
+     * <p>An annotation with no {@link Target} defaults to "any declaration"
+     * (JLS 9.6.4.1), so it propagates. {@code @Deprecated},
      * {@code @SuppressWarnings}, and JetBrains
-     * {@code @NotNull}/{@code @Nullable} (which list METHOD in their
-     * targets) all land here cleanly.
+     * {@code @NotNull}/{@code @Nullable} (which list {@link ElementType#METHOD}
+     * among their targets) all land here.
      */
     private List<JCAnnotation> collectDeclarationAnnotations(FieldSpec lazy) {
         ListBuffer<JCAnnotation> out = new ListBuffer<>();
@@ -381,34 +377,37 @@ public final class LazyFieldMutator {
     }
 
     /**
-     * Returns {@code true} only when the annotation has at least one
-     * declaration target AND does not list {@link ElementType#TYPE_USE}.
-     * Annotations with TYPE_USE are skipped entirely on this path - javac
-     * auto-lifts them off the modifier list into the return-type tree, and
-     * when the type is a qualified name the lift produces malformed AST.
-     * The IDE-side {@code LazyAugmentProvider} surfaces type-use cases for
-     * hover and DFA without going through javac.
-     *
-     * <p>An annotation with no {@code @Target} at all defaults to "any
-     * declaration" (JLS 9.6.4.1), so it's safe to propagate.
-     */
-    /**
      * Whether an annotation written on the field is legal on the getter this
      * pass synthesises.
      *
-     * <p>{@code METHOD} is required, not merely some declaration target. Asking
-     * only whether the annotation had <b>any</b> declaration target let a
-     * field-only one through - {@code @Setter} and {@code @Getter} are
-     * {@code @Target({TYPE, FIELD})} - and javac then rejected the synthesised
-     * getter with "annotation interface not applicable to this kind of
-     * declaration", anchored on the author's field. The denylist below cannot
-     * be the defence: it has to be extended by hand for every field-level
-     * annotation that is ever added, and it silently was not.
+     * <p>{@link ElementType#METHOD} is required, not merely some declaration
+     * target. Asking only whether the annotation had <b>any</b> declaration
+     * target let a field-only one through - {@code @Setter} and {@code @Getter}
+     * are {@code @Target({TYPE, FIELD})} - and javac then rejected the
+     * synthesised getter with "annotation interface not applicable to this kind
+     * of declaration", anchored on the author's field. The
+     * {@code SKIP_ANNOTATIONS} denylist cannot be the defence: it has to be
+     * extended by hand for every field-level annotation that is ever added, and
+     * it silently was not.
      *
-     * <p>A {@code TYPE_USE} annotation is still refused outright even when it
-     * also targets {@code METHOD}. It belongs on the return type rather than in
-     * declaration position, and the type this pass emits is reconstructed from
-     * the field's own, so propagating it here would double it.
+     * <p>{@link ElementType#TYPE_USE} is not itself a reason to refuse. A
+     * dual-target annotation that also lists {@code METHOD} - JetBrains
+     * {@code @NotNull}/{@code @Nullable} being the pair that matters - is
+     * copied, so the getter states the same nullness its field does, matching
+     * both what {@code AccessorMutator} emits for a {@code @Getter} on the same
+     * field and what the IDE-side {@code LazyAugmentProvider} already shows.
+     * There is nothing to double: the return type is rebuilt through
+     * {@code JavacTypeFactory.parseType}, which strips type-use annotations off
+     * the display string on every path, so the emitted type carries none for a
+     * declaration-position copy to collide with. javac then records the single
+     * written annotation in both the declaration and the type-annotation
+     * channel of the class file, which is its ordinary handling of one
+     * dual-target annotation.
+     *
+     * <p>A {@code TYPE_USE}-only annotation is a separate matter this method
+     * neither causes nor cures. It fails on the rewritten {@code Lazy<T>}
+     * <i>field</i> type with "scoping construct cannot be annotated with
+     * type-use annotation", before the getter is ever built.
      *
      * @param mirror the annotation written on the field
      * @return whether it may be copied onto the getter
@@ -421,7 +420,6 @@ public final class LazyFieldMutator {
         if (target == null) return true;
         boolean method = false;
         for (ElementType e : target.value()) {
-            if (e == ElementType.TYPE_USE) return false;
             if (e == ElementType.METHOD) method = true;
         }
         return method;

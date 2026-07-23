@@ -5,9 +5,16 @@ import com.google.testing.compile.Compiler;
 import com.google.testing.compile.JavaFileObjects;
 import dev.simplified.classbuilder.apt.ClassBuilderProcessor;
 import org.junit.Test;
+import org.objectweb.asm.AnnotationVisitor;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.TypePath;
 
 import javax.tools.JavaFileObject;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -17,6 +24,10 @@ import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
@@ -34,6 +45,9 @@ import static org.junit.Assert.fail;
  * compile-time as well.
  */
 public class LazyFieldMutatorTest {
+
+    private static final String NOT_NULL = "Lorg/jetbrains/annotations/NotNull;";
+    private static final String NULLABLE = "Lorg/jetbrains/annotations/Nullable;";
 
     private static Compilation compile(JavaFileObject... sources) {
         return Compiler.javac()
@@ -57,6 +71,65 @@ public class LazyFieldMutatorTest {
             }
         }
         return new URLClassLoader(new URL[]{tmp.toUri().toURL()}, LazyFieldMutatorTest.class.getClassLoader());
+    }
+
+    /**
+     * Returns, per method ({@code name+descriptor}), the annotation descriptors
+     * attached to it - collected from both the declaration channel
+     * ({@code RuntimeInvisibleAnnotations}) and the type-use channel
+     * ({@code RuntimeInvisibleTypeAnnotations}) so the assertion holds however
+     * javac routes a dual-target annotation.
+     */
+    private static Map<String, Set<String>> readMethodAnnotations(Compilation c, String className)
+        throws IOException {
+        byte[] bytes = findClassBytes(c, className);
+        assertNotNull("expected class-file output for " + className, bytes);
+        Map<String, Set<String>> out = new LinkedHashMap<>();
+        new ClassReader(bytes).accept(new ClassVisitor(Opcodes.ASM9) {
+            @Override
+            public MethodVisitor visitMethod(int access, String name, String descriptor,
+                                             String signature, String[] exceptions) {
+                Set<String> descriptors = new LinkedHashSet<>();
+                out.put(name + descriptor, descriptors);
+                return new MethodVisitor(Opcodes.ASM9) {
+                    @Override
+                    public AnnotationVisitor visitAnnotation(String desc, boolean visible) {
+                        descriptors.add(desc);
+                        return null;
+                    }
+
+                    @Override
+                    public AnnotationVisitor visitTypeAnnotation(int typeRef, TypePath typePath,
+                                                                 String desc, boolean visible) {
+                        descriptors.add(desc);
+                        return null;
+                    }
+                };
+            }
+        }, ClassReader.SKIP_CODE | ClassReader.SKIP_FRAMES);
+        return out;
+    }
+
+    private static byte[] findClassBytes(Compilation c, String className) throws IOException {
+        String expected = "/CLASS_OUTPUT/" + className.replace('.', '/') + ".class";
+        for (JavaFileObject f : c.generatedFiles()) {
+            if (f.getKind() != JavaFileObject.Kind.CLASS) continue;
+            if (!f.toUri().toString().contains(expected)) continue;
+            try (InputStream in = f.openInputStream()) {
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                in.transferTo(baos);
+                return baos.toByteArray();
+            }
+        }
+        return null;
+    }
+
+    /** Matches on the method name, so the assertion does not pin a descriptor. */
+    private static Set<String> annotationsFor(Map<String, Set<String>> byMethod, String methodName) {
+        for (Map.Entry<String, Set<String>> e : byMethod.entrySet()) {
+            if (e.getKey().startsWith(methodName + "(")) return e.getValue();
+        }
+        return Set.of();
     }
 
     private static Class<?> nested(Class<?> outer, String simpleName) {
@@ -506,21 +579,45 @@ public class LazyFieldMutatorTest {
     // Annotation propagation onto the synthesised getter
     // ------------------------------------------------------------------
 
+    /**
+     * Every annotation the field declares that is legal on a method travels to
+     * the synthesised getter - nullness included.
+     *
+     * <p>JetBrains {@code @NotNull}/{@code @Nullable} list {@code METHOD} among
+     * their targets and {@code TYPE_USE} beside it, and the dual target alone
+     * used to disqualify them. The reason given was that the getter's return
+     * type, rebuilt from the field's own, would already carry the annotation
+     * and a declaration copy would double it. It cannot:
+     * {@code JavacTypeFactory.parseType} strips type-use annotations off the
+     * display string on every path, so the rebuilt type carries none and the
+     * getter carried no nullness at all - while the IDE-side
+     * {@code LazyAugmentProvider} showed one, so the editor claimed what the
+     * class file did not have.
+     *
+     * <p>These annotations are {@code @Retention(CLASS)} and invisible to
+     * reflection, so the getter's descriptors are read out of the class file
+     * with ASM. Both channels are collected: javac records one written
+     * dual-target annotation once as a declaration annotation and once as a
+     * {@code METHOD_RETURN} type annotation, which is its ordinary handling of
+     * a single annotation rather than a duplicate.
+     */
     @Test
     public void annotationPropagation_landsOnGetter() throws Exception {
-        // Declaration-only annotations (METHOD/FIELD targets, no TYPE_USE)
-        // propagate cleanly from the field to the synthesised getter.
-        // TYPE_USE-capable annotations like JetBrains @NotNull/@Nullable are
-        // covered by the editor-side LazyAugmentProvider, not the AST
-        // mutator, because javac would auto-migrate them into the
-        // qualified-name type tree and break attribution.
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.Propagated",
             "package demo;",
             "import dev.simplified.annotations.Lazy;",
+            "import org.jetbrains.annotations.NotNull;",
+            "import org.jetbrains.annotations.Nullable;",
             "public class Propagated {",
             "    @Lazy",
             "    @Deprecated",
+            "    @NotNull",
             "    private String tag = \"x\";",
+            "    @Lazy",
+            "    @Nullable",
+            "    private String note = \"y\";",
+            "    @Lazy",
+            "    private String plain = \"z\";",
             "    public Propagated() {}",
             "}");
         Compilation c = compile(src);
@@ -531,6 +628,19 @@ public class LazyFieldMutatorTest {
         Method getter = cls.getMethod("getTag");
         assertNotNull("@Deprecated must propagate to the getter",
             getter.getAnnotation(Deprecated.class));
+
+        Map<String, Set<String>> byMethod = readMethodAnnotations(c, "demo.Propagated");
+        Set<String> tag = annotationsFor(byMethod, "getTag");
+        Set<String> note = annotationsFor(byMethod, "getNote");
+        Set<String> plainGetter = annotationsFor(byMethod, "getPlain");
+
+        assertTrue("getTag() must carry the field's @NotNull, saw " + tag,
+            tag.contains(NOT_NULL));
+        assertTrue("getNote() must carry the field's @Nullable, saw " + note,
+            note.contains(NULLABLE));
+        // The copy restores what the field declared, it does not invent a hint.
+        assertFalse("a field with no nullness must give a bare getter, saw " + plainGetter,
+            plainGetter.contains(NOT_NULL) || plainGetter.contains(NULLABLE));
     }
 
     // ------------------------------------------------------------------
