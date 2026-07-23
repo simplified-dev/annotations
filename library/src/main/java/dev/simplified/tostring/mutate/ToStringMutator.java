@@ -110,7 +110,7 @@ public final class ToStringMutator {
         GeneratedAnnotations generated =
             new GeneratedAnnotations(make, types, config.emitGenerated());
 
-        JCExpression rendered = render(targetElement, config, callSuper, members);
+        JCExpression rendered = render(targetElement, target, config, callSuper, members);
         JCMethodDecl method = make.MethodDef(
             make.Modifiers(Flags.PUBLIC, contracts.pureReturnNonNull()),
             names.fromString("toString"),
@@ -133,8 +133,9 @@ public final class ToStringMutator {
      * makes the whole chain a string concatenation rather than an arithmetic
      * one - the first operand decides.
      */
-    private JCExpression render(TypeElement targetElement, ToStringConfig config,
-                                boolean callSuper, java.util.List<MemberSpec> members) {
+    private JCExpression render(TypeElement targetElement, JCClassDecl target,
+                                ToStringConfig config, boolean callSuper,
+                                java.util.List<MemberSpec> members) {
         JCExpression out = make.Literal(targetElement.getSimpleName() + config.open());
         boolean first = true;
 
@@ -146,7 +147,7 @@ public final class ToStringMutator {
             first = false;
         }
         for (MemberSpec member : members) {
-            AccessorReads.Read read = AccessorReads.resolve(targetElement, member,
+            AccessorReads.Read read = AccessorReads.resolve(targetElement, target, member,
                 config.useAccessors(), typeUtils, ToStringConfig.LABEL, messager);
             StringBuilder prefix = new StringBuilder();
             if (!first) prefix.append(", ");

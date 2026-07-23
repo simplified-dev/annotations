@@ -63,6 +63,15 @@ import java.util.Set;
  */
 public final class AccessorMutator {
 
+    /**
+     * This pass's marker key. Public because it is the only way a later reader
+     * can tell an accessor this pass minted from any other zero-arg generated
+     * method the pipeline injects - the builder's {@code mutate()} and the
+     * equality pass's {@code hashCode()} are both generated, both zero-arg and
+     * both instance methods, and either can carry the name of a field.
+     */
+    public static final String PASS = "accessor";
+
     /** Which accessor is being synthesised. */
     public enum Kind {
 
@@ -285,6 +294,10 @@ public final class AccessorMutator {
             );
         }
         AstMarkers.markGenerated(method, generated);
+        // The pass mark, not the generated one, is what a reader resolving a
+        // member through its accessor may match on: only this pass mints a
+        // return type from the very field the body returns.
+        AstMarkers.markPass(method, PASS);
         return method;
     }
 

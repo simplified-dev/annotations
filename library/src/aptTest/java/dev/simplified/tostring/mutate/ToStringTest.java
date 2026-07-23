@@ -626,6 +626,50 @@ public class ToStringTest {
     }
 
     // ------------------------------------------------------------------
+    // useAccessors
+    // ------------------------------------------------------------------
+
+    /**
+     * An accessor {@code @Getter} minted in the same round is never in the
+     * element model, so reading only the model turns {@code useAccessors} beside
+     * it into the field reads it exists to avoid.
+     *
+     * <p>Rendered off a subclass overriding the generated accessor, because that
+     * is the one place the two reads produce different text: a field read sees
+     * the hidden value and a call dispatches.
+     */
+    @Test
+    public void useAccessors_readsThroughAnAccessorGeneratedInTheSameRound() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Tagged",
+                "package demo;",
+                "import dev.simplified.annotations.CallSuper;",
+                "import dev.simplified.annotations.Getter;",
+                "import dev.simplified.annotations.NamingStyle;",
+                "import dev.simplified.annotations.ToString;",
+                "@Getter(style = NamingStyle.FLUENT)",
+                "@ToString(useAccessors = true, callSuper = CallSuper.NO)",
+                "public class Tagged {",
+                "    private final String tag;",
+                "    public Tagged(String tag) { this.tag = tag; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.TaggedProxy",
+                "package demo;",
+                "public class TaggedProxy extends Tagged {",
+                "    public TaggedProxy(String tag) { super(tag); }",
+                "    @Override public String tag() { return \"resolved\"; }",
+                "}"));
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Object overridden = Class.forName("demo.TaggedProxy", true, cl)
+            .getConstructors()[0].newInstance("raw");
+        // The name is the annotated type's, baked in at generation; only the
+        // value moves, and it moves only because the read is a call.
+        assertEquals("Tagged[tag=resolved]", overridden.toString());
+    }
+
+    // ------------------------------------------------------------------
     // Both whole-object annotations on one type
     // ------------------------------------------------------------------
 

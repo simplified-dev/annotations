@@ -107,11 +107,9 @@ public @interface EqualsAndHashCode {
      * Whether members are read through an accessor the target declares rather
      * than directly.
      *
-     * <p>Only an accessor the target <b>writes</b> and that returns the
+     * <p>Only an accessor the target <b>declares</b> and that returns the
      * member's own type is used; anything else falls back to the direct read
-     * and says so. An accessor {@link Getter} synthesises is not one of them -
-     * it exists in the tree by then but not in the model this reads - so the
-     * two together produce field reads rather than accessor calls.
+     * and says so.
      *
      * <p>Worth setting when a persistence or proxying framework subclasses the
      * type, since a field read on an uninitialised proxy sees the subclass's

@@ -1299,6 +1299,119 @@ public class EqualsAndHashCodeTest {
             ctor.newInstance("a "), ctor.newInstance(" a"));
     }
 
+    /**
+     * An accessor {@code @Getter} minted in the same round is never in the
+     * element model, so reading only the model turns {@code useAccessors} beside
+     * it into the field reads it exists to avoid.
+     *
+     * <p>The two reads compile to the same bytes on the annotated class itself,
+     * which is why the assertion is on a <b>subclass overriding the generated
+     * accessor</b>: only a call dispatches, so the override's answer is visible
+     * from {@code equals} exactly when the accessor route was taken.
+     */
+    @Test
+    public void useAccessors_readsThroughAnAccessorGeneratedInTheSameRound() throws Exception {
+        JavaFileObject base = JavaFileObjects.forSourceLines("demo.Tagged",
+            "package demo;",
+            "import dev.simplified.annotations.CallSuper;",
+            "import dev.simplified.annotations.EqualsAndHashCode;",
+            "import dev.simplified.annotations.Getter;",
+            "import dev.simplified.annotations.NamingStyle;",
+            "@Getter(style = NamingStyle.FLUENT)",
+            "@EqualsAndHashCode(useAccessors = true,",
+            "    identity = EqualsAndHashCode.Identity.INSTANCE_OF, callSuper = CallSuper.NO)",
+            "public class Tagged {",
+            "    private final String tag;",
+            "    public Tagged(String tag) { this.tag = tag; }",
+            "}");
+        JavaFileObject proxy = JavaFileObjects.forSourceLines("demo.TaggedProxy",
+            "package demo;",
+            "public class TaggedProxy extends Tagged {",
+            "    public TaggedProxy(String tag) { super(tag); }",
+            "    @Override public String tag() { return \"resolved\"; }",
+            "}");
+        Compilation c = compile(base, proxy);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Object plain = soleConstructor(Class.forName("demo.Tagged", true, cl))
+            .newInstance("resolved");
+        Object overridden = soleConstructor(Class.forName("demo.TaggedProxy", true, cl))
+            .newInstance("raw");
+
+        assertEquals("the override's answer is what is compared, not the field it hides",
+            plain, overridden);
+        assertEquals(plain.hashCode(), overridden.hashCode());
+        assertNoneContaining(c.notes(), "found no declared accessor for 'tag'");
+    }
+
+    /**
+     * The accessor route may only take an accessor the <b>accessor pass</b>
+     * minted, because that pass alone builds the return type out of the field
+     * the body returns.
+     *
+     * <p>Several other passes inject a zero-arg instance method, and the read
+     * candidates end with the bare field name, so a field named after one of
+     * them collides: {@code mutate} is the builder's own round-trip method,
+     * which returns a {@code Builder}. Matching generated authorship rather than
+     * the pass reads the field through it, compares two builders by identity,
+     * and two objects holding equal state come out unequal.
+     */
+    @Test
+    public void useAccessors_refusesAGeneratedMethodTheAccessorPassDidNotMint() throws Exception {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.Named",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.EqualsAndHashCode;",
+            "@ClassBuilder",
+            "@EqualsAndHashCode(useAccessors = true)",
+            "public class Named {",
+            "    private String mutate;",
+            "    private int size;",
+            "}"));
+        assertThat(c).succeeded();
+
+        Class<?> type = Class.forName("demo.Named", true, loadClasses(c));
+        Object a = named(type, "tag", 1);
+        Object b = named(type, "tag", 1);
+        assertEquals("the field is what is compared, not the builder mutate() returns", a, b);
+        assertEquals(a.hashCode(), b.hashCode());
+        assertNotEquals(a, named(type, "other", 1));
+        assertThat(c).hadNoteContaining("found no declared accessor for 'mutate'");
+    }
+
+    /** One {@code demo.Named}, assembled through its builder. */
+    private static Object named(Class<?> type, String mutate, int size) throws Exception {
+        Object builder = type.getMethod("builder").invoke(null);
+        Class<?> builderType = builder.getClass();
+        builder = builderType.getMethod("mutate", String.class).invoke(builder, mutate);
+        builder = builderType.getMethod("size", int.class).invoke(builder, size);
+        return builderType.getMethod("build").invoke(builder);
+    }
+
+    /**
+     * The fallback still has to fire: nothing declares an accessor and nothing
+     * generated one, so the note is the only warning an author gets that the
+     * attribute did not take.
+     */
+    @Test
+    public void useAccessors_notesAndReadsTheFieldWhenNoAccessorExistsAtAll() throws Exception {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.Bare",
+            "package demo;",
+            "import dev.simplified.annotations.EqualsAndHashCode;",
+            "@EqualsAndHashCode(useAccessors = true)",
+            "public final class Bare {",
+            "    private final String name;",
+            "    public Bare(String name) { this.name = name; }",
+            "}"));
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("found no declared accessor for 'name' returning its own type");
+
+        Constructor<?> ctor = soleConstructor(Class.forName("demo.Bare", true, loadClasses(c)));
+        assertEquals(ctor.newInstance("a"), ctor.newInstance("a"));
+        assertNotEquals(ctor.newInstance("a "), ctor.newInstance(" a"));
+    }
+
     // ------------------------------------------------------------------
     // The limits no emission can close
     // ------------------------------------------------------------------

@@ -142,7 +142,7 @@ public final class EqualityMutator {
         java.util.List<Resolved> resolved = new ArrayList<>(members.size());
         for (MemberSpec member : members) {
             MemberWarnings.report(member, targetElement, messager);
-            AccessorReads.Read read = AccessorReads.resolve(targetElement, member,
+            AccessorReads.Read read = AccessorReads.resolve(targetElement, target, member,
                 config.useAccessors(), typeUtils, EqualityConfig.LABEL, messager);
             resolved.add(new Resolved(member, read, MemberShape.of(read.type())));
         }
