@@ -61,9 +61,29 @@ import static org.junit.Assert.assertTrue;
  * its components, and a field absent from that attribute is not a component -
  * so reflection, deconstruction and serialization are all unaffected.
  *
- * <p>A pass here means records can cache wholesale with no change to their
- * public shape. A failure means the answer is per-site: convert the record to a
- * final class, or accept recomputation.
+ * <p><b>It passes, and the capability is deliberately not used.</b> Caching a
+ * hash on a record is refused, and {@code @EqualsAndHashCode(cacheHashCode)}
+ * reports an error on a record target - so this class exists to record that the
+ * refusal is a choice rather than a limitation, and to stop the mechanism being
+ * rediscovered and mistaken for an oversight.
+ *
+ * <p>Two reasons it is refused. Nothing measured needs it: the type that looked
+ * like the motivating case holds a large pixel buffer but is only ever a map
+ * <i>value</i>, so its {@code hashCode} is never called, and the workspace's
+ * actual map keys are strings, boxed primitives, enums and string-backed
+ * records whose hashes are already trivial or self-caching. And the mechanism
+ * steps around a deliberate language rule rather than using a sanctioned seam,
+ * which is a standing commitment to re-verify on every supported JDK.
+ *
+ * <p>Note the contrast with the sibling spike, whose mechanism <i>is</i> used:
+ * JLS 8.10.3 synthesises the implicit pair only when the body does not declare
+ * it, so appending a method operates inside the rule as written. The
+ * instance-field restriction is a prohibition being stepped around.
+ *
+ * <p>The tests stay green so the finding stays true. If a hash expensive enough
+ * to memoize ever appears on a record, this is the proof the mechanism works and
+ * the shape to add is an opt-in attribute named for the mechanism, so that a
+ * type depending on it says so in its own source.
  */
 public class RecordFieldInjectionSpike {
 
