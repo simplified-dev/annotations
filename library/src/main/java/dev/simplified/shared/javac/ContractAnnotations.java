@@ -100,6 +100,22 @@ public final class ContractAnnotations {
         return contract("-> !null", true, null);
     }
 
+    /**
+     * The non-null return without the purity claim, for a reader that computes
+     * on its first call.
+     *
+     * <p>Deliberately not the {@code pure} sibling above. {@code pure} licenses
+     * the IDE to treat a call whose result is unused as removable and
+     * reorderable, which is sound for a field read and unsound for anything that
+     * runs an author-supplied initializer on the way - there, purity would
+     * change when, or whether, that initializer runs at all.
+     *
+     * @return {@code @XContract("-> !null")} or an empty list when disabled
+     */
+    public List<JCAnnotation> returnNonNull() {
+        return contract("-> !null", false, null);
+    }
+
     /** @return {@code @XContract(value="null -> null", pure=true)} or an empty list when disabled. */
     public List<JCAnnotation> pureNullParamNullReturn() {
         return contract("null -> null", true, null);

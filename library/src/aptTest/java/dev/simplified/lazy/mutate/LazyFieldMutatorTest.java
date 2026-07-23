@@ -35,6 +35,7 @@ import static com.google.testing.compile.CompilationSubject.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -805,6 +806,81 @@ public class LazyFieldMutatorTest {
         Object instance = cls.getDeclaredConstructor().newInstance();
         assertEquals("the @Lazy getter is still synthesised and still memoizes",
             "hi", cls.getMethod("getValue").invoke(instance));
+    }
+
+    /**
+     * The getter states the field's non-nullness as a contract, and states
+     * nothing else.
+     *
+     * <p>The value is the same claim the accessor pass makes for
+     * {@code @Getter} - it rests on the author's annotation rather than on
+     * proof - so the two getters now agree. {@code pure} is where they
+     * deliberately part: a field read has no effect, while the first call here
+     * runs the author's supplier, which may do IO or throw, and {@code pure}
+     * licenses the IDE to drop or reorder the call that triggers it.
+     *
+     * <p>A field with no nullness annotation gets no contract at all rather
+     * than the bare purity claim the accessor pass falls back to, for the same
+     * reason.
+     */
+    @Test
+    public void getterStatesNonNullnessButNeverPurity() throws Exception {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.Contracted",
+            "package demo;",
+            "import dev.simplified.annotations.Lazy;",
+            "import org.jetbrains.annotations.NotNull;",
+            "import org.jetbrains.annotations.Nullable;",
+            "public class Contracted {",
+            "    private @Lazy @NotNull String req = c();",
+            "    private @Lazy @Nullable String opt = c();",
+            "    private @Lazy String bare = c();",
+            "    private static String c() { return \"x\"; }",
+            "}"));
+        assertThat(c).succeeded();
+
+        Map<String, Contract> byMethod = readContracts(c, "demo.Contracted");
+
+        Contract req = byMethod.get("getReq");
+        assertNotNull("a @NotNull @Lazy field's getter must carry a contract", req);
+        assertEquals("-> !null", req.value);
+        assertNull("the contract must not claim purity - the first call runs the supplier", req.pure);
+
+        assertNull("a @Nullable field's getter has nothing to state", byMethod.get("getOpt"));
+        assertNull("an unannotated field's getter has nothing to state", byMethod.get("getBare"));
+    }
+
+    /** The {@code @XContract} attributes per method name, absent when unannotated. */
+    private static Map<String, Contract> readContracts(Compilation c, String className) throws IOException {
+        byte[] bytes = findClassBytes(c, className);
+        assertNotNull("expected class-file output for " + className, bytes);
+        Map<String, Contract> out = new LinkedHashMap<>();
+        new ClassReader(bytes).accept(new ClassVisitor(Opcodes.ASM9) {
+            @Override
+            public MethodVisitor visitMethod(int access, String name, String descriptor,
+                                             String signature, String[] exceptions) {
+                return new MethodVisitor(Opcodes.ASM9) {
+                    @Override
+                    public AnnotationVisitor visitAnnotation(String desc, boolean visible) {
+                        if (!"Ldev/simplified/annotations/XContract;".equals(desc)) return null;
+                        Contract contract = new Contract();
+                        out.put(name, contract);
+                        return new AnnotationVisitor(Opcodes.ASM9) {
+                            @Override
+                            public void visit(String attribute, Object value) {
+                                if ("value".equals(attribute)) contract.value = (String) value;
+                                if ("pure".equals(attribute)) contract.pure = (Boolean) value;
+                            }
+                        };
+                    }
+                };
+            }
+        }, ClassReader.SKIP_CODE | ClassReader.SKIP_FRAMES);
+        return out;
+    }
+
+    private static final class Contract {
+        String value;
+        Boolean pure;
     }
 
 }

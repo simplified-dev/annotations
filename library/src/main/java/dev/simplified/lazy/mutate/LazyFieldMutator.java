@@ -22,6 +22,7 @@ import com.sun.tools.javac.util.Position;
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.shared.javac.AstMarkers;
+import dev.simplified.shared.javac.ContractAnnotations;
 import dev.simplified.shared.javac.GeneratedAnnotations;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.JavacTypeFactory;
@@ -68,6 +69,7 @@ public final class LazyFieldMutator {
 
     public static final String LAZY_FQN = "dev.simplified.lazy.Lazy";
     public static final String SUPPLIER_FQN = "java.util.function.Supplier";
+    private static final String NOT_NULL_FQN = "org.jetbrains.annotations.NotNull";
 
     /**
      * Annotation FQNs (and their bare simple names) that must NOT propagate
@@ -102,6 +104,7 @@ public final class LazyFieldMutator {
     private final Names names;
     private final JavacTypeFactory types;
     private final GeneratedAnnotations generated;
+    private final ContractAnnotations contracts;
 
     public LazyFieldMutator(JavacBridge bridge,
                             TypeElement targetElement,
@@ -120,6 +123,11 @@ public final class LazyFieldMutator {
         this.types = new JavacTypeFactory(make, names);
         // @Lazy has no opt-out attribute, so the marker is unconditional.
         this.generated = GeneratedAnnotations.always(make, types);
+        // Unconditional for the same reason, and the two answer one question:
+        // if @Lazy ever gains emitContracts it gains emitGenerated with it,
+        // since a consumer who wants neither in their class files is asking
+        // about both. Neither adds a runtime dependency.
+        this.contracts = new ContractAnnotations(make, names, types, true);
     }
 
     /**
@@ -293,6 +301,21 @@ public final class LazyFieldMutator {
         JCBlock body = make.Block(0, List.of(make.Return(callGet)));
         JCExpression returnType = types.parseType(lazy.typeDisplay);
         List<JCAnnotation> declAnnotations = collectDeclarationAnnotations(lazy);
+        // The contract states only what the field states. A @NotNull field
+        // memoizes a non-null value, so the getter returns one - the same claim
+        // the accessor pass makes for @Getter, resting on the author's
+        // annotation rather than on proof. Without it there is nothing to say:
+        // an unannotated field's getter returns whatever the supplier produced,
+        // so this emits no contract at all rather than the bare purity claim
+        // the accessor pass falls back to.
+        //
+        // Never pure, which is the one place this deliberately differs from
+        // @Getter. A field read has no effect; the first call to this getter
+        // runs the author's supplier - arbitrary code that may do IO or throw -
+        // and pure would license the IDE to drop or reorder the call that
+        // triggers it.
+        if (hasAnnotation(lazy, NOT_NULL_FQN))
+            declAnnotations = contracts.returnNonNull().appendList(declAnnotations);
         JCModifiers mods = make.Modifiers(accessFlagFor(lazy), declAnnotations);
         JCMethodDecl getter = make.MethodDef(
             mods,
@@ -466,9 +489,20 @@ public final class LazyFieldMutator {
     }
 
     private boolean hasLazyAnnotation(FieldSpec f) {
+        return hasAnnotation(f, "dev.simplified.annotations.Lazy");
+    }
+
+    /**
+     * Whether a field carries the named annotation.
+     *
+     * @param f the selected field
+     * @param fqn the annotation's fully qualified name
+     * @return whether the field declares it
+     */
+    private boolean hasAnnotation(FieldSpec f, String fqn) {
         if (f.element == null) return false;
         for (var m : f.element.getAnnotationMirrors()) {
-            if (m.getAnnotationType().toString().equals("dev.simplified.annotations.Lazy")) return true;
+            if (m.getAnnotationType().toString().equals(fqn)) return true;
         }
         return false;
     }
