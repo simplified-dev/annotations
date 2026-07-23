@@ -251,6 +251,15 @@
                 displayName="@ToString misuse"
                 groupName="Simplified Annotations"
         />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.log.inspect.LogInspection"
+                enabledByDefault="true"
+                level="ERROR"
+                shortName="LogInspection"
+                displayName="@Log misuse"
+                groupName="Simplified Annotations"
+        />
         <custom.exception.handler implementation="dev.simplified.silentthrows.editor.SilentThrowsExceptionHandler"/>
         <lang.inspectionSuppressor language="JAVA" implementationClass="dev.simplified.cleanup.inspect.CleanupSuppressor"/>
         <lang.inferredAnnotationProvider implementation="dev.simplified.xcontract.XContractInferredAnnotationProvider"/>
@@ -263,6 +272,7 @@
         <lang.psiAugmentProvider implementation="dev.simplified.args.editor.ArgsAugmentProvider"/>
         <lang.psiAugmentProvider implementation="dev.simplified.utility.editor.UtilityClassAugmentProvider"/>
         <lang.psiAugmentProvider implementation="dev.simplified.equality.editor.WholeObjectAugmentProvider"/>
+        <lang.psiAugmentProvider implementation="dev.simplified.log.editor.LogAugmentProvider"/>
         <java.elementFinder implementation="dev.simplified.classbuilder.editor.ClassBuilderElementFinder" order="last"/>
         <codeInsight.lineMarkerProvider
                 language="JAVA"
