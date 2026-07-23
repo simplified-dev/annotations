@@ -6,11 +6,13 @@ import dev.simplified.annotations.BuilderIgnore;
 import dev.simplified.annotations.BuilderNames;
 import dev.simplified.annotations.ClassBuilder;
 import dev.simplified.annotations.Collector;
+import dev.simplified.annotations.EqualsAndHashCode;
 import dev.simplified.annotations.Formattable;
 import dev.simplified.annotations.NamingStyle;
 import dev.simplified.annotations.Negate;
 import dev.simplified.annotations.ObtainVia;
 import dev.simplified.annotations.SetterNames;
+import dev.simplified.annotations.ToString;
 import dev.simplified.classbuilder.validate.BuilderValidationException;
 import lombok.Getter;
 
@@ -39,10 +41,14 @@ import java.util.Optional;
  * in {@code @ClassBuilder(exclude = ...)} are skipped in the constructor
  * signature; their initializers supply the field value.
  *
+ * <p>The whole-object annotations - {@link EqualsAndHashCode},
+ * {@link ToString} - carry no builder, so their nested types declare only the
+ * constructor their cases build through.
+ *
  * <p>Case IDs are stable and mirrored in the integration test's expected
- * set. Add new cases by (a) introducing a new nested @ClassBuilder class
- * with a matching constructor, (b) appending a {@code report.expect(...)}
- * block in main(), and (c) adding the id to the test's EXPECTED_IDS.
+ * set. Add new cases by (a) introducing a new nested annotated class with a
+ * matching constructor, (b) appending a {@code report.expect(...)} block in
+ * main(), and (c) adding the id to the test's EXPECTED_IDS.
  */
 public final class ClassBuilderShowcase {
 
@@ -392,6 +398,70 @@ public final class ClassBuilderShowcase {
         public String getMessage() { return message; }
         @Override public String toString() { return "FormattedString[message=" + message + "]"; }
     }
+
+    // ==================================================================
+    // @EqualsAndHashCode / @ToString
+    //
+    // The two array-carrying shapes are the ones a divergence bites on: an
+    // array member compared by reference gives a type that is unequal to its
+    // own copy, and a hash that disagrees with whatever equals decided.
+    // ==================================================================
+
+    /** The ordinary accumulator path - no array, no partitioned primitive. */
+    @EqualsAndHashCode
+    public static final class Measurement {
+        private final String name;
+        private final int size;
+        public Measurement(String name, int size) { this.name = name; this.size = size; }
+    }
+
+    /**
+     * A primitive array and a reference array, which take the flat and the deep
+     * comparison respectively. {@code style = LOMBOK} so the rendering can be
+     * held against {@link LombokPalette}'s field for field.
+     */
+    @EqualsAndHashCode
+    @ToString(style = ToString.Style.LOMBOK)
+    public static final class Palette {
+        private final String name;
+        private final int[] swatches;
+        private final String[] labels;
+        public Palette(String name, int[] swatches, String[] labels) {
+            this.name = name;
+            this.swatches = swatches;
+            this.labels = labels;
+        }
+    }
+
+    /**
+     * The same shape under Lombok, generated in the same javac round - the only
+     * place the two generators are held against each other on one processor
+     * path. The pair stays on a separate type from {@link Palette}: both
+     * annotations inject the members, and the two on one target is the
+     * already-declares-it error.
+     */
+    @lombok.EqualsAndHashCode
+    @lombok.ToString
+    public static final class LombokPalette {
+        private final String name;
+        private final int[] swatches;
+        private final String[] labels;
+        public LombokPalette(String name, int[] swatches, String[] labels) {
+            this.name = name;
+            this.swatches = swatches;
+            this.labels = labels;
+        }
+    }
+
+    /**
+     * The headline shape, and the one with no Lombok column: Lombok rejects a
+     * record outright - "@EqualsAndHashCode is only supported on a class" - so
+     * a record whose array component compares by content is what the implicit
+     * pair and Lombok both leave to the author.
+     */
+    @EqualsAndHashCode
+    @ToString
+    public record Frame(float[] values, int width) {}
 
     // ==================================================================
     // main - runs every case
@@ -841,6 +911,105 @@ public final class ClassBuilderShowcase {
                     throw new AssertionError("expected resetItems() to empty the list");
             })
             .asSuccess("appendItem(T) / resetItems() from per-role patterns");
+
+        // --- @EqualsAndHashCode ------------------------------------------
+
+        report.expect("equalsAndHashCode.scalar")
+            .runVoid(() -> {
+                Measurement a = new Measurement("width", 12);
+                Measurement b = new Measurement("width", 12);
+                if (!a.equals(b) || !b.equals(a))
+                    throw new AssertionError("equal scalar state must compare equal");
+                if (a.hashCode() != b.hashCode())
+                    throw new AssertionError("equal instances must hash alike, got "
+                        + a.hashCode() + " / " + b.hashCode());
+                if (a.equals(new Measurement("width", 13)))
+                    throw new AssertionError("a differing int must break equality");
+                if (a.equals(new Measurement("height", 12)))
+                    throw new AssertionError("a differing String must break equality");
+            })
+            .asSuccess("scalar state compares and hashes on value");
+
+        report.expect("equalsAndHashCode.array.content")
+            .runVoid(() -> {
+                Palette a = new Palette("solar", new int[]{1, 2}, new String[]{"x", "y"});
+                Palette b = new Palette("solar", new int[]{1, 2}, new String[]{"x", "y"});
+                // Every array here is a distinct instance, so a reference
+                // comparison answers false for both assertions below.
+                if (!a.equals(b))
+                    throw new AssertionError("distinct-but-equal arrays must compare equal");
+                if (a.hashCode() != b.hashCode())
+                    throw new AssertionError("equal arrays must hash alike, got "
+                        + a.hashCode() + " / " + b.hashCode());
+                if (a.equals(new Palette("solar", new int[]{1, 9}, new String[]{"x", "y"})))
+                    throw new AssertionError("differing primitive-array content must break equality");
+                if (a.equals(new Palette("solar", new int[]{1, 2}, new String[]{"x", "z"})))
+                    throw new AssertionError("differing reference-array content must break equality");
+            })
+            .asSuccess("int[] and String[] compared by content, hash agrees");
+
+        report.expect("equalsAndHashCode.array.lombokParity")
+            .runVoid(() -> {
+                LombokPalette a = new LombokPalette("solar", new int[]{1, 2}, new String[]{"x", "y"});
+                LombokPalette b = new LombokPalette("solar", new int[]{1, 2}, new String[]{"x", "y"});
+                if (!a.equals(b))
+                    throw new AssertionError("Lombok must also compare the arrays by content");
+                if (a.hashCode() != b.hashCode())
+                    throw new AssertionError("Lombok hash disagrees with its own equals, got "
+                        + a.hashCode() + " / " + b.hashCode());
+                if (a.equals(new LombokPalette("solar", new int[]{1, 9}, new String[]{"x", "y"})))
+                    throw new AssertionError("Lombok must reject differing array content");
+            })
+            .asSuccess("Lombok's pair agrees on the same shape, same javac round");
+
+        report.expect("equalsAndHashCode.record.array")
+            .runVoid(() -> {
+                Frame a = new Frame(new float[]{1f, 2f}, 4);
+                Frame b = new Frame(new float[]{1f, 2f}, 4);
+                if (a.values() == b.values())
+                    throw new AssertionError("the two components must be distinct arrays");
+                // The implicit record pair compares a float[] component by
+                // reference, so both assertions fail without the injection.
+                if (!a.equals(b))
+                    throw new AssertionError("the injected pair must beat the implicit one");
+                if (a.hashCode() != b.hashCode())
+                    throw new AssertionError("equal records must hash alike, got "
+                        + a.hashCode() + " / " + b.hashCode());
+                if (a.equals(new Frame(new float[]{1f, 3f}, 4)))
+                    throw new AssertionError("differing component content must break equality");
+                if (a.equals(new Frame(new float[]{1f, 2f}, 5)))
+                    throw new AssertionError("a differing scalar component must break equality");
+            })
+            .asSuccess("record's implicit reference comparison replaced by content");
+
+        // --- @ToString ----------------------------------------------------
+
+        report.expect("toString.record.array")
+            .runVoid(() -> {
+                String rendered = new Frame(new float[]{1f, 2f}, 4).toString();
+                if (!"Frame[values=[1.0, 2.0], width=4]".equals(rendered))
+                    throw new AssertionError("expected Frame[values=[1.0, 2.0], width=4], got " + rendered);
+            })
+            .asSuccess("record renders Name[a=1, b=2] with array contents");
+
+        report.expect("toString.lombokParity")
+            .runVoid(() -> {
+                String ours = new Palette("solar", new int[]{1, 2}, new String[]{"x", "y"}).toString();
+                String theirs = new LombokPalette("solar", new int[]{1, 2}, new String[]{"x", "y"}).toString();
+                // The type name itself diverges and is meant to: Lombok
+                // qualifies a nested type with its outer name, this renders the
+                // simple name. The member list is what LOMBOK style promises.
+                if (ours.indexOf('(') < 0 || theirs.indexOf('(') < 0)
+                    throw new AssertionError("no generated rendering: " + ours + " / " + theirs);
+                String oursMembers = ours.substring(ours.indexOf('('));
+                String theirsMembers = theirs.substring(theirs.indexOf('('));
+                if (!oursMembers.equals(theirsMembers))
+                    throw new AssertionError("LOMBOK style rendered " + oursMembers
+                        + " where Lombok rendered " + theirsMembers);
+                if (!"Palette".equals(ours.substring(0, ours.indexOf('('))))
+                    throw new AssertionError("expected the simple name to lead, got " + ours);
+            })
+            .asSuccess("style = LOMBOK matches Lombok's member list byte for byte");
 
         report.finish();
     }

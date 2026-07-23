@@ -92,7 +92,13 @@ public class ClassBuilderShowcaseIntegrationTest {
         "formattable.string",
         "naming.boolean.bareTypedSetter",
         "naming.style.lombok",
-        "naming.roles.override"
+        "naming.roles.override",
+        "equalsAndHashCode.scalar",
+        "equalsAndHashCode.array.content",
+        "equalsAndHashCode.array.lombokParity",
+        "equalsAndHashCode.record.array",
+        "toString.record.array",
+        "toString.lombokParity"
     );
 
     private static Map<String, CaseLine> cases;
