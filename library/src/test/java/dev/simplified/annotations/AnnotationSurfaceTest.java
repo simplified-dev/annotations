@@ -173,6 +173,36 @@ public class AnnotationSurfaceTest {
         assertTargets(ObtainVia.class, ElementType.FIELD);
     }
 
+    @Test
+    public void equalsAndHashCode_metadata() {
+        // Read while the processor mutates the target's AST, so nothing needs
+        // it after the compile.
+        assertRetention(EqualsAndHashCode.class, RetentionPolicy.CLASS);
+        assertTargets(EqualsAndHashCode.class, ElementType.TYPE);
+    }
+
+    @Test
+    public void toString_metadata() {
+        assertRetention(ToString.class, RetentionPolicy.CLASS);
+        assertTargets(ToString.class, ElementType.TYPE);
+    }
+
+    /**
+     * All four selection markers carry one target set on purpose. METHOD is
+     * what lets a derived value join the selection, and a marker legal on a
+     * field but not on a method would let the two halves of one selection
+     * disagree about which members a type is made of.
+     */
+    @Test
+    public void selectionMarkers_metadata() {
+        List<Class<? extends Annotation>> markers = List.of(
+            EqualsExclude.class, EqualsInclude.class, ToStringExclude.class, ToStringInclude.class);
+        for (Class<? extends Annotation> marker : markers) {
+            assertRetention(marker, RetentionPolicy.CLASS);
+            assertTargets(marker, ElementType.FIELD, ElementType.METHOD);
+        }
+    }
+
     // ------------------------------------------------------------------
     // Default values (pin down so accidental renames/changes break tests)
     // ------------------------------------------------------------------
@@ -238,11 +268,113 @@ public class AnnotationSurfaceTest {
     }
 
     @Test
+    public void equalsAndHashCode_defaults() throws Exception {
+        // EXACT_CLASS rather than Lombok's unconditional instanceof: it is the
+        // only one of the three that is a valid equivalence relation without
+        // cooperation from every subclass.
+        assertDefault(EqualsAndHashCode.class, "identity", EqualsAndHashCode.Identity.EXACT_CLASS);
+        // AUTO rather than a flat NO, which drops inherited state silently.
+        assertDefault(EqualsAndHashCode.class, "callSuper", CallSuper.AUTO);
+        // Memoizing is sound only while every compared member is immutable, so
+        // it stays opt-in.
+        assertDefault(EqualsAndHashCode.class, "cacheHashCode", false);
+        // Inverts Lombok: a direct field read cannot be intercepted by an
+        // overridden accessor, and it keeps the emitted pair independent of
+        // whether an accessor generator ran first.
+        assertDefault(EqualsAndHashCode.class, "useAccessors", false);
+        assertDefault(EqualsAndHashCode.class, "emitContracts", true);
+        assertDefault(EqualsAndHashCode.class, "emitGenerated", true);
+        assertArrayEquals(new String[0], (String[]) EqualsAndHashCode.class.getMethod("of").getDefaultValue());
+        assertArrayEquals(new String[0], (String[]) EqualsAndHashCode.class.getMethod("exclude").getDefaultValue());
+    }
+
+    @Test
+    public void toString_defaults() throws Exception {
+        assertDefault(ToString.class, "callSuper", CallSuper.AUTO);
+        assertDefault(ToString.class, "includeFieldNames", true);
+        // SIMPLIFIED is the shape a record already prints, so one library does
+        // not ship two.
+        assertDefault(ToString.class, "style", ToString.Style.SIMPLIFIED);
+        assertDefault(ToString.class, "useAccessors", false);
+        assertDefault(ToString.class, "emitContracts", true);
+        assertDefault(ToString.class, "emitGenerated", true);
+        assertArrayEquals(new String[0], (String[]) ToString.class.getMethod("of").getDefaultValue());
+        assertArrayEquals(new String[0], (String[]) ToString.class.getMethod("exclude").getDefaultValue());
+    }
+
+    /**
+     * The two annotations must default identically wherever they share an
+     * attribute name. One component resolves both selections, so a type whose
+     * compared state and printed state disagreed would do so for a reason
+     * nothing in its source shows.
+     */
+    @Test
+    public void equalityAndToString_shareTheirCommonDefaults() {
+        for (String attr : List.of("callSuper", "useAccessors", "emitContracts", "emitGenerated")) {
+            assertEquals("shared attribute " + attr,
+                defaultOf(EqualsAndHashCode.class, attr), defaultOf(ToString.class, attr));
+        }
+    }
+
+    @Test
+    public void toStringInclude_defaults() {
+        // An empty name keeps the member's own, so the annotation can be
+        // written for rank alone and vice versa.
+        assertDefault(ToStringInclude.class, "name", "");
+        assertDefault(ToStringInclude.class, "rank", 0);
+    }
+
+    /**
+     * Three of the four markers take no attributes, and {@code @EqualsInclude}
+     * is the one worth stating: it deliberately carries no rank, since ordering
+     * the compared terms would make an emitted hash depend on a rule invisible
+     * in the source, where the same attribute on its printing counterpart only
+     * reorders output.
+     */
+    @Test
+    public void selectionMarkers_carryNoAttributes() {
+        assertEquals("@EqualsExclude takes no attributes",
+            0, EqualsExclude.class.getDeclaredMethods().length);
+        assertEquals("@EqualsInclude takes no attributes",
+            0, EqualsInclude.class.getDeclaredMethods().length);
+        assertEquals("@ToStringExclude takes no attributes",
+            0, ToStringExclude.class.getDeclaredMethods().length);
+    }
+
+    @Test
     public void accessLevel_keywords() {
         assertEquals("public", AccessLevel.PUBLIC.toKeyword());
         assertEquals("protected", AccessLevel.PROTECTED.toKeyword());
         assertEquals("", AccessLevel.PACKAGE.toKeyword());
         assertEquals("private", AccessLevel.PRIVATE.toKeyword());
+    }
+
+    /**
+     * Pins the constant set and its order together. The set is published
+     * surface - dropping or renaming a constant breaks every consumer naming it
+     * - and holding the order as well means an insertion has to be a deliberate
+     * edit rather than something that slides in between two existing constants.
+     */
+    @Test
+    public void enumConstants_areStable() {
+        assertConstants(EqualsAndHashCode.Identity.class,
+            "EXACT_CLASS", "INSTANCE_OF", "INSTANCE_OF_CANEQUAL");
+        assertConstants(ToString.Style.class, "SIMPLIFIED", "LOMBOK");
+        assertConstants(CallSuper.class, "AUTO", "YES", "NO");
+    }
+
+    /**
+     * {@link CallSuper} is top level rather than nested in either annotation.
+     * Both face the identical question, and a type whose equality counted an
+     * inherited field while its printed form hid one would read as a bug in
+     * whichever member was looked at second.
+     */
+    @Test
+    public void callSuper_isSharedByBothAnnotations() throws Exception {
+        assertNull("CallSuper must stay top level so neither annotation owns it",
+            CallSuper.class.getEnclosingClass());
+        assertEquals(CallSuper.class, EqualsAndHashCode.class.getMethod("callSuper").getReturnType());
+        assertEquals(CallSuper.class, ToString.class.getMethod("callSuper").getReturnType());
     }
 
     // ------------------------------------------------------------------
@@ -299,6 +431,50 @@ public class AnnotationSurfaceTest {
         @BuildFlag(limit = 25) List<String> tags();
     }
 
+    /**
+     * The equality and printing surface at every target it declares, with both
+     * type-level annotations carrying a non-default value for each attribute
+     * that has one. Compiling is the proof: none of it survives to runtime.
+     */
+    @EqualsAndHashCode(
+        identity = EqualsAndHashCode.Identity.INSTANCE_OF_CANEQUAL,
+        callSuper = CallSuper.NO,
+        exclude = "loadedAt",
+        cacheHashCode = true,
+        useAccessors = true,
+        emitContracts = false,
+        emitGenerated = false)
+    @ToString(
+        callSuper = CallSuper.NO,
+        includeFieldNames = false,
+        style = ToString.Style.LOMBOK,
+        of = {"name", "swatches"},
+        useAccessors = true,
+        emitContracts = false,
+        emitGenerated = false)
+    static class FixtureOnEqualityTarget {
+        String name;
+        byte[] swatches;
+        @EqualsExclude @ToStringExclude long loadedAt;
+        // The include markers override the transient skip, which is the one
+        // place the two selections deliberately start from different sets.
+        @EqualsInclude @ToStringInclude(name = "id", rank = 10) transient String key;
+
+        @EqualsInclude @ToStringInclude String derived() { return name + key; }
+    }
+
+    /**
+     * A record is a legal target for both, which is the shape that needs them
+     * most - an implicit {@code equals} compares an array component by
+     * reference.
+     *
+     * @param name a reference component, compared through {@code Objects.equals}
+     * @param swatches an array component, the one an implicit {@code equals} gets wrong
+     */
+    @EqualsAndHashCode
+    @ToString
+    record FixtureOnEqualityRecord(String name, byte[] swatches) { }
+
     @Test
     public void buildFlag_visibleAtRuntime_onAccessor() throws Exception {
         BuildFlag flag = FixtureOnAccessors.class.getDeclaredMethod("name").getAnnotation(BuildFlag.class);
@@ -345,6 +521,33 @@ public class AnnotationSurfaceTest {
         }
     }
 
+    /**
+     * The same guard for the equality and printing surface, which is
+     * CLASS-retained end to end. Nothing reads any of the six after the
+     * compile, so a RUNTIME retention would drag them into every consumer class
+     * file that carried one for no reader at all.
+     */
+    @Test
+    public void equalitySurface_invisibleAtRuntime_asDesigned() throws Exception {
+        Annotation[] onType = FixtureOnEqualityTarget.class.getAnnotations();
+        assertEquals("EqualsAndHashCode should be invisible at runtime",
+            0, annotationsByName(onType, "EqualsAndHashCode"));
+        assertEquals("ToString should be invisible at runtime",
+            0, annotationsByName(onType, "ToString"));
+
+        Annotation[] onExcluded = FixtureOnEqualityTarget.class.getDeclaredField("loadedAt").getAnnotations();
+        assertEquals("EqualsExclude should be invisible at runtime",
+            0, annotationsByName(onExcluded, "EqualsExclude"));
+        assertEquals("ToStringExclude should be invisible at runtime",
+            0, annotationsByName(onExcluded, "ToStringExclude"));
+
+        Annotation[] onMethod = FixtureOnEqualityTarget.class.getDeclaredMethod("derived").getAnnotations();
+        assertEquals("EqualsInclude should be invisible at runtime",
+            0, annotationsByName(onMethod, "EqualsInclude"));
+        assertEquals("ToStringInclude should be invisible at runtime",
+            0, annotationsByName(onMethod, "ToStringInclude"));
+    }
+
     private static long annotationsByName(Annotation[] annotations, String simpleName) {
         return Arrays.stream(annotations)
             .filter(a -> a.annotationType().getSimpleName().equals(simpleName))
@@ -370,12 +573,22 @@ public class AnnotationSurfaceTest {
     }
 
     private static void assertDefault(Class<? extends Annotation> annotation, String attr, Object expected) {
+        assertEquals(annotation.getSimpleName() + "#" + attr, expected, defaultOf(annotation, attr));
+    }
+
+    private static Object defaultOf(Class<? extends Annotation> annotation, String attr) {
         try {
             Method m = annotation.getMethod(attr);
-            assertEquals(annotation.getSimpleName() + "#" + attr, expected, m.getDefaultValue());
+            return m.getDefaultValue();
         } catch (NoSuchMethodException e) {
             throw new AssertionError("missing attribute " + attr + " on " + annotation, e);
         }
+    }
+
+    private static void assertConstants(Class<? extends Enum<?>> type, String... expected) {
+        List<String> actual = new ArrayList<>();
+        for (Enum<?> constant : type.getEnumConstants()) actual.add(constant.name());
+        assertEquals(type.getSimpleName() + " constants", Arrays.asList(expected), actual);
     }
 
 }

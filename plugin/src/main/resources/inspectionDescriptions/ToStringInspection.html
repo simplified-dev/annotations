@@ -1,0 +1,62 @@
+<html>
+<body>
+Flags misuse of <code>@ToString</code>:
+
+<ul>
+  <li>A target that carries no instance state to print: an enum, an annotation
+      type, or an interface with no <code>@ClassBuilder</code> to give it an
+      implementation to reach.</li>
+  <li>A <code>toString</code> the author already wrote. It is kept and the
+      annotation generates nothing, so the annotation is a silent no-op.</li>
+  <li>A supertype declaring <code>toString</code> <code>final</code>, which no
+      generated override can compile past.</li>
+  <li><code>callSuper = YES</code> on a type whose superclass supplies no
+      implementation to call.</li>
+  <li><code>of</code> and <code>exclude</code> both set, or either naming a
+      member the selection never reaches - the check that catches a rename
+      leaving the string behind.</li>
+  <li>The include and exclude markers on one member, the include marker on a
+      <code>@Lazy</code> field or on a static, parameterised or void method, and
+      either marker on a type carrying no <code>@ToString</code> to narrow.</li>
+  <li><b><code>@BuilderIgnore</code> on a member the dump still prints</b>, with
+      a fix that writes <code>@ToStringExclude</code> beside it.</li>
+</ul>
+
+<!-- tooltip end -->
+
+<p>
+Every check bar the last mirrors a diagnostic the annotation processor already
+emits. What this adds is timing and position: the processor can only report
+against the type, while the inspection underlines the offending attribute or
+marker as it is typed.
+</p>
+
+<p>
+The already-declared check carries the deliberate asymmetry with
+<code>@EqualsAndHashCode</code>, which reports the same shape as an error. A
+written <code>toString</code> is a diagnostic rather than a contract, so an
+annotation that quietly generates nothing costs the reader an expectation and
+nothing else - which is what a prompt is for, rather than a failed build.
+</p>
+
+<p>
+<code>@BuilderIgnore</code> and the exclude marker stay independent on purpose. A
+field the caller does not supply to the builder is still state a debugger dump
+wants to show, so the pair is reported as a prompt with the marker one keystroke
+away, never applied on the author's behalf. It fires only for a member the dump
+actually prints - a <code>@Lazy</code> or static field has already left the
+selection, and there is nothing to reconcile. The fix is withheld where
+<code>of</code> or <code>exclude</code> already names the member: the marker would
+then be a second, contradicting statement about it, and the selection reports a
+name it can no longer reach as an error.
+</p>
+
+<p>
+Hard rejections report at ERROR, matching the processor, since the build cannot
+complete. The two prompts - a written <code>toString</code>, and a
+builder-excluded member still printed - report as weak warnings, because both
+compile and both may be exactly what was wanted.
+</p>
+
+</body>
+</html>

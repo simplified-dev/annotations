@@ -11,13 +11,19 @@ import dev.simplified.args.mutate.ArgsConstructorMutator;
 import dev.simplified.classbuilder.mutate.BuilderMutator;
 import dev.simplified.classbuilder.mutate.InterfaceBootstrapMutator;
 import dev.simplified.cleanup.mutate.CleanupBlockMutator;
+import dev.simplified.equality.apt.EqualityConfig;
+import dev.simplified.equality.mutate.EqualityMutator;
 import dev.simplified.lazy.mutate.LazyFieldMutator;
 import dev.simplified.shared.apt.AnnotationLookup;
+import dev.simplified.shared.apt.MemberSelector;
+import dev.simplified.shared.apt.MemberSpec;
 import dev.simplified.shared.apt.SourceIntrospector;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.LazyOwnership;
 import dev.simplified.shared.javac.compat.JavacAccessFactory;
 import dev.simplified.silentthrows.mutate.SilentThrowsMutator;
+import dev.simplified.tostring.apt.ToStringConfig;
+import dev.simplified.tostring.mutate.ToStringMutator;
 
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.Messager;
@@ -57,7 +63,9 @@ import java.util.Set;
     "dev.simplified.annotations.AllArgsConstructor",
     "dev.simplified.annotations.RequiredArgsConstructor",
     "dev.simplified.annotations.NoArgsConstructor",
-    "dev.simplified.annotations.BuilderArgsConstructor"
+    "dev.simplified.annotations.BuilderArgsConstructor",
+    "dev.simplified.annotations.EqualsAndHashCode",
+    "dev.simplified.annotations.ToString"
 })
 @SupportedSourceVersion(SourceVersion.RELEASE_17)
 public class ClassBuilderProcessor extends AbstractProcessor {
@@ -182,6 +190,13 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         // ordering a guarantee - processor order within a round is otherwise
         // unspecified, and a @Getter racing @Lazy emits a duplicate method.
         processAccessors(roundEnv, messager);
+
+        // The whole-object members after the accessors, for two reasons that
+        // point the same way: useAccessors has to see every accessor the
+        // accessor pass minted, and the collision snapshot has to be able to
+        // tell an author-written equals from one this pipeline produced.
+        processEquality(roundEnv, messager);
+        processToString(roundEnv, messager);
 
         // The two body rewrites last of all, after every member injection - a
         // synthesised body carries neither annotation, so running last means
@@ -371,6 +386,116 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     }
 
     /**
+     * Runs {@link EqualityMutator} over every class or record carrying
+     * {@code @EqualsAndHashCode}.
+     */
+    private void processEquality(RoundEnvironment roundEnv, Messager messager) {
+        for (TypeElement target : wholeObjectTargets(roundEnv, EqualityConfig.FQN,
+            EqualityConfig.LABEL, messager)) {
+            if (javacBridge.isEmpty()) {
+                messager.printMessage(Diagnostic.Kind.ERROR, requiresJavac(EqualityConfig.LABEL),
+                    target);
+                return;
+            }
+            try {
+                EqualityConfig config = EqualityConfig.from(target);
+                List<MemberSpec> members =
+                    MemberSelector.select(target, config.policy(), lookup, messager);
+                boolean mutated = new EqualityMutator(javacBridge.get(),
+                    processingEnv.getTypeUtils(), lookup, messager)
+                    .mutate(target, config, members);
+                if (!mutated) {
+                    messager.printMessage(Diagnostic.Kind.ERROR,
+                        EqualityConfig.LABEL + " could not resolve a source tree for " + target
+                            + "; mutation requires the annotated element to have a source "
+                            + "declaration.",
+                        target);
+                }
+            } catch (Exception e) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "Failed to generate equals/hashCode on " + target + ": " + e.getMessage(),
+                    target);
+            }
+        }
+    }
+
+    /** Runs {@link ToStringMutator} over every class or record carrying {@code @ToString}. */
+    private void processToString(RoundEnvironment roundEnv, Messager messager) {
+        for (TypeElement target : wholeObjectTargets(roundEnv, ToStringConfig.FQN,
+            ToStringConfig.LABEL, messager)) {
+            if (javacBridge.isEmpty()) {
+                messager.printMessage(Diagnostic.Kind.ERROR, requiresJavac(ToStringConfig.LABEL),
+                    target);
+                return;
+            }
+            try {
+                ToStringConfig config = ToStringConfig.from(target);
+                List<MemberSpec> members =
+                    MemberSelector.select(target, config.policy(), lookup, messager);
+                boolean mutated = new ToStringMutator(javacBridge.get(),
+                    processingEnv.getTypeUtils(), lookup, messager)
+                    .mutate(target, config, members);
+                if (!mutated) {
+                    messager.printMessage(Diagnostic.Kind.ERROR,
+                        ToStringConfig.LABEL + " could not resolve a source tree for " + target
+                            + "; mutation requires the annotated element to have a source "
+                            + "declaration.",
+                        target);
+                }
+            } catch (Exception e) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "Failed to generate toString on " + target + ": " + e.getMessage(), target);
+            }
+        }
+    }
+
+    /**
+     * The classes and records one whole-object annotation reaches, rejecting
+     * every other target kind on the way.
+     *
+     * <p>An interface carrying {@code @ClassBuilder} is deliberately silent
+     * here: it has no in-source mutation surface, and the concrete class the
+     * builder emits for it is where the members land instead.
+     */
+    private List<TypeElement> wholeObjectTargets(RoundEnvironment roundEnv, String annotationFqn,
+                                                 String label, Messager messager) {
+        TypeElement annotation = processingEnv.getElementUtils().getTypeElement(annotationFqn);
+        if (annotation == null) return List.of();
+        List<TypeElement> targets = new ArrayList<>();
+        for (Element annotated : roundEnv.getElementsAnnotatedWith(annotation)) {
+            if (!(annotated instanceof TypeElement target)) continue;
+            ElementKind kind = target.getKind();
+            if (kind == ElementKind.CLASS || kind == ElementKind.RECORD) {
+                targets.add(target);
+                continue;
+            }
+            if (kind == ElementKind.INTERFACE) {
+                if (lookup.hasAnnotation(target, ANNOTATION_FQN)) continue;
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    label + " on the interface " + target.getSimpleName() + ", which declares no "
+                        + "state to compare and no body to generate into. Write it on the "
+                        + "implementing type, or add @ClassBuilder so an implementation exists "
+                        + "for it to reach",
+                    target);
+                continue;
+            }
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                label + " on the " + kind.toString().toLowerCase() + " " + target.getSimpleName()
+                    + (kind == ElementKind.ENUM
+                        ? " - an enum constant is already unique, and Enum's own members are "
+                            + "final or name it"
+                        : " - only classes and records carry the instance state this reads"),
+                target);
+        }
+        return targets;
+    }
+
+    private static String requiresJavac(String label) {
+        return label + " requires javac for AST mutation - current environment is not a "
+            + "JavacProcessingEnvironment. Run your build under OpenJDK javac (no ecj).";
+    }
+
+    /**
      * Reports a {@code name} pattern on {@code @Getter} or {@code @Setter} that
      * cannot expand into a distinct accessor.
      *
@@ -512,12 +637,28 @@ public class ClassBuilderProcessor extends AbstractProcessor {
 
         String implName = target.getSimpleName().toString() + "Impl";
         if (config.generateImpl()) {
-            // Impl class first
+            // Impl class first. Its whole-object members are configured here
+            // rather than by a later round, because the class it would mutate
+            // already declares all three - see ImplPlan.
+            ImplPlan plan = ImplPlan.resolve(target, implName, fields, lookup, messager);
             String implSource = InterfaceImplEmitter.emit(
-                target, packageName, implName, fields, config.emitGenerated());
+                target, packageName, implName, fields, config.emitGenerated(), plan);
             String implQn = packageName.isEmpty() ? implName : packageName + "." + implName;
             JavaFileObject implFile = processingEnv.getFiler().createSourceFile(implQn, target);
             try (Writer w = implFile.openWriter()) { w.write(implSource); }
+        }
+        // A set factoryMethod diverts build() to the author's factory whether or
+        // not the Impl was emitted, so the whole-object annotations land on a
+        // class no caller holds either way. The Impl is still emitted in that
+        // case - the factory may well construct it itself.
+        if (!config.generateImpl()) {
+            ImplPlan.reportNoImpl(target, "sets @ClassBuilder(generateImpl = false)",
+                lookup, messager);
+        } else if (!config.factoryMethod().isEmpty()) {
+            ImplPlan.reportNoImpl(target,
+                "sets @ClassBuilder(factoryMethod = \"" + config.factoryMethod()
+                    + "\"), so build() returns what that factory produces rather than " + implName,
+                lookup, messager);
         }
 
         // Builder second - build() returns the interface, populated via Impl

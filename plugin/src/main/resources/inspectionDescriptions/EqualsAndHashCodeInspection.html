@@ -1,0 +1,125 @@
+<html>
+<body>
+Flags misuse of <code>@EqualsAndHashCode</code>, and the identity failures no
+generated member can prevent:
+
+<ul>
+  <li>A target that carries no instance state to compare: an enum, whose
+      constants are already unique; an annotation type; or an interface with no
+      <code>@ClassBuilder</code> to give it an implementation to reach.</li>
+  <li>An <code>equals</code> or <code>hashCode</code> the author already wrote.
+      The annotation generates neither, which would leave the type with an
+      equality relation half written down and half not.</li>
+  <li>A supertype declaring either member <code>final</code>, which no generated
+      override can compile past.</li>
+  <li>An annotated supertype asking for a different <code>identity</code>. One
+      hierarchy cannot hold two identity relations without the comparison
+      becoming asymmetric.</li>
+  <li><code>callSuper = YES</code> on a type whose superclass supplies no
+      implementation to call, and a left-to-resolve <code>callSuper</code> whose
+      superclass declares one half of the pair and not the other - a hierarchy
+      that is already inconsistent, and the one shape the resolution refuses to
+      guess at.</li>
+  <li><code>of</code> and <code>exclude</code> both set, or either naming a
+      member the selection never reaches - the check that catches a rename
+      leaving the string behind.</li>
+  <li><code>cacheHashCode</code> on a record, whose body cannot declare the
+      instance field the memo needs; beside a member that can change after
+      construction; or beside a <code>callSuper</code> whose contribution is not
+      decidable here.</li>
+  <li>The include and exclude markers on one member, the include marker on a
+      <code>@Lazy</code> field or on a static, parameterised or void method, and
+      either marker on a type carrying no <code>@EqualsAndHashCode</code> to
+      narrow.</li>
+  <li><b>A member whose declared type hides an array behind a type parameter</b>
+      - <code>List&lt;byte[]&gt;</code>, <code>Optional&lt;byte[]&gt;</code>,
+      <code>Map&lt;K, int[]&gt;</code> - or one declared bare
+      <code>java.util.Collection</code>.</li>
+  <li><b><code>identity = EXACT_CLASS</code> on a type a framework subclasses at
+      runtime</b>, with a fix that writes
+      <code>INSTANCE_OF_CANEQUAL</code>.</li>
+  <li><b>A subclass overriding <code>equals</code> without overriding
+      <code>canEqual</code></b> under <code>INSTANCE_OF_CANEQUAL</code>, with a
+      fix that writes the hook.</li>
+  <li><b>A hand-written <code>canEqual</code> of the wrong shape</b> - one that
+      does not return <code>boolean</code>, cannot be passed the instance the
+      generated <code>equals</code> hands it, takes something other than
+      <code>Object</code>, or is declared so that no subclass can override
+      it.</li>
+  <li><b><code>@BuilderIgnore</code> on a member the equality relation still
+      reads</b>, with a fix that writes <code>@EqualsExclude</code> beside
+      it.</li>
+</ul>
+
+<!-- tooltip end -->
+
+<p>
+Most of these mirror a diagnostic the annotation processor already emits, so
+what the inspection adds is timing and position: the processor can only report
+against the type, while this underlines the offending attribute, marker or
+member as it is typed.
+</p>
+
+<p>
+The last five are not mirrors, and they are why the inspection earns its keep.
+A member holding an array behind a type parameter is the one limitation of the
+feature a reader cannot infer from the annotation: the container delegates to
+its element's <code>equals</code>, and an array inherits <code>Object</code>'s,
+so the elements compare by identity and no generator can see through the
+wrapper. It deliberately does <b>not</b> fire on a plain array field of any
+depth - <code>byte[]</code>, <code>int[][]</code> and <code>Vector3f[]</code> are all
+compared correctly, and warning on them would train the reader to ignore the
+case that matters.
+</p>
+
+<p>
+<code>identity = EXACT_CLASS</code> is the default because it is a valid
+equivalence relation everywhere, where the liberal relations can be silently
+wrong. Its one real cost is that a runtime-generated subclass - a persistence
+proxy standing in for state that has not been loaded - compares unequal to the
+instance it represents. The recommendation fires only where such a subclass is
+expected, and offers the cooperating relation rather than changing the default
+underneath every other type.
+</p>
+
+<p>
+The subclass check is the one failure no emission can catch: the subclass may
+not exist when the annotated type is compiled, or even in the same compilation,
+so an override of <code>equals</code> that leaves the inherited hook in place
+reinstates exactly the asymmetry the hook exists to remove.
+</p>
+
+<p>
+A hand-written <code>canEqual</code> is <b>reused</b> rather than replaced -
+writing one is how an author opts into the protocol, so the generated
+<code>equals</code> calls that declaration instead of emitting its own. The reuse
+is matched on the name and the argument count, which leaves the rest of the shape
+to the author: a hook returning the wrong type fails inside a member nobody
+wrote, and one nothing can override reads exactly like the cooperating relation
+while behaving like the bare one.
+</p>
+
+<p>
+<code>@BuilderIgnore</code> and the exclude marker stay independent on purpose. A
+field the caller does not supply to the builder is still part of what the value
+is, so the pair is reported as a prompt with the marker one keystroke away, never
+applied on the author's behalf. It fires only for a member the relation actually
+reads - a <code>transient</code> or <code>@Lazy</code> field has already left the
+selection, and there is nothing to reconcile. The fix is withheld where
+<code>of</code> or <code>exclude</code> already names the member: the marker would
+then be a second, contradicting statement about it, and the selection reports a
+name it can no longer reach as an error.
+</p>
+
+<p>
+Hard rejections report at ERROR, matching the processor, since the build cannot
+complete - as does a <code>canEqual</code> the generated <code>equals</code>
+cannot call at all. A stale memo, a container of arrays, a bare
+<code>java.util.Collection</code> and an unoverridable hook report at WARNING -
+each compiles and each is wrong at runtime. The identity recommendation, the
+<code>@BuilderIgnore</code> prompt and the informational checks report as weak
+warnings: they propose a change rather than report a defect.
+</p>
+
+</body>
+</html>
