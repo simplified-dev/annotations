@@ -4,11 +4,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is an **IntelliJ IDEA plugin + Maven Central annotation library** that provides three annotation families, each with companion tooling:
+This is an **IntelliJ IDEA plugin + Maven Central annotation library**. It ships sixteen
+annotations that do work, plus the field- and member-level companions those read, and each
+one comes in two halves: a javac half that emits, and an IDE half whose job is to make the
+editor say exactly what javac will emit. **That pairing is the project's central invariant** -
+a green editor over source javac rejects, or a red editor over source that builds, is the
+failure mode nearly every design decision here is defending against.
 
-- `@ResourcePath` - evaluates string expressions at annotated sites and verifies the referenced resource files exist in the project's source/resource roots. Pure inspection, no code generation.
+Two families are pure inspection and generate nothing:
+
+- `@ResourcePath` - evaluates string expressions at annotated sites and verifies the referenced resource files exist in the project's source/resource roots.
 - `@XContract` - a superset of JetBrains `@Contract` with a richer grammar (relational comparisons, `&&`/`||` with grouping, field access, named-parameter references, integer/boolean constants). The plugin synthesises an equivalent `@Contract` via an `InferredAnnotationProvider` so IntelliJ's data-flow analysis works from a single annotation.
-- `@ClassBuilder` - generates a sibling `<TypeName>Builder.java` via a JSR 269 annotation processor. Supports classes, records, and interfaces. Setter shapes cover Optional dual setters, boolean zero-arg + typed pairs with optional negation, String `@PrintFormat` overloads, `@Collector` varargs/iterable bulk overloads with opt-in single-element add/put, clear, and lazy put-if-absent for maps, and configurable method naming. Field initializers are retained as builder defaults by default (`@ClassBuilder(retainInit)`, overridable per field with `@BuilderDefault`). The `@BuildFlag` runtime validator enforces nonNull/notEmpty/group/pattern/limit in the generated `build()`. Every generated method carries a matching `@XContract` so IDE data-flow sees fresh-object and this-return shapes.
+
+The rest generate, and **all but one generate by mutating the javac AST in place rather than
+by emitting a sibling file**. The exception is load-bearing: `@ClassBuilder` on an *interface*
+has no in-source mutation surface to inject into, so that one path emits `<Name>Impl.java` and
+`<Name>Builder.java` as source text - which is why the interface path keeps turning out to be a
+second implementation of whatever the AST path already does.
+
+- `@ClassBuilder` - synthesises a nested `Builder` plus `builder()` / `from(T)` / `mutate()`. Classes, records and interfaces. Setter shapes cover Optional dual setters, boolean zero-arg + typed pairs with optional negation, String `@PrintFormat` overloads, `@Collector` varargs/iterable bulk overloads with opt-in single-element add/put, clear, and lazy put-if-absent for maps, and configurable method naming. Field initializers are retained as builder defaults by default (`@ClassBuilder(retainInit)`, overridable per field with `@BuilderDefault`). The `@BuildFlag` runtime validator enforces nonNull/notEmpty/group/pattern/limit in the generated `build()`. Every generated method carries a matching `@XContract` so IDE data-flow sees fresh-object and this-return shapes.
+- `@Getter` / `@Setter` - read and write accessors, defaulting to bean-shaped names because a bare `@Getter` has to keep producing `getX()` or every existing call site is renamed.
+- `@AllArgsConstructor` / `@RequiredArgsConstructor` / `@NoArgsConstructor` / `@BuilderArgsConstructor` - one field-selection policy with four settings, over one mutator.
+- `@EqualsAndHashCode` / `@ToString` - the whole-object members, over one shared member selector and one term emitter. Records are the shape they exist for and the shape Lombok refuses.
+- `@UtilityClass` - `final` plus a throwing constructor, with the implicit-`static`-on-members half deliberately opt-in behind `members = MAKE_STATIC`.
+- `@Lazy` - retypes a field's storage from `T` to `Lazy<T>` and synthesises a memoizing getter, turning an initializer into the supplier body.
+- `@EnumLookup` - a cached values array plus a uniform set of static lookup helpers on an enum, with `@KeyField` adding a parallel key array and `of<Name>` / `findBy<Name>` per field.
+- `@SilentThrows` / `@Cleanup` - the two body rewrites, and the only passes here that change control flow rather than appending a member. They must run last, and after `@Lazy`.
 
 Published to:
 - JetBrains Marketplace: plugin ID `dev.simplified.simplified-annotations` (from `:plugin` module)
@@ -20,19 +41,40 @@ Two-module Gradle build. The split falls on the IntelliJ-platform boundary -
 library has zero IntelliJ classpath references and ships standalone to Maven;
 plugin depends on library and adds the IDE tooling.
 
-- `:library` - Maven-publishable. Contains `dev.simplified.annotations` (the annotations),
-  `dev.simplified.classbuilder.apt` (JSR 269 processor), `dev.simplified.classbuilder.mutate`
-  (javac AST mutation + compat), `dev.simplified.classbuilder.validate` (runtime validator),
-  `META-INF/services/javax.annotation.processing.Processor`. The `aptTest` source
-  set and the plain-JUnit tests for `validate/` live here.
-- `:plugin` - JetBrains Marketplace. Contains `dev.simplified.classbuilder.editor` (PSI
-  augmentation + line marker + icon provider), `dev.simplified.classbuilder.inspect`
-  (field inspection + shared constants), `dev.simplified.contract` (contract DSL parser,
-  only consumed by xcontract), `dev.simplified.xcontract` (@XContract inspections +
-  inferred annotation provider), `dev.simplified.resourcepath` (@ResourcePath inspections),
-  `META-INF/plugin.xml`, icons, inspection descriptions. Depends on `:library`
-  via `implementation(project(":library"))`; the library jar is bundled under
-  `lib/` in the plugin distribution zip.
+**Packages are named per feature and mirrored across the module boundary** - a feature is
+`dev.simplified.<feature>.{apt,mutate}` in library and `dev.simplified.<feature>.{editor,inspect}`
+in plugin. The convention is what makes the two halves of a feature findable from either side,
+and a feature missing one of its four is usually a gap rather than a decision.
+
+- `:library` - Maven-publishable. `dev.simplified.annotations` holds every annotation and
+  the enums they read (`AccessLevel`, `NamingStyle`, `CallSuper`). One feature package per
+  family: `accessor`, `args`, `classbuilder`, `cleanup`, `enumlookup`, `equality`, `lazy`,
+  `silentthrows`, `tostring`, `utility` - each with an `apt` half (annotation-model reads,
+  resolved config, per-member IR) and a `mutate` half (javac AST emission).
+  `dev.simplified.shared` carries what more than one feature needs: `shared.apt`
+  (`MemberSelector`, `MemberPolicy`, `MemberSpec`, `MemberShape`, `SuperResolver`),
+  `shared.javac` (`AstMarkers`, `MemberTerms`, `AnnotationSpelling`, `ContractAnnotations`)
+  and `shared.javac.compat` (the `JavacCompat` interface, its factory, and the `v17` baseline
+  every supported JDK still uses). **Two packages exist at runtime rather than at compile
+  time** and that is the whole distinction: `classbuilder.validate` (`BuildFlagValidator`,
+  reflected from inside the generated `build()`) and `dev.simplified.lazy` (`Lazy<T>`, which
+  has to exist at runtime because it *holds* the memoized value). Plus
+  `META-INF/services/javax.annotation.processing.Processor`. Source sets: `main`, `test`
+  (plain JUnit), `aptTest` (compile-testing, its own task because the IntelliJ test
+  framework's module layer hides `jdk.compiler`), and `showcase` - the one place the library
+  is exercised against Lombok on the same processor path.
+- `:plugin` - JetBrains Marketplace. The same feature names with `editor` (PSI augment
+  providers, line markers, intentions) and `inspect` (inspections plus the PSI analogue of
+  whatever constants the processor half reads) halves, plus three that exist only here:
+  `dev.simplified.contract` (the annotation-neutral contract-DSL grammar, consumed only by
+  xcontract), `dev.simplified.xcontract` and `dev.simplified.resourcepath` (both
+  inspection-only features with no library half at all), and `dev.simplified.shared.psi` /
+  `dev.simplified.util` for the platform helpers several features share. Also
+  `META-INF/plugin.xml`, icons and inspection descriptions. Depends on `:library` via
+  `implementation(project(":library"))` - which is what lets the naming trio, `ArgsSelection`
+  and the other javac-free decision classes be *shared instances* rather than reimplemented,
+  the single most common source of editor-versus-build drift. The library jar is bundled
+  under `lib/` in the plugin distribution zip.
 
 Root `build.gradle.kts` is minimal - plugin versions + shared `group` / `version`
 via `allprojects { }`. Everything else lives in the subprojects' own build scripts.
@@ -86,6 +128,7 @@ via `allprojects { }`. Everything else lives in the subprojects' own build scrip
   - **`identity` defaults to `EXACT_CLASS`, and the argument is about failure modes rather than taste.** `getClass()` comparison is always a valid equivalence relation and needs no cooperation from any other class, so it is right everywhere the other two are and right in the two places they are not; its cost is a *narrow* answer, where both alternatives can produce a silently *wrong* one. Bare `INSTANCE_OF` is asymmetric the moment a subclass adds a value component. `INSTANCE_OF_CANEQUAL` fixes that but is a cooperation protocol rather than a defence, and adds a failure `EXACT_CLASS` does not have: two subclasses of an annotated base that neither override compare **equal to each other**. All three ship because the workspace needs all three - one live site hand-writes the bare relation deliberately so a materialised and a borrowed backend compare equal, and a JPA `@IdClass` wants the hook.
   - **`callSuper` defaults to `AUTO`, resolved annotation-mirror-first.** Deciding it by scanning members of types in the same round is order-dependent - the round's annotated elements arrive as an unordered set, so a superclass processed after its subclass has not been mutated yet and the answer changes between builds with nothing to see. The member scan requires **both** `equals` and `hashCode`; finding exactly one is an ERROR, because a superclass overriding `equals` alone yields value equality over an identity hash. The resolution is reported as a `NOTE` **only when there is a superclass**: `AUTO` can flip from `NO` to `YES` when a superclass in another artifact gains the annotation, and a direct subclass of `Object` can never flip, so noting it there would put a message on nearly every annotated type.
   - **`useAccessors` defaults to `false`, inverting Lombok, and `true` gets its own resolver.** Reusing the builder's `from(T)` seeding ladder would be a silent `hashCode` break: that ladder matches on **name only**, with no return-type or owner check. `dev.simplified.accessor.apt.AccessorReads` instead takes names from `AccessorScheme`, skips a field carrying `@Getter(AccessLevel.NONE)`, and accepts only a target-declared zero-arg accessor whose return type is assignable to the member's. Consequently the emission row is chosen from the **read expression's** type, not the declared field's - a `List` field read through an `int[]`-returning accessor would otherwise dispatch to `Objects.equals` and compare by identity.
+    - **It reads the tree as well as the element model, and the acceptance rule on each side is different on purpose.** An accessor `@Getter` synthesises lands in `JCClassDecl.defs` and never in `ClassSymbol.members_field`, so a model-only scan can never see one and `@Getter` + `useAccessors` silently degraded to a field read with a `NOTE` - the opposite of what the attribute says, and a contradiction of the pass ordering that exists to make it true. The tree side cannot type-check: `restype` there is an unattributed `JCExpression` and `Types.isAssignable` does not apply to it. So it matches on **authorship instead of on type**, and specifically on `AstMarkers.isPassMarked(method, AccessorMutator.PASS)` rather than on `isGenerated`. That narrowing is load-bearing: `readCandidates` ends with the bare field name, so a field named `mutate` or `hashCode` matches the builder's `mutate()` or the equality pass's `hashCode()` under the broader test, and the result is an `equals` that reads the wrong member and compares two identical objects unequal, from a clean build. Taking `member.type()` as the read type is exact only because `AccessorMutator` mints the return type from `element.asType()` on the very field the body returns - a claim about that one pass and no other.
   - **`hashCode` is a `result * PRIME + term` accumulator, not `Objects.hash(...)`, for correctness rather than allocation.** `Objects.hash` takes `Object...`, so an array argument hashes by identity and any type with an array member gets a hash inconsistent with the `equals` beside it. `cacheHashCode` adds a `private transient int $hashCode` memo with three load-bearing details: `transient`, since a persisted hash is meaningless across JVMs; a computed `0` normalised to `Integer.MIN_VALUE`, since `0` is the field's own default and therefore the not-yet-computed sentinel; and **no `volatile`** - the race is benign, two threads compute the same value and a 32-bit `int` write cannot tear.
   - **The memo is refused on a record, and the refusal is a choice rather than a limitation.** `RecordFieldInjectionSpike` proves an injected instance field compiles and works on 17, 21 and 25. It is refused because nothing measured needs it and because the mechanism steps around a deliberate language rule rather than using a sanctioned seam - the asymmetry with the method injection, which JLS 8.10.3 explicitly leaves open, is the whole distinction.
   - **A target already declaring either member is an ERROR naming both**, not the silent skip `@ClassBuilder` and `@Getter` perform. Those decline to supply a member the author can still see and call; an annotation asking for an equality relation that then supplies none leaves the type with a relation nobody wrote down. A supertype declaring either `final` is an ERROR naming the supertype, since no override can compile past it.
@@ -120,7 +163,8 @@ These four replaced a single `@BuildRule` parent in 2.5.0. Bundling them forced 
 - `dev.simplified.resourcepath` — ResourcePath inspection + visitor + evaluator + change listener + startup activity.
 - `dev.simplified.contract` — **annotation-neutral** contract-DSL grammar infrastructure: `ContractAst`, `ContractLexer`, `ContractParser`, `ContractParseException`. Reusable for any annotation that carries the same contract DSL.
 - `dev.simplified.xcontract` — **specific to the `@XContract` annotation**: `XContractInspection` (declaration-side), `XContractCallInspection` (caller-side), `XContractInferredAnnotationProvider` (bridge to JetBrains `@Contract`), `XContractTranslator` (AST → `@Contract` string).
-- `dev.simplified.classbuilder.apt` — JSR 269 annotation processor: `ClassBuilderProcessor` (entry, registered via `META-INF/services/javax.annotation.processing.Processor`, dispatches class/record targets to the mutator and interface targets to the sibling emitter), `FieldSpec` (per-field IR), `SourceIntrospector` (Trees-API bridge for reading declared initialisers), `AnnotationLookup` (mirror attribute reader), `BuilderConfig` (resolved annotation attributes), `NamePattern` + `SetterScheme` + `BuilderScheme` (the naming trio, below), `BuilderEmitter` (legacy source generator; now only handles interface targets since classes/records use AST mutation), `InterfaceImplEmitter` (emits the `<Name>Impl` concrete class for interface targets, copying each accessor's `@BuildFlag` onto the field it synthesises - re-escaping string attributes, since a `pattern` regex routinely carries backslashes).
+- `dev.simplified.classbuilder.apt` — JSR 269 annotation processor: `ClassBuilderProcessor` (entry, registered via `META-INF/services/javax.annotation.processing.Processor`, dispatches class/record targets to the mutator and interface targets to the sibling emitter), `FieldSpec` (per-field IR), `SourceIntrospector` (Trees-API bridge for reading declared initialisers), `AnnotationLookup` (mirror attribute reader), `BuilderConfig` (resolved annotation attributes), `NamePattern` + `SetterScheme` + `BuilderScheme` (the naming trio, below), `BuilderEmitter` (legacy source generator; now only handles interface targets since classes/records use AST mutation), `InterfaceImplEmitter` (emits the `<Name>Impl` concrete class for interface targets, copying each accessor's `@BuildFlag` onto the field it synthesises - re-escaping string attributes, since a `pattern` regex routinely carries backslashes), `ImportRegistry` (the single import bookkeeper both emitters delegate to).
+  - **`ImportRegistry` keys on the simple NAME, not the FQN, and that inversion is the whole point.** Both emitters previously kept their own import set keyed on the fully-qualified name while returning the simple one, so two types sharing a simple name each got a single-type import and the generated file failed to compile with `reference to Arrays is ambiguous` - on a line the consumer cannot edit. First claimant wins and gets the import; every later type wanting that name is spelled out inline. Three claims are easy to miss and all three are load-bearing: a `java.lang` type must claim even though it takes no import entry, or a field typed `acme.String` imports itself and silently reassigns every other `String` in the file; a same-package type likewise; and `declare(simpleName)` claims the names the emitter writes **bare** - the target, the `Impl`, the `Builder`, `@Override` - which nothing routed through the import path at all. Claims are made before the first `use()` can spend one, since a claim registered late loses the race silently.
   - **The naming trio is the single place any generated name is minted.** `NamePattern` holds the `{}` expander and the validator (`patternError(pattern, placeholderRequired)` - that boolean *is* the per-field / once-per-target distinction). `SetterScheme` resolves the six per-field patterns and mints their names; `BuilderScheme` resolves the five once-per-target names, already expanded and already emptied where suppressed. All three are deliberately free of javac, PSI, and `FieldSpec` references so `:plugin` shares the instances, and the five naming sites (`FieldMutators`, `SelfTypedSetters`, `BootstrapMethodFactory`'s seed-setter lookup, `BuilderEmitter`, and the editor's `GeneratedMemberFactory`) all route through them. Each used to carry a private `methodName(String, boolean forceBoolean)` plus inline `"is"` / `"add"` / `"put"` / `"clear"` literals that had to agree byte-for-byte or the editor's autocompletion diverged from javac's output.
   - `BuilderConfig` keeps flat `builderName()` / `builderMethodName()` / … accessors delegating to its `BuilderScheme`, so the ~30 emitter call sites did not move when the annotation surface regrouped.
 - `dev.simplified.args.{apt,mutate}` — the constructor family. `ArgsMode` (the four settings), `ArgsField` (per-field IR), `ArgsSelection` (the rule), `ArgsFieldSelector` (tree walk), `ArgsConfig` (resolved annotations plus the `@ClassBuilder` inference), `ArgsConstructorFactory` (the shared mint), `ArgsConstructorMutator` (the orchestrator). Dispatched from `ClassBuilderProcessor` rather than a processor of its own, for the same reason `@Getter` is: **ordering has to be a guarantee**, and the constructor pass must run before `@Lazy` retypes its parameters and before the builder pass decides whether to synthesise its own.
