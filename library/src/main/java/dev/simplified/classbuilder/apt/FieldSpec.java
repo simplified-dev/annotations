@@ -22,7 +22,8 @@ import java.util.Set;
 
 /**
  * Intermediate representation of a single field on a {@code @ClassBuilder}-annotated class.
- * All classification the emitter needs happens once in {@link #from(VariableElement, AnnotationLookup, SourceIntrospector)},
+ * All classification the emitter needs happens once in
+ * {@link #from(VariableElement, AnnotationLookup, SourceIntrospector, Types, boolean)},
  * so the emitter only reads already-resolved properties.
  */
 public final class FieldSpec {
