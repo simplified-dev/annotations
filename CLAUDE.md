@@ -339,7 +339,9 @@ Editor: `ClassBuilderAugmentProvider` surfaces the bootstrap methods AND the nes
 
 JDK compatibility: `mutate/compat/` carries the `JavacCompat` interface plus the `JavacCompatV17` baseline. Every currently supported JDK (17 through 25) uses the baseline because every javac internal the pipeline touches has been stable across those versions. `JavacCompatFactory.forRuntime()` stays wired up as the single entry point so a future divergence is a new subclass + one gate - no caller change required.
 
-Consumer requirements: javac-only (no ecj). Consumers must configure the same `--add-exports=jdk.compiler/com.sun.tools.javac.*=ALL-UNNAMED` flags the plugin's own build uses (see `build.gradle.kts`), since the mutator reaches into internal javac APIs.
+Consumer requirements: javac-only (no ecj), and nothing else - **no `--add-exports` flags**. `dev.simplified.shared.javac.compat.JavacAccess` opens `jdk.compiler/com.sun.tools.javac.*` from the processor's static initializer, through `sun.misc.Unsafe` to reach `MethodHandles.Lookup.IMPL_LOOKUP` and from there `Module.implAddOpens` - the same bootstrap Lombok uses - so a consumer build needs only the artifact on its annotation processor path.
+
+**The `--add-exports` lists in `library/build.gradle.kts` are not a consumer requirement, and reading them as one is the mistake to avoid.** They serve this build and no other: `javacCompileExports` is what compiles the mutator's own source, which imports `com.sun.tools.javac.*` directly and so must see those packages at compile time, and `javacRuntimeExports` adds three more that `com.google.testing.compile` reaches into when it drives javac inside the `aptTest` JVM. The `showcase` source set is the in-repo proof of the distinction: it is a consumer-shaped build exercising the processor over ordinary source, and it sets no fork args at all.
 
 ### @ClassBuilder test strategy
 
