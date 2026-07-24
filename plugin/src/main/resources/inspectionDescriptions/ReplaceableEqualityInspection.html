@@ -1,0 +1,56 @@
+<html>
+<body>
+Reports a hand-written <code>equals</code> and <code>hashCode</code> pair that
+<code>@EqualsAndHashCode</code> would generate, and offers to replace the two
+methods with the annotation.
+
+<!-- tooltip end -->
+
+<p>
+The counterpart to <b>Hand-written equals and hashCode read different state</b>,
+which reports the pairs the annotation <i>cannot</i> adopt. Between them, a class
+carrying a hand-written pair gets an answer either way.
+</p>
+
+<p>
+<b>The match is exact, and that is the whole safety argument.</b> Every statement
+of the <code>equals</code> has to be a recognised guard, the cast local, or the
+returned chain, and every term of that chain has to be the comparison the
+annotation emits for that member's declared type. A guard that reads the
+object's own state, a term this does not recognise, or a <code>float</code>
+compared with bare <code>==</code> where the annotation emits
+<code>Float.compare</code> - each means the generated relation could differ from
+the written one, and each drops the class from the report entirely rather than
+reporting it with a caveat.
+</p>
+
+<p>
+<code>hashCode</code> is held to a weaker standard on purpose: it has to read the
+same members, and nothing more. A hash <i>value</i> is not part of any contract -
+only its consistency with <code>equals</code> is - so requiring the accumulator
+shape as well would reject almost every hand-written pair in order to protect a
+number nobody may depend on.
+</p>
+
+<p>
+<b>One difference is reported rather than rejected.</b> Where the written
+<code>equals</code> compares an array member with <code>Objects.equals</code>,
+that is reference identity, and the annotation compares arrays by content. The
+finding says so in its own words and its fix is named
+<code>(compares arrays by content)</code>, because adopting the annotation there
+<b>changes equality</b> - which is, in almost every case, the reason to adopt it.
+</p>
+
+<p>
+The fix writes the attributes needed to reproduce what was written -
+<code>identity</code> where it is not the default, <code>callSuper</code>
+wherever there is a superclass to be explicit about, and <code>exclude</code>
+for any member the selection reaches that the written pair ignored. A member the
+selection does not reach on its own, such as a derived accessor or
+<code>transient</code> state, gets an <code>@EqualsInclude</code> marker written
+onto it; if there is nowhere to put that marker, the class is not reported at
+all.
+</p>
+
+</body>
+</html>
