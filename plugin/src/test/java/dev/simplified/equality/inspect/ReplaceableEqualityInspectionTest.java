@@ -322,6 +322,75 @@ public class ReplaceableEqualityInspectionTest extends LightJavaCodeInsightFixtu
     }
 
     /**
+     * A member compared through its own {@code equals} is the relation
+     * {@code Objects.equals} expresses, which is what the annotation emits.
+     */
+    public void testAMemberComparedWithItsOwnEqualsIsOffered() {
+        configure("app/Token.java",
+            """
+            package app;
+            public class Token {
+                private String value;
+                private int issued;
+                public boolean equals(Object o) {
+                    if (o == null || getClass() != o.getClass()) return false;
+                    Token that = (Token) o;
+                    return this.value.equals(that.value) && this.issued == that.issued;
+                }
+                public int hashCode() { return this.value.hashCode() * 31 + this.issued; }
+            }
+            """);
+        assertTrue(reports("emits the same relation"));
+
+        String result = applyFix("Replace equals/hashCode with @EqualsAndHashCode");
+        assertTrue("the annotation is written on the class",
+            result.contains("@EqualsAndHashCode\npublic class Token"));
+        assertFalse("equals is gone", result.contains("boolean equals"));
+        assertFalse("hashCode is gone", result.contains("int hashCode"));
+    }
+
+    /**
+     * The written call and the generated {@code Objects.equals} both compare an
+     * array by reference, so an array member still reaches the finding that says
+     * adopting the annotation switches it to content.
+     */
+    public void testAnArrayComparedWithItsOwnEqualsIsStillTheByReferenceFinding() {
+        configure("app/Payload.java",
+            """
+            package app;
+            public class Payload {
+                private byte[] data;
+                public boolean equals(Object o) {
+                    if (o == null || getClass() != o.getClass()) return false;
+                    Payload that = (Payload) o;
+                    return this.data.equals(that.data);
+                }
+                public int hashCode() { return this.data.hashCode(); }
+            }
+            """);
+        assertTrue(reports("compares 'data' by content where this equals compares it by reference"));
+    }
+
+    /** A term has to be one member read across the two objects, not two different ones. */
+    public void testAnEqualsAcrossTwoDifferentMembersIsSilent() {
+        configure("app/Pair.java",
+            """
+            package app;
+            public class Pair {
+                private String left;
+                private String right;
+                public boolean equals(Object o) {
+                    if (o == null || getClass() != o.getClass()) return false;
+                    Pair that = (Pair) o;
+                    return this.left.equals(that.right) && this.right.equals(that.left);
+                }
+                public int hashCode() { return this.left.hashCode() + this.right.hashCode(); }
+            }
+            """);
+        assertSilent("a crossed comparison is not the relation the annotation emits");
+    }
+
+    /**
      * {@code Enum.equals} is final and identity-based, so the {@code Objects.equals}
      * the annotation emits and a written {@code ==} agree on every pair, two nulls
      * included. Only the spelling differs, so the pair is still replaceable.

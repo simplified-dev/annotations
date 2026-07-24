@@ -79,11 +79,18 @@ import java.util.Set;
  * accumulator shape as well would reject almost every hand-written pair to
  * protect a number nobody may depend on.
  *
- * <p>The one difference the report tolerates is an array member the written
+ * <p>One difference the report tolerates is an array member the written
  * {@code equals} compares by reference. Adopting the annotation switches it to
  * content comparison, so <b>equality changes</b> - and that change is the reason
  * the annotation exists. It is reported in its own words, with a fix whose name
  * says what it does, rather than folded in with the pairs that change nothing.
+ *
+ * <p>The other is a member compared through its own {@code equals} rather than
+ * through {@code Objects.equals}. Those two agree on every input but a
+ * {@code null} member, where the written call throws out of {@code equals} and
+ * the generated pair answers - it compares with {@code Objects.equals} and
+ * hashes behind a null check, so neither half can throw. Only a crash becomes
+ * an answer, which is why this one is folded in with the exact matches.
  */
 public class ReplaceableEqualityInspection extends LocalInspectionTool {
 
@@ -295,10 +302,15 @@ public class ReplaceableEqualityInspection extends LocalInspectionTool {
 
     private static @Nullable Term term(@NotNull PsiExpression conjunct, @NotNull PsiClass target) {
         if (conjunct instanceof PsiMethodCallExpression call) {
-            String owner = staticOwner(call);
             String name = call.getMethodExpression().getReferenceName();
+            if (name == null) return null;
+
+            Term written = instanceEquals(call, name, target);
+            if (written != null) return written;
+
+            String owner = staticOwner(call);
             String member = pairedMember(call, target);
-            if (member == null || owner == null || name == null) return null;
+            if (member == null || owner == null) return null;
             if (OBJECTS_FQN.equals(owner) && "equals".equals(name)) {
                 return new Term(member, Comparison.OBJECTS_EQUALS);
             }
@@ -342,6 +354,38 @@ public class ReplaceableEqualityInspection extends LocalInspectionTool {
         PsiMethod resolved = call.resolveMethod();
         PsiClass owner = resolved == null ? null : resolved.getContainingClass();
         return owner == null ? null : owner.getQualifiedName();
+    }
+
+    /**
+     * The term for a member compared through its own {@code equals}, as in
+     * {@code this.name.equals(that.name)}.
+     *
+     * <p>Read as an {@code Objects.equals}, because that is the relation it is.
+     * {@code Objects.equals} delegates to this very method for every non-null
+     * receiver, and on an array both compare by reference, so the array member
+     * still reaches the finding that says content comparison would change it.
+     *
+     * <p>The two forms part company on exactly one input: a {@code null}
+     * member, where the written call throws out of {@code equals} and the
+     * generated one answers. That direction is why this is an exact match
+     * rather than its own finding - the generated pair is null-safe on both
+     * halves, comparing with {@code Objects.equals} and hashing through a null
+     * check, so adopting it removes a crash instead of changing an answer.
+     *
+     * @param call the candidate term
+     * @param name the called method's name
+     * @param target the class declaring the pair
+     * @return the term, or {@code null} if this is not one member compared across the two objects
+     */
+    private static @Nullable Term instanceEquals(@NotNull PsiMethodCallExpression call,
+                                                 @NotNull String name,
+                                                 @NotNull PsiClass target) {
+        if (!"equals".equals(name)) return null;
+        PsiExpression[] arguments = call.getArgumentList().getExpressions();
+        if (arguments.length != 1) return null;
+        PsiExpression qualifier = call.getMethodExpression().getQualifierExpression();
+        String member = sameMember(qualifier, arguments[0], target);
+        return member == null ? null : new Term(member, Comparison.OBJECTS_EQUALS);
     }
 
     /** The single member a two-argument comparison reads on both sides. */
