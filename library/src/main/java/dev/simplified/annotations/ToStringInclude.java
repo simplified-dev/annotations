@@ -11,9 +11,18 @@ import java.lang.annotation.Target;
  * Includes a member in the {@code toString} {@link ToString} generates that the
  * selection would otherwise skip, and optionally renames or reorders it.
  *
- * <p>On a {@link Lazy} field it overrides the skip; on a zero-arg
- * non-{@code void} method it adds the method's result, which is how a derived
- * value gets printed alongside the state it is derived from.
+ * <p>On a zero-arg non-{@code void} method it adds the method's result, which
+ * is how a <b>derived</b> value - one with no backing field to select - gets
+ * printed alongside the state it is derived from. That holds on a class and a
+ * record; on an interface whose implementation {@link ClassBuilder} emits it is
+ * reported, since the generated class holds a field only for an abstract
+ * accessor. A {@code transient} field needs no marker to be printed, since
+ * {@link ToString} keeps them.
+ *
+ * <p>On a {@link Lazy} field it is an error rather than an override. By the
+ * time the pass runs that field's storage is a {@code Lazy} wrapper, so neither
+ * the slot nor a forced read means what the marker asks for; the method form
+ * says the same thing where the forcing is visible.
  *
  * @see ToStringExclude
  */

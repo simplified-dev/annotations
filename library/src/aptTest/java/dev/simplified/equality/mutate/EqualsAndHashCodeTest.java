@@ -1106,6 +1106,44 @@ public class EqualsAndHashCodeTest {
         assertThat(c).hadErrorContaining("names 'labell', which is not a member this selection reaches");
     }
 
+    /**
+     * The wrong turn the attribute invites: a derived value is reachable, but
+     * only once the method carries the marker, and the bare report never said so.
+     */
+    @Test
+    public void ofNamingAnUnmarkedMethodNamesTheMarker() {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.Keyless",
+            "package demo;",
+            "import dev.simplified.annotations.EqualsAndHashCode;",
+            "@EqualsAndHashCode(of = \"key\")",
+            "public final class Keyless {",
+            "    private final String name;",
+            "    public Keyless(String name) { this.name = name; }",
+            "    public String key() { return this.name.toLowerCase(); }",
+            "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(
+            "@EqualsAndHashCode(of) names 'key', which is a method rather than a field - "
+                + "mark it @EqualsInclude to make it a member");
+    }
+
+    /** A shape the marker could not rescue keeps the report that names no remedy. */
+    @Test
+    public void ofNamingAnUnusableMethodKeepsThePlainReport() {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.Unusable",
+            "package demo;",
+            "import dev.simplified.annotations.EqualsAndHashCode;",
+            "@EqualsAndHashCode(of = \"scaled\")",
+            "public final class Unusable {",
+            "    private final int a;",
+            "    public Unusable(int a) { this.a = a; }",
+            "    public int scaled(int by) { return this.a * by; }",
+            "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(
+            "names 'scaled', which is not a member this selection reaches");
+    }
+
     @Test
     public void bothMarkersOnOneMemberIsAnError() {
         Compilation c = compile(JavaFileObjects.forSourceLines("demo.Contradictory",

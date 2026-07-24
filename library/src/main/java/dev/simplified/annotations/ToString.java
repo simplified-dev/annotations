@@ -40,6 +40,16 @@ import java.lang.annotation.Target;
  * // ServerPing[motd=Hello, players=12]
  * </code></pre>
  *
+ * <p>A member need not be a field. A zero-arg non-{@code void} instance method
+ * carrying {@link ToStringInclude} joins the selection as a printed term, which
+ * is how a <b>derived</b> value - one with no backing field to select - appears
+ * beside the state it is derived from.
+ *
+ * <p>A class and a record admit that. An interface whose implementation
+ * {@link ClassBuilder} emits does not, and reports the marker instead: that
+ * class holds a field only for an abstract zero-arg accessor, so there is no
+ * member for a derived method to become.
+ *
  * <p>An array member prints through {@code java.util.Arrays.toString} or
  * {@code deepToString} rather than as an identity hash. There is no cycle
  * detection: a bidirectional graph recurses until the stack is exhausted, the
@@ -67,10 +77,19 @@ public @interface ToString {
      * Member names to print, to the exclusion of every other. Mutually
      * exclusive with {@link #exclude()}, and an error on a name that matches
      * nothing.
+     *
+     * <p>A member name is a field name, or the name of a method already
+     * carrying {@link ToStringInclude}. The marker is what makes a method a
+     * member, so neither attribute can reach one without it.
      */
     @NotNull String[] of() default {};
 
-    /** Member names to skip. An error on a name that matches nothing. */
+    /**
+     * Member names to skip. An error on a name that matches nothing.
+     *
+     * <p>Names a field or a {@link ToStringInclude}-carrying method, the same
+     * as {@link #of()}.
+     */
     @NotNull String[] exclude() default {};
 
     /**

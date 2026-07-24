@@ -465,6 +465,41 @@ public class EqualsAndHashCodeInspectionTest extends LightJavaCodeInsightFixture
         assertTrue(reports("(of) names 'cache'", HighlightSeverity.ERROR));
     }
 
+    /**
+     * The wrong turn the attribute invites: a derived value is reachable, but
+     * only once the method carries the marker, and the bare report never said so.
+     */
+    public void testOfNamingAnUnmarkedMethodNamesTheMarker() {
+        configure("app/Token.java",
+            """
+            package app;
+            import dev.simplified.annotations.EqualsAndHashCode;
+            @EqualsAndHashCode(of = "key")
+            public class Token {
+                private String value;
+                public String key() { return this.value.toLowerCase(); }
+            }
+            """);
+        assertTrue(reports("names 'key', which is a method rather than a field - mark it "
+            + "@EqualsInclude to make it a member", HighlightSeverity.ERROR));
+    }
+
+    /** A shape the marker could not rescue keeps the report that names no remedy. */
+    public void testOfNamingAnUnusableMethodKeepsThePlainReport() {
+        configure("app/Token.java",
+            """
+            package app;
+            import dev.simplified.annotations.EqualsAndHashCode;
+            @EqualsAndHashCode(of = "scaled")
+            public class Token {
+                private int amount;
+                public int scaled(int by) { return this.amount * by; }
+            }
+            """);
+        assertTrue(reports("names 'scaled', which is not a member this selection reaches",
+            HighlightSeverity.ERROR));
+    }
+
     public void testOfNamingAMemberIsClean() {
         configure("app/Token.java",
             """

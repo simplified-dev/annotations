@@ -239,11 +239,45 @@ public final class MemberSelector {
                                         String attribute, MemberPolicy policy, Messager messager) {
         for (String name : names) {
             if (seen.contains(name)) continue;
+            ExecutableElement candidate = includableMethod(target, name);
+            if (candidate == null) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    policy.label() + "(" + attribute + ") names '" + name
+                        + "', which is not a member this selection reaches",
+                    target);
+                continue;
+            }
             messager.printMessage(Diagnostic.Kind.ERROR,
                 policy.label() + "(" + attribute + ") names '" + name
-                    + "', which is not a member this selection reaches",
-                target);
+                    + "', which is a method rather than a field - mark it @"
+                    + simpleName(policy.includeFqn()) + " to make it a member",
+                candidate);
         }
+    }
+
+    /**
+     * The method a name would reach once it carried the include marker, or
+     * {@code null} when nothing the target declares could ever answer to it.
+     *
+     * <p>Only the shapes {@link #fromMethod} accepts qualify, so the remedy the
+     * message names is one that works. A method already carrying the marker is
+     * in {@code seen} and never arrives here.
+     */
+    private static ExecutableElement includableMethod(TypeElement target, String name) {
+        for (Element enclosed : target.getEnclosedElements()) {
+            if (enclosed.getKind() != ElementKind.METHOD) continue;
+            ExecutableElement method = (ExecutableElement) enclosed;
+            if (!method.getSimpleName().contentEquals(name)) continue;
+            if (method.getModifiers().contains(Modifier.STATIC)) continue;
+            if (!method.getParameters().isEmpty()) continue;
+            if (method.getReturnType().getKind() == TypeKind.VOID) continue;
+            return method;
+        }
+        return null;
+    }
+
+    private static String simpleName(String fqn) {
+        return fqn.substring(fqn.lastIndexOf('.') + 1);
     }
 
 }

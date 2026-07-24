@@ -318,6 +318,43 @@ public class ToStringTest {
         assertEquals("Triple[a=1, c=3]", rendered(c, "demo.Triple", 1, 2, 3));
     }
 
+    /**
+     * The wrong turn the attribute invites: a derived value is reachable, but
+     * only once the method carries the marker, and the bare report never said so.
+     */
+    @Test
+    public void of_namingAnUnmarkedMethodNamesTheMarker() {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.Arealess",
+            "package demo;",
+            "import dev.simplified.annotations.ToString;",
+            "@ToString(of = \"area\")",
+            "public class Arealess {",
+            "    private final int width;",
+            "    public Arealess(int width) { this.width = width; }",
+            "    public int area() { return this.width * this.width; }",
+            "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(
+            "@ToString(of) names 'area', which is a method rather than a field - "
+                + "mark it @ToStringInclude to make it a member");
+    }
+
+    /** A shape the marker could not rescue keeps the report that names no remedy. */
+    @Test
+    public void of_namingNothingKeepsThePlainReport() {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.Missing",
+            "package demo;",
+            "import dev.simplified.annotations.ToString;",
+            "@ToString(of = \"widht\")",
+            "public class Missing {",
+            "    private final int width;",
+            "    public Missing(int width) { this.width = width; }",
+            "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(
+            "names 'widht', which is not a member this selection reaches");
+    }
+
     @Test
     public void excludeMarker_dropsTheFieldItSitsOn() throws Exception {
         Compilation c = compile(JavaFileObjects.forSourceLines("demo.Ping",

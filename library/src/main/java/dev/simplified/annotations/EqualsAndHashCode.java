@@ -29,6 +29,27 @@ import java.lang.annotation.Target;
  * }
  * </code></pre>
  *
+ * <p>A member need not be a field. A zero-arg non-{@code void} instance method
+ * carrying {@link EqualsInclude} joins the selection as a compared term, which
+ * is how a <b>derived</b> value - one with no backing field to select - takes
+ * part in the relation:
+ *
+ * <pre><code>
+ * &#64;EqualsAndHashCode(exclude = "name")
+ * public final class Tag {
+ *     private final String name;
+ *
+ *     &#64;EqualsInclude
+ *     public String key() { return this.name.toLowerCase(); }
+ * }
+ * // two tags differing only in case are equal
+ * </code></pre>
+ *
+ * <p>A class and a record admit that. An interface whose implementation
+ * {@link ClassBuilder} emits does not, and reports the marker instead: that
+ * class holds a field only for an abstract zero-arg accessor, so there is no
+ * member for a derived method to become.
+ *
  * <h2>Arrays</h2>
  *
  * <p>An array field is the reason most of the hand-written pairs this replaces
@@ -85,12 +106,19 @@ public @interface EqualsAndHashCode {
      * Member names to compare, to the exclusion of every other. Mutually
      * exclusive with {@link #exclude()}, and an error on a name that matches
      * nothing.
+     *
+     * <p>A member name is a field name, or the name of a method already
+     * carrying {@link EqualsInclude}. The marker is what makes a method a
+     * member, so neither attribute can reach one without it.
      */
     @NotNull String[] of() default {};
 
     /**
      * Member names to skip. An error on a name that matches nothing, which is
      * the check that catches a rename leaving the attribute behind.
+     *
+     * <p>Names a field or an {@link EqualsInclude}-carrying method, the same as
+     * {@link #of()}.
      */
     @NotNull String[] exclude() default {};
 

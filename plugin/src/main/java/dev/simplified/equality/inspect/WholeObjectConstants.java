@@ -534,6 +534,32 @@ public final class WholeObjectConstants {
     }
 
     /**
+     * The method a narrowing name would reach once it carried the include
+     * marker, or {@code null} when nothing the target declares could answer to
+     * it.
+     *
+     * <p>Only the shapes {@link #includable} accepts qualify, so the remedy a
+     * message names is one that works. A method already carrying the marker is
+     * a candidate already and never arrives here.
+     *
+     * @param target the annotated type
+     * @param name the unmatched name
+     * @return the method the marker would admit, or {@code null}
+     */
+    public static @Nullable PsiMethod includableCandidate(@NotNull PsiClass target,
+                                                          @NotNull String name) {
+        for (PsiMethod method : ownMethods(target)) {
+            if (name.equals(method.getName()) && includable(method)) return method;
+        }
+        return null;
+    }
+
+    /** The marker's simple name, for a message naming the remedy. */
+    public static @NotNull String simpleName(@NotNull String fqn) {
+        return fqn.substring(fqn.lastIndexOf('.') + 1);
+    }
+
+    /**
      * Applies {@code of} or {@code exclude} to the candidates.
      *
      * @param candidates the members the selection reaches

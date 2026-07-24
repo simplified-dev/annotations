@@ -401,6 +401,41 @@ public class ToStringInspectionTest extends LightJavaCodeInsightFixtureTestCase 
         assertSilent("the include marker puts the method into the selection");
     }
 
+    /**
+     * The same method without the marker: reachable, but only once it carries
+     * one, and the bare report never said so.
+     */
+    public void testOfNamingAnUnmarkedMethodNamesTheMarker() {
+        configure("app/Ping.java",
+            """
+            package app;
+            import dev.simplified.annotations.ToString;
+            @ToString(of = "latency")
+            public class Ping {
+                private String motd;
+                public long latency() { return 0L; }
+            }
+            """);
+        assertTrue(reports("names 'latency', which is a method rather than a field - mark it "
+            + "@ToStringInclude to make it a member", HighlightSeverity.ERROR));
+    }
+
+    /** A shape the marker could not rescue keeps the report that names no remedy. */
+    public void testOfNamingAnUnusableMethodKeepsThePlainReport() {
+        configure("app/Ping.java",
+            """
+            package app;
+            import dev.simplified.annotations.ToString;
+            @ToString(of = "scaled")
+            public class Ping {
+                private int players;
+                public int scaled(int by) { return this.players * by; }
+            }
+            """);
+        assertTrue(reports("names 'scaled', which is not a member this selection reaches",
+            HighlightSeverity.ERROR));
+    }
+
     // ------------------------------------------------------------------
     // The marker pair
     // ------------------------------------------------------------------

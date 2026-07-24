@@ -335,21 +335,26 @@ public final class EqualsAndHashCodeInspection extends LocalInspectionTool {
         }
         List<String> selectable = new ArrayList<>(candidates.size());
         for (Selected member : candidates) selectable.add(member.name());
-        reportUnmatched(holder, annotation, WholeObjectConstants.ATTR_OF, selectable);
-        reportUnmatched(holder, annotation, WholeObjectConstants.ATTR_EXCLUDE, selectable);
+        reportUnmatched(holder, target, annotation, WholeObjectConstants.ATTR_OF, selectable);
+        reportUnmatched(holder, target, annotation, WholeObjectConstants.ATTR_EXCLUDE, selectable);
         return WholeObjectConstants.narrow(candidates, of, exclude);
     }
 
-    private static void reportUnmatched(@NotNull ProblemsHolder holder,
+    private static void reportUnmatched(@NotNull ProblemsHolder holder, @NotNull PsiClass target,
                                         @NotNull PsiAnnotation annotation, @NotNull String attribute,
                                         @NotNull List<String> selectable) {
         for (PsiAnnotationMemberValue entry :
             WholeObjectConstants.entries(annotation, attribute)) {
             String name = WholeObjectConstants.stringValue(entry);
             if (name == null || selectable.contains(name)) continue;
+            PsiMethod candidate = WholeObjectConstants.includableCandidate(target, name);
+            String because = candidate == null
+                ? "which is not a member this selection reaches"
+                : "which is a method rather than a field - mark it @"
+                    + WholeObjectConstants.simpleName(POLICY.includeFqn())
+                    + " to make it a member";
             holder.registerProblem(entry,
-                LABEL + "(" + attribute + ") names '" + name
-                    + "', which is not a member this selection reaches",
+                LABEL + "(" + attribute + ") names '" + name + "', " + because,
                 ProblemHighlightType.GENERIC_ERROR);
         }
     }

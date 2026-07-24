@@ -354,6 +354,12 @@ record ImplPlan(
      * Reports a name that reaches no accessor. That report is what earns the
      * attribute its keep: a rename leaves the string behind, and the member it
      * used to name silently rejoins or leaves the relation with nothing failing.
+     *
+     * <p>Deliberately does <b>not</b> offer the remedy the class path offers
+     * when the name matches a declared method. There, marking the method makes
+     * it a member; here the same marker is an error, since the emitted class
+     * holds a field only for an abstract zero-arg accessor. Naming a remedy
+     * that produces a different error would be worse than naming none.
      */
     private static void reportUnmatched(TypeElement target, Set<String> names, Set<String> seen,
                                         String attribute, String label, Messager messager) {
