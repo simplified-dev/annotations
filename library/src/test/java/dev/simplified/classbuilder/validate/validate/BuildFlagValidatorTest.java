@@ -1,7 +1,8 @@
 package dev.simplified.classbuilder.validate;
 
 import dev.simplified.annotations.BuildFlag;
-import dev.simplified.annotations.BuildRule;
+import dev.simplified.annotations.BuilderDefault;
+import dev.simplified.annotations.BuilderIgnore;
 import org.junit.Test;
 
 import java.util.*;
@@ -13,7 +14,7 @@ public class BuildFlagValidatorTest {
     // --- nonNull ---------------------------------------------------------
 
     static class NonNullRequired {
-        @BuildRule(flag = @BuildFlag(nonNull = true)) String name;
+        @BuildFlag(nonNull = true) String name;
     }
 
     @Test
@@ -37,11 +38,11 @@ public class BuildFlagValidatorTest {
     // --- notEmpty across shapes ------------------------------------------
 
     static class NotEmptyShapes {
-        @BuildRule(flag = @BuildFlag(notEmpty = true)) String s;
-        @BuildRule(flag = @BuildFlag(notEmpty = true)) Optional<String> opt = Optional.empty();
-        @BuildRule(flag = @BuildFlag(notEmpty = true)) List<String> list = new ArrayList<>();
-        @BuildRule(flag = @BuildFlag(notEmpty = true)) Map<String, String> map = new HashMap<>();
-        @BuildRule(flag = @BuildFlag(notEmpty = true)) Object[] array = new Object[0];
+        @BuildFlag(notEmpty = true) String s;
+        @BuildFlag(notEmpty = true) Optional<String> opt = Optional.empty();
+        @BuildFlag(notEmpty = true) List<String> list = new ArrayList<>();
+        @BuildFlag(notEmpty = true) Map<String, String> map = new HashMap<>();
+        @BuildFlag(notEmpty = true) Object[] array = new Object[0];
     }
 
     @Test
@@ -107,8 +108,8 @@ public class BuildFlagValidatorTest {
     // --- group (at-least-one-of) -----------------------------------------
 
     static class FaceGroup {
-        @BuildRule(flag = @BuildFlag(nonNull = true, group = "face")) String label;
-        @BuildRule(flag = @BuildFlag(nonNull = true, group = "face")) String emoji;
+        @BuildFlag(nonNull = true, group = "face") String label;
+        @BuildFlag(nonNull = true, group = "face") String emoji;
     }
 
     @Test
@@ -138,9 +139,9 @@ public class BuildFlagValidatorTest {
     }
 
     static class MultiGroup {
-        @BuildRule(flag = @BuildFlag(nonNull = true, group = {"a", "b"})) String x;
-        @BuildRule(flag = @BuildFlag(nonNull = true, group = "a")) String y;
-        @BuildRule(flag = @BuildFlag(nonNull = true, group = "b")) String z;
+        @BuildFlag(nonNull = true, group = {"a", "b"}) String x;
+        @BuildFlag(nonNull = true, group = "a") String y;
+        @BuildFlag(nonNull = true, group = "b") String z;
     }
 
     @Test
@@ -160,8 +161,8 @@ public class BuildFlagValidatorTest {
     // --- pattern ---------------------------------------------------------
 
     static class PatternRules {
-        @BuildRule(flag = @BuildFlag(pattern = "[a-z0-9_]+")) String identifier;
-        @BuildRule(flag = @BuildFlag(pattern = "\\d{3}")) Optional<String> code = Optional.empty();
+        @BuildFlag(pattern = "[a-z0-9_]+") String identifier;
+        @BuildFlag(pattern = "\\d{3}") Optional<String> code = Optional.empty();
     }
 
     @Test
@@ -200,12 +201,12 @@ public class BuildFlagValidatorTest {
     // --- limit -----------------------------------------------------------
 
     static class LimitRules {
-        @BuildRule(flag = @BuildFlag(limit = 5)) String text;
-        @BuildRule(flag = @BuildFlag(limit = 3)) List<String> items = new ArrayList<>();
-        @BuildRule(flag = @BuildFlag(limit = 2)) Map<String, String> entries = new LinkedHashMap<>();
-        @BuildRule(flag = @BuildFlag(limit = 4)) Object[] arr = new Object[0];
-        @BuildRule(flag = @BuildFlag(limit = 10)) Optional<String> optStr = Optional.empty();
-        @BuildRule(flag = @BuildFlag(limit = 100)) Optional<Integer> optNum = Optional.empty();
+        @BuildFlag(limit = 5) String text;
+        @BuildFlag(limit = 3) List<String> items = new ArrayList<>();
+        @BuildFlag(limit = 2) Map<String, String> entries = new LinkedHashMap<>();
+        @BuildFlag(limit = 4) Object[] arr = new Object[0];
+        @BuildFlag(limit = 10) Optional<String> optStr = Optional.empty();
+        @BuildFlag(limit = 100) Optional<Integer> optNum = Optional.empty();
     }
 
     @Test
@@ -290,11 +291,11 @@ public class BuildFlagValidatorTest {
     // --- inheritance -----------------------------------------------------
 
     static class ParentShape {
-        @BuildRule(flag = @BuildFlag(nonNull = true)) String parentName;
+        @BuildFlag(nonNull = true) String parentName;
     }
 
     static class ChildShape extends ParentShape {
-        @BuildRule(flag = @BuildFlag(nonNull = true)) String childName;
+        @BuildFlag(nonNull = true) String childName;
     }
 
     @Test
@@ -326,7 +327,7 @@ public class BuildFlagValidatorTest {
     // --- caching ---------------------------------------------------------
 
     static class Cached {
-        @BuildRule(flag = @BuildFlag(nonNull = true)) String x;
+        @BuildFlag(nonNull = true) String x;
     }
 
     @Test
@@ -350,16 +351,16 @@ public class BuildFlagValidatorTest {
         BuildFlagValidator.validate(new NoFlags());
     }
 
-    // --- default (no-op) @BuildRule.flag() is skipped -------------------
+    // --- fields carrying no @BuildFlag are skipped ----------------------
 
     static class RuleWithoutFlag {
-        @BuildRule(retainInit = true) String x;
-        @BuildRule(ignore = true) String y;
+        @BuilderDefault String x;
+        @BuilderIgnore String y;
     }
 
     @Test
     public void buildRuleWithoutActiveFlag_passesSilently() {
-        // @BuildRule present but flag() attributes are all at default -
+        // Other builder companion annotations present but no @BuildFlag -
         // validator should treat these fields as constraint-free and not
         // throw on their null values.
         BuildFlagValidator.validate(new RuleWithoutFlag());
@@ -368,7 +369,7 @@ public class BuildFlagValidatorTest {
     // --- combinations ---------------------------------------------------
 
     static class Composite {
-        @BuildRule(flag = @BuildFlag(nonNull = true, notEmpty = true, limit = 10, pattern = "[a-z]+")) String name;
+        @BuildFlag(nonNull = true, notEmpty = true, limit = 10, pattern = "[a-z]+") String name;
     }
 
     @Test

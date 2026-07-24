@@ -1,0 +1,50 @@
+<html>
+<body>
+Flags misuse of <code>@Getter</code> and <code>@Setter</code>:
+
+<ul>
+  <li><code>@Setter</code> on a <code>final</code> field - there is no
+      assignment to generate.</li>
+  <li><code>@Setter</code> beside <code>@Lazy</code>. The field's storage is a
+      <code>Lazy&lt;T&gt;</code> wrapper, so the generated assignment does not
+      type-check.</li>
+  <li><code>@Getter</code> beside <code>@Lazy</code>, which already synthesises
+      a memoizing accessor - redundant rather than wrong, so the second one is
+      simply not emitted.</li>
+  <li>Either annotation on a record or an interface. Only classes and enums are
+      supported: a record's components are accessors already, and an interface
+      declares no state to read or write.</li>
+  <li>A <code>name</code> pattern with no <code>{}</code> placeholder, which
+      gives every field the same method name, or one set to the
+      <code>"-"</code> sentinel, which would be minted verbatim as the method
+      name. Write <code>AccessLevel.NONE</code> to generate nothing.</li>
+</ul>
+
+<!-- tooltip end -->
+
+<p>
+Every check mirrors a diagnostic the annotation processor already emits. What
+this adds is timing and position: the processor can only report against the
+field, while the inspection underlines the offending annotation or attribute as
+it is typed.
+</p>
+
+<p>
+The per-field checks carry the processor's asymmetry. A rejection that arises
+from a <b>type-level</b> annotation is silent, because fanning out over a class
+is a blanket request rather than a claim about any one field - a bare
+<code>@Getter</code> on a class with one <code>final</code> field is correct
+code. Only a field the author singled out with its own annotation is reported.
+The <code>@Lazy</code> clash with <code>@Setter</code> is the exception and is
+reported wherever the annotation was written, since it is the one case that
+reaches javac as a type error on a line nobody wrote.
+</p>
+
+<p>
+Hard rejections report at ERROR, matching the processor. The redundant
+<code>@Getter</code> reports as a weak warning: the accessor the author asked
+for exists either way, so nothing is broken.
+</p>
+
+</body>
+</html>

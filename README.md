@@ -1,6 +1,6 @@
 # Simplified Annotations
 
-Three Java annotations with matching IntelliJ IDEA tooling - covering static resource-path validation, an extended `@Contract` grammar, and a full-featured builder generator with runtime validation.
+Four Java annotations with matching IntelliJ IDEA tooling - covering static resource-path validation, an extended `@Contract` grammar, a full-featured builder generator with runtime validation, and lazy field memoisation via AST mutation.
 
 > [!IMPORTANT]
 > `@ClassBuilder` uses javac AST mutation and **requires javac** (ecj is not supported). The processor opens `jdk.compiler` internals automatically at load time via `sun.misc.Unsafe` + `MethodHandles.Lookup.IMPL_LOOKUP` (same technique Lombok uses), so **no `--add-exports` flags are needed** in consumer builds. `@ResourcePath` and `@XContract` have no compiler dependency and work on any build.
@@ -16,9 +16,10 @@ Three Java annotations with matching IntelliJ IDEA tooling - covering static res
   - [@ResourcePath](#resourcepath)
   - [@XContract](#xcontract)
   - [@ClassBuilder](#classbuilder)
+  - [@Lazy](#lazy)
 - [Annotation Reference](#annotation-reference)
   - [@ClassBuilder Attributes](#classbuilder-attributes)
-  - [@BuildRule Attributes](#buildrule-attributes)
+  - [Field Annotations](#field-annotations)
   - [Field-Level Companions](#field-level-companions)
 - [Documentation](#documentation)
 - [License](#license)
@@ -28,12 +29,15 @@ Three Java annotations with matching IntelliJ IDEA tooling - covering static res
 - **`@ResourcePath`** - validates that string expressions at annotated sites resolve to files that exist in the project's source or resource roots. Supports an optional `base` directory prefix and a caller-side inspection that catches `base` mismatches across method boundaries.
 - **`@XContract`** - a superset of JetBrains `@Contract` with relational comparisons, `&&`/`||` grouping, named-parameter references, `instanceof` checks, typed `throws` returns, and chained comparisons. A synthetic `@Contract` is inferred so IntelliJ's data-flow analysis works from a single annotation.
 - **`@ClassBuilder`** - generates a `public static class Builder` via javac AST mutation, covering classes, records, and interfaces. Full Lombok `@Builder` parity plus richer setter shapes:
-  - Boolean zero-arg + typed pair with `@Negate` inverse
-  - `Optional<T>` dual setters (raw nullable + wrapped)
+  - Boolean typed setter plus a zero-arg convenience, with `@Negate` inverse
+  - Every generated name driven by a per-role pattern, with a `NamingStyle.LOMBOK` drop-in profile
+  - `Optional<T>` dual setters (raw nullable + wrapped), so a maybe-null value needs no wrapping at the call site
   - `@Collector` varargs/iterable bulk overloads with opt-in single-element add/put, clear, and lazy put-if-absent
   - `@Formattable` `@PrintFormat` string overload
-  - `@BuildRule(retainInit = true)` carries field initializers (`UUID.randomUUID()`, `List.of(...)`, etc.) into the builder as defaults evaluated fresh per `build()`
-  - `@BuildRule(flag = @BuildFlag(...))` runtime validator enforcing `nonNull` / `notEmpty` / `group` / `pattern` / `limit` in the generated `build()`
+  - Field initializers (`UUID.randomUUID()`, `List.of(...)`, etc.) carried into the builder as defaults evaluated fresh per `build()`, with no annotation required
+  - An all-args constructor synthesised when the class declares none, so a plain class needs nothing but the annotation
+  - `@BuildFlag` runtime validator enforcing `nonNull` / `notEmpty` / `group` / `pattern` / `limit` in the generated `build()`
+- **`@Lazy`** - field-level annotation that defers a field's value computation until first access and caches it thereafter. The processor rewrites the storage from `T` to `Lazy<T>`, wraps the initializer as `Lazy.of(() -> <init>)`, and synthesises a memoizing getter. With `@ClassBuilder` the builder gets a dual `field(T)` / `field(Supplier<T>)` setter pair so deferred computations can flow through the builder unchanged.
 
 ## Getting Started
 
@@ -44,8 +48,8 @@ Three Java annotations with matching IntelliJ IDEA tooling - covering static res
 
 ```kotlin
 dependencies {
-    implementation("io.github.simplified-dev:annotations:2.0.0")
-    annotationProcessor("io.github.simplified-dev:annotations:2.0.0")
+    implementation("io.github.simplified-dev:annotations:2.1.0")
+    annotationProcessor("io.github.simplified-dev:annotations:2.1.0")
 }
 ```
 
@@ -56,8 +60,8 @@ dependencies {
 
 ```groovy
 dependencies {
-    implementation 'io.github.simplified-dev:annotations:2.0.0'
-    annotationProcessor 'io.github.simplified-dev:annotations:2.0.0'
+    implementation 'io.github.simplified-dev:annotations:2.1.0'
+    annotationProcessor 'io.github.simplified-dev:annotations:2.1.0'
 }
 ```
 
@@ -70,7 +74,7 @@ dependencies {
 <dependency>
     <groupId>io.github.simplified-dev</groupId>
     <artifactId>annotations</artifactId>
-    <version>2.0.0</version>
+    <version>2.1.0</version>
 </dependency>
 ```
 
@@ -136,8 +140,8 @@ import java.util.UUID;
 
 @ClassBuilder
 public class Pizza {
-    @BuildRule(retainInit = true) UUID id = UUID.randomUUID();
-    @BuildRule(flag = @BuildFlag(nonNull = true)) String name;
+    UUID id = UUID.randomUUID();
+    @BuildFlag(nonNull = true) String name;
     @Collector(singular = true, clearable = true) List<String> toppings;
     @Formattable Optional<String> description;
     @Negate("vegetarian") boolean containsMeat;
@@ -150,16 +154,88 @@ Generates a `Pizza.Builder` with:
 - `name(String)` - chained `@BuildFlag` enforcement at `build()` time
 - `toppings(String...)`, `toppings(Iterable<String>)`, `addTopping(String)`, `clearToppings()`
 - `description(String)`, `description(Optional<String>)`, `description(String fmt, Object... args)` with null-safe `String.format`
-- `isContainsMeat()`, `isContainsMeat(boolean)`, `isVegetarian()`, `isVegetarian(boolean)` (booleans always use `is` prefix)
+- `containsMeat(boolean)`, `vegetarian(boolean)` plus the zero-arg `isContainsMeat()` / `isVegetarian()` convenience
 
 Plus bootstrap methods on `Pizza` itself: `static Pizza.Builder builder()`, `static Pizza.Builder from(Pizza)`, and `Pizza.Builder mutate()`.
 
 > [!NOTE]
-> `@BuildRule(retainInit = true)` evaluates the field initializer **fresh per builder instance** - `UUID.randomUUID()` produces a new UUID each time, `new ArrayList<>()` produces a fresh list. Any expression valid in the target class's scope is supported (constructor calls, factory methods, static method invocations, ternaries, etc.).
+> Field initializers are retained as builder defaults automatically - `id` needs no annotation. Each is evaluated **fresh per builder instance**, so `UUID.randomUUID()` produces a new UUID each time and `new ArrayList<>()` a fresh list. Any expression valid in the target class's scope is supported (constructor calls, factory methods, static method invocations, ternaries, etc.). Opt a single field out with `@BuilderDefault(false)`, or the whole class with `@ClassBuilder(retainInit = false)`.
 
 For abstract classes, `@ClassBuilder` produces a self-typed `Builder<T, B>` that concrete subclasses inherit with `class Builder extends Super.Builder<Sub, Sub.Builder>`; `self()` and `build()` are abstract on the root and overridden per subclass. This mirrors Lombok's `@SuperBuilder` with no runtime dependency.
 
-Records, interfaces, and plain classes are all supported. For interfaces, the processor writes a sibling `<Name>Impl.java` in addition to `<Name>Builder.java` since there is no in-source mutation surface on an interface body.
+Records, interfaces, and plain classes are all supported. For interfaces, the processor writes a sibling `<Name>Impl.java` in addition to `<Name>Builder.java` since there is no in-source mutation surface for a nested builder on an interface body. The entry points still land on the interface itself, so an interface target is used exactly like a class:
+
+```java
+@ClassBuilder
+public interface Shape {
+    String name();
+    int sides();
+}
+
+Shape s = Shape.builder().name("tri").sides(3).build();
+Shape t = Shape.from(s).sides(4).build();
+Shape u = t.mutate().name("quad").build();
+```
+
+`builder()` and `from(T)` are `static` interface methods and `mutate()` is a `default`, so no runtime dependency or implementor change is involved. The usual `generate*` opt-outs and the skip-on-collision rule apply as they do on a class.
+
+#### Generic targets
+
+A target may declare type parameters, on any of those shapes:
+
+```java
+@ClassBuilder
+public class Crate<V> {
+    V item;
+    List<V> spares = new ArrayList<>();
+}
+
+Crate<String> c = Crate.<String>builder().item("x").build();
+```
+
+The generated builder re-declares the target's parameters, since a nested `Builder` is `static` and an interface's sibling builder is a separate top-level class - neither can see the enclosing type's variables. Every static member that mentions one carries its own copy, so `from(T)` and the initializer providers infer them back at the call site. Bounds are preserved (`class Ranked<V extends Comparable<V>>` yields `Builder<V extends Comparable<V>>`).
+
+On a SuperBuilder chain the parameters lead the self-typed pair, and a concrete link reproduces the arguments the target passes up:
+
+```java
+@ClassBuilder public abstract class Box<V> { V item; }
+@ClassBuilder public class StringBox extends Box<String> { int n; }
+
+// Box.Builder<V, T extends Box<V>, B extends Builder<V, T, B>>
+// StringBox.Builder extends Box.Builder<String, StringBox, StringBox.Builder>
+StringBox b = StringBox.builder().item("x").n(1).build();
+```
+
+> [!NOTE]
+> `builder()` is a generic static method, and a chained call has nothing to infer its parameter from - so a typed chain needs the explicit witness, `Crate.<String>builder()`, the same as Lombok's generic `@Builder`. Writing `Crate.builder()` infers `Object`; the result still assigns to a `Crate<String>` local, but only under an unchecked warning. Where the parameter is already determined by an argument, as in `Crate.from(existing)`, no witness is needed.
+
+### `@Lazy`
+
+```java
+import dev.simplified.annotations.Lazy;
+
+public class Report {
+    @Lazy
+    private final List<Row> rows = expensiveQuery();
+}
+```
+
+Compiled to:
+
+```java
+private final Lazy<List<Row>> rows = Lazy.of(() -> expensiveQuery());
+
+public List<Row> getRows() {
+    return rows.get();
+}
+```
+
+The supplier runs once on the first `getRows()` call and the result is cached for every subsequent call (thread-safe, double-checked-locking, with a sentinel for cached `null`). Field-level annotations (`@NotNull`, `@Nullable`, `@PrintFormat`, `@Deprecated`, etc.) propagate onto the synthesised getter and its return type using each annotation's declared `@Target`.
+
+When the enclosing class also carries `@ClassBuilder`, the generated builder receives a dual setter: `rows(List<Row>)` wraps the value as `() -> value`, and `rows(Supplier<List<Row>>)` stores the supplier verbatim, so deferred computations flow through the builder without being eagerly invoked.
+
+> [!NOTE]
+> `@Lazy` only supports reference types (use `Boolean` rather than `boolean`), is not allowed on static fields or record components, and standalone use (no `@ClassBuilder`) requires a field initializer.
 
 ## Annotation Reference
 
@@ -167,30 +243,139 @@ Records, interfaces, and plain classes are all supported. For interfaces, the pr
 
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `builderName` | `String` | `"Builder"` | Simple name of the generated builder class |
-| `builderMethodName` | `String` | `"builder"` | Static factory method returning a fresh builder |
-| `buildMethodName` | `String` | `"build"` | Terminal method on the builder |
-| `fromMethodName` | `String` | `"from"` | Static copy-factory seeding a builder from an existing instance |
-| `toBuilderMethodName` | `String` | `"mutate"` | Instance method returning a pre-seeded builder |
-| `methodPrefix` | `String` | `""` | Setter method prefix (booleans always use `is`) |
+| `style` | `NamingStyle` | `SIMPLIFIED` | Naming for the whole generated surface (see below) |
+| `setters` | `@SetterNames` | inherit | Overrides for the members generated once per field |
+| `builder` | `@BuilderNames` | inherit | Overrides for the members generated exactly once |
 | `access` | `AccessLevel` | `PUBLIC` | Access level of generated bootstrap methods and builder class |
-| `validate` | `boolean` | `true` | Whether `build()` calls `BuildFlagValidator.validate(target)` |
+| `validate` | `boolean` | `true` | Whether `build()` validates the constructed instance against its `@BuildFlag` constraints |
 | `emitContracts` | `boolean` | `true` | Whether to emit `@XContract` annotations on generated methods |
-| `generateBuilder` | `boolean` | `true` | Whether to emit the static `builder()` factory |
-| `generateFrom` | `boolean` | `true` | Whether to emit the static copy factory |
-| `generateMutate` | `boolean` | `true` | Whether to emit the instance `mutate()` method |
 | `generateImpl` | `boolean` | `true` | Interface targets only: whether to generate `<Name>Impl` |
 | `factoryMethod` | `String` | `""` | Static factory method `build()` delegates to instead of `new` |
 | `exclude` | `String[]` | `{}` | Field names to exclude from the builder |
 
-### `@BuildRule` Attributes
+### Naming
+
+The generated surface splits by how often a member appears, and each half has its own annotation.
+
+**`@SetterNames` - generated once per field.** Six **roles**, each holding a **pattern** with one `{}`
+placeholder. The placeholder expands to the name the setter is built from - the field name, the
+`@Negate` stem, or the `@Collector` singular - capitalised unless it opens the pattern. Because the
+placeholder may sit anywhere, a pattern expresses a suffix (`{}Value`) or a wrapped form
+(`put{}IfAbsent`) as readily as a prefix, and it is mandatory: without it every field would generate
+the same method name.
+
+| Role | What it names | `SIMPLIFIED` | `LOMBOK` | `BEAN` |
+|------|---------------|--------------|----------|--------|
+| `set` | The value-taking setter, booleans included | `{}` | `{}` | `set{}` |
+| `flag` | The zero-arg boolean setter and its `@Negate` inverse | `is{}` | *none* | `is{}` |
+| `add` | `@Collector` single-element add | `add{}` | `{}` | `add{}` |
+| `put` | `@Collector` single-entry put (maps) | `put{}` | `{}` | `put{}` |
+| `compute` | `@Collector` put-if-absent (maps) | `put{}IfAbsent` | *none* | `put{}IfAbsent` |
+| `clear` | `@Collector` clear | `clear{}` | `clear{}` | `clear{}` |
+
+**`@BuilderNames` - generated exactly once.** The builder class and the methods that enter and leave
+it, named by plain literals.
+
+| Name | What it names | `SIMPLIFIED` | `LOMBOK` | `BEAN` |
+|------|---------------|--------------|----------|--------|
+| `type` | The generated builder class | `Builder` | `<Type>Builder` | `Builder` |
+| `builder` | Static factory returning a fresh builder | `builder` | `builder` | `builder` |
+| `build` | Terminal method returning the instance | `build` | `build` | `build` |
+| `from` | Static copy factory | `from` | `from` | `from` |
+| `toBuilder` | Instance method seeding from `this` | `mutate` | `toBuilder` | `mutate` |
+
+`style` sets both halves at once; `setters` and `builder` override individual names.
+
+```java
+@ClassBuilder                                              // fluent: animated(boolean) + isAnimated()
+@ClassBuilder(style = NamingStyle.LOMBOK)                  // drop-in for Lombok @Builder
+@ClassBuilder(setters = @SetterNames(set = "set{}"))       // JavaBean setters, rest unchanged
+@ClassBuilder(setters = @SetterNames(add = "append{}"))    // rename one role only
+@ClassBuilder(setters = @SetterNames(flag = SetterNames.NONE))  // drop the zero-arg boolean form
+@ClassBuilder(builder = @BuilderNames(build = "construct"))     // rename the terminal method
+@ClassBuilder(builder = @BuilderNames(from = BuilderNames.NONE))  // suppress the copy factory
+```
+
+`NONE` suppresses a member; `INHERIT` (the default, `""`) takes it from the style. Four members
+cannot be suppressed - `set`, because the field would have no way to be assigned, and `type` /
+`build`, because a builder with no class to name or no way to finish is not a builder. Those, and any
+malformed pattern, are rejected at the annotation by both the processor and the IDE inspection.
+
+### Field Annotations
+
+Each is written directly on the field - or, for `@BuildFlag` on an interface target, on the accessor
+standing in for one. Only `@BuildFlag` is retained at runtime; the rest are consumed at
+annotation-processing time.
+
+| Annotation | Purpose |
+|------------|---------|
+| `@BuilderDefault` | Override the class-level `retainInit` policy for one field |
+| `@BuilderIgnore` | Exclude this field from builder synthesis entirely |
+| `@BuildFlag` | Runtime validation constraints (see below) |
+| `@ObtainVia` | Override how `from(T)` / `mutate()` reads this field |
+
+#### `@BuilderDefault` Attributes
 
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `retainInit` | `boolean` | `false` | Carry the field's declared initializer into the builder as a per-build default |
-| `ignore` | `boolean` | `false` | Exclude this field from builder synthesis entirely |
-| `flag` | `@BuildFlag` | `@BuildFlag` | Runtime validation constraints (see below) |
-| `obtainVia` | `@ObtainVia` | `@ObtainVia` | Override how `from(T)` / `mutate()` reads this field |
+| `value` | `boolean` | `true` | Whether to carry the field's declared initializer into the builder as a per-build default |
+
+Since `@ClassBuilder(retainInit)` already defaults to `true`, the common use is the opt-out form
+`@BuilderDefault(false)`. Writing it bare is only needed on a class that set `retainInit = false`.
+
+An initializer that reads instance state - an instance field, an instance method, `getClass()`,
+`this` - is retained too, but applied later. It cannot be evaluated when the builder is created,
+since no target exists then, so it is computed in the generated constructor instead, where `this`
+is available exactly as in the ordinary field initializer it came from:
+
+```java
+@ClassBuilder
+public class Report {
+    String kind = getClass().getSimpleName();   // computed per build()
+    String header = "== " + kind;               // reads the field above
+    UUID id = UUID.randomUUID();                // static-safe: per builder
+}
+```
+
+The observable difference is timing: a static-safe default is evaluated once per builder, an
+instance-referencing one once per `build()`. This works across a SuperBuilder chain as well, through
+the copy constructor each link carries - a default on an abstract root sees the concrete subclass
+being built, and a link's own default runs after `super(b)` has drained the parent's slots.
+
+The path retypes the builder slot to `Supplier<T>` so an unset slot stays distinguishable from an
+explicitly-set null. Every shape whose setter simply assigns carries that - `boolean` (including a
+`@Negate` pair), `Optional`, arrays, `@Formattable` strings, plain fields and `@Lazy` ones.
+
+`@Collector` containers take a merge rather than a `Supplier`, since their `add` / `put` / `clear`
+setters need a real container to mutate while the builder runs. The slot carries only what the caller
+contributed and the constructor folds it onto the computed default, so the observable behaviour
+matches a static-safe default exactly:
+
+```java
+@ClassBuilder
+public class Bag {
+    @Collector(singular = true, clearable = true) List<String> items = seed();
+    List<String> seed() { return new ArrayList<>(List.of("a")); }
+}
+
+Bag.builder().build()                  // [a]      - default seeds the collection
+Bag.builder().addItem("b").build()     // [a, b]   - add appends onto it
+Bag.builder().items("x").build()       // [x]      - wholesale replace discards it
+Bag.builder().clearItems().build()     // []       - so does clear
+```
+
+A custom container works the same way, whatever its shape - including one with no usable
+constructor, or an interface, which has none at all:
+
+```java
+@Collector(singular = true) ConcurrentList<String> items = seed();
+ConcurrentList<String> seed() { return ConcurrentLists.of(List.of(prefix)); }
+```
+
+Nothing needs to construct the declared type. The builder collects contributions into a plain
+`java.util` scratch, and the constructor takes the real container from the field's own initializer -
+so the built object holds exactly what `seed()` returned, subclass and all, rather than something
+reconstructed from the declared type. No inference is done on the initializer at any point.
 
 #### `@BuildFlag` Attributes
 
@@ -201,6 +386,23 @@ Records, interfaces, and plain classes are all supported. For interfaces, the pr
 | `pattern` | `String` | `""` | Regex the field value must match (CharSequence / Optional\<String\>) |
 | `limit` | `int` | `-1` | Maximum length/size (String/Collection/Map/array/Optional) |
 | `group` | `String[]` | `{}` | At-least-one-of group: all members null/empty throws |
+
+On an **interface** target the constraint goes on the accessor, the interface having no fields of its
+own. The processor copies it onto the matching `<Name>Impl` field, which is the instance `build()`
+constructs and the one the validator reads, so it is enforced identically:
+
+```java
+@ClassBuilder
+public interface Shape {
+    @BuildFlag(nonNull = true) String name();
+    int sides();
+}
+
+Shape.builder().sides(3).build();   // BuilderValidationException: Field 'name' in 'ShapeImpl' is required and is null/empty
+```
+
+`@BuildFlag` is the only companion whose target is wider than where it takes effect - written on any
+other method it is silently inert, which the IDE inspection warns about.
 
 #### `@ObtainVia` Attributes
 
@@ -215,8 +417,29 @@ Records, interfaces, and plain classes are all supported. For interfaces, the pr
 | Annotation | Target | Description |
 |------------|--------|-------------|
 | `@Collector` | `Collection`, `List`, `Set`, `Map` | Emits varargs + `Iterable` bulk setters; opt-in `singular`, `clearable`, `compute` (maps: `putIfAbsent(K, Supplier<V>)`) |
-| `@Negate("inverse")` | `boolean` | Emits an inverse setter pair (`isInverse()` / `isInverse(boolean)`) alongside the direct pair |
+| `@Negate("inverse")` | `boolean` | Emits an inverse setter pair (`inverse(boolean)` plus the zero-arg `isInverse()`) alongside the direct pair |
 | `@Formattable` | `String`, `Optional<String>` | Emits a `@PrintFormat` overload (`withField(String fmt, Object... args)`) with null-safe `String.format` |
+
+### `Optional<T>` fields
+
+An `Optional<T>` field gets a **dual setter** - `x(T)` alongside `x(Optional<T>)` - so a caller
+holding a maybe-null `T` hands it straight over and the wrapping stays inside the builder. This is a
+deliberate divergence from Lombok, which emits only the wrapped setter and so pushes
+`Optional.ofNullable(...)` onto every such call site.
+
+The one shape it cannot serve is a bare literal `x(null)`: both parameter types accept null and
+neither is more specific, so the call is ambiguous (JLS 15.12.2.5) and both javac and the IDE reject
+it. Everything else resolves, including a null-valued *variable*, which carries a static type.
+
+That is arguably the right error - on an `Optional` field, `x(null)` is ambiguous in intent too
+(absent, or present-and-null?) - so the plugin ships an Alt+Enter fix rather than a way to turn the
+overload off:
+
+```java
+Box.builder().label(null);              // ambiguous
+Box.builder().label(Optional.empty());  // ← Alt+Enter: Replace 'null' with 'Optional.empty()'
+```
+| `@Lazy` | any reference-typed field | Rewrites storage to `Lazy<T>`, wraps the initializer as a supplier, and synthesises a memoizing getter; with `@ClassBuilder` adds a dual `field(T)` / `field(Supplier<T>)` setter pair |
 
 ## Documentation
 

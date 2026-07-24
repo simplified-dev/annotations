@@ -1,11 +1,11 @@
 package dev.simplified.classbuilder.mutate;
-
 import com.google.testing.compile.Compilation;
 import com.google.testing.compile.Compiler;
 import com.google.testing.compile.JavaFileObjects;
-import dev.simplified.classbuilder.mutate.compat.JavacCompat;
-import dev.simplified.classbuilder.mutate.compat.JavacCompatFactory;
-import dev.simplified.classbuilder.mutate.compat.v17.JavacCompatV17;
+import dev.simplified.shared.javac.JavacBridge;
+import dev.simplified.shared.javac.compat.JavacCompat;
+import dev.simplified.shared.javac.compat.JavacCompatFactory;
+import dev.simplified.shared.javac.compat.v17.JavacCompatV17;
 import org.junit.Test;
 
 import javax.annotation.processing.AbstractProcessor;

@@ -1,0 +1,37 @@
+<html>
+<body>
+Flags misuse of <code>@Log</code>, the annotation that generates a log4j2
+logger field into the type it is written on:
+
+<ul>
+  <li><code>@Log</code> on an interface, a record or an annotation type - none
+      of them can hold the field the annotation exists to generate, so the
+      annotation would have no output at all.</li>
+  <li><code>@Log(name = "-")</code> - suppressing the field leaves the
+      annotation with nothing to do, unlike a per-field name where one member
+      among many can be turned off.</li>
+  <li><code>@Log(name = ...)</code> that cannot expand to a legal Java
+      identifier - the generated field would not compile, on a line that is
+      not in the source.</li>
+  <li>log4j2 missing from the module's classpath - the generated field is
+      injected rather than written, so it carries no source line for the
+      compiler to report against; this names the dependency to add instead.</li>
+  <li>A type that already declares a field under the resolved name - the
+      annotation backs off rather than emitting a duplicate, so it silently
+      generates nothing. A field <i>inherited</i> from a supertype is not a
+      collision and is not reported.</li>
+</ul>
+
+<!-- tooltip end -->
+
+<p>
+The generated field is <code>private static final</code> and named
+<code>log</code> unless <code>name</code> says otherwise. log4j2 must be on
+the annotated module's own classpath: the annotation library carries no
+dependency on it and refers to <code>Logger</code> by name only. Add
+<code>org.apache.logging.log4j:log4j-api</code> to compile, and a binding such
+as <code>log4j-core</code> to log at runtime.
+</p>
+
+</body>
+</html>

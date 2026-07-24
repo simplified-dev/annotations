@@ -1,5 +1,6 @@
 package demo;
 
+import dev.simplified.annotations.BuilderNames;
 import dev.simplified.annotations.ClassBuilder;
 import dev.simplified.annotations.Collector;
 import dev.simplified.annotations.Formattable;
@@ -20,7 +21,7 @@ import java.util.Optional;
  *       co-located on consecutive lines for visual density</li>
  * </ul>
  */
-@ClassBuilder(generateFrom = false, generateMutate = false)
+@ClassBuilder(builder = @BuilderNames(from = BuilderNames.NONE, toBuilder = BuilderNames.NONE))
 public final class Order {
 
     @Collector(singular = true, clearable = true)

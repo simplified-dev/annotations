@@ -28,23 +28,66 @@ import java.lang.annotation.Target;
  * </ul>
  * If the target already declares any of those methods by name and arity,
  * injection is skipped for that name and the user-supplied version wins -
- * a compiler {@code NOTE} is emitted for visibility. Interface targets still
- * receive a sibling {@code <Name>Impl.java} plus {@code <Name>Builder.java}
- * since there is no mutation surface on an interface body.
+ * a compiler {@code NOTE} is emitted for visibility.
+ *
+ * <p>An interface target gets its builder as a sibling
+ * {@code <Name>Builder.java} (plus {@code <Name>Impl.java}), there being no
+ * in-source surface for a nested class on an interface body. The bootstrap
+ * methods still land on the interface itself, so it is entered exactly like a
+ * class - {@code Shape.builder()} rather than {@code new ShapeBuilder<>()}.
+ * {@code builder} and {@code from} are {@code static} interface methods and
+ * {@code mutate} is a {@code default}, both legal since Java 8, so implementors
+ * need no change.
+ *
+ * <p>An interface target declares {@link BuildFlag} constraints on the accessor
+ * rather than on a field, having none of its own. The generated
+ * {@code <Name>Impl} carries the annotation onto the field it synthesises, so
+ * the validator finds it on the instance {@code build()} returns.
+ *
+ * <h2>Generic targets</h2>
+ * A target may declare type parameters, on any supported shape. The generated
+ * builder re-declares them, since a nested {@code Builder} is {@code static}
+ * and an interface's sibling builder is a separate top-level class - neither
+ * can see the enclosing type's variables. Bounds carry over, and every static
+ * member mentioning a parameter takes its own copy so the call site infers it
+ * back. On a SuperBuilder chain the target's parameters lead the self-typed
+ * pair ({@code Builder<V, T extends Box<V>, B extends Builder<V, T, B>>}) and a
+ * concrete link reproduces the arguments it passes up.
+ *
+ * <p>{@code builder()} is a generic static method, so a chained call has
+ * nothing to infer from and needs the explicit witness -
+ * {@code Crate.<String>builder().item("x").build()}. The bare form infers
+ * {@code Object}, which still assigns to a parameterised local but only under
+ * an unchecked warning. {@code from(T)} infers from its argument and needs no
+ * witness.
  *
  * <h2>Per-field customisation</h2>
  * <ul>
- *   <li>{@link BuildRule} - parent for generic field rules: {@code retainInit}
- *       (carry the field's initialiser into the builder), {@code ignore}
- *       (exclude a single field), nested {@link BuildFlag} for runtime
- *       constraints, nested {@link ObtainVia} to override how
- *       {@code from}/{@code mutate} reads the field</li>
+ *   <li>{@link BuilderDefault} - opt a single field in or out of carrying its
+ *       declared initialiser into the builder, overriding {@link #retainInit()}</li>
+ *   <li>{@link BuilderIgnore} - exclude a single field from the builder</li>
+ *   <li>{@link BuildFlag} - runtime constraints enforced in the generated
+ *       {@code build()}</li>
+ *   <li>{@link ObtainVia} - override how {@code from}/{@code mutate} reads the
+ *       field off an existing instance</li>
  *   <li>{@link Collector} - emit varargs / {@code Iterable} bulk setters on
  *       collection and map fields, with opt-in single-element add/put,
  *       {@code clearX}, and lazy {@code putXIfAbsent} overloads</li>
  *   <li>{@link Negate} - emit an inverse boolean setter on a {@code boolean} field</li>
  *   <li>{@link Formattable} - emit a {@code @PrintFormat} string overload</li>
  * </ul>
+ *
+ * <h2>Naming</h2>
+ * The generated surface splits by how often a member appears. The setters are
+ * generated once per field and are named by a pattern whose {@code {}}
+ * placeholder expands to the field name, {@link Negate} stem, or
+ * {@link Collector} singular - six roles covering the value-taking setter, the
+ * zero-arg boolean setter, and the collector's add, put, put-if-absent, and
+ * clear. The builder class and the methods that enter and leave it are
+ * generated exactly once and carry plain names.
+ *
+ * <p>{@link #style()} sets the whole surface at once; {@link #setters()} and
+ * {@link #builder()} override individual names.
  *
  * <h2>Examples</h2>
  * <pre><code>
@@ -57,31 +100,41 @@ import java.lang.annotation.Target;
  *
  * // Record with a required field
  * &#64;ClassBuilder
- * public record User(&#64;BuildRule(flag = &#64;BuildFlag(nonNull = true, notEmpty = true)) String name, int age) { }
+ * public record User(&#64;BuildFlag(nonNull = true, notEmpty = true) String name, int age) { }
  *
  * // Interface - plugin generates ShapeImpl + ShapeBuilder
- * &#64;ClassBuilder(generateImpl = true)
+ * &#64;ClassBuilder
  * public interface Shape {
- *     &#64;BuildRule(flag = &#64;BuildFlag(nonNull = true)) String name();
+ *     &#64;BuildFlag(nonNull = true) String name();
  * }
  *
  * // Builder on a static factory method
  * public final class Range {
- *     &#64;ClassBuilder(builderName = "RangeBuilder")
+ *     &#64;ClassBuilder(builder = &#64;BuilderNames(type = "RangeBuilder"))
  *     public static Range of(int min, int max) { ... }
  * }
  *
  * // Custom naming
  * &#64;ClassBuilder(
- *     builderName = "MyBuilder",
- *     builderMethodName = "newBuilder",
- *     toBuilderMethodName = "toBuilder",
- *     methodPrefix = "set"
+ *     builder = &#64;BuilderNames(type = "MyBuilder", builder = "newBuilder", toBuilder = "toBuilder"),
+ *     setters = &#64;SetterNames(set = "set{}")
  * )
+ * public final class Config { ... }
+ *
+ * // A drop-in for Lombok &#64;Builder: ConfigBuilder, toBuilder(), bare-name setters
+ * &#64;ClassBuilder(style = NamingStyle.LOMBOK)
+ * public final class Config { ... }
+ *
+ * // Suppress the static copy factory
+ * &#64;ClassBuilder(builder = &#64;BuilderNames(from = BuilderNames.NONE))
  * public final class Config { ... }
  * </code></pre>
  *
- * @see BuildRule
+ * @see NamingStyle
+ * @see SetterNames
+ * @see BuilderNames
+ * @see BuilderDefault
+ * @see BuilderIgnore
  * @see BuildFlag
  * @see Collector
  * @see Negate
@@ -93,41 +146,38 @@ import java.lang.annotation.Target;
 public @interface ClassBuilder {
 
     /**
-     * The simple name of the generated builder class. Lombok parity:
-     * {@code builderClassName}.
+     * The naming style every generated member takes its name from. Selecting a
+     * style sets the default for the whole surface at once - the six per-field
+     * setter roles, the builder class, and the methods that enter and leave it -
+     * which is what makes {@code style = NamingStyle.LOMBOK} a complete drop-in
+     * for Lombok {@code @Builder} naming rather than a set of overrides repeated
+     * per type.
+     *
+     * <p>Anything written in {@link #setters()} or {@link #builder()} wins over
+     * the style.
+     *
+     * @see NamingStyle
      */
-    @NotNull String builderName() default "Builder";
+    @NotNull NamingStyle style() default NamingStyle.SIMPLIFIED;
 
     /**
-     * The name of the static factory method returning a fresh builder. Lombok
-     * parity: {@code builderMethodName}.
+     * Overrides of the setter patterns {@link #style()} supplies, for the
+     * members generated once per field. Every unwritten role inherits, so only
+     * the roles that differ need naming.
+     *
+     * @see SetterNames
      */
-    @NotNull String builderMethodName() default "builder";
+    @NotNull SetterNames setters() default @SetterNames;
 
     /**
-     * The name of the {@code build} method on the generated builder. Lombok
-     * parity: {@code buildMethodName}.
+     * Overrides of the names {@link #style()} supplies for the members
+     * generated exactly once - the builder class and the methods that enter and
+     * leave it. Every unwritten name inherits, and
+     * {@link BuilderNames#NONE} suppresses an entry point.
+     *
+     * @see BuilderNames
      */
-    @NotNull String buildMethodName() default "build";
-
-    /**
-     * The name of the static copy factory seeding a builder from an existing
-     * instance. Empty string suppresses the factory.
-     */
-    @NotNull String fromMethodName() default "from";
-
-    /**
-     * The name of the instance method returning a builder seeded from
-     * {@code this}. Lombok parity: {@code toBuilder} (renamed to {@code mutate}
-     * by default per project convention). Empty string suppresses the method.
-     */
-    @NotNull String toBuilderMethodName() default "mutate";
-
-    /**
-     * The setter method prefix. Booleans always use {@code "is"} unless this
-     * attribute is set to a non-default value.
-     */
-    @NotNull String methodPrefix() default "";
+    @NotNull BuilderNames builder() default @BuilderNames;
 
     /**
      * The access level of the generated bootstrap methods and the generated
@@ -136,21 +186,29 @@ public @interface ClassBuilder {
     @NotNull AccessLevel access() default AccessLevel.PUBLIC;
 
     /**
-     * Whether to generate the static {@code builder()} factory on the annotated
-     * type.
+     * The access level of the synthesised all-args constructor. Defaults to
+     * package-private, matching the implicit constructor Lombok {@code @Builder}
+     * supplies, so callers are routed through {@code build()} and its
+     * {@code @BuildFlag} validation rather than instantiating the type directly.
+     * Independent of {@link #access()}, which governs the builder class and the
+     * bootstrap methods.
      */
-    boolean generateBuilder() default true;
+    @NotNull AccessLevel constructorAccess() default AccessLevel.PACKAGE;
 
     /**
-     * Whether to generate the static copy factory on the annotated type.
+     * Whether the generated builder seeds each field from its declared
+     * initializer rather than the JVM default. On by default, since a field
+     * written as {@code String name = "anonymous"} almost always means that
+     * value to survive into the builder.
+     *
+     * <p>Applies to every field of the type. An individual field overrides it
+     * with {@link BuilderDefault}, whose setting always wins; fields carrying no
+     * {@code @BuilderDefault} inherit this one. Fields without an initializer
+     * are unaffected either way.
+     *
+     * @see BuilderDefault
      */
-    boolean generateFrom() default true;
-
-    /**
-     * Whether to generate the instance {@code mutate()} method on the annotated
-     * type.
-     */
-    boolean generateMutate() default true;
+    boolean retainInit() default true;
 
     /**
      * Whether the annotation processor should inject a protected copy
@@ -162,9 +220,12 @@ public @interface ClassBuilder {
     boolean generateCopyConstructor() default true;
 
     /**
-     * Whether the generated {@code build()} method should call
-     * {@code BuildFlagValidator.validate(this)} before invoking the
-     * constructor or factory.
+     * Whether the generated {@code build()} method should validate the
+     * constructed instance against its {@link BuildFlag} constraints.
+     *
+     * <p>A target that no {@code @BuildFlag} reaches costs only a cached no-op
+     * call - the validator resolves the flagged fields of the instance's
+     * runtime class once and returns immediately when there are none.
      */
     boolean validate() default true;
 
@@ -174,6 +235,17 @@ public @interface ClassBuilder {
      * this-return shapes.
      */
     boolean emitContracts() default true;
+
+    /**
+     * Whether to emit {@link Generated} on the members and types this
+     * annotation synthesises, so coverage tools exclude them from their
+     * reports.
+     *
+     * <p>Independent of {@link #emitContracts()} - the two answer different
+     * questions, and dropping {@code @XContract} from decompiled output is no
+     * reason to lose coverage filtering.
+     */
+    boolean emitGenerated() default true;
 
     /**
      * For {@code interface} targets only: whether to generate a concrete
@@ -200,7 +272,7 @@ public @interface ClassBuilder {
     /**
      * Field names to exclude from the builder, in addition to the fields
      * always excluded ({@code static}, {@code transient}, and fields marked
-     * with {@link BuildRule#ignore()}).
+     * with {@link BuilderIgnore}).
      */
     @NotNull String[] exclude() default { };
 

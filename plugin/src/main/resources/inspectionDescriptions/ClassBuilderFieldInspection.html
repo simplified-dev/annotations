@@ -15,15 +15,26 @@ Flags misuse of the per-field companion annotations that travel with
       setters, with opt-in single-element <code>addX</code> /
       <code>putX</code>, <code>clearX</code>, and
       <code>putXIfAbsent</code> (maps only).</li>
-  <li><code>@BuildRule(flag = @BuildFlag(pattern = ...))</code> is only
+  <li><code>@BuildFlag(pattern = ...)</code> is only
       meaningful on <code>CharSequence</code> or
       <code>Optional&lt;String&gt;</code> fields - the validator cannot
       check a regex against other types.</li>
-  <li><code>@BuildRule(flag = @BuildFlag(limit = N))</code> is only
+  <li><code>@BuildFlag(limit = N)</code> is only
       meaningful on <code>CharSequence</code>, <code>Collection</code>,
       <code>Map</code>, object arrays, or <code>Optional</code> of
       <code>String</code> / <code>Number</code> - the validator has no
       notion of size on other types.</li>
+  <li>A <code>@SetterNames</code> pattern must carry the <code>{}</code>
+      placeholder exactly once and expand to a legal Java identifier.
+      These setters are generated once per field, so without the
+      placeholder every field would name the same method.</li>
+  <li>A <code>@BuilderNames</code> value must expand to a legal Java
+      identifier. Its members are generated exactly once, so unlike the
+      setter roles it needs no placeholder.</li>
+  <li>Four members cannot be set to <code>NONE</code>:
+      <code>set</code>, or a field would have no way to be assigned; and
+      <code>type</code> / <code>build</code>, since a builder with no
+      class to name or no way to finish is not a builder.</li>
 </ul>
 
 <!-- tooltip end -->

@@ -36,16 +36,17 @@
           overloads with opt-in single-element add/put, clear, and lazy put-if-absent
           for collections and maps, defensive-copy <code>from(T)</code>, and a
           <code>mutate()</code> instance shorthand.</li>
-      <li><b>@BuildRule</b> collects generic field rules in one place:
-          <code>retainInit</code> copies the field's declared initializer into
-          the builder so unset fields start at the intended value
+      <li><b>Per-field rules</b> as standalone annotations:
+          <code>retainInit</code> - on by default, and overridable per field with
+          <code>@BuilderDefault</code> - copies the field's declared initializer
+          into the builder so unset fields start at the intended value
           (<code>UUID.randomUUID()</code>, sensible strings, pre-populated
-          collections) instead of the JVM default; <code>ignore</code> excludes
-          a single field; nested <code>@ObtainVia</code> redirects
+          collections) instead of the JVM default; <code>@BuilderIgnore</code>
+          excludes a single field; <code>@ObtainVia</code> redirects
           <code>from(T)</code> to a non-standard accessor - an instance method,
           a static helper, or a different field - when the target type doesn't
           expose a matching getter.</li>
-      <li><b>@BuildRule(flag = @BuildFlag(...)) runtime validator</b> enforces
+      <li><b>@BuildFlag runtime validator</b> enforces
           <code>nonNull</code> / <code>notEmpty</code> / <code>group</code>
           mutual-requirement / regex <code>pattern</code> / length
           <code>limit</code> in the generated <code>build()</code>. Zero
@@ -105,6 +106,7 @@
     <!-- Extension points defined by the plugin.
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
     <extensions defaultExtensionNs="com.intellij">
+        <notificationGroup id="Simplified Annotations" displayType="BALLOON"/>
         <localInspection
                 language="JAVA"
                 implementationClass="dev.simplified.resourcepath.ResourcePathInspection"
@@ -150,14 +152,158 @@
                 displayName="@ClassBuilder field annotation misuse"
                 groupName="Simplified Annotations"
         />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.lazy.inspect.LazyFieldInspection"
+                enabledByDefault="true"
+                level="ERROR"
+                shortName="LazyFieldInspection"
+                displayName="@Lazy field misuse"
+                groupName="Simplified Annotations"
+        />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.enumlookup.inspect.EnumLookupInspection"
+                enabledByDefault="true"
+                level="ERROR"
+                shortName="EnumLookupInspection"
+                displayName="@EnumLookup misuse"
+                groupName="Simplified Annotations"
+        />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.enumlookup.inspect.EnumLookupKeyInspection"
+                enabledByDefault="true"
+                level="ERROR"
+                shortName="EnumLookupKeyInspection"
+                displayName="@KeyField duplicate / null key"
+                groupName="Simplified Annotations"
+        />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.args.inspect.ArgsConstructorInspection"
+                enabledByDefault="true"
+                level="ERROR"
+                shortName="ArgsConstructorInspection"
+                displayName="Constructor annotation misuse"
+                groupName="Simplified Annotations"
+        />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.accessor.inspect.AccessorInspection"
+                enabledByDefault="true"
+                level="ERROR"
+                shortName="AccessorInspection"
+                displayName="@Getter / @Setter misuse"
+                groupName="Simplified Annotations"
+        />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.utility.inspect.UtilityClassInspection"
+                enabledByDefault="true"
+                level="ERROR"
+                shortName="UtilityClassInspection"
+                displayName="@UtilityClass misuse"
+                groupName="Simplified Annotations"
+        />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.classbuilder.inspect.GetterVisibilityInspection"
+                enabledByDefault="true"
+                level="WARNING"
+                shortName="GetterVisibilityInspection"
+                displayName="@Getter accessor width and hand-written accessors"
+                groupName="Simplified Annotations"
+        />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.silentthrows.inspect.SilentThrowsInspection"
+                enabledByDefault="true"
+                level="ERROR"
+                shortName="SilentThrowsInspection"
+                displayName="@SilentThrows misuse"
+                groupName="Simplified Annotations"
+        />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.cleanup.inspect.CleanupInspection"
+                enabledByDefault="true"
+                level="ERROR"
+                shortName="CleanupInspection"
+                displayName="@Cleanup misuse"
+                groupName="Simplified Annotations"
+        />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.equality.inspect.EqualsAndHashCodeInspection"
+                enabledByDefault="true"
+                level="ERROR"
+                shortName="EqualsAndHashCodeInspection"
+                displayName="@EqualsAndHashCode misuse"
+                groupName="Simplified Annotations"
+        />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.equality.inspect.ToStringInspection"
+                enabledByDefault="true"
+                level="ERROR"
+                shortName="ToStringInspection"
+                displayName="@ToString misuse"
+                groupName="Simplified Annotations"
+        />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.log.inspect.LogInspection"
+                enabledByDefault="true"
+                level="ERROR"
+                shortName="LogInspection"
+                displayName="@Log misuse"
+                groupName="Simplified Annotations"
+        />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.equality.inspect.EqualityConsistencyInspection"
+                enabledByDefault="true"
+                level="WARNING"
+                shortName="EqualityConsistencyInspection"
+                displayName="Hand-written equals and hashCode read different state"
+                groupName="Simplified Annotations"
+        />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.equality.inspect.ReplaceableEqualityInspection"
+                enabledByDefault="true"
+                level="WEAK WARNING"
+                shortName="ReplaceableEqualityInspection"
+                displayName="Hand-written equals and hashCode @EqualsAndHashCode would generate"
+                groupName="Simplified Annotations"
+        />
+        <custom.exception.handler implementation="dev.simplified.silentthrows.editor.SilentThrowsExceptionHandler"/>
+        <lang.inspectionSuppressor language="JAVA" implementationClass="dev.simplified.cleanup.inspect.CleanupSuppressor"/>
         <lang.inferredAnnotationProvider implementation="dev.simplified.xcontract.XContractInferredAnnotationProvider"/>
         <lang.inferredAnnotationProvider implementation="dev.simplified.classbuilder.editor.ClassBuilderInferredAnnotationProvider"/>
+        <lang.inferredAnnotationProvider implementation="dev.simplified.args.editor.ArgsInferredAnnotationProvider"/>
         <lang.psiAugmentProvider implementation="dev.simplified.classbuilder.editor.ClassBuilderAugmentProvider"/>
+        <lang.psiAugmentProvider implementation="dev.simplified.lazy.editor.LazyAugmentProvider"/>
+        <lang.psiAugmentProvider implementation="dev.simplified.enumlookup.editor.EnumLookupAugmentProvider"/>
+        <lang.psiAugmentProvider implementation="dev.simplified.accessor.editor.AccessorAugmentProvider"/>
+        <lang.psiAugmentProvider implementation="dev.simplified.args.editor.ArgsAugmentProvider"/>
+        <lang.psiAugmentProvider implementation="dev.simplified.utility.editor.UtilityClassAugmentProvider"/>
+        <lang.psiAugmentProvider implementation="dev.simplified.equality.editor.WholeObjectAugmentProvider"/>
+        <lang.psiAugmentProvider implementation="dev.simplified.log.editor.LogAugmentProvider"/>
         <java.elementFinder implementation="dev.simplified.classbuilder.editor.ClassBuilderElementFinder" order="last"/>
         <codeInsight.lineMarkerProvider
                 language="JAVA"
                 implementationClass="dev.simplified.classbuilder.editor.ClassBuilderLineMarkerProvider"/>
+        <codeInsight.lineMarkerProvider
+                language="JAVA"
+                implementationClass="dev.simplified.equality.editor.WholeObjectLineMarkerProvider"/>
         <iconProvider implementation="dev.simplified.classbuilder.editor.ClassBuilderIconProvider"/>
+        <intentionAction>
+            <language>JAVA</language>
+            <className>dev.simplified.classbuilder.editor.OptionalSetterNullIntention</className>
+            <category>Simplified Annotations</category>
+        </intentionAction>
         <postStartupActivity implementation="dev.simplified.resourcepath.ResourcePathStartupActivity"/>
         <postStartupActivity implementation="dev.simplified.classbuilder.editor.ClassBuilderStartupActivity"/>
     </extensions>

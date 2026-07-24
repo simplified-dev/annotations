@@ -47,17 +47,26 @@ public class AnnotationSurfaceTest {
     }
 
     @Test
-    public void buildRule_metadata() {
-        assertRetention(BuildRule.class, RetentionPolicy.RUNTIME);
-        assertTargets(BuildRule.class, ElementType.FIELD);
+    public void builderDefault_metadata() {
+        // APT-time only, so CLASS retention is enough - nothing reads it at runtime.
+        assertRetention(BuilderDefault.class, RetentionPolicy.CLASS);
+        assertTargets(BuilderDefault.class, ElementType.FIELD);
+    }
+
+    @Test
+    public void builderIgnore_metadata() {
+        assertRetention(BuilderIgnore.class, RetentionPolicy.CLASS);
+        assertTargets(BuilderIgnore.class, ElementType.FIELD);
     }
 
     @Test
     public void buildFlag_metadata() {
-        // BuildFlag is nested-only (@Target({})) but stays RUNTIME-retained so
-        // BuildFlagValidator can read it reflectively via BuildRule.flag().
+        // The one annotation of the four that must survive to runtime:
+        // BuildFlagValidator reads it reflectively inside the generated build().
         assertRetention(BuildFlag.class, RetentionPolicy.RUNTIME);
-        assertTargets(BuildFlag.class /* no targets - nested-only */);
+        // METHOD is for interface targets, which declare no fields to carry a
+        // constraint - the processor copies it onto the generated Impl field.
+        assertTargets(BuildFlag.class, ElementType.FIELD, ElementType.METHOD);
     }
 
     @Test
@@ -79,11 +88,119 @@ public class AnnotationSurfaceTest {
     }
 
     @Test
+    public void setterNames_metadata() {
+        // Only ever an attribute value on @ClassBuilder, so an empty @Target is
+        // what stops it being written anywhere else.
+        assertRetention(SetterNames.class, RetentionPolicy.CLASS);
+        assertTargets(SetterNames.class);
+    }
+
+    @Test
+    public void builderNames_metadata() {
+        assertRetention(BuilderNames.class, RetentionPolicy.CLASS);
+        assertTargets(BuilderNames.class);
+    }
+
+    /**
+     * The two suppression sentinels must agree, since a scheme resolves both
+     * groups through the same emptiness test.
+     */
+    @Test
+    public void namingSentinels_areShared() {
+        assertEquals(SetterNames.INHERIT, BuilderNames.INHERIT);
+        assertEquals(SetterNames.NONE, BuilderNames.NONE);
+        assertEquals("INHERIT must be the empty string so an unwritten attribute inherits",
+            "", SetterNames.INHERIT);
+        assertFalse("NONE must not be a legal identifier, or it could collide with a real name",
+            isJavaIdentifier(SetterNames.NONE));
+    }
+
+    /**
+     * Every name of every style must expand to something usable. The per-field
+     * setters need the placeholder - without it every field would generate the
+     * same method - while the once-per-target names default to plain literals.
+     * A typo in the style table would otherwise surface as a compile error in
+     * consumer code.
+     */
+    @Test
+    public void namingStyle_everyPatternIsWellFormed() {
+        for (NamingStyle style : NamingStyle.values()) {
+            assertPattern(style, "set", style.set(), true);
+            assertPattern(style, "flag", style.flag(), true);
+            assertPattern(style, "add", style.add(), true);
+            assertPattern(style, "put", style.put(), true);
+            assertPattern(style, "compute", style.compute(), true);
+            assertPattern(style, "clear", style.clear(), true);
+            assertPattern(style, "builderType", style.builderType(), false);
+            assertPattern(style, "builderMethod", style.builderMethod(), false);
+            assertPattern(style, "buildMethod", style.buildMethod(), false);
+            assertPattern(style, "fromMethod", style.fromMethod(), false);
+            assertPattern(style, "toBuilderMethod", style.toBuilderMethod(), false);
+            assertNotEquals(style + " must be able to assign a field",
+                SetterNames.NONE, style.set());
+            // A style cannot ship a builder with no class to name or no way to
+            // finish, the two names @BuilderNames also refuses to suppress.
+            assertNotEquals(style + " must name its builder class",
+                SetterNames.NONE, style.builderType());
+            assertNotEquals(style + " must name its build method",
+                SetterNames.NONE, style.buildMethod());
+        }
+    }
+
+    private static void assertPattern(NamingStyle style, String role, String pattern, boolean placeholderRequired) {
+        if (SetterNames.NONE.equals(pattern)) return;
+        String subject = "sample";
+        String expanded = placeholderRequired || pattern.contains("{}")
+            ? pattern.replace("{}", pattern.startsWith("{}") ? subject : "Sample")
+            : pattern;
+        assertTrue(style + "." + role + " must expand to a Java identifier, got '" + expanded + "'",
+            isJavaIdentifier(expanded));
+    }
+
+    private static boolean isJavaIdentifier(String s) {
+        if (s.isEmpty() || !Character.isJavaIdentifierStart(s.charAt(0))) return false;
+        for (int i = 1; i < s.length(); i++) {
+            if (!Character.isJavaIdentifierPart(s.charAt(i))) return false;
+        }
+        return true;
+    }
+
+    @Test
     public void obtainVia_metadata() {
-        // ObtainVia is nested-only (@Target({})). Retention stays CLASS but
-        // effective retention when nested inside @BuildRule is RUNTIME.
+        // Consumed by the processor when emitting from(T) / mutate(), so CLASS
+        // retention suffices.
         assertRetention(ObtainVia.class, RetentionPolicy.CLASS);
-        assertTargets(ObtainVia.class /* no targets - nested-only */);
+        assertTargets(ObtainVia.class, ElementType.FIELD);
+    }
+
+    @Test
+    public void equalsAndHashCode_metadata() {
+        // Read while the processor mutates the target's AST, so nothing needs
+        // it after the compile.
+        assertRetention(EqualsAndHashCode.class, RetentionPolicy.CLASS);
+        assertTargets(EqualsAndHashCode.class, ElementType.TYPE);
+    }
+
+    @Test
+    public void toString_metadata() {
+        assertRetention(ToString.class, RetentionPolicy.CLASS);
+        assertTargets(ToString.class, ElementType.TYPE);
+    }
+
+    /**
+     * All four selection markers carry one target set on purpose. METHOD is
+     * what lets a derived value join the selection, and a marker legal on a
+     * field but not on a method would let the two halves of one selection
+     * disagree about which members a type is made of.
+     */
+    @Test
+    public void selectionMarkers_metadata() {
+        List<Class<? extends Annotation>> markers = List.of(
+            EqualsExclude.class, EqualsInclude.class, ToStringExclude.class, ToStringInclude.class);
+        for (Class<? extends Annotation> marker : markers) {
+            assertRetention(marker, RetentionPolicy.CLASS);
+            assertTargets(marker, ElementType.FIELD, ElementType.METHOD);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -92,16 +209,15 @@ public class AnnotationSurfaceTest {
 
     @Test
     public void classBuilder_defaults() throws Exception {
-        assertDefault(ClassBuilder.class, "builderName", "Builder");
-        assertDefault(ClassBuilder.class, "builderMethodName", "builder");
-        assertDefault(ClassBuilder.class, "buildMethodName", "build");
-        assertDefault(ClassBuilder.class, "fromMethodName", "from");
-        assertDefault(ClassBuilder.class, "toBuilderMethodName", "mutate");
-        assertDefault(ClassBuilder.class, "methodPrefix", "");
+        // Every generated name now comes from the style, so it is the one
+        // naming default worth pinning here; the per-name defaults are the
+        // style table, asserted by namingStyle_everyPatternIsWellFormed.
+        assertDefault(ClassBuilder.class, "style", NamingStyle.SIMPLIFIED);
         assertDefault(ClassBuilder.class, "access", AccessLevel.PUBLIC);
-        assertDefault(ClassBuilder.class, "generateBuilder", true);
-        assertDefault(ClassBuilder.class, "generateFrom", true);
-        assertDefault(ClassBuilder.class, "generateMutate", true);
+        assertDefault(ClassBuilder.class, "constructorAccess", AccessLevel.PACKAGE);
+        // Retain-all is the default: a field written `String x = "v"` keeps "v"
+        // as its builder default without any per-field annotation.
+        assertDefault(ClassBuilder.class, "retainInit", true);
         assertDefault(ClassBuilder.class, "validate", true);
         assertDefault(ClassBuilder.class, "emitContracts", true);
         assertDefault(ClassBuilder.class, "generateImpl", true);
@@ -110,21 +226,16 @@ public class AnnotationSurfaceTest {
     }
 
     @Test
-    public void buildRule_defaults() throws Exception {
-        assertDefault(BuildRule.class, "retainInit", false);
-        assertDefault(BuildRule.class, "ignore", false);
-        BuildFlag flagDefault = (BuildFlag) BuildRule.class.getMethod("flag").getDefaultValue();
-        assertNotNull(flagDefault);
-        assertFalse(flagDefault.nonNull());
-        assertFalse(flagDefault.notEmpty());
-        assertEquals("", flagDefault.pattern());
-        assertEquals(-1, flagDefault.limit());
-        assertArrayEquals(new String[0], flagDefault.group());
-        ObtainVia viaDefault = (ObtainVia) BuildRule.class.getMethod("obtainVia").getDefaultValue();
-        assertNotNull(viaDefault);
-        assertEquals("", viaDefault.method());
-        assertEquals("", viaDefault.field());
-        assertFalse(viaDefault.isStatic());
+    public void builderDefault_defaults() {
+        // Bare @BuilderDefault means "retain", so the opt-out has to be written
+        // explicitly as @BuilderDefault(false).
+        assertDefault(BuilderDefault.class, "value", true);
+    }
+
+    @Test
+    public void builderIgnore_isAMarker() {
+        assertEquals("@BuilderIgnore takes no attributes",
+            0, BuilderIgnore.class.getDeclaredMethods().length);
     }
 
     @Test
@@ -157,11 +268,113 @@ public class AnnotationSurfaceTest {
     }
 
     @Test
+    public void equalsAndHashCode_defaults() throws Exception {
+        // EXACT_CLASS rather than Lombok's unconditional instanceof: it is the
+        // only one of the three that is a valid equivalence relation without
+        // cooperation from every subclass.
+        assertDefault(EqualsAndHashCode.class, "identity", EqualsAndHashCode.Identity.EXACT_CLASS);
+        // AUTO rather than a flat NO, which drops inherited state silently.
+        assertDefault(EqualsAndHashCode.class, "callSuper", CallSuper.AUTO);
+        // Memoizing is sound only while every compared member is immutable, so
+        // it stays opt-in.
+        assertDefault(EqualsAndHashCode.class, "cacheHashCode", false);
+        // Inverts Lombok: a direct field read cannot be intercepted by an
+        // overridden accessor, and it keeps the emitted pair independent of
+        // whether an accessor generator ran first.
+        assertDefault(EqualsAndHashCode.class, "useAccessors", false);
+        assertDefault(EqualsAndHashCode.class, "emitContracts", true);
+        assertDefault(EqualsAndHashCode.class, "emitGenerated", true);
+        assertArrayEquals(new String[0], (String[]) EqualsAndHashCode.class.getMethod("of").getDefaultValue());
+        assertArrayEquals(new String[0], (String[]) EqualsAndHashCode.class.getMethod("exclude").getDefaultValue());
+    }
+
+    @Test
+    public void toString_defaults() throws Exception {
+        assertDefault(ToString.class, "callSuper", CallSuper.AUTO);
+        assertDefault(ToString.class, "includeFieldNames", true);
+        // SIMPLIFIED is the shape a record already prints, so one library does
+        // not ship two.
+        assertDefault(ToString.class, "style", ToString.Style.SIMPLIFIED);
+        assertDefault(ToString.class, "useAccessors", false);
+        assertDefault(ToString.class, "emitContracts", true);
+        assertDefault(ToString.class, "emitGenerated", true);
+        assertArrayEquals(new String[0], (String[]) ToString.class.getMethod("of").getDefaultValue());
+        assertArrayEquals(new String[0], (String[]) ToString.class.getMethod("exclude").getDefaultValue());
+    }
+
+    /**
+     * The two annotations must default identically wherever they share an
+     * attribute name. One component resolves both selections, so a type whose
+     * compared state and printed state disagreed would do so for a reason
+     * nothing in its source shows.
+     */
+    @Test
+    public void equalityAndToString_shareTheirCommonDefaults() {
+        for (String attr : List.of("callSuper", "useAccessors", "emitContracts", "emitGenerated")) {
+            assertEquals("shared attribute " + attr,
+                defaultOf(EqualsAndHashCode.class, attr), defaultOf(ToString.class, attr));
+        }
+    }
+
+    @Test
+    public void toStringInclude_defaults() {
+        // An empty name keeps the member's own, so the annotation can be
+        // written for rank alone and vice versa.
+        assertDefault(ToStringInclude.class, "name", "");
+        assertDefault(ToStringInclude.class, "rank", 0);
+    }
+
+    /**
+     * Three of the four markers take no attributes, and {@code @EqualsInclude}
+     * is the one worth stating: it deliberately carries no rank, since ordering
+     * the compared terms would make an emitted hash depend on a rule invisible
+     * in the source, where the same attribute on its printing counterpart only
+     * reorders output.
+     */
+    @Test
+    public void selectionMarkers_carryNoAttributes() {
+        assertEquals("@EqualsExclude takes no attributes",
+            0, EqualsExclude.class.getDeclaredMethods().length);
+        assertEquals("@EqualsInclude takes no attributes",
+            0, EqualsInclude.class.getDeclaredMethods().length);
+        assertEquals("@ToStringExclude takes no attributes",
+            0, ToStringExclude.class.getDeclaredMethods().length);
+    }
+
+    @Test
     public void accessLevel_keywords() {
         assertEquals("public", AccessLevel.PUBLIC.toKeyword());
         assertEquals("protected", AccessLevel.PROTECTED.toKeyword());
         assertEquals("", AccessLevel.PACKAGE.toKeyword());
         assertEquals("private", AccessLevel.PRIVATE.toKeyword());
+    }
+
+    /**
+     * Pins the constant set and its order together. The set is published
+     * surface - dropping or renaming a constant breaks every consumer naming it
+     * - and holding the order as well means an insertion has to be a deliberate
+     * edit rather than something that slides in between two existing constants.
+     */
+    @Test
+    public void enumConstants_areStable() {
+        assertConstants(EqualsAndHashCode.Identity.class,
+            "EXACT_CLASS", "INSTANCE_OF", "INSTANCE_OF_CANEQUAL");
+        assertConstants(ToString.Style.class, "SIMPLIFIED", "LOMBOK");
+        assertConstants(CallSuper.class, "AUTO", "YES", "NO");
+    }
+
+    /**
+     * {@link CallSuper} is top level rather than nested in either annotation.
+     * Both face the identical question, and a type whose equality counted an
+     * inherited field while its printed form hid one would read as a bug in
+     * whichever member was looked at second.
+     */
+    @Test
+    public void callSuper_isSharedByBothAnnotations() throws Exception {
+        assertNull("CallSuper must stay top level so neither annotation owns it",
+            CallSuper.class.getEnclosingClass());
+        assertEquals(CallSuper.class, EqualsAndHashCode.class.getMethod("callSuper").getReturnType());
+        assertEquals(CallSuper.class, ToString.class.getMethod("callSuper").getReturnType());
     }
 
     // ------------------------------------------------------------------
@@ -179,36 +392,102 @@ public class AnnotationSurfaceTest {
     static final class FixtureOnClass { }
 
     static final class FixtureOnConstructor {
-        @ClassBuilder(builderName = "CtorBuilder")
+        @ClassBuilder(builder = @BuilderNames(type = "CtorBuilder"))
         FixtureOnConstructor(String x) {}
     }
 
     static final class FixtureOnMethod {
-        @ClassBuilder(builderName = "MethodBuilder")
+        @ClassBuilder(builder = @BuilderNames(type = "MethodBuilder"))
         static FixtureOnMethod of(String x) { return new FixtureOnMethod(); }
     }
 
     static final class FixtureOnFields {
-        @BuildRule(flag = @BuildFlag(nonNull = true, notEmpty = true, limit = 10, pattern = "[a-z]+", group = {"g"})) String a;
+        @BuildFlag(nonNull = true, notEmpty = true, limit = 10, pattern = "[a-z]+", group = {"g"}) String a;
         @Collector(singular = true, clearable = true) List<String> bs;
         @Collector(singularMethodName = "entry", singular = true) Map<String, String> cs;
         @Negate("disabled") boolean enabled;
         @Formattable String text;
-        @BuildRule(retainInit = true) String defaulted = "x";
-        @BuildRule(ignore = true) String ignored;
-        @BuildRule(obtainVia = @ObtainVia(method = "getCustomAccess")) String custom;
-        @BuildRule(obtainVia = @ObtainVia(field = "other")) String redirect;
-        @BuildRule(obtainVia = @ObtainVia(method = "stat", isStatic = true)) String staticCall;
+        @BuilderDefault(false) String notDefaulted = "x";
+        @BuilderIgnore String ignored;
+        @ObtainVia(method = "getCustomAccess") String custom;
+        @ObtainVia(field = "other") String redirect;
+        @ObtainVia(method = "stat", isStatic = true) String staticCall;
         @SuppressWarnings("unused") Optional<String> optionalString;
     }
 
+    /**
+     * The interface-target surface: an accessor is the only place a constraint
+     * can be written when the type declares no fields. That this compiles is
+     * the target-compatibility proof; the copy onto the generated Impl field is
+     * covered by the processor's own tests.
+     *
+     * <p>Deliberately not {@code @ClassBuilder}-annotated. The processor does
+     * not run over this source set, but were it ever wired up it would try to
+     * emit a top-level {@code FixtureOnAccessorsImpl implements
+     * FixtureOnAccessors} - which does not resolve for a nested interface.
+     */
+    interface FixtureOnAccessors {
+        @BuildFlag(nonNull = true, notEmpty = true) String name();
+        @BuildFlag(limit = 25) List<String> tags();
+    }
+
+    /**
+     * The equality and printing surface at every target it declares, with both
+     * type-level annotations carrying a non-default value for each attribute
+     * that has one. Compiling is the proof: none of it survives to runtime.
+     */
+    @EqualsAndHashCode(
+        identity = EqualsAndHashCode.Identity.INSTANCE_OF_CANEQUAL,
+        callSuper = CallSuper.NO,
+        exclude = "loadedAt",
+        cacheHashCode = true,
+        useAccessors = true,
+        emitContracts = false,
+        emitGenerated = false)
+    @ToString(
+        callSuper = CallSuper.NO,
+        includeFieldNames = false,
+        style = ToString.Style.LOMBOK,
+        of = {"name", "swatches"},
+        useAccessors = true,
+        emitContracts = false,
+        emitGenerated = false)
+    static class FixtureOnEqualityTarget {
+        String name;
+        byte[] swatches;
+        @EqualsExclude @ToStringExclude long loadedAt;
+        // The include markers override the transient skip, which is the one
+        // place the two selections deliberately start from different sets.
+        @EqualsInclude @ToStringInclude(name = "id", rank = 10) transient String key;
+
+        @EqualsInclude @ToStringInclude String derived() { return name + key; }
+    }
+
+    /**
+     * A record is a legal target for both, which is the shape that needs them
+     * most - an implicit {@code equals} compares an array component by
+     * reference.
+     *
+     * @param name a reference component, compared through {@code Objects.equals}
+     * @param swatches an array component, the one an implicit {@code equals} gets wrong
+     */
+    @EqualsAndHashCode
+    @ToString
+    record FixtureOnEqualityRecord(String name, byte[] swatches) { }
+
     @Test
-    public void buildRule_flag_visibleAtRuntime_onField() throws Exception {
+    public void buildFlag_visibleAtRuntime_onAccessor() throws Exception {
+        BuildFlag flag = FixtureOnAccessors.class.getDeclaredMethod("name").getAnnotation(BuildFlag.class);
+        assertNotNull("BuildFlag on an accessor should be readable", flag);
+        assertTrue(flag.nonNull());
+        assertTrue(flag.notEmpty());
+    }
+
+    @Test
+    public void buildFlag_visibleAtRuntime_onField() throws Exception {
         Field a = FixtureOnFields.class.getDeclaredField("a");
-        BuildRule rule = a.getAnnotation(BuildRule.class);
-        assertNotNull("BuildRule is RUNTIME-retained and should be readable", rule);
-        BuildFlag flag = rule.flag();
-        assertNotNull("BuildFlag nested in BuildRule should be readable", flag);
+        BuildFlag flag = a.getAnnotation(BuildFlag.class);
+        assertNotNull("BuildFlag is RUNTIME-retained and should be readable", flag);
         assertTrue(flag.nonNull());
         assertTrue(flag.notEmpty());
         assertEquals(10, flag.limit());
@@ -216,18 +495,14 @@ public class AnnotationSurfaceTest {
         assertArrayEquals(new String[] {"g"}, flag.group());
     }
 
-    @Test
-    public void buildRule_obtainVia_visibleAtRuntime_onField() throws Exception {
-        Field custom = FixtureOnFields.class.getDeclaredField("custom");
-        BuildRule rule = custom.getAnnotation(BuildRule.class);
-        assertNotNull(rule);
-        assertEquals("getCustomAccess", rule.obtainVia().method());
-    }
-
+    /**
+     * Guards the reason the four field annotations were split apart: only
+     * {@code @BuildFlag} needs to reach runtime, and the other three must not be
+     * dragged into consumer class files with it. Before the split they shared a
+     * single RUNTIME-retained parent and all four were reflectively visible.
+     */
     @Test
     public void classRetentionAnnotations_invisibleAtRuntime_asDesigned() {
-        // Confirm the CLASS-retention contract: these should NOT be reflectively
-        // visible. If they become visible, someone flipped a retention unintentionally.
         assertEquals(0, annotationsByName(FixtureOnClass.class.getAnnotations(), "ClassBuilder"));
         for (Field f : FixtureOnFields.class.getDeclaredFields()) {
             Annotation[] annos = f.getAnnotations();
@@ -237,7 +512,40 @@ public class AnnotationSurfaceTest {
                 0, annotationsByName(annos, "Negate"));
             assertEquals("Formattable should be invisible at runtime on " + f.getName(),
                 0, annotationsByName(annos, "Formattable"));
+            assertEquals("BuilderDefault should be invisible at runtime on " + f.getName(),
+                0, annotationsByName(annos, "BuilderDefault"));
+            assertEquals("BuilderIgnore should be invisible at runtime on " + f.getName(),
+                0, annotationsByName(annos, "BuilderIgnore"));
+            assertEquals("ObtainVia should be invisible at runtime on " + f.getName(),
+                0, annotationsByName(annos, "ObtainVia"));
         }
+    }
+
+    /**
+     * The same guard for the equality and printing surface, which is
+     * CLASS-retained end to end. Nothing reads any of the six after the
+     * compile, so a RUNTIME retention would drag them into every consumer class
+     * file that carried one for no reader at all.
+     */
+    @Test
+    public void equalitySurface_invisibleAtRuntime_asDesigned() throws Exception {
+        Annotation[] onType = FixtureOnEqualityTarget.class.getAnnotations();
+        assertEquals("EqualsAndHashCode should be invisible at runtime",
+            0, annotationsByName(onType, "EqualsAndHashCode"));
+        assertEquals("ToString should be invisible at runtime",
+            0, annotationsByName(onType, "ToString"));
+
+        Annotation[] onExcluded = FixtureOnEqualityTarget.class.getDeclaredField("loadedAt").getAnnotations();
+        assertEquals("EqualsExclude should be invisible at runtime",
+            0, annotationsByName(onExcluded, "EqualsExclude"));
+        assertEquals("ToStringExclude should be invisible at runtime",
+            0, annotationsByName(onExcluded, "ToStringExclude"));
+
+        Annotation[] onMethod = FixtureOnEqualityTarget.class.getDeclaredMethod("derived").getAnnotations();
+        assertEquals("EqualsInclude should be invisible at runtime",
+            0, annotationsByName(onMethod, "EqualsInclude"));
+        assertEquals("ToStringInclude should be invisible at runtime",
+            0, annotationsByName(onMethod, "ToStringInclude"));
     }
 
     private static long annotationsByName(Annotation[] annotations, String simpleName) {
@@ -265,12 +573,22 @@ public class AnnotationSurfaceTest {
     }
 
     private static void assertDefault(Class<? extends Annotation> annotation, String attr, Object expected) {
+        assertEquals(annotation.getSimpleName() + "#" + attr, expected, defaultOf(annotation, attr));
+    }
+
+    private static Object defaultOf(Class<? extends Annotation> annotation, String attr) {
         try {
             Method m = annotation.getMethod(attr);
-            assertEquals(annotation.getSimpleName() + "#" + attr, expected, m.getDefaultValue());
+            return m.getDefaultValue();
         } catch (NoSuchMethodException e) {
             throw new AssertionError("missing attribute " + attr + " on " + annotation, e);
         }
+    }
+
+    private static void assertConstants(Class<? extends Enum<?>> type, String... expected) {
+        List<String> actual = new ArrayList<>();
+        for (Enum<?> constant : type.getEnumConstants()) actual.add(constant.name());
+        assertEquals(type.getSimpleName() + " constants", Arrays.asList(expected), actual);
     }
 
 }

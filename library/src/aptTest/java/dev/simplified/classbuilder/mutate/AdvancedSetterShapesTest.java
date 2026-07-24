@@ -100,12 +100,13 @@ public class AdvancedSetterShapesTest {
         Object t2 = builder.getMethod("build").invoke(b2);
         assertEquals(Boolean.FALSE, toggle.getMethod("isDisabled").invoke(t2));
 
-        // Typed inverse: isEnabled(true) -> disabled=false; isEnabled(false) -> disabled=true.
+        // Typed inverse takes the `set` role over the negate stem, so it is
+        // enabled(boolean): enabled(true) -> disabled=false, enabled(false) -> disabled=true.
         Object b3 = toggle.getMethod("builder").invoke(null);
-        builder.getMethod("isEnabled", boolean.class).invoke(b3, true);
+        builder.getMethod("enabled", boolean.class).invoke(b3, true);
         assertEquals(Boolean.FALSE, toggle.getMethod("isDisabled").invoke(builder.getMethod("build").invoke(b3)));
         Object b4 = toggle.getMethod("builder").invoke(null);
-        builder.getMethod("isEnabled", boolean.class).invoke(b4, false);
+        builder.getMethod("enabled", boolean.class).invoke(b4, false);
         assertEquals(Boolean.TRUE, toggle.getMethod("isDisabled").invoke(builder.getMethod("build").invoke(b4)));
     }
 

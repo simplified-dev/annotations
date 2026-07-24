@@ -1,7 +1,5 @@
 package dev.simplified.classbuilder.mutate;
-
 import com.sun.tools.javac.code.Flags;
-import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.JCTree.JCAnnotation;
 import com.sun.tools.javac.tree.JCTree.JCBlock;
 import com.sun.tools.javac.tree.JCTree.JCEnhancedForLoop;
@@ -10,12 +8,18 @@ import com.sun.tools.javac.tree.JCTree.JCMethodDecl;
 import com.sun.tools.javac.tree.JCTree.JCModifiers;
 import com.sun.tools.javac.tree.JCTree.JCStatement;
 import com.sun.tools.javac.tree.JCTree.JCVariableDecl;
+import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.TreeMaker;
 import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Name;
 import com.sun.tools.javac.util.Names;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.classbuilder.apt.SetterScheme;
+import dev.simplified.shared.javac.AstMarkers;
+import dev.simplified.shared.javac.ContractAnnotations;
+import dev.simplified.shared.javac.JavacBridge;
+import dev.simplified.shared.javac.JavacTypeFactory;
 
 /**
  * Emits one or more setter {@link JCMethodDecl}s per {@link FieldSpec},
@@ -47,40 +51,61 @@ final class FieldMutators {
         this.make = ctx.make();
         this.names = ctx.names();
         this.types = ctx.types();
-        this.contracts = new ContractAnnotations(ctx);
+        this.contracts = ctx.contracts();
     }
 
 
     /** Returns every setter the field should emit on the nested Builder. */
     List<JCMethodDecl> setters(FieldSpec field) {
         ListBuffer<JCMethodDecl> out = new ListBuffer<>();
+        if (field.lazy) {
+            // @Lazy fields take a dual shape: foo(T value) wraps as a constant
+            // Supplier; foo(Supplier<T>) stores the supplier verbatim. The
+            // builder slot is Supplier<T>, the target field is Lazy<T>, and
+            // the build() copy wraps the Supplier as Lazy.of(supplier) at
+            // construction time (via the constructor-param rewrite in
+            // LazyFieldMutator).
+            out.append(lazyValueSetter(field));
+            out.append(lazySupplierSetter(field));
+            return out.toList();
+        }
         if (field.isBoolean) {
-            out.append(booleanZeroArg(field, field.name, false));
+            // The typed setter is the ordinary `set` role, so a boolean is named
+            // like every other field; the zero-arg form is the separate `flag`
+            // role and drops out entirely when a style suppresses it.
+            if (setters().emitsFlag()) out.append(booleanZeroArg(field, field.name, false));
             out.append(booleanTyped(field, field.name, false));
             if (field.negateName != null && !field.negateName.isEmpty()) {
-                out.append(booleanZeroArg(field, field.negateName, true));
+                if (setters().emitsFlag()) out.append(booleanZeroArg(field, field.negateName, true));
                 out.append(booleanTyped(field, field.negateName, true));
             }
         } else if (field.isOptional) {
             out.append(optionalNullableRaw(field));
             out.append(optionalWrapped(field));
-            if (field.formattable && "java.lang.String".equals(field.optionalInner)) {
+            if (field.formattable && field.isOptionalString) {
                 out.append(optionalFormattable(field));
             }
         } else if (field.isArray) {
             out.append(arrayVarargs(field));
         } else if ((field.isListLike || field.isMap) && field.collector) {
-            // @Collector: bulk overloads always; add/put/clear/compute opt-in.
-            if (field.isMap) {
-                out.append(singularMapReplace(field));
-                if (field.singular) out.append(singularMapPut(field));
-                if (field.compute) out.append(singularMapPutIfAbsent(field));
+            if (field.isCustomContainer && !hasInit(field)) {
+                // Custom container with @Collector but no captured initializer
+                // to build fresh instances from - degrade to a plain replace
+                // setter (the processor emits a NOTE explaining how to enable it).
+                out.append(plainSetter(field));
             } else {
-                out.append(singularCollectionVarargsReplace(field));
-                out.append(singularCollectionIterableReplace(field));
-                if (field.singular) out.append(singularCollectionAdd(field));
+                // @Collector: bulk overloads always; add/put/clear/compute opt-in.
+                if (field.isMap) {
+                    out.append(singularMapReplace(field));
+                    if (field.singular && setters().emitsPut()) out.append(singularMapPut(field));
+                    if (field.compute && setters().emitsCompute()) out.append(singularMapPutIfAbsent(field));
+                } else {
+                    out.append(singularCollectionVarargsReplace(field));
+                    out.append(singularCollectionIterableReplace(field));
+                    if (field.singular && setters().emitsAdd()) out.append(singularCollectionAdd(field));
+                }
+                if (field.clearable && setters().emitsClear()) out.append(singularClear(field));
             }
-            if (field.clearable) out.append(singularClear(field));
         } else if (field.isString && field.formattable) {
             out.append(plainSetter(field));
             out.append(stringFormattable(field));
@@ -94,11 +119,44 @@ final class FieldMutators {
      * Private-access field declaration on the nested Builder itself, matching
      * the target's type. Collection/Map/Optional types receive the same
      * defensive initialisers the sibling emitter uses so unset slots are
-     * never null.
+     * never null. {@code @Lazy} fields are stored as
+     * {@code Supplier<T>} so callers can opt into eager-from-value or
+     * lazy-from-supplier semantics through the dual setter pair.
      */
     JCVariableDecl fieldDecl(FieldSpec field) {
-        JCExpression fieldType = types.parseType(field.typeDisplay);
-        JCExpression init = defaultInitializer(field);
+        // A field whose default reads instance state is stored as Supplier<T>
+        // for the same reason a @Lazy field is: the constructor must tell "never
+        // set" from "set to null" without a parallel flag, and null is
+        // unambiguous on a Supplier-typed slot because every setter wraps its
+        // argument. The constructor reads null as "apply my default instead".
+        // A collected instance default keeps its declared container type - the
+        // add/put/clear setters need something real to mutate - and carries the
+        // caller's contributions only, which the constructor folds onto the
+        // instance-computed default. A separate marker records a wholesale
+        // replace, the one case where the default must be discarded.
+        if (ctx.isCollectedInstanceDefault(field)) {
+            return make.VarDef(
+                make.Modifiers(Flags.PRIVATE),
+                names.fromString(field.name),
+                ctx.collectedSlotType(field),
+                freshContainer(field)
+            );
+        }
+        boolean supplierTyped = field.lazy || ctx.isInstanceDefault(field.name);
+        JCExpression fieldType = supplierTyped
+            ? make.TypeApply(types.qualIdent("java.util.function.Supplier"),
+                List.of(types.parseBoxedType(field.typeDisplay)))
+            : types.parseType(field.typeDisplay);
+        JCExpression init;
+        if (ctx.isInstanceDefault(field.name)) {
+            // No slot default: $default$<name>() is an instance method here, so
+            // it cannot be called before a target exists.
+            init = null;
+        } else if (field.lazy) {
+            init = lazyDefaultInitializer(field);
+        } else {
+            init = defaultInitializer(field);
+        }
         return make.VarDef(
             make.Modifiers(Flags.PRIVATE),
             names.fromString(field.name),
@@ -107,25 +165,41 @@ final class FieldMutators {
         );
     }
 
+    /**
+     * Builder-slot default for a {@code @Lazy} field. The slot is typed
+     * {@code Supplier<T>} while the provider returns {@code T}, so the call is
+     * wrapped in a lambda rather than used directly. That also keeps both
+     * properties the two features promise separately: evaluation stays deferred
+     * to the first {@code get()}, and each builder holds its own lambda so the
+     * default is still computed fresh per {@code build()}.
+     *
+     * <p>Only a captured initializer produces a default; a {@code @Lazy} field
+     * without one leaves the slot null, and the setter must fill it.
+     */
+    private JCExpression lazyDefaultInitializer(FieldSpec field) {
+        if (!hasInit(field)) return null;
+        return make.Lambda(List.nil(), providerCall(field));
+    }
+
     private JCExpression defaultInitializer(FieldSpec field) {
-        // @BuildRule(retainInit = true): the Builder's field default is a
-        // call to the synthesised Target.$default$<fieldName>() static method.
-        // That method (injected by RetainedInitFactory) contains the original
-        // declared initializer expression inside a normal method body, so
-        // javac's flow analyser handles it correctly. Embedding the expression
-        // directly in this field init was attempted and causes position-
-        // bookkeeping crashes in Flow$AssignAnalyzer.
-        if (field.builderDefault && field.sourceInitializer != null
-                && !field.sourceInitializer.isEmpty()) {
-            return make.Apply(
-                List.nil(),
-                make.Select(
-                    make.Ident(names.fromString(ctx.targetSimpleName())),
-                    names.fromString(RetainedInitFactory.providerName(field.name))
-                ),
-                List.nil()
-            );
-        }
+        // A captured field initializer (from a retained initializer or an
+        // auto-captured @Collector on a custom container) becomes a call to the
+        // synthesised Target.$default$<fieldName>() static method. That method
+        // (injected by RetainedInitFactory) contains the original declared
+        // initializer expression inside a normal method body, so javac's flow
+        // analyser handles it correctly. Embedding the expression directly in
+        // this field init was attempted and causes position-bookkeeping crashes
+        // in Flow$AssignAnalyzer.
+        if (hasInit(field)) return mutableIfCollected(field, providerCall(field));
+        // A custom container has no new ArrayList<>()-style default that is
+        // assignable to its own type; without a captured initializer the
+        // builder slot stays null and a plain replace setter fills it.
+        if (field.isCustomContainer) return null;
+        // An array is a container like the rest, so an unset slot is empty
+        // rather than null - iterating the result of build() should not depend
+        // on whether a setter happened to be called. The setter is varargs, so
+        // this is also what calling it with no arguments already produces.
+        if (field.isArray) return emptyArray(field);
         if (field.isOptional) {
             return make.Apply(
                 List.nil(),
@@ -145,18 +219,211 @@ final class FieldMutators {
         return null;
     }
 
+    /**
+     * The {@code boolean $replaced$<name>} marker accompanying a collected
+     * instance default's slot, or {@code null} when the field needs none.
+     * Emitted alongside the slot so the constructor can tell a wholesale
+     * replace (discard the default) from an append (fold onto it).
+     *
+     * @param field the field being declared
+     * @return the marker declaration, or {@code null}
+     */
+    JCVariableDecl replacedMarkerDecl(FieldSpec field) {
+        if (!ctx.isCollectedInstanceDefault(field)) return null;
+        return make.VarDef(
+            make.Modifiers(Flags.PRIVATE),
+            names.fromString(MutationContext.replacedMarker(field.name)),
+            make.TypeIdent(com.sun.tools.javac.code.TypeTag.BOOLEAN),
+            make.Literal(false)
+        );
+    }
+
+    /** {@code this.$replaced$<name> = true;} - marks the default discarded. */
+    private JCStatement markReplaced(FieldSpec field) {
+        return make.Exec(make.Assign(
+            make.Select(make.Ident(names._this),
+                names.fromString(MutationContext.replacedMarker(field.name))),
+            make.Literal(true)
+        ));
+    }
+
+    /**
+     * Prepends the replaced marker to a wholesale-replace setter's body when the
+     * field takes the merge path; otherwise returns the body unchanged.
+     */
+    private List<JCStatement> withReplacedMark(FieldSpec field, List<JCStatement> body) {
+        if (!ctx.isCollectedInstanceDefault(field)) return body;
+        return body.prepend(markReplaced(field));
+    }
+
+    /**
+     * Copies a {@code @Collector} field's retained default into a fresh mutable
+     * container. The field's own {@code add} / {@code put} / {@code clear}
+     * setters mutate the slot in place, so seeding it with the initializer's
+     * own instance makes an immutable default - {@code List.of("a")}, the
+     * idiomatic way to write a small one - throw
+     * {@link UnsupportedOperationException} on the first call. Copying also
+     * stops a default that returns shared state from being mutated through the
+     * builder.
+     *
+     * <p>A custom container is left alone: {@code new ArrayList<>(...)} is not
+     * assignable to its type, and its provider is the field's own factory, so
+     * it already yields something the setters can work with.
+     *
+     * @param field the field being defaulted
+     * @param provider the call to the field's {@code $default$} provider
+     * @return the provider call, wrapped in a mutable copy where one is needed
+     */
+    private JCExpression mutableIfCollected(FieldSpec field, JCExpression provider) {
+        if (!field.collector || field.isCustomContainer) return provider;
+        String fqn = field.isMap ? "java.util.LinkedHashMap"
+            : field.isSet ? "java.util.LinkedHashSet"
+            : field.isListLike ? "java.util.ArrayList"
+            : null;
+        if (fqn == null) return provider;
+        return make.NewClass(null, List.nil(),
+            make.TypeApply(types.qualIdent(fqn), List.nil()), List.of(provider), null);
+    }
+
+    /**
+     * {@code new T[0]} for an array field, using the declared component type so
+     * a multi-dimensional field yields a correctly-shaped empty outer array.
+     */
+    private JCExpression emptyArray(FieldSpec field) {
+        JCExpression component = types.parseType(field.collectionElement);
+        return make.NewArray(component, List.of(make.Literal(0)), null);
+    }
+
+    /**
+     * Assigns the builder slot, wrapping the value as {@code () -> value} when
+     * the field takes the constructor-computed path. The slot is
+     * {@code Supplier<T>} there, and every setter has to wrap so that null keeps
+     * meaning "never set" - an explicit null becomes {@code () -> null} and
+     * survives as the caller's chosen value.
+     *
+     * @param field the field being set
+     * @param value the value expression, in the slot's declared type
+     * @return the assignment statement
+     */
+    private JCStatement slotAssign(FieldSpec field, JCExpression value) {
+        JCExpression rhs = ctx.isInstanceDefault(field.name)
+            ? make.Lambda(List.nil(), value)
+            : value;
+        return make.Exec(make.Assign(
+            make.Select(make.Ident(names._this), names.fromString(field.name)),
+            rhs
+        ));
+    }
+
+    /** Slot assignment from a like-named parameter, then {@code return this;}. */
+    private List<JCStatement> assignAndReturnThis(FieldSpec field) {
+        return List.of(slotAssign(field, make.Ident(names.fromString(field.name))), returnThis());
+    }
+
+    /** Whether the field's declared initializer was captured for reuse as a builder default. */
+    private static boolean hasInit(FieldSpec field) {
+        return field.sourceInitializer != null && !field.sourceInitializer.isEmpty();
+    }
+
+    /** Call to the target's synthesised {@code $default$<field>()} initializer provider. */
+    private JCExpression providerCall(FieldSpec field) {
+        return make.Apply(
+            List.nil(),
+            make.Select(
+                make.Ident(names.fromString(ctx.targetSimpleName())),
+                names.fromString(RetainedInitFactory.providerName(field.name))
+            ),
+            List.nil()
+        );
+    }
+
+    /**
+     * A fresh, empty container for a {@code @Collector} reset setter. A custom
+     * container comes from the field's own {@code $default$} provider, because
+     * {@code new ArrayList<>()} (etc.) is not assignable to the field's own
+     * type; java.util containers use the matching concrete implementation.
+     */
+    /** Call to the target's synthesised {@code $empty$<field>()} factory. */
+    private JCExpression emptyFactoryCall(FieldSpec field) {
+        return make.Apply(
+            List.nil(),
+            make.Select(
+                make.Ident(names.fromString(ctx.targetSimpleName())),
+                names.fromString(RetainedInitFactory.emptyName(field.name))
+            ),
+            List.nil()
+        );
+    }
+
+    private JCExpression freshContainer(FieldSpec field) {
+        // A collected instance default collects into a plain java.util scratch:
+        // the real container comes from the initializer in the constructor, so
+        // nothing here has to build the declared type at all.
+        if (ctx.isCollectedInstanceDefault(field)) return ctx.freshCollectedSlot(field);
+        // A custom container otherwise resets through the emptied copy of its
+        // own initializer - the only expression able to produce the declared
+        // type - and the initializer is the field's default as well as its
+        // factory, so a replace setter must not keep its contents.
+        if (field.isCustomContainer) return emptyFactoryCall(field);
+        String fqn = field.isMap ? "java.util.LinkedHashMap"
+            : field.isSet ? "java.util.LinkedHashSet"
+            : "java.util.ArrayList";
+        return make.NewClass(null, List.nil(),
+            make.TypeApply(types.qualIdent(fqn), List.nil()), List.nil(), null);
+    }
+
     // ------------------------------------------------------------------
     // Setter shapes
     // ------------------------------------------------------------------
 
+    // ------------------------------------------------------------------
+    // @Lazy shapes
+    // ------------------------------------------------------------------
+
+    /**
+     * {@code Builder withFoo(T value)} - eager value form. Stores
+     * {@code () -> value} in the {@code Supplier<T>} slot so the eventual
+     * {@code Lazy.of(supplier)} on the target side returns the value
+     * immediately on first {@code get()}. Slot is {@code Supplier<T>} so
+     * the synthesized constructor receives a Supplier and wraps as
+     * {@code Lazy.of(supplier)}.
+     */
+    private JCMethodDecl lazyValueSetter(FieldSpec field) {
+        String setterName = setters().setName(field.name);
+        JCExpression valueType = types.parseType(field.typeDisplay);
+        JCVariableDecl p = param(field.name, valueType);
+        // this.<name> = () -> <name>;
+        JCExpression lambda = make.Lambda(List.nil(), make.Ident(names.fromString(field.name)));
+        JCStatement assign = make.Exec(make.Assign(
+            make.Select(make.Ident(names._this), names.fromString(field.name)),
+            lambda
+        ));
+        return methodDefRaw(setterName, List.of(p), List.of(assign, returnThis()));
+    }
+
+    /**
+     * {@code Builder withFoo(Supplier<T> supplier)} - true lazy form.
+     * Stores the supplier verbatim; first call to the target's getter
+     * evaluates the supplier and memoizes the result.
+     */
+    private JCMethodDecl lazySupplierSetter(FieldSpec field) {
+        String setterName = setters().setName(field.name);
+        JCExpression supplierType = make.TypeApply(
+            types.qualIdent("java.util.function.Supplier"),
+            List.of(types.parseType(field.typeDisplay))
+        );
+        return methodDef(setterName, param(field.name, supplierType), assignAndReturnThis(field.name));
+    }
+
     private JCMethodDecl plainSetter(FieldSpec field) {
-        String setterName = methodName(field.name, false);
+        String setterName = setters().setName(field.name);
         JCExpression fieldType = types.parseType(field.typeDisplay);
-        return methodDef(setterName, param(field.name, fieldType), assignAndReturnThis(field.name));
+        JCVariableDecl p = nullnessParam(field.name, fieldType, field);
+        return methodDef(setterName, p, assignAndReturnThis(field));
     }
 
     private JCMethodDecl arrayVarargs(FieldSpec field) {
-        String setterName = methodName(field.name, false);
+        String setterName = setters().setName(field.name);
         JCExpression elemType = types.parseType(field.collectionElement);
         JCVariableDecl p = make.VarDef(
             make.Modifiers(Flags.PARAMETER | Flags.VARARGS),
@@ -164,33 +431,27 @@ final class FieldMutators {
             make.TypeArray(elemType),
             null
         );
-        return methodDefRaw(setterName, List.of(p), assignAndReturnThis(field.name));
+        return methodDefRaw(setterName, List.of(p), assignAndReturnThis(field));
     }
 
     private JCMethodDecl booleanZeroArg(FieldSpec field, String methodBase, boolean inverse) {
-        String setterName = "is" + capitalise(methodBase);
-        JCStatement assign = make.Exec(make.Assign(
-            make.Select(make.Ident(names._this), names.fromString(field.name)),
-            make.Literal(!inverse)
-        ));
+        String setterName = setters().flagName(methodBase);
+        JCStatement assign = slotAssign(field, make.Literal(!inverse));
         return methodDefRaw(setterName, List.nil(), List.of(assign, returnThis()));
     }
 
     private JCMethodDecl booleanTyped(FieldSpec field, String methodBase, boolean inverse) {
-        String setterName = "is" + capitalise(methodBase);
+        String setterName = setters().setName(methodBase);
         JCExpression paramRef = make.Ident(names.fromString(methodBase));
         JCExpression value = inverse ? make.Unary(JCTree.Tag.NOT, paramRef) : paramRef;
-        JCStatement assign = make.Exec(make.Assign(
-            make.Select(make.Ident(names._this), names.fromString(field.name)),
-            value
-        ));
+        JCStatement assign = slotAssign(field, value);
         JCVariableDecl p = param(methodBase, make.TypeIdent(com.sun.tools.javac.code.TypeTag.BOOLEAN));
         return methodDefRaw(setterName, List.of(p), List.of(assign, returnThis()));
     }
 
     /** {@code Builder withX(T x)} where x is the Optional's inner type, wraps via {@code Optional.ofNullable}. */
     private JCMethodDecl optionalNullableRaw(FieldSpec field) {
-        String setterName = methodName(field.name, false);
+        String setterName = setters().setName(field.name);
         JCExpression inner = types.parseType(field.optionalInner);
         JCVariableDecl p = param(field.name, inner);
 
@@ -210,12 +471,12 @@ final class FieldMutators {
 
     /** {@code Builder withX(Optional<T> x)} assigns directly. */
     private JCMethodDecl optionalWrapped(FieldSpec field) {
-        String setterName = methodName(field.name, false);
+        String setterName = setters().setName(field.name);
         JCExpression optType = make.TypeApply(
             types.qualIdent("java.util.Optional"),
             List.of(types.parseType(field.optionalInner))
         );
-        return methodDef(setterName, param(field.name, optType), assignAndReturnThis(field.name));
+        return methodDef(setterName, param(field.name, optType), assignAndReturnThis(field));
     }
 
     // ------------------------------------------------------------------
@@ -229,7 +490,7 @@ final class FieldMutators {
      * null format string survives.
      */
     private JCMethodDecl stringFormattable(FieldSpec field) {
-        String setterName = methodName(field.name, false);
+        String setterName = setters().setName(field.name);
         boolean nullable = field.nullable;
         JCExpression stringType = types.qualIdent("java.lang.String");
         JCVariableDecl formatParam = annotatedParam(
@@ -266,10 +527,7 @@ final class FieldMutators {
                     make.Ident(names.fromString("args")))
             );
         }
-        JCStatement assign = make.Exec(make.Assign(
-            make.Select(make.Ident(names._this), names.fromString(field.name)),
-            rhs
-        ));
+        JCStatement assign = slotAssign(field, rhs);
         return methodDefRaw(setterName, List.of(formatParam, argsParam),
             List.of(assign, returnThis()));
     }
@@ -281,7 +539,7 @@ final class FieldMutators {
      * Optional wrapper is preserved.
      */
     private JCMethodDecl optionalFormattable(FieldSpec field) {
-        String setterName = methodName(field.name, false);
+        String setterName = setters().setName(field.name);
         JCExpression stringType = types.qualIdent("java.lang.String");
         JCVariableDecl formatParam = annotatedParam(
             field.name, stringType,
@@ -302,10 +560,7 @@ final class FieldMutators {
             List.of(make.Ident(names.fromString(field.name)),
                 make.Ident(names.fromString("args")))
         );
-        JCStatement assign = make.Exec(make.Assign(
-            make.Select(make.Ident(names._this), names.fromString(field.name)),
-            rhs
-        ));
+        JCStatement assign = slotAssign(field, rhs);
         return methodDefRaw(setterName, List.of(formatParam, argsParam),
             List.of(assign, returnThis()));
     }
@@ -319,7 +574,7 @@ final class FieldMutators {
      * collection and copies every element. Used for List/Set @Collector fields.
      */
     private JCMethodDecl singularCollectionVarargsReplace(FieldSpec field) {
-        String setterName = methodName(field.name, false);
+        String setterName = setters().setName(field.name);
         JCExpression elemType = types.parseType(field.collectionElement);
         JCVariableDecl varargs = make.VarDef(
             make.Modifiers(Flags.PARAMETER | Flags.VARARGS),
@@ -327,13 +582,10 @@ final class FieldMutators {
             make.TypeArray(elemType),
             null
         );
-        // this.field = new <Container>();
-        String containerFqn = field.isSet ? "java.util.LinkedHashSet" : "java.util.ArrayList";
+        // this.field = <fresh empty container>;
         JCStatement assignFresh = make.Exec(make.Assign(
             make.Select(make.Ident(names._this), names.fromString(field.name)),
-            make.NewClass(null, List.nil(),
-                make.TypeApply(types.qualIdent(containerFqn), List.nil()),
-                List.nil(), null)
+            freshContainer(field)
         ));
         // for (T e : field) this.field.add(e);
         JCEnhancedForLoop loop = make.ForeachLoop(
@@ -348,7 +600,7 @@ final class FieldMutators {
             ))
         );
         return methodDefRaw(setterName, List.of(varargs),
-            List.of(assignFresh, loop, returnThis()));
+            withReplacedMark(field, List.of(assignFresh, loop, returnThis())));
     }
 
     /**
@@ -356,20 +608,17 @@ final class FieldMutators {
      * collection and forEach-adds every element.
      */
     private JCMethodDecl singularCollectionIterableReplace(FieldSpec field) {
-        String setterName = methodName(field.name, false);
+        String setterName = setters().setName(field.name);
         JCExpression elemType = types.parseType(field.collectionElement);
         JCExpression iterableType = make.TypeApply(
             types.qualIdent("java.lang.Iterable"),
             List.of(elemType)
         );
         JCVariableDecl iterableParam = param(field.name, iterableType);
-        String containerFqn = field.isSet ? "java.util.LinkedHashSet" : "java.util.ArrayList";
 
         JCStatement assignFresh = make.Exec(make.Assign(
             make.Select(make.Ident(names._this), names.fromString(field.name)),
-            make.NewClass(null, List.nil(),
-                make.TypeApply(types.qualIdent(containerFqn), List.nil()),
-                List.nil(), null)
+            freshContainer(field)
         ));
         // entries.forEach(this.field::add)
         JCExpression methodRef = make.Reference(
@@ -384,13 +633,12 @@ final class FieldMutators {
             List.of(methodRef)
         ));
         return methodDefRaw(setterName, List.of(iterableParam),
-            List.of(assignFresh, forEach, returnThis()));
+            withReplacedMark(field, List.of(assignFresh, forEach, returnThis())));
     }
 
     /** {@code Builder addEntry(T entry)} that appends to the existing collection. */
     private JCMethodDecl singularCollectionAdd(FieldSpec field) {
-        String prefix = ctx.config().methodPrefix().isEmpty() ? "add" : ctx.config().methodPrefix();
-        String addName = prefix + capitalise(field.singularName);
+        String addName = setters().addName(field.singularName);
         JCExpression elemType = types.parseType(field.collectionElement);
         JCVariableDecl entryParam = param(field.singularName, elemType);
         JCStatement add = make.Exec(make.Apply(
@@ -406,7 +654,7 @@ final class FieldMutators {
 
     /** {@code Builder withEntries(Map<K, V> entries)} that replaces with a fresh LinkedHashMap. */
     private JCMethodDecl singularMapReplace(FieldSpec field) {
-        String setterName = methodName(field.name, false);
+        String setterName = setters().setName(field.name);
         JCExpression keyType = types.parseType(field.mapKey);
         JCExpression valueType = types.parseType(field.mapValue);
         JCExpression mapType = make.TypeApply(
@@ -414,6 +662,22 @@ final class FieldMutators {
             List.of(keyType, valueType)
         );
         JCVariableDecl mapParam = param(field.name, mapType);
+        if (field.isCustomContainer) {
+            // this.field = $default$field(); this.field.putAll(field);
+            JCStatement assignFresh = make.Exec(make.Assign(
+                make.Select(make.Ident(names._this), names.fromString(field.name)),
+                freshContainer(field)
+            ));
+            JCStatement putAll = make.Exec(make.Apply(
+                List.nil(),
+                make.Select(
+                    make.Select(make.Ident(names._this), names.fromString(field.name)),
+                    names.fromString("putAll")),
+                List.of(make.Ident(names.fromString(field.name)))
+            ));
+            return methodDefRaw(setterName, List.of(mapParam),
+                withReplacedMark(field, List.of(assignFresh, putAll, returnThis())));
+        }
         JCStatement assignFresh = make.Exec(make.Assign(
             make.Select(make.Ident(names._this), names.fromString(field.name)),
             make.NewClass(null, List.nil(),
@@ -422,12 +686,12 @@ final class FieldMutators {
                 null)
         ));
         return methodDefRaw(setterName, List.of(mapParam),
-            List.of(assignFresh, returnThis()));
+            withReplacedMark(field, List.of(assignFresh, returnThis())));
     }
 
     /** {@code Builder putEntry(K key, V value)} that puts into the existing map. */
     private JCMethodDecl singularMapPut(FieldSpec field) {
-        String putName = "put" + capitalise(field.singularName);
+        String putName = setters().putName(field.singularName);
         JCExpression keyType = types.parseType(field.mapKey);
         JCExpression valueType = types.parseType(field.mapValue);
         JCVariableDecl keyParam = param("key", keyType);
@@ -450,7 +714,7 @@ final class FieldMutators {
      * lazily for the value. Gated on {@code @Collector(compute = true)}.
      */
     private JCMethodDecl singularMapPutIfAbsent(FieldSpec field) {
-        String putName = "put" + capitalise(field.singularName) + "IfAbsent";
+        String putName = setters().computeName(field.singularName);
         JCExpression keyType = types.parseType(field.mapKey);
         JCExpression supplierType = make.TypeApply(
             types.qualIdent("java.util.function.Supplier"),
@@ -485,7 +749,7 @@ final class FieldMutators {
 
     /** {@code Builder clearEntries()} that empties the underlying collection or map. */
     private JCMethodDecl singularClear(FieldSpec field) {
-        String clearName = "clear" + capitalise(field.name);
+        String clearName = setters().clearName(field.name);
         JCStatement clear = make.Exec(make.Apply(
             List.nil(),
             make.Select(
@@ -493,7 +757,8 @@ final class FieldMutators {
                 names.fromString("clear")),
             List.nil()
         ));
-        return methodDefRaw(clearName, List.nil(), List.of(clear, returnThis()));
+        return methodDefRaw(clearName, List.nil(),
+            withReplacedMark(field, List.of(clear, returnThis())));
     }
 
     // ------------------------------------------------------------------
@@ -526,6 +791,21 @@ final class FieldMutators {
         );
     }
 
+    /**
+     * Field-type setter parameter that re-emits the field's own nullness
+     * annotation when it carries one. {@code parseType} strips any type-use
+     * {@code @NotNull}/{@code @Nullable} out of the field type (it would
+     * otherwise corrupt the qualified-name tree), so the hint is re-attached
+     * here as a plain declaration annotation on the parameter - restoring the
+     * IDE null-analysis the field declared. Fields without a nullness
+     * annotation get a bare parameter, exactly as before.
+     */
+    private JCVariableDecl nullnessParam(String name, JCExpression type, FieldSpec field) {
+        if (field.notNull) return annotatedParam(name, type, notNullAnnotation());
+        if (field.nullable) return annotatedParam(name, type, nullableAnnotation());
+        return param(name, type);
+    }
+
     private JCAnnotation printFormatAnnotation() {
         return make.Annotation(types.qualIdent("org.intellij.lang.annotations.PrintFormat"), List.nil());
     }
@@ -548,18 +828,21 @@ final class FieldMutators {
 
     /**
      * Core method-declaration builder. Public modifier; return type is the
-     * enclosing nested Builder's simple name so inherited this-chaining works
-     * without qualification. The attached {@code @XContract} (when
-     * {@code emitContracts = true}) is chosen by parameter arity: every
-     * setter shape here returns {@code this} and mutates the builder.
+     * enclosing nested Builder so inherited this-chaining works without
+     * qualification, carrying the target's type arguments on a generic target -
+     * returning the bare name there would erase the builder to a raw type and
+     * silently drop the parameter for the rest of the chain. The attached
+     * {@code @XContract} (when {@code emitContracts = true}) is chosen by
+     * parameter arity: every setter shape here returns {@code this} and mutates
+     * the builder.
      */
     private JCMethodDecl methodDefRaw(String methodName, List<JCVariableDecl> params, List<JCStatement> body) {
         JCModifiers mods = make.Modifiers(Flags.PUBLIC, thisReturnContract(params.size()));
         Name name = names.fromString(methodName);
-        JCExpression returnType = make.Ident(names.fromString(ctx.builderName()));
+        JCExpression returnType = ctx.builderType();
         JCBlock block = make.Block(0, body);
         JCMethodDecl method = make.MethodDef(mods, name, returnType, List.nil(), params, List.nil(), block, null);
-        AstMarkers.markGenerated(method);
+        AstMarkers.markGenerated(method, ctx.generated());
         return method;
     }
 
@@ -580,15 +863,8 @@ final class FieldMutators {
         };
     }
 
-    private String methodName(String fieldName, boolean forceBoolean) {
-        String prefix = forceBoolean ? "is" : ctx.config().methodPrefix();
-        if (prefix.isEmpty()) return fieldName;
-        return prefix + capitalise(fieldName);
-    }
-
-    private static String capitalise(String s) {
-        if (s == null || s.isEmpty()) return s;
-        return Character.toUpperCase(s.charAt(0)) + s.substring(1);
+    private SetterScheme setters() {
+        return ctx.config().setters();
     }
 
 }

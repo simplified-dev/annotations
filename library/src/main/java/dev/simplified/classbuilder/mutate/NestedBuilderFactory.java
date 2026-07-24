@@ -1,7 +1,5 @@
 package dev.simplified.classbuilder.mutate;
-
 import com.sun.tools.javac.code.Flags;
-import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.JCTree.JCBlock;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import com.sun.tools.javac.tree.JCTree.JCExpression;
@@ -9,11 +7,17 @@ import com.sun.tools.javac.tree.JCTree.JCMethodDecl;
 import com.sun.tools.javac.tree.JCTree.JCModifiers;
 import com.sun.tools.javac.tree.JCTree.JCStatement;
 import com.sun.tools.javac.tree.JCTree.JCVariableDecl;
+import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.TreeMaker;
 import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
+import dev.simplified.classbuilder.apt.BuilderConfig;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.shared.javac.AstMarkers;
+import dev.simplified.shared.javac.ContractAnnotations;
+import dev.simplified.shared.javac.JavacBridge;
+import dev.simplified.shared.javac.JavacTypeFactory;
 
 /**
  * Builds the nested {@code Builder} {@link JCClassDecl} that gets appended to
@@ -33,7 +37,7 @@ final class NestedBuilderFactory {
         this.make = ctx.make();
         this.names = ctx.names();
         this.fieldMutators = new FieldMutators(ctx);
-        this.contracts = new ContractAnnotations(ctx);
+        this.contracts = ctx.contracts();
     }
 
     JCClassDecl build() {
@@ -41,8 +45,13 @@ final class NestedBuilderFactory {
         // Fields
         for (FieldSpec f : ctx.fields()) {
             JCVariableDecl decl = fieldMutators.fieldDecl(f);
-            AstMarkers.markGenerated(decl);
+            AstMarkers.markGenerated(decl, ctx.generated());
             defs.append(decl);
+            JCVariableDecl marker = fieldMutators.replacedMarkerDecl(f);
+            if (marker != null) {
+                AstMarkers.markGenerated(marker, ctx.generated());
+                defs.append(marker);
+            }
         }
         // Setters
         for (FieldSpec f : ctx.fields()) {
@@ -52,28 +61,30 @@ final class NestedBuilderFactory {
         defs.append(buildMethod());
 
         // Builder class visibility follows @ClassBuilder.access; always STATIC
-        // because nested builders must not capture an enclosing this.
+        // because nested builders must not capture an enclosing this. Being
+        // static is also why a generic target's type parameters have to be
+        // re-declared here - the enclosing class's are out of scope.
         JCModifiers mods = make.Modifiers(ctx.accessFlag() | Flags.STATIC);
         JCClassDecl nested = make.ClassDef(
             mods,
             names.fromString(ctx.builderName()),
-            List.nil(),
+            ctx.typeParams(),
             null,
             List.nil(),
             defs.toList()
         );
-        AstMarkers.markGenerated(nested);
+        AstMarkers.markGenerated(nested, ctx.generated());
         return nested;
     }
 
     /**
      * Emits {@code public Target build() { Target t = new Target(f1, f2, ...);
      * (validate?) BuildFlagValidator.validate(t); return t; }}.
-     * Honours {@link dev.simplified.classbuilder.apt.BuilderConfig#validate()} and
-     * {@link dev.simplified.classbuilder.apt.BuilderConfig#factoryMethod()}.
+     * Honours {@link BuilderConfig#validate()} and
+     * {@link BuilderConfig#factoryMethod()}.
      *
      * <p>Validation runs against the constructed target, not the Builder,
-     * because {@code @BuildRule} annotations live on the target class's
+     * because {@code @BuildFlag} annotations live on the target class's
      * fields. The Builder's own fields are synthesised and unannotated, so
      * validating {@code this} was a no-op prior to this change.
      */
@@ -81,7 +92,14 @@ final class NestedBuilderFactory {
         ListBuffer<JCStatement> body = new ListBuffer<>();
 
         ListBuffer<JCExpression> args = new ListBuffer<>();
-        for (FieldSpec f : ctx.fields()) args.append(make.Ident(names.fromString(f.name)));
+        for (FieldSpec f : ctx.fields()) {
+            args.append(make.Ident(names.fromString(f.name)));
+            // A collected instance default passes its replaced marker alongside
+            // the container, matching the extra constructor parameter.
+            if (ctx.isCollectedInstanceDefault(f)) {
+                args.append(make.Ident(names.fromString(MutationContext.replacedMarker(f.name))));
+            }
+        }
 
         JCExpression instantiation;
         String factory = ctx.config().factoryMethod();
@@ -92,10 +110,12 @@ final class NestedBuilderFactory {
                 args.toList()
             );
         } else {
+            // Target, or Target<K, V> on a generic target - the Builder's own
+            // type parameters, which bind one-for-one with the target's.
             instantiation = make.NewClass(
                 null,
                 List.nil(),
-                make.Ident(names.fromString(ctx.targetSimpleName())),
+                ctx.targetType(),
                 args.toList(),
                 null
             );
@@ -103,7 +123,7 @@ final class NestedBuilderFactory {
 
         if (ctx.config().validate()) {
             // Target t = new Target(...); BuildFlagValidator.validate(t); return t;
-            JCExpression targetType = make.Ident(names.fromString(ctx.targetSimpleName()));
+            JCExpression targetType = ctx.targetType();
             JCVariableDecl targetVar = make.VarDef(
                 make.Modifiers(Flags.FINAL),
                 names.fromString("$result"),
@@ -125,7 +145,7 @@ final class NestedBuilderFactory {
         }
 
         JCBlock block = make.Block(0, body.toList());
-        JCExpression returnType = make.Ident(names.fromString(ctx.targetSimpleName()));
+        JCExpression returnType = ctx.targetType();
         // build() always returns a fresh target instance; "-> new" without
         // mutates or pure matches BuilderEmitter.emitBuildMethod.
         JCMethodDecl method = make.MethodDef(
@@ -138,7 +158,7 @@ final class NestedBuilderFactory {
             block,
             null
         );
-        AstMarkers.markGenerated(method);
+        AstMarkers.markGenerated(method, ctx.generated());
         return method;
     }
 

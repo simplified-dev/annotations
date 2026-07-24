@@ -9,6 +9,7 @@ import com.intellij.psi.PsiJavaCodeReferenceElement;
 import com.intellij.psi.PsiManager;
 import com.intellij.psi.PsiTreeChangeAdapter;
 import com.intellij.psi.PsiTreeChangeEvent;
+import com.intellij.psi.util.PsiModificationTracker;
 import com.intellij.util.messages.MessageBusConnection;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.util.DaemonRestart;
@@ -21,7 +22,7 @@ import org.jetbrains.annotations.Nullable;
  * inspections and synthesised members update immediately.
  *
  * <p>The augment provider's {@code CachedValueProvider.Result} already depends
- * on {@link com.intellij.psi.util.PsiModificationTracker#MODIFICATION_COUNT},
+ * on {@link PsiModificationTracker#MODIFICATION_COUNT},
  * which invalidates on every PSI edit; this service is the belt-and-braces
  * complement that nudges the daemon to repaint the moment the user types a
  * tracked annotation, so printf / null-flow / {@code @BuildFlag}-derived
@@ -65,6 +66,9 @@ final class ClassBuilderChangeService {
 
             private void handle(@Nullable PsiElement element) {
                 if (!(element instanceof PsiAnnotation annotation)) return;
+                // A replace hands back the node it swapped out, which is already
+                // detached - reading its reference element throws.
+                if (!annotation.isValid()) return;
                 if (!isTracked(annotation)) return;
 
                 PsiFile file = annotation.getContainingFile();

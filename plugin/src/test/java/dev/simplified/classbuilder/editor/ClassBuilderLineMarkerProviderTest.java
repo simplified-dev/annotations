@@ -1,8 +1,10 @@
 package dev.simplified.classbuilder.editor;
 
 import com.intellij.codeInsight.daemon.GutterMark;
+import com.intellij.openapi.application.AccessToken;
 import com.intellij.openapi.util.IconLoader;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
+import dev.simplified.testutil.JSvgErrorSuppressor;
 
 import javax.swing.Icon;
 import java.util.List;
@@ -24,9 +26,12 @@ public class ClassBuilderLineMarkerProviderTest extends BasePlatformTestCase {
      */
     private static final String EXPECTED_ICON_PATH = "/icons/classbuilder_generated.svg";
 
+    private AccessToken jsvgSuppressor;
+
     @Override
     protected void setUp() throws Exception {
         super.setUp();
+        jsvgSuppressor = JSvgErrorSuppressor.install();
         myFixture.addFileToProject("dev/simplified/annotations/ClassBuilder.java",
             """
             package dev.simplified.annotations;
@@ -34,6 +39,15 @@ public class ClassBuilderLineMarkerProviderTest extends BasePlatformTestCase {
             @Retention(RetentionPolicy.CLASS) @Target(ElementType.TYPE)
             public @interface ClassBuilder { }
             """);
+    }
+
+    @Override
+    protected void tearDown() throws Exception {
+        try {
+            if (jsvgSuppressor != null) jsvgSuppressor.close();
+        } finally {
+            super.tearDown();
+        }
     }
 
     public void testGutterOnClassBuilderAnnotation() {

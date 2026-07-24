@@ -3,6 +3,7 @@ package dev.simplified.annotations;
 import org.intellij.lang.annotations.Language;
 import org.jetbrains.annotations.NotNull;
 
+import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
@@ -11,14 +12,10 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Declares runtime-enforced constraints on a builder field that are verified by
- * {@code BuildFlagValidator.validate(this)} inside the builder's generated
+ * Declares runtime-enforced constraints on a builder field, or on the abstract
+ * accessor standing in for one on an interface target, verified by
+ * {@code BuildFlagValidator.validate($result)} inside the builder's generated
  * {@code build()} method.
- *
- * <p>Used only as the {@link BuildRule#flag} attribute of
- * {@link BuildRule} - not a field-level annotation in its own right.
- * {@link Target @Target} is empty so direct field usage
- * ({@code @BuildFlag String x;}) is a compile-time error.
  *
  * <p>Each attribute is independent and may be combined. When {@link #group()} is
  * empty, {@link #nonNull()} / {@link #notEmpty()} enforce the field
@@ -29,28 +26,46 @@ import java.util.Optional;
  * label.
  *
  * <p>The validator is provided by this plugin's runtime support and has no
- * external dependencies. Fields are scanned once per class and cached.
+ * external dependencies. Fields are scanned once per class and cached - the
+ * scan walking the superclass chain, so an inherited constraint is enforced on
+ * the subclass being built.
+ *
+ * <p>On an interface {@link ClassBuilder} target the constraint goes on the
+ * abstract accessor instead, an interface declaring no fields of its own. The
+ * processor copies it onto the matching field of the generated
+ * {@code <Name>Impl} - the instance {@code build()} actually constructs, and
+ * the one the validator reads - so an accessor constraint is enforced exactly
+ * as a field constraint is. That is the only place a method target is read:
+ * written on any other method it has no effect.
  *
  * <h2>Examples</h2>
  * <pre><code>
  * // Required, must be non-empty, at most 256 characters
- * &#64;BuildRule(flag = &#64;BuildFlag(nonNull = true, notEmpty = true, limit = 256))
+ * &#64;BuildFlag(nonNull = true, notEmpty = true, limit = 256)
  * private String name;
  *
  * // At least one of emoji or label must be set
- * &#64;BuildRule(flag = &#64;BuildFlag(nonNull = true, group = "face")) private Emoji emoji;
- * &#64;BuildRule(flag = &#64;BuildFlag(nonNull = true, group = "face")) private String label;
+ * &#64;BuildFlag(nonNull = true, group = "face") private Emoji emoji;
+ * &#64;BuildFlag(nonNull = true, group = "face") private String label;
  *
  * // Must match a regex
- * &#64;BuildRule(flag = &#64;BuildFlag(nonNull = true, pattern = "[a-z0-9_]+"))
+ * &#64;BuildFlag(nonNull = true, pattern = "[a-z0-9_]+")
  * private String identifier;
  *
  * // Limit applied to a collection
- * &#64;BuildRule(flag = &#64;BuildFlag(limit = 25))
+ * &#64;BuildFlag(limit = 25)
  * private List&lt;Field&gt; fields;
+ *
+ * // On an interface target, the accessor carries it
+ * &#64;ClassBuilder
+ * public interface Shape {
+ *     &#64;BuildFlag(nonNull = true) String name();
+ * }
  * </code></pre>
+ *
+ * @see ClassBuilder#validate
  */
-@Target({})
+@Target({ElementType.FIELD, ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
 public @interface BuildFlag {
 

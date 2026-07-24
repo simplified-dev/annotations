@@ -1,0 +1,37 @@
+<html>
+<body>
+Flags <code>@SilentThrows</code> that cannot do what it was written for:
+
+<ul>
+  <li>An abstract, native or otherwise bodyless declaration. There is no body to
+      wrap, and since a method annotation is never inherited the annotation
+      cannot reach an implementation later either, so it is inert forever. The
+      build rejects it too - this reports the same thing sooner.</li>
+  <li>A narrowed <code>value</code> type the body cannot throw. The generated
+      catch clause is unreachable and javac rejects it - against generated code
+      the author cannot open, which is why it is named here instead.</li>
+  <li>A body that throws no checked exception, leaving the wrap with nothing to
+      absorb.</li>
+  <li>A type listed both in <code>value</code> and in the declaration's own
+      <code>throws</code> clause. The wrap absorbs it either way, so the clause
+      describes an exception no caller can catch.</li>
+</ul>
+
+<!-- tooltip end -->
+
+<p>
+The two body-reading checks stay quiet while the body holds a syntax error. A
+half-typed statement throws nothing yet, and a squiggle that appears every time a
+line is opened teaches nothing.
+</p>
+
+<p>
+The narrowing check is deliberately one-sided: it reports only when no exception
+raised anywhere in the body is related to the written type in either direction,
+which is the same rule javac applies to a catch clause. <b>Write the bare
+form.</b> <code>Throwable</code> and <code>Exception</code> clauses are never
+unreachable, so the bare form is exempt from this check by construction.
+</p>
+
+</body>
+</html>

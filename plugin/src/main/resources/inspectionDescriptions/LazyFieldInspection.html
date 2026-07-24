@@ -1,0 +1,38 @@
+<html>
+<body>
+Flags misuse of the <code>@Lazy</code> field annotation:
+
+<ul>
+  <li><code>@Lazy</code> must apply to an instance field - static fields and
+      record components have no place to install the
+      <code>Lazy&lt;T&gt;</code> backing storage.</li>
+  <li><code>@Lazy</code> requires a reference (boxed) field type.
+      Primitives must be replaced with their boxed equivalents
+      (<code>Boolean</code> for <code>boolean</code>, etc.).</li>
+  <li><code>@Lazy</code> on a class without <code>@ClassBuilder</code>
+      requires a field initializer expression - the initializer becomes
+      the supplier body. Without one and without a builder driving
+      construction, no value can ever be produced.</li>
+  <li><code>@Lazy</code> alongside <code>@Collector</code>,
+      <code>@Negate</code>, <code>@Formattable</code>,
+      <code>@BuildFlag</code>, or <code>@ObtainVia</code>
+      is not supported - the companion-annotation
+      contracts assume direct <code>T</code>-typed storage rather than
+      a memoizing wrapper. <code>@BuilderDefault</code> and
+      <code>@BuilderIgnore</code> are not flagged: they govern how the
+      builder treats the field, not how it is stored.</li>
+  <li><code>@Lazy</code> alongside Lombok <code>@Getter</code> is
+      redundant: <code>@Lazy</code> generates its own memoizing getter,
+      so Lombok's getter is never emitted.</li>
+</ul>
+
+<!-- tooltip end -->
+
+<p>
+Hard errors (static, primitive, missing initializer) report at ERROR
+severity because the AST mutation cannot complete safely. Companion
+clashes report at ERROR; Lombok redundancy reports at INFORMATION.
+</p>
+
+</body>
+</html>

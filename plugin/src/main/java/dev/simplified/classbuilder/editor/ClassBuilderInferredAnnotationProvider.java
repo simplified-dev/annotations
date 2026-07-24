@@ -1,5 +1,4 @@
 package dev.simplified.classbuilder.editor;
-
 import com.intellij.codeInsight.InferredAnnotationProvider;
 import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiAnnotation;
@@ -7,7 +6,9 @@ import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElementFactory;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifierListOwner;
+import com.intellij.psi.impl.light.LightMethodBuilder;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
+import dev.simplified.shared.psi.GeneratedMemberMarker;
 import org.jetbrains.annotations.Contract;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -22,14 +23,14 @@ import java.util.List;
  *
  * <p>{@code LightModifierList.addAnnotation(String)} only accepts zero-
  * attribute annotation FQNs, so attribute-carrying annotations cannot ride on
- * the {@link com.intellij.psi.impl.light.LightMethodBuilder}s the augment
+ * the {@link LightMethodBuilder}s the augment
  * provider produces. This provider fills that gap: for every method tagged by
  * {@link GeneratedMemberMarker}, it reconstructs the contract shape from the
  * method's signature and the containing target's {@code @ClassBuilder} config,
  * then hands back freshly-built {@link PsiAnnotation}s.
  *
  * <p>Shape matrix, mirroring
- * {@code dev.simplified.classbuilder.mutate.ContractAnnotations}:
+ * {@code dev.simplified.shared.javac.ContractAnnotations}:
  * <ul>
  *   <li>{@code builder()}, {@code mutate()}, {@code build()} - {@code "-> new"}.</li>
  *   <li>{@code from(T)} - {@code "_ -> new"}, {@code pure = true}.</li>

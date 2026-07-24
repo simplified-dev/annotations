@@ -1,10 +1,21 @@
 package dev.simplified.classbuilder.editor;
-
+import com.intellij.codeInsight.daemon.impl.HighlightInfo;
+import com.intellij.codeInsight.intention.IntentionAction;
+import com.intellij.lang.annotation.HighlightSeverity;
+import com.intellij.openapi.application.AccessToken;
+import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
-import com.intellij.testFramework.fixtures.BasePlatformTestCase;
+import com.intellij.testFramework.LightProjectDescriptor;
+import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
+import dev.simplified.shared.psi.GeneratedMemberMarker;
+import dev.simplified.testutil.JSvgErrorSuppressor;
+import org.jetbrains.annotations.NotNull;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Exercises {@link ClassBuilderAugmentProvider}: a {@code @ClassBuilder}
@@ -12,12 +23,32 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase;
  * {@code mutate()} methods to the PSI layer, plus a nested {@code Builder}
  * class whose setter matrix mirrors the APT mutator output.
  */
-public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
+public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixtureTestCase {
+
+    private AccessToken jsvgSuppressor;
+
+    @Override
+    protected @NotNull LightProjectDescriptor getProjectDescriptor() {
+        // A real JDK so InheritanceUtil resolves custom-collection hierarchies
+        // (Bag extends java.util.List extends Collection) in the supertype walk;
+        // the default mock JDK stubs java.util without those supertype links.
+        return JAVA_17;
+    }
 
     @Override
     protected void setUp() throws Exception {
         super.setUp();
+        jsvgSuppressor = JSvgErrorSuppressor.install();
         addAnnotationSources();
+    }
+
+    @Override
+    protected void tearDown() throws Exception {
+        try {
+            if (jsvgSuppressor != null) jsvgSuppressor.close();
+        } finally {
+            super.tearDown();
+        }
     }
 
     /** Adds the annotation stubs the tests reference onto the fixture's source path. */
@@ -28,13 +59,55 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
             import java.lang.annotation.*;
             @Retention(RetentionPolicy.CLASS) @Target(ElementType.TYPE)
             public @interface ClassBuilder {
-                String builderName() default "Builder";
-                String builderMethodName() default "builder";
-                String fromMethodName() default "from";
-                String toBuilderMethodName() default "mutate";
-                String methodPrefix() default "";
+                BuilderNames builder() default @BuilderNames;
+                NamingStyle style() default NamingStyle.SIMPLIFIED;
+                SetterNames setters() default @SetterNames;
+                String factoryMethod() default "";
+                AccessLevel access() default AccessLevel.PUBLIC;
+                AccessLevel constructorAccess() default AccessLevel.PACKAGE;
                 String[] exclude() default {};
             }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/NamingStyle.java",
+            """
+            package dev.simplified.annotations;
+            public enum NamingStyle { SIMPLIFIED, LOMBOK, BEAN }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/SetterNames.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target({})
+            public @interface SetterNames {
+                String INHERIT = "";
+                String NONE = "-";
+                String set() default INHERIT;
+                String flag() default INHERIT;
+                String add() default INHERIT;
+                String put() default INHERIT;
+                String compute() default INHERIT;
+                String clear() default INHERIT;
+            }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/BuilderNames.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target({})
+            public @interface BuilderNames {
+                String INHERIT = "";
+                String NONE = "-";
+                String type() default INHERIT;
+                String builder() default INHERIT;
+                String build() default INHERIT;
+                String from() default INHERIT;
+                String toBuilder() default INHERIT;
+            }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/AccessLevel.java",
+            """
+            package dev.simplified.annotations;
+            public enum AccessLevel { PUBLIC, PROTECTED, PACKAGE, PRIVATE }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/Negate.java",
             """
@@ -98,6 +171,130 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
             GeneratedMemberMarker.isGenerated(froms[0]));
         assertTrue("mutate() carries generated marker",
             GeneratedMemberMarker.isGenerated(mutates[0]));
+    }
+
+    // ------------------------------------------------------------------
+    // All-args constructor synthesis
+    // ------------------------------------------------------------------
+
+    public void testAllArgsConstructorSynthesized() {
+        PsiFile file = myFixture.configureByText("Gadget.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Gadget {
+                String name;
+                int count;
+            }
+            """);
+        PsiClass gadget = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+
+        PsiMethod[] ctors = gadget.getConstructors();
+        assertEquals("all-args constructor must be synthesised", 1, ctors.length);
+        assertEquals("parameter count must match the field list", 2, ctors[0].getParameterList().getParametersCount());
+        assertTrue("constructor carries generated marker", GeneratedMemberMarker.isGenerated(ctors[0]));
+        assertFalse("constructor must be package-private by default",
+            ctors[0].hasModifierProperty(PsiModifier.PUBLIC));
+        assertFalse("constructor must be package-private by default",
+            ctors[0].hasModifierProperty(PsiModifier.PRIVATE));
+    }
+
+    public void testConstructorAccess_honoured() {
+        PsiFile file = myFixture.configureByText("Sealed.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(constructorAccess = AccessLevel.PRIVATE)
+            public class Sealed {
+                String name;
+            }
+            """);
+        PsiClass sealed = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+        PsiMethod[] ctors = sealed.getConstructors();
+        assertEquals(1, ctors.length);
+        assertTrue("constructorAccess must drive the modifier",
+            ctors[0].hasModifierProperty(PsiModifier.PRIVATE));
+    }
+
+    public void testExplicitConstructor_noSynthesis() {
+        PsiFile file = myFixture.configureByText("Manual.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Manual {
+                String name;
+                int count;
+                public Manual(String name, int count) { this.name = name; this.count = count; }
+            }
+            """);
+        PsiClass manual = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+        PsiMethod[] ctors = manual.getConstructors();
+        assertEquals("author's constructor must be the only one", 1, ctors.length);
+        assertFalse("author's constructor must not carry the generated marker",
+            GeneratedMemberMarker.isGenerated(ctors[0]));
+    }
+
+    public void testFactoryMethod_noConstructorSynthesis() {
+        PsiFile file = myFixture.configureByText("Factoried.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(factoryMethod = "of")
+            public class Factoried {
+                String name;
+                public static Factoried of(String name) { return null; }
+            }
+            """);
+        PsiClass factoried = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+        assertEquals("a set factoryMethod suppresses synthesis", 0, factoried.getConstructors().length);
+    }
+
+    public void testAbstractClass_noAllArgsConstructor() {
+        PsiFile file = myFixture.configureByText("Base.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Base {
+                String name;
+            }
+            """);
+        PsiClass base = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+        assertEquals("abstract targets take the copy constructor instead",
+            0, base.getConstructors().length);
+    }
+
+    public void testRecord_noAllArgsConstructor() {
+        PsiFile file = myFixture.configureByText("Coord.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public record Coord(String name, int count) {}
+            """);
+        PsiClass coord = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+        for (PsiMethod ctor : coord.getConstructors()) {
+            assertFalse("record must keep only its canonical constructor",
+                GeneratedMemberMarker.isGenerated(ctor));
+        }
+    }
+
+    /**
+     * The user-facing payoff: a same-package {@code new Target(...)} must resolve
+     * in the editor before the first {@code javac} round rather than showing as
+     * an unresolved constructor.
+     */
+    public void testHighlighting_samePackageNewResolves() {
+        myFixture.configureByText("Consumer.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            class Target {
+                String name;
+                int count;
+            }
+            public class Consumer {
+                static Target make() { return new Target("a", 1); }
+            }
+            """);
+        myFixture.checkHighlighting(false, false, false);
     }
 
     public void testNonAnnotatedClass_noAugment() {
@@ -208,7 +405,7 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
 
     /**
      * Cross-package variant - exercises {@link ClassBuilderElementFinder}'s
-     * bridge from {@link com.intellij.psi.JavaPsiFacade#findClass} to the
+     * bridge from {@link JavaPsiFacade#findClass} to the
      * augmented inner class. Without that finder the highlighter calls
      * {@code findClass("a.Doc.Builder", scope)} which returns null (augment
      * providers don't participate in the global class index), and reports
@@ -338,7 +535,7 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
         PsiFile file = myFixture.configureByText("Named.java",
             """
             import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder(builderMethodName = "make", fromMethodName = "of", toBuilderMethodName = "edit")
+            @ClassBuilder(builder = @BuilderNames(builder = "make", from = "of", toBuilder = "edit"))
             public class Named {
                 String tag;
             }
@@ -362,15 +559,15 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
             @ClassBuilder
             public class Toggle { boolean active; }
             """);
-        PsiMethod[] isActive = builder.findMethodsByName("isActive", false);
-        assertEquals("zero-arg + typed pair", 2, isActive.length);
-        boolean sawZeroArg = false, sawTyped = false;
-        for (PsiMethod m : isActive) {
-            if (m.getParameterList().getParametersCount() == 0) sawZeroArg = true;
-            else sawTyped = true;
-        }
-        assertTrue("zero-arg isActive()", sawZeroArg);
-        assertTrue("typed isActive(boolean)", sawTyped);
+        // The typed setter is the ordinary `set` role, so it takes the bare
+        // field name; only the zero-arg convenience keeps the `is` prefix.
+        PsiMethod[] zeroArg = builder.findMethodsByName("isActive", false);
+        assertEquals("zero-arg flag setter", 1, zeroArg.length);
+        assertEquals("isActive() takes no argument", 0, zeroArg[0].getParameterList().getParametersCount());
+
+        PsiMethod[] typed = builder.findMethodsByName("active", false);
+        assertEquals("typed setter", 1, typed.length);
+        assertEquals("active(boolean) takes one argument", 1, typed[0].getParameterList().getParametersCount());
     }
 
     /** {@code @Negate("name")} on a boolean field produces a second zero-arg + typed pair. */
@@ -384,8 +581,50 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
                 @Negate("closed") boolean open;
             }
             """);
-        assertEquals("primary pair", 2, builder.findMethodsByName("isOpen", false).length);
-        assertEquals("inverse pair", 2, builder.findMethodsByName("isClosed", false).length);
+        assertEquals("primary flag", 1, builder.findMethodsByName("isOpen", false).length);
+        assertEquals("primary typed", 1, builder.findMethodsByName("open", false).length);
+        assertEquals("inverse flag", 1, builder.findMethodsByName("isClosed", false).length);
+        assertEquals("inverse typed", 1, builder.findMethodsByName("closed", false).length);
+    }
+
+    /** {@code style = LOMBOK} renames the builder, the seed method, and the collector shapes. */
+    public void testLombokStyleNaming() {
+        PsiClass builder = builderFor("Card",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Collector;
+            import dev.simplified.annotations.NamingStyle;
+            import java.util.List;
+            @ClassBuilder(style = NamingStyle.LOMBOK)
+            public class Card {
+                boolean shiny;
+                @Collector(singular = true, clearable = true) List<String> tags;
+            }
+            """, "CardBuilder");
+        assertEquals("bare-name boolean setter", 1, builder.findMethodsByName("shiny", false).length);
+        assertEquals("no zero-arg boolean form", 0, builder.findMethodsByName("isShiny", false).length);
+        assertEquals("bare singular add", 1, builder.findMethodsByName("tag", false).length);
+        assertEquals("addX is the SIMPLIFIED name", 0, builder.findMethodsByName("addTag", false).length);
+        assertEquals("clear is unchanged", 1, builder.findMethodsByName("clearTags", false).length);
+    }
+
+    /** A per-role override renames the collector's add and clear independently. */
+    public void testSetterNamesRoleOverride() {
+        PsiClass builder = builderFor("Basket",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Collector;
+            import dev.simplified.annotations.SetterNames;
+            import java.util.List;
+            @ClassBuilder(setters = @SetterNames(add = "append{}", clear = "reset{}"))
+            public class Basket {
+                @Collector(singular = true, clearable = true) List<String> items;
+            }
+            """);
+        assertEquals(1, builder.findMethodsByName("appendItem", false).length);
+        assertEquals(1, builder.findMethodsByName("resetItems", false).length);
+        assertEquals(0, builder.findMethodsByName("addItem", false).length);
+        assertEquals(0, builder.findMethodsByName("clearItems", false).length);
     }
 
     /** {@code Optional<T>} fields get nullable-raw + wrapped setters. */
@@ -399,6 +638,117 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
             """);
         PsiMethod[] withLabel = builder.findMethodsByName("label", false);
         assertEquals("nullable-raw + wrapped", 2, withLabel.length);
+    }
+
+    /**
+     * Pins the one call shape the dual setter cannot serve, and - just as
+     * importantly - the four it can.
+     *
+     * <p>A bare {@code label(null)} is ambiguous by the language rule, both
+     * {@code String} and {@code Optional<String>} accepting null with neither
+     * more specific (JLS 15.12.2.5). That is javac's verdict, and this test
+     * asserts the editor reaches the same one: the augment provider has to
+     * model both overloads faithfully for the resolver to see the ambiguity at
+     * all, so a regression that dropped or mistyped an overload would show up
+     * here as the error disappearing.
+     *
+     * <p>The ambiguity is a feature rather than a defect. On an
+     * {@code Optional} field, {@code label(null)} is ambiguous in intent too -
+     * absent, or present-and-null? - and telling those apart is the reason to
+     * declare the field {@code Optional} in the first place.
+     */
+    public void testOptionalDualSetter_onlyBareNullIsAmbiguous() {
+        myFixture.configureByText("Consumer.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import java.util.Optional;
+            @ClassBuilder
+            class Box { Optional<String> label; }
+            public class Consumer {
+                static void go(String s) {
+                    Box.builder().label(s);                 // nullable raw, by static type
+                    Box.builder().label(Optional.empty());  // explicitly absent
+                    Box.builder().label("x");               // literal value
+                    Box.builder().label((String) null);     // cast disambiguates
+                    Box.builder().label(null);              // the one ambiguous form
+                }
+            }
+            """);
+        List<String> errors = new ArrayList<>();
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            if (info.getSeverity().myVal >= HighlightSeverity.ERROR.myVal) {
+                errors.add(info.getText() + " :: " + info.getDescription());
+            }
+        }
+        assertEquals("only the bare null call may fail to resolve, got " + errors, 1, errors.size());
+        // The highlighted range is the argument list, so the text is "(null)".
+        assertTrue("the ambiguity must be reported on the null argument, got " + errors.get(0),
+            errors.get(0).startsWith("(null) ::"));
+        assertTrue("the editor must name both overloads, got " + errors.get(0),
+            errors.get(0).contains("Ambiguous method call")
+                && errors.get(0).contains("label(String)")
+                && errors.get(0).contains("label(Optional<String>)"));
+    }
+
+    /** The intention rewrites the one ambiguous form into the one worth writing. */
+    public void testOptionalNullIntention_rewritesToOptionalEmpty() {
+        myFixture.configureByText("Consumer.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import java.util.Optional;
+            @ClassBuilder
+            class Box { Optional<String> label; }
+            public class Consumer {
+                static void go() {
+                    Box.builder().label(nu<caret>ll);
+                }
+            }
+            """);
+        IntentionAction fix = myFixture.findSingleIntention("Replace 'null' with 'Optional.empty()'");
+        myFixture.launchAction(fix);
+        myFixture.checkResult(
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import java.util.Optional;
+            @ClassBuilder
+            class Box { Optional<String> label; }
+            public class Consumer {
+                static void go() {
+                    Box.builder().label(Optional.empty());
+                }
+            }
+            """);
+    }
+
+    /**
+     * The intention is keyed on the candidate shape, so it must stay off an
+     * ambiguity that has nothing to do with an Optional dual setter.
+     */
+    public void testOptionalNullIntention_absentOnUnrelatedAmbiguity() {
+        myFixture.configureByText("Other.java",
+            """
+            public class Other {
+                static void pick(String s) {}
+                static void pick(Integer i) {}
+                static void go() { pick(nu<caret>ll); }
+            }
+            """);
+        assertEmpty(myFixture.filterAvailableIntentions("Replace 'null' with 'Optional.empty()'"));
+    }
+
+    /** A resolvable call is not the intention's business either. */
+    public void testOptionalNullIntention_absentWhenTheCallResolves() {
+        myFixture.configureByText("Consumer.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import java.util.Optional;
+            @ClassBuilder
+            class Box { Optional<String> label; }
+            public class Consumer {
+                static void go(String s) { Box.builder().label(<caret>s); }
+            }
+            """);
+        assertEmpty(myFixture.filterAvailableIntentions("Replace 'null' with 'Optional.empty()'"));
     }
 
     /** {@code Optional<String>} with {@code @Formattable} gets a third overload. */
@@ -540,9 +890,104 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
         assertEquals(0, builder.findMethodsByName("addFlavorss", false).length);
     }
 
+    /**
+     * A project-specific collection type (an interface built via a factory,
+     * the {@code ConcurrentList} shape) recognised by the supertype walk gets
+     * the same {@code @Collector} bulk API in autocomplete as a java.util list.
+     */
+    public void testCustomCollectionCollector_surfacesBulkApi() {
+        addCustomBagSources();
+        PsiClass builder = builderFor("Shelf",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Collector;
+            import demo.Bag;
+            import demo.Bags;
+            @ClassBuilder
+            public class Shelf {
+                @Collector(singular = true, clearable = true) Bag<String> tags = Bags.newBag();
+            }
+            """);
+        assertEquals("varargs + iterable replace on the custom container", 2,
+            builder.findMethodsByName("tags", false).length);
+        assertEquals("singular add", 1, builder.findMethodsByName("addTag", false).length);
+        assertEquals("clear", 1, builder.findMethodsByName("clearTags", false).length);
+    }
+
+    /** Custom map recognised via the supertype walk gets replace + put + clear. */
+    public void testCustomMapCollector_surfacesBulkApi() {
+        addCustomBagSources();
+        PsiClass builder = builderFor("Book",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Collector;
+            import demo.Ledger;
+            import demo.Ledgers;
+            @ClassBuilder
+            public class Book {
+                @Collector(singular = true, clearable = true) Ledger<String, Integer> entries = Ledgers.newLedger();
+            }
+            """);
+        assertEquals("replace", 1, builder.findMethodsByName("entries", false).length);
+        assertEquals("put", 1, builder.findMethodsByName("putEntry", false).length);
+        assertEquals("clear", 1, builder.findMethodsByName("clearEntries", false).length);
+    }
+
+    /**
+     * A custom-container {@code @Collector} field with no initializer can't be
+     * built by the APT (plain replace setter + NOTE), so the augment provider
+     * mirrors that and does not advertise the bulk API.
+     */
+    public void testCustomCollectionCollector_noInitializer_plainSetterOnly() {
+        addCustomBagSources();
+        PsiClass builder = builderFor("Shelf",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Collector;
+            import demo.Bag;
+            @ClassBuilder
+            public class Shelf {
+                @Collector(singular = true, clearable = true) Bag<String> tags;
+            }
+            """);
+        assertEquals("single plain replace setter", 1, builder.findMethodsByName("tags", false).length);
+        assertEquals("no singular add without an initializer",
+            0, builder.findMethodsByName("addTag", false).length);
+        assertEquals("no clear without an initializer",
+            0, builder.findMethodsByName("clearTags", false).length);
+    }
+
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+
+    /** Registers custom interface collection/map types plus their factories. */
+    private void addCustomBagSources() {
+        myFixture.addFileToProject("demo/Bag.java",
+            """
+            package demo;
+            public interface Bag<E> extends java.util.List<E> {}
+            """);
+        myFixture.addFileToProject("demo/Bags.java",
+            """
+            package demo;
+            public final class Bags {
+                public static <E> Bag<E> newBag() { return null; }
+            }
+            """);
+        myFixture.addFileToProject("demo/Ledger.java",
+            """
+            package demo;
+            public interface Ledger<K, V> extends java.util.Map<K, V> {}
+            """);
+        myFixture.addFileToProject("demo/Ledgers.java",
+            """
+            package demo;
+            public final class Ledgers {
+                public static <K, V> Ledger<K, V> newLedger() { return null; }
+            }
+            """);
+    }
 
     /** Shortcut: configure a file, return the synthesised nested Builder PsiClass. */
     private PsiClass builderFor(String className, String source) {
@@ -551,6 +996,13 @@ public class ClassBuilderAugmentProviderTest extends BasePlatformTestCase {
         PsiClass[] inner = target.getInnerClasses();
         assertEquals("expected exactly one synthesised Builder", 1, inner.length);
         return inner[0];
+    }
+
+    /** As {@link #builderFor(String, String)}, additionally pinning the builder's simple name. */
+    private PsiClass builderFor(String className, String source, String expectedBuilderName) {
+        PsiClass builder = builderFor(className, source);
+        assertEquals("builder class name", expectedBuilderName, builder.getName());
+        return builder;
     }
 
 }

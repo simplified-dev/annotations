@@ -1,6 +1,7 @@
 package dev.simplified.classbuilder.editor;
 
 import com.intellij.codeInsight.InferredAnnotationsManager;
+import com.intellij.codeInsight.InferredAnnotationsManagerImpl;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiFile;
@@ -41,13 +42,47 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
             import java.lang.annotation.*;
             @Retention(RetentionPolicy.CLASS) @Target(ElementType.TYPE)
             public @interface ClassBuilder {
-                String builderName() default "Builder";
-                String builderMethodName() default "builder";
-                String fromMethodName() default "from";
-                String toBuilderMethodName() default "mutate";
-                String methodPrefix() default "";
+                BuilderNames builder() default @BuilderNames;
+                NamingStyle style() default NamingStyle.SIMPLIFIED;
+                SetterNames setters() default @SetterNames;
                 String[] exclude() default {};
                 boolean emitContracts() default true;
+            }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/NamingStyle.java",
+            """
+            package dev.simplified.annotations;
+            public enum NamingStyle { SIMPLIFIED, LOMBOK, BEAN }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/SetterNames.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target({})
+            public @interface SetterNames {
+                String INHERIT = "";
+                String NONE = "-";
+                String set() default INHERIT;
+                String flag() default INHERIT;
+                String add() default INHERIT;
+                String put() default INHERIT;
+                String compute() default INHERIT;
+                String clear() default INHERIT;
+            }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/BuilderNames.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target({})
+            public @interface BuilderNames {
+                String INHERIT = "";
+                String NONE = "-";
+                String type() default INHERIT;
+                String builder() default INHERIT;
+                String build() default INHERIT;
+                String from() default INHERIT;
+                String toBuilder() default INHERIT;
             }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/Formattable.java",
@@ -61,7 +96,7 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
             """
             package dev.simplified.annotations;
             import java.lang.annotation.*;
-            @Retention(RetentionPolicy.RUNTIME) @Target({})
+            @Retention(RetentionPolicy.RUNTIME) @Target(ElementType.FIELD)
             public @interface BuildFlag {
                 boolean nonNull() default false;
             }
@@ -70,24 +105,28 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
             """
             package dev.simplified.annotations;
             import java.lang.annotation.*;
-            @Retention(RetentionPolicy.CLASS) @Target({})
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
             public @interface ObtainVia {
                 String method() default "";
                 String field() default "";
                 boolean isStatic() default false;
             }
             """);
-        myFixture.addFileToProject("dev/simplified/annotations/BuildRule.java",
+        myFixture.addFileToProject("dev/simplified/annotations/BuilderDefault.java",
             """
             package dev.simplified.annotations;
             import java.lang.annotation.*;
-            @Retention(RetentionPolicy.RUNTIME) @Target(ElementType.FIELD)
-            public @interface BuildRule {
-                boolean retainInit() default false;
-                boolean ignore() default false;
-                BuildFlag flag() default @BuildFlag;
-                ObtainVia obtainVia() default @ObtainVia;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
+            public @interface BuilderDefault {
+                boolean value() default true;
             }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/BuilderIgnore.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
+            public @interface BuilderIgnore { }
             """);
     }
 
@@ -198,7 +237,7 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
      * Direct check that the platform's printf inspection fires on synth
      * formattable setters - mirrors what the user actually sees. Catches
      * regressions where {@code @PrintFormat} is attached to the parameter
-     * but isn't surfaced in a way that {@link com.intellij.psi.PsiParameter#getAnnotation}
+     * but isn't surfaced in a way that {@link PsiParameter#getAnnotation}
      * (or {@code AnnotationUtil}) can find.
      */
     public void testStringFormattable_propagatesToPrintFormatLookup() {
@@ -283,22 +322,21 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
         }
     }
 
-    /** {@code @BuildRule(flag = @BuildFlag(nonNull = true))} pushes {@code @NotNull} onto the primary setter param. */
+    /** {@code @BuildFlag(nonNull = true)} pushes {@code @NotNull} onto the primary setter param. */
     public void testBuildRule_flagNonNull_forcesNotNullOnPlainSetter() {
         PsiClass builder = builderFor("Widget",
             """
             import dev.simplified.annotations.ClassBuilder;
             import dev.simplified.annotations.BuildFlag;
-            import dev.simplified.annotations.BuildRule;
             @ClassBuilder
             public class Widget {
-                @BuildRule(flag = @BuildFlag(nonNull = true)) String name;
+                @BuildFlag(nonNull = true) String name;
             }
             """);
 
         PsiMethod setter = builder.findMethodsByName("name", false)[0];
         PsiParameter name = setter.getParameterList().getParameter(0);
-        assertNotNull("@BuildRule(flag = @BuildFlag(nonNull)) forces @NotNull",
+        assertNotNull("@BuildFlag(nonNull) forces @NotNull",
             name.getModifierList().findAnnotation(NOT_NULL_FQN));
     }
 
@@ -419,7 +457,7 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
      * always route through the full provider chain for light elements, so we
      * assert the registration directly - the real IDE's daemon loop iterates
      * the same list per
-     * {@link com.intellij.codeInsight.InferredAnnotationsManagerImpl}.
+     * {@link InferredAnnotationsManagerImpl}.
      */
     public void testProviderRegisteredInExtensionPoint() {
         boolean present = com.intellij.codeInsight.InferredAnnotationProvider.EP_NAME

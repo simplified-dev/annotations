@@ -1,24 +1,24 @@
 package dev.simplified.classbuilder.editor;
-
 import com.intellij.openapi.util.Key;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
-import com.intellij.psi.augment.PsiAugmentProvider;
+import com.intellij.psi.impl.source.PsiExtensibleClass;
 import com.intellij.psi.util.CachedValueProvider;
 import com.intellij.psi.util.CachedValuesManager;
 import com.intellij.psi.util.PsiModificationTracker;
+import com.intellij.util.IdempotenceChecker;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
+import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * Surfaces the bootstrap methods ({@code builder()}, {@code from(T)},
@@ -32,22 +32,12 @@ import java.util.Set;
  * point the compiled class file makes the injected nested class visible.
  * Expanding to full nested-class synthesis is a planned follow-up.
  */
-public final class ClassBuilderAugmentProvider extends PsiAugmentProvider {
-
-    /**
-     * Tracks targets currently undergoing synthesis on this thread. Editor-time
-     * type creation ({@code createTypeFromText}, {@code createType}) eagerly
-     * resolves nested-class references, which re-enters this provider for the
-     * same target. The guard breaks the cycle by returning empty for the
-     * inner call.
-     */
-    private static final ThreadLocal<Set<PsiClass>> IN_PROGRESS =
-        ThreadLocal.withInitial(HashSet::new);
+public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugmentProvider {
 
     /**
      * Memoises per-target synthesised members. {@link CachedValuesManager}
      * periodically re-runs producers and requires the results be equal across
-     * invocations ({@link com.intellij.util.IdempotenceChecker}). Building a
+     * invocations ({@link IdempotenceChecker}). Building a
      * fresh {@code LightPsiClassBuilder} / {@code LightMethodBuilder} on each
      * call yields new-identity instances that fail that check, so we keep one
      * cached pair on the target's user data keyed by the resolved
@@ -61,7 +51,17 @@ public final class ClassBuilderAugmentProvider extends PsiAugmentProvider {
 
     private record SynthesizedMembers(GeneratedMemberFactory.EditorBuilderConfig config,
                                       List<PsiMethod> bootstrapMethods,
-                                      PsiClass builderClass) {
+                                      PsiClass builderClass,
+                                      @Nullable PsiMethod allArgsConstructor) {
+
+        /** Bootstrap methods plus the all-args constructor when one was synthesised. */
+        List<PsiMethod> allMethods() {
+            if (allArgsConstructor == null) return bootstrapMethods;
+            List<PsiMethod> out = new ArrayList<>(bootstrapMethods.size() + 1);
+            out.addAll(bootstrapMethods);
+            out.add(allArgsConstructor);
+            return out;
+        }
     }
 
     @Override
@@ -136,7 +136,7 @@ public final class ClassBuilderAugmentProvider extends PsiAugmentProvider {
             }
             SynthesizedMembers members = synthesizeOrReuse(target, resolved);
             return CachedValueProvider.Result.create(
-                members.bootstrapMethods(),
+                members.allMethods(),
                 PsiModificationTracker.MODIFICATION_COUNT);
         });
     }
@@ -176,7 +176,7 @@ public final class ClassBuilderAugmentProvider extends PsiAugmentProvider {
      * Returns cached {@link SynthesizedMembers} when the stored config matches
      * the current annotation, otherwise re-synthesises and replaces the cache.
      * Pairs with {@link #SYNTHESIZED} to defeat
-     * {@link com.intellij.util.IdempotenceChecker} re-invocation failures:
+     * {@link IdempotenceChecker} re-invocation failures:
      * whoever wins the synthesis race stores its result under the key, and
      * subsequent calls (including the checker's rerun) retrieve the same
      * {@link PsiClass} / {@link PsiMethod} instances.
@@ -196,12 +196,74 @@ public final class ClassBuilderAugmentProvider extends PsiAugmentProvider {
         try {
             PsiClass builderClass = GeneratedMemberFactory.synthesizeBuilderClass(target, config);
             List<PsiMethod> bootstrap = GeneratedMemberFactory.bootstrapMethods(target, config, builderClass);
-            SynthesizedMembers fresh = new SynthesizedMembers(config, bootstrap, builderClass);
+            PsiMethod ctor = needsAllArgsConstructor(target, config)
+                ? GeneratedMemberFactory.allArgsConstructor(target, config)
+                : null;
+            SynthesizedMembers fresh = new SynthesizedMembers(config, bootstrap, builderClass, ctor);
             target.putUserData(SYNTHESIZED, fresh);
             return fresh;
         } finally {
             IN_PROGRESS.get().remove(target);
         }
+    }
+
+    /**
+     * Mirrors the APT-side gate in {@code BuilderMutator.needsAllArgsConstructor}
+     * so the editor surfaces a constructor exactly when javac will inject one.
+     * Records keep their canonical constructor, a set {@code factoryMethod} means
+     * {@code build()} never calls {@code new}, and any author-declared
+     * constructor suppresses synthesis outright.
+     *
+     * <p>Reads {@code getOwnMethods()} rather than {@code getConstructors()}:
+     * the latter is augment-aware and would recurse back into this provider.
+     */
+    private static boolean needsAllArgsConstructor(PsiClass target,
+                                                   GeneratedMemberFactory.EditorBuilderConfig config) {
+        if (target.isRecord() || target.isInterface() || target.isEnum()) return false;
+        if (target.hasModifierProperty(PsiModifier.ABSTRACT)) return false;
+        if (!config.factoryMethod().isEmpty()) return false;
+        // A concrete subclass of an annotated super sits in a SuperBuilder chain
+        // and takes CopyConstructorFactory's Target(Builder b) instead.
+        PsiClass superClass = target.getSuperClass();
+        if (superClass != null && findClassBuilderAnnotation(superClass) != null) return false;
+        if (target instanceof PsiExtensibleClass extensible) {
+            for (PsiMethod own : extensible.getOwnMethods()) {
+                if (own.isConstructor()) return false;
+            }
+            for (PsiClass nested : extensible.getOwnInnerClasses()) {
+                if (config.builderName().equals(nested.getName())) return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Whether {@code @ClassBuilder} synthesises a constructor on this target.
+     *
+     * <p>The one public reading of that gate. The inferred-annotation surface
+     * and the gutter tooltip both have to answer the same question - "is there
+     * a constructor here, and what does it look like" - and a second copy of a
+     * six-clause predicate is exactly how the signature in the gutter comes to
+     * contradict the one javac emits.
+     *
+     * @param target the class to test
+     * @return whether a constructor is synthesised for it
+     */
+    public static boolean synthesisesConstructor(@NotNull PsiClass target) {
+        PsiAnnotation annotation = findClassBuilderAnnotation(target);
+        if (annotation == null) return false;
+        return needsAllArgsConstructor(target,
+            GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(annotation));
+    }
+
+    /**
+     * The target's {@code @ClassBuilder}, or {@code null}.
+     *
+     * @param target the class to read
+     * @return the annotation, when present
+     */
+    public static @Nullable PsiAnnotation classBuilderAnnotation(@NotNull PsiClass target) {
+        return findClassBuilderAnnotation(target);
     }
 
     private static PsiAnnotation findClassBuilderAnnotation(PsiClass target) {

@@ -1,9 +1,13 @@
 package dev.simplified.classbuilder.mutate;
-
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
-import dev.simplified.classbuilder.apt.AnnotationLookup;
+import com.sun.tools.javac.tree.JCTree.JCMethodDecl;
+import dev.simplified.annotations.AccessLevel;
+import dev.simplified.args.mutate.ArgsConstructorMutator;
 import dev.simplified.classbuilder.apt.BuilderConfig;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.lazy.mutate.LazyFieldMutator;
+import dev.simplified.shared.apt.AnnotationLookup;
+import dev.simplified.shared.javac.JavacBridge;
 
 import javax.annotation.processing.Messager;
 import javax.lang.model.element.Element;
@@ -43,7 +47,8 @@ public final class BuilderMutator {
      *         element has no source tree (class-file origin, stub, etc.) and
      *         the caller should fall back
      */
-    public boolean mutate(TypeElement targetElement, BuilderConfig config, List<FieldSpec> fields) {
+    public boolean mutate(TypeElement targetElement, BuilderConfig config, List<FieldSpec> fields,
+                          List<FieldSpec> allFields) {
         JCClassDecl target = bridge.treeOf(targetElement);
         if (target == null) return false;
 
@@ -53,8 +58,45 @@ public final class BuilderMutator {
         // messages on synthesised members point at the @ClassBuilder declaration.
         bridge.treeMaker().at(target.pos);
 
+        warnUnbuildableCustomCollectors(targetElement, fields);
+
         boolean isAbstract = targetElement.getModifiers().contains(Modifier.ABSTRACT);
-        String annotatedSuper = findAnnotatedDirectSuperSimpleName(targetElement);
+        AnnotatedSuper annotatedSuper = findAnnotatedDirectSuper(targetElement);
+
+        // The build() we emit calls new Target(f1, f2, ...) positionally, and a
+        // plain class that declares no constructor gets only javac's no-arg
+        // default - so synthesise the matching all-args form. Injected ahead of
+        // LazyFieldMutator so a @Lazy field's parameter and assignment are
+        // rewritten here exactly as they would be in a hand-written ctor.
+        if (needsAllArgsConstructor(targetElement, target, ctx, isAbstract, annotatedSuper)) {
+            JCMethodDecl ctor = new AllArgsConstructorFactory(ctx).build(
+                constructorAccess(targetElement, ctx));
+            // A written @AllArgsConstructor whose field set happens to coincide
+            // with the builder's has already produced this exact signature in
+            // the constructor pass. build() binds to it, and emitting a second
+            // would be a duplicate rather than an override.
+            if (ArgsConstructorMutator.hasGeneratedConstructor(target, ctor.params)) {
+                messager.printMessage(Diagnostic.Kind.NOTE,
+                    "@ClassBuilder used the constructor a written annotation already generates on "
+                        + ctx.targetSimpleName() + "; constructorAccess is not applied",
+                    targetElement);
+            } else {
+                bridge.compat().appendDef(target, ctor);
+            }
+        }
+
+        // @Lazy fields: rewrite storage type to Lazy<T>, wrap initialisers,
+        // adjust matching constructor params + assignments, synthesise
+        // memoizing getters. Runs before any other phase (SuperBuilder or
+        // regular) so RetainedInitFactory + FieldMutators see the rewritten
+        // field tree, and so the synthesised getter is in place before the
+        // nested Builder generation considers method-name collisions.
+        // allFields, not fields: @Lazy rewrites storage and synthesises a
+        // getter, neither of which depends on the builder exposing the field.
+        // A @BuilderIgnore'd lazy field keeps its own initializer and is never
+        // touched by the constructor, so it behaves exactly as the standalone
+        // case does.
+        new LazyFieldMutator(ctx.bridge(), targetElement, target, allFields, true, messager).mutate();
 
         if (isAbstract || annotatedSuper != null) {
             // For SuperBuilder subclasses, the bootstrap from(T) must populate
@@ -75,16 +117,89 @@ public final class BuilderMutator {
             return true;
         }
 
-        // $default$<fieldName>() providers for @BuildRule(retainInit) fields.
+        // $default$<fieldName>() providers for retained-initializer fields.
         // Must run before the nested Builder is built so FieldMutators'
         // Target.$default$<name>() references resolve at javac attribution.
-        new RetainedInitFactory(ctx).appendAll();
+        new RetainedInitFactory(ctx, messager).appendAll();
 
         JCClassDecl nested = new NestedBuilderFactory(ctx).build();
         bridge.compat().appendDef(target, nested);
 
         new BootstrapMethodFactory(ctx, messager).appendAll();
         return true;
+    }
+
+    /**
+     * Resolves the visibility of the constructor {@code build()} calls.
+     *
+     * <p>A value written on {@code @BuilderArgsConstructor} wins, then one
+     * written as {@code @ClassBuilder(constructorAccess)}, then package-private.
+     * Both steps read the written value rather than the effective one - a bare
+     * {@code @BuilderArgsConstructor} states nothing about visibility and must
+     * not silently overrule a {@code constructorAccess} beside it.
+     *
+     * @param targetElement the annotated type
+     * @param ctx the per-target mutation context
+     * @return the resolved access level
+     */
+    private static AccessLevel constructorAccess(TypeElement targetElement, MutationContext ctx) {
+        String written = new AnnotationLookup().stringAttr(
+            targetElement, "dev.simplified.annotations.BuilderArgsConstructor", "access", null);
+        if (written == null) return ctx.config().constructorAccess();
+        try {
+            return AccessLevel.valueOf(written);
+        } catch (IllegalArgumentException e) {
+            return ctx.config().constructorAccess();
+        }
+    }
+
+    /**
+     * Decides whether the target needs a synthesised all-args constructor.
+     * Skipped for records (the canonical constructor already has the shape), for
+     * SuperBuilder targets (they take a copy constructor instead), when a
+     * {@code factoryMethod} means {@code build()} never calls {@code new}, when
+     * the author declared any constructor, when a hand-written nested builder
+     * suppresses injection wholesale, and when there are no fields to pass -
+     * that last case would collide with javac's own default constructor.
+     *
+     * @param targetElement the annotated type
+     * @param target the target's class declaration
+     * @param ctx the per-target mutation context
+     * @param isAbstract whether the target is abstract
+     * @param annotatedSuper the annotated direct super, or {@code null}
+     * @return whether an all-args constructor should be injected
+     */
+    private boolean needsAllArgsConstructor(TypeElement targetElement,
+                                            JCClassDecl target,
+                                            MutationContext ctx,
+                                            boolean isAbstract,
+                                            AnnotatedSuper annotatedSuper) {
+        if (targetElement.getKind() == ElementKind.RECORD) return false;
+        if (isAbstract || annotatedSuper != null) return false;
+        if (!ctx.config().factoryMethod().isEmpty()) return false;
+        if (ctx.fields().isEmpty()) return false;
+        if (AllArgsConstructorFactory.hasExplicitConstructor(target)) return false;
+        return !hasExistingNested(target, ctx.builderName());
+    }
+
+    /**
+     * Emits a {@link Diagnostic.Kind#NOTE} for each {@code @Collector} field
+     * whose type is a custom (non-java.util) container with no declared
+     * initializer. The builder has no way to construct a fresh instance of such
+     * a type, so those fields get a plain replace setter instead of the
+     * {@code @Collector} bulk API - the note tells the author how to enable it.
+     */
+    private void warnUnbuildableCustomCollectors(TypeElement target, List<FieldSpec> fields) {
+        for (FieldSpec f : fields) {
+            boolean noInit = f.sourceInitializer == null || f.sourceInitializer.isEmpty();
+            if (f.collector && f.isCustomContainer && noInit) {
+                messager.printMessage(Diagnostic.Kind.NOTE,
+                    "@ClassBuilder: @Collector on '" + f.name + "' has no field initializer to build "
+                        + "fresh instances of a custom collection type from - using a plain replace "
+                        + "setter. Give the field an initializer to enable the @Collector bulk API.",
+                    target);
+            }
+        }
     }
 
     private static boolean hasExistingNested(JCClassDecl target, String nestedName) {
@@ -117,12 +232,20 @@ public final class BuilderMutator {
             Element se = dt.asElement();
             if (!(se instanceof TypeElement superType)) break;
             if ("java.lang.Object".equals(superType.getQualifiedName().toString())) break;
+            // retainInit is the ancestor's own policy, not the subclass's.
+            // Inert on this path (no introspector, so no initializer is
+            // captured), but reading it locally keeps the semantics honest.
+            boolean superRetainInit = lookup.booleanAttr(
+                superType, "dev.simplified.annotations.ClassBuilder", "retainInit", true);
             // Collect this ancestor's own fields.
             for (Element enc : superType.getEnclosedElements()) {
                 if (enc.getKind() != ElementKind.FIELD) continue;
                 if (enc.getModifiers().contains(Modifier.STATIC)) continue;
                 if (enc.getModifiers().contains(Modifier.TRANSIENT)) continue;
-                FieldSpec spec = FieldSpec.from((VariableElement) enc, lookup, null);
+                // Inherited fields use the plain classification (no Types walk):
+                // their initializers aren't accessible cross-class, so a custom
+                // container on a parent falls back to a plain setter here.
+                FieldSpec spec = FieldSpec.from((VariableElement) enc, lookup, null, null, superRetainInit);
                 if (spec.ignored) continue;
                 ancestors.add(spec);
             }
@@ -136,7 +259,7 @@ public final class BuilderMutator {
         return out;
     }
 
-    private static String findAnnotatedDirectSuperSimpleName(TypeElement target) {
+    private static AnnotatedSuper findAnnotatedDirectSuper(TypeElement target) {
         TypeMirror superMirror = target.getSuperclass();
         if (!(superMirror instanceof DeclaredType dt)) return null;
         Element superElement = dt.asElement();
@@ -145,7 +268,9 @@ public final class BuilderMutator {
         if ("java.lang.Object".equals(superQn)) return null;
         for (var m : superType.getAnnotationMirrors()) {
             if (m.getAnnotationType().toString().equals("dev.simplified.annotations.ClassBuilder")) {
-                return superType.getSimpleName().toString();
+                List<String> args = new ArrayList<>();
+                for (TypeMirror arg : dt.getTypeArguments()) args.add(arg.toString());
+                return new AnnotatedSuper(superType.getSimpleName().toString(), args);
             }
         }
         return null;

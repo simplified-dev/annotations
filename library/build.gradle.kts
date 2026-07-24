@@ -158,7 +158,7 @@ idea {
 // The showcase source set is a consumer-style fixture: @ClassBuilder types
 // annotated with every runtime-observable configuration, plus a main() that
 // exercises the generated builders. Packaged as a standalone runnable jar
-// and exercised by BuildRuleShowcaseIntegrationTest in src/test.
+// and exercised by ClassBuilderShowcaseIntegrationTest in src/test.
 //
 // CRITICAL: the showcase jar is INTERNAL verification only. It is never
 // added to the "release" maven publication, and its output directory is
@@ -197,7 +197,7 @@ val showcaseJar by tasks.registering(Jar::class) {
     from(sourceSets["showcase"].output)
     from(sourceSets.main.get().output)
     manifest {
-        attributes("Main-Class" to "dev.simplified.classbuilder.showcase.BuildRuleShowcase")
+        attributes("Main-Class" to "dev.simplified.classbuilder.showcase.ClassBuilderShowcase")
     }
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
@@ -212,6 +212,31 @@ tasks.test {
         "showcase.output.dir",
         layout.buildDirectory.dir("showcase-output").get().asFile.absolutePath
     )
+}
+
+// ----------------------------------------------------------------------------
+// Lombok co-residence for the showcase (BUG-2 / F3 regression gate)
+//
+// The showcase includes @ClassBuilder + Lombok @Getter cases carrying `final`
+// @BuildRule(retainInit) fields, so the blank-final lift is exercised under REAL
+// javac + REAL Lombok multi-round processing - the exact configuration that
+// surfaced BUG-2. Lombok is compile-time only (source-level @Getter); the
+// showcase jar needs no runtime Lombok. Existing showcase cases carry no Lombok
+// annotations, so Lombok is a no-op on them. The showcase jar is internal
+// verification only (never published), so this dependency stays out of the
+// release artifact.
+// ----------------------------------------------------------------------------
+// Newest Lombok: it retains javac support back to 17 while adding the newer
+// JDKs (1.18.36 crashes on JDK 25 - NoSuchFieldException on a moved javac
+// internal). The showcase is internal verification only, so this version is
+// independent of any consumer's Lombok.
+val showcaseLombok by configurations.creating
+dependencies { showcaseLombok("org.projectlombok:lombok:1.18.42") }
+sourceSets["showcase"].compileClasspath += showcaseLombok
+tasks.named<JavaCompile>("compileShowcaseJava") {
+    options.annotationProcessorPath = files(sourceSets.main.get().output) +
+        showcaseLombok +
+        configurations.compileClasspath.get()
 }
 
 // ----------------------------------------------------------------------------

@@ -1,8 +1,8 @@
 package dev.simplified.classbuilder.editor;
-
 import com.intellij.ide.IconProvider;
 import com.intellij.openapi.util.IconLoader;
 import com.intellij.psi.PsiElement;
+import dev.simplified.shared.psi.GeneratedMemberMarker;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 

@@ -1,0 +1,57 @@
+<html>
+<body>
+Reports a class whose hand-written <code>equals</code> and <code>hashCode</code>
+read different state. Folding the superclass in counts as state, so an
+<code>equals</code> calling <code>super.equals</code> beside a
+<code>hashCode</code> that skips <code>super.hashCode</code> is the same finding
+as a dropped field.
+
+<!-- tooltip end -->
+
+<p>
+The two directions are different problems and report at different severities.
+</p>
+
+<ul>
+  <li><b>Warning - <code>hashCode</code> reads what <code>equals</code>
+      ignores.</b> A contract break. Two objects the relation calls equal differ
+      in that member, hash apart, and land in different buckets, so one of them
+      cannot be found in any <code>HashMap</code> or <code>HashSet</code> that
+      holds the other.</li>
+  <li><b>Weak warning - <code>equals</code> compares what <code>hashCode</code>
+      ignores.</b> Legal: equal objects still agree on the smaller set, so their
+      hashes still agree. The cost is collisions rather than correctness, which
+      is why it is reported quietly - but it is almost always a member that was
+      added to one of the pair and never to the other.</li>
+</ul>
+
+<p>
+Both are the one shape <code>@EqualsAndHashCode</code> cannot adopt. The
+annotation drives both members from a single selection and a single
+<code>callSuper</code>, so a split member set has no spelling in it. Where the
+goal is to replace a hand-written pair with the annotation, this check is the
+inventory of what has to be decided first.
+</p>
+
+<p>
+<b>No quick fix is offered, and that is the finding rather than a gap in it.</b>
+Closing the split means deciding which of the two member sets is the value of
+the object, and nothing in the source says which. A fix that guessed would
+either widen what equality means or rewrite a hash the author had a reason for -
+and a deliberately loose hash is a legitimate, if unusual, thing to have
+written.
+</p>
+
+<p>
+The check declines to report rather than guess. A pair that delegates to a
+helper method, or reads state through a call this analysis cannot follow, is
+left alone: an unreadable body yields no member set, and comparing an unknown
+against a known one would report every such class. A field assigned inside
+<code>hashCode</code> is treated as a memoized hash rather than a member, so a
+cached <code>hashCode</code> does not report. A class already carrying
+<code>@EqualsAndHashCode</code> is left to the inspection that owns that
+annotation.
+</p>
+
+</body>
+</html>

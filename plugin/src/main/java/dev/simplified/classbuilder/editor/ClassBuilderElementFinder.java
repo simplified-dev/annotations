@@ -1,20 +1,22 @@
 package dev.simplified.classbuilder.editor;
 
 import com.intellij.openapi.project.Project;
+import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElementFinder;
+import com.intellij.psi.augment.PsiAugmentProvider;
 import com.intellij.psi.impl.file.impl.JavaFileManager;
 import com.intellij.psi.search.GlobalSearchScope;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * Bridges {@link com.intellij.psi.JavaPsiFacade#findClass} to our augmented
+ * Bridges {@link JavaPsiFacade#findClass} to our augmented
  * inner classes.
  *
  * <p>{@code JavaPsiFacade.findClass} queries registered {@link PsiElementFinder}
  * extensions and the global class index; neither of those consult
- * {@link com.intellij.psi.augment.PsiAugmentProvider}. So even when our
+ * {@link PsiAugmentProvider}. So even when our
  * {@link ClassBuilderAugmentProvider} happily returns the synth Builder via
  * {@code Target.getInnerClasses()}, a direct lookup like
  * {@code JavaPsiFacade.findClass("a.Doc.Builder", scope)} returns

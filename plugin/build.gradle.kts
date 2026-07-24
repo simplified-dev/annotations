@@ -51,6 +51,15 @@ dependencies {
     }
 
     testImplementation("junit:junit:4.13.2")
+    // The bundled IntelliJ test framework loads classes that reference
+    // org.opentest4j.AssertionFailedError but doesn't bring opentest4j onto
+    // the test runtime classpath transitively. Without this explicit pin
+    // every BasePlatformTestCase fails with NoClassDefFoundError before any
+    // test method runs. Pinning 1.3.0 because that's already in the local
+    // Gradle cache from the JUnit 5 transitive set; the API surface this
+    // path uses (AssertionFailedError + ValueWrapper) has been stable since
+    // 1.0.
+    testImplementation("org.opentest4j:opentest4j:1.3.0")
 }
 
 // ----------------------------------------------------------------------------
@@ -143,8 +152,22 @@ intellijPlatform {
             create(IntelliJPlatformType.IntellijIdeaCommunity, "2023.3")
             create(IntelliJPlatformType.IntellijIdeaCommunity, "2024.3")
             create(IntelliJPlatformType.IntellijIdea, "2025.3")
+            create(IntelliJPlatformType.IntellijIdea, "2026.1")
         }
     }
+}
+
+// ----------------------------------------------------------------------------
+// HandWrittenPairCorpusTest measures the two hand-written-pair inspections
+// against a real source tree, which has to be named from outside the build.
+// Forwarded rather than hardcoded: the test skips when the property is absent,
+// so an ordinary run is unaffected and no checkout needs the directory to exist.
+//
+//   ./gradlew :plugin:test --tests "*HandWrittenPairCorpusTest" -Pcorpus.dir=<path>
+// ----------------------------------------------------------------------------
+
+tasks.test {
+    (project.findProperty("corpus.dir") as String?)?.let { systemProperty("corpus.dir", it) }
 }
 
 // ----------------------------------------------------------------------------

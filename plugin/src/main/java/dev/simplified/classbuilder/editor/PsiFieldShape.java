@@ -1,14 +1,18 @@
 package dev.simplified.classbuilder.editor;
 
+import com.intellij.psi.CommonClassNames;
 import com.intellij.psi.PsiArrayType;
 import com.intellij.psi.PsiClassType;
 import com.intellij.psi.PsiDocCommentOwner;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypes;
+import com.intellij.psi.util.InheritanceUtil;
+import com.intellij.psi.util.PsiUtil;
+import dev.simplified.classbuilder.apt.FieldSpec;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * PSI-side analogue of {@link dev.simplified.classbuilder.apt.FieldSpec}: the shape
+ * PSI-side analogue of {@link FieldSpec}: the shape
  * vocabulary the augment provider needs to synthesise setters. FieldSpec
  * itself is tied to {@code javax.lang.model} (APT-only); this mirror is
  * derived from PSI so editor-time synthesis has no APT dependency.
@@ -36,6 +40,13 @@ public final class PsiFieldShape {
     public final boolean isListLike;
     public final boolean isSet;
     public final boolean isMap;
+    /**
+     * Recognised as a {@code Collection}/{@code Map} subtype by a supertype
+     * walk rather than an exact {@code java.util.*} match (e.g.
+     * {@code dev.simplified.collection.ConcurrentList}). Mirrors
+     * {@link FieldSpec#isCustomContainer}.
+     */
+    public final boolean isCustomContainer;
     public final PsiType collectionElement;
     public final PsiType mapKey;
     public final PsiType mapValue;
@@ -77,6 +88,12 @@ public final class PsiFieldShape {
     public final boolean nonNullByBuildFlag;
 
     /**
+     * True when the field carries {@code @Lazy}. Drives the dual-setter shape
+     * (value form + Supplier form) on the synthesised Builder PSI.
+     */
+    public final boolean lazy;
+
+    /**
      * Source element whose Javadoc the generated setter should surface.
      * Typically the backing field or record component. Null when no Javadoc
      * owner is available (e.g. interface accessor extraction paths).
@@ -96,6 +113,7 @@ public final class PsiFieldShape {
         this.isListLike = b.isListLike;
         this.isSet = b.isSet;
         this.isMap = b.isMap;
+        this.isCustomContainer = b.isCustomContainer;
         this.collectionElement = b.collectionElement;
         this.mapKey = b.mapKey;
         this.mapValue = b.mapValue;
@@ -109,6 +127,7 @@ public final class PsiFieldShape {
         this.clearable = b.clearable;
         this.compute = b.compute;
         this.nonNullByBuildFlag = b.nonNullByBuildFlag;
+        this.lazy = b.lazy;
         this.docSource = b.docSource;
     }
 
@@ -145,8 +164,37 @@ public final class PsiFieldShape {
             b.isMap = true;
             b.mapKey = params.length == 0 ? null : params[0];
             b.mapValue = params.length < 2 ? null : params[1];
+        } else {
+            classifyCustomContainer(b, classType);
         }
         return b;
+    }
+
+    /**
+     * Fallback for a project-specific container the exact-FQN matchers miss:
+     * recognise any {@code Collection}/{@code Map} subtype by walking its
+     * supertypes, reading the element/key/value types off the matched java.util
+     * supertype. Mirrors the {@code Types}-based walk in
+     * {@link FieldSpec}. Flagged
+     * {@link Builder#isCustomContainer} so the extractor mirrors the APT's
+     * initializer requirement for {@code @Collector}.
+     */
+    private static void classifyCustomContainer(Builder b, PsiClassType classType) {
+        if (InheritanceUtil.isInheritor(classType, CommonClassNames.JAVA_UTIL_MAP)) {
+            b.isMap = true;
+            b.isCustomContainer = true;
+            b.mapKey = PsiUtil.substituteTypeParameter(classType, CommonClassNames.JAVA_UTIL_MAP, 0, false);
+            b.mapValue = PsiUtil.substituteTypeParameter(classType, CommonClassNames.JAVA_UTIL_MAP, 1, false);
+        } else if (InheritanceUtil.isInheritor(classType, CommonClassNames.JAVA_UTIL_SET)) {
+            b.isListLike = true;
+            b.isSet = true;
+            b.isCustomContainer = true;
+            b.collectionElement = PsiUtil.substituteTypeParameter(classType, CommonClassNames.JAVA_UTIL_COLLECTION, 0, false);
+        } else if (InheritanceUtil.isInheritor(classType, CommonClassNames.JAVA_UTIL_COLLECTION)) {
+            b.isListLike = true;
+            b.isCustomContainer = true;
+            b.collectionElement = PsiUtil.substituteTypeParameter(classType, CommonClassNames.JAVA_UTIL_COLLECTION, 0, false);
+        }
     }
 
     /**
@@ -207,13 +255,14 @@ public final class PsiFieldShape {
         PsiType arrayComponent;
         boolean isOptional, isOptionalString;
         PsiType optionalInner;
-        boolean isListLike, isSet, isMap;
+        boolean isListLike, isSet, isMap, isCustomContainer;
         PsiType collectionElement, mapKey, mapValue;
         boolean nullable, notNull, formattable;
         String negateName;
         boolean collector, singular, clearable, compute;
         String singularName;
         boolean nonNullByBuildFlag;
+        boolean lazy;
         @Nullable PsiDocCommentOwner docSource;
 
         PsiFieldShape build() {

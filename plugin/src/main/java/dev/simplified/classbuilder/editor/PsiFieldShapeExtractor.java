@@ -10,6 +10,8 @@ import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiModifierListOwner;
 import com.intellij.psi.PsiRecordComponent;
+import com.intellij.psi.PsiSubstitutor;
+import com.intellij.psi.PsiTypeParameter;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 
 import java.util.ArrayList;
@@ -19,7 +21,7 @@ import java.util.Set;
 /**
  * Walks a {@code @ClassBuilder}-annotated PsiClass (or a record) and derives
  * the {@link PsiFieldShape} list the augment provider uses to synthesise
- * setters. Honours {@code @BuildRule(ignore)} and the annotation's
+ * setters. Honours {@code @BuilderIgnore} and the annotation's
  * {@code exclude} attribute, and reads companion annotations
  * ({@code @Collector}, {@code @Negate}, {@code @Formattable},
  * {@code @Nullable}) so the synthesised shape matrix lines up with what
@@ -27,10 +29,12 @@ import java.util.Set;
  */
 final class PsiFieldShapeExtractor {
 
-    private static final String BUILD_RULE_FQN = ClassBuilderConstants.BUILD_RULE_FQN;
+    private static final String BUILDER_IGNORE_FQN = ClassBuilderConstants.BUILDER_IGNORE_FQN;
+    private static final String BUILD_FLAG_FQN = ClassBuilderConstants.BUILD_FLAG_FQN;
     private static final String COLLECTOR_FQN = ClassBuilderConstants.COLLECTOR_FQN;
     private static final String NEGATE_FQN = ClassBuilderConstants.NEGATE_FQN;
     private static final String FORMATTABLE_FQN = ClassBuilderConstants.FORMATTABLE_FQN;
+    private static final String LAZY_FQN = ClassBuilderConstants.LAZY_FQN;
 
     private PsiFieldShapeExtractor() {
     }
@@ -40,33 +44,55 @@ final class PsiFieldShapeExtractor {
      * components are handled separately by {@link #fromRecord}.
      */
     static List<PsiFieldShape> fromClass(PsiClass target, Set<String> excluded) {
+        return fromClass(target, excluded, PsiSubstitutor.EMPTY);
+    }
+
+    /**
+     * Substituting variant. A member synthesised onto the {@code static} nested
+     * Builder of a generic target must express field types in the Builder's own
+     * type parameters, not the target's - they are distinct
+     * {@link PsiTypeParameter}s, so a setter left holding the target's would
+     * never be substituted by a {@code Builder<String>} receiver and the editor
+     * would reject every call. Applied once here, ahead of classification, so
+     * the derived element / key / value types follow.
+     *
+     * @param target the annotated type
+     * @param excluded field names to skip
+     * @param substitutor mapping to apply to each declared type
+     * @return the extracted shapes
+     */
+    static List<PsiFieldShape> fromClass(PsiClass target, Set<String> excluded, PsiSubstitutor substitutor) {
         List<PsiFieldShape> out = new ArrayList<>();
         for (PsiField field : target.getFields()) {
             if (field.hasModifierProperty(PsiModifier.STATIC)) continue;
             if (field.hasModifierProperty(PsiModifier.TRANSIENT)) continue;
             if (excluded.contains(field.getName())) continue;
             if (isIgnored(field)) continue;
-            out.add(buildShape(field, field.getName(), field.getType()));
+            out.add(buildShape(field, field.getName(), substitutor.substitute(field.getType())));
         }
         return out;
     }
 
     /** Record-component variant; records expose fields via {@link PsiRecordComponent}. */
     static List<PsiFieldShape> fromRecord(PsiClass record, Set<String> excluded) {
+        return fromRecord(record, excluded, PsiSubstitutor.EMPTY);
+    }
+
+    /** Substituting variant of {@link #fromRecord(PsiClass, Set)}. */
+    static List<PsiFieldShape> fromRecord(PsiClass record, Set<String> excluded, PsiSubstitutor substitutor) {
         List<PsiFieldShape> out = new ArrayList<>();
         for (PsiRecordComponent c : record.getRecordComponents()) {
             String name = c.getName();
             if (excluded.contains(name)) continue;
             if (isIgnored(c)) continue;
-            out.add(buildShape(c, name, c.getType()));
+            out.add(buildShape(c, name, substitutor.substitute(c.getType())));
         }
         return out;
     }
 
-    /** True when the owner carries {@code @BuildRule(ignore = true)}. */
+    /** True when the owner carries {@code @BuilderIgnore}. */
     private static boolean isIgnored(PsiModifierListOwner owner) {
-        PsiAnnotation rule = findAnnotation(owner, BUILD_RULE_FQN);
-        return rule != null && booleanAttr(rule, "ignore", false);
+        return hasAnnotation(owner, BUILDER_IGNORE_FQN);
     }
 
     /**
@@ -85,6 +111,7 @@ final class PsiFieldShapeExtractor {
         b.notNull = nnm.isNotNull(owner, false);
 
         b.formattable = hasAnnotation(owner, FORMATTABLE_FQN);
+        b.lazy = hasAnnotation(owner, LAZY_FQN);
 
         PsiAnnotation negate = findAnnotation(owner, NEGATE_FQN);
         if (negate != null) {
@@ -102,17 +129,25 @@ final class PsiFieldShapeExtractor {
             b.singularName = methodName.isEmpty() ? defaultSingular(name) : methodName;
         }
 
-        // @BuildRule.flag().nonNull() - PsiAnnotation.findAttributeValue
-        // returns a PsiAnnotation for nested-annotation attributes; read
-        // its own attribute via the same booleanAttr helper.
-        PsiAnnotation rule = findAnnotation(owner, BUILD_RULE_FQN);
-        if (rule != null) {
-            PsiAnnotationMemberValue flagValue = rule.findAttributeValue("flag");
-            if (flagValue instanceof PsiAnnotation flag) {
-                b.nonNullByBuildFlag = booleanAttr(flag, "nonNull", false);
-            }
+        // Parity with the APT mutator: a custom (non-java.util) container needs
+        // a field initializer to build fresh instances from. Without one the APT
+        // emits a plain replace setter (and a NOTE), so suppress the @Collector
+        // shape here too rather than advertise bulk methods the build won't
+        // generate. Record components have no field initializer, matching the
+        // APT, which reads the initializer off the backing field.
+        if (b.isCustomContainer && b.collector && !hasFieldInitializer(owner)) {
+            b.collector = false;
         }
+
+        PsiAnnotation flag = findAnnotation(owner, BUILD_FLAG_FQN);
+        if (flag != null) b.nonNullByBuildFlag = booleanAttr(flag, "nonNull", false);
+
         return b.build();
+    }
+
+    /** True when the owner is a field carrying a declared initializer. */
+    private static boolean hasFieldInitializer(PsiModifierListOwner owner) {
+        return owner instanceof PsiField field && field.hasInitializer();
     }
 
     /** True when the element carries the given FQN annotation. */

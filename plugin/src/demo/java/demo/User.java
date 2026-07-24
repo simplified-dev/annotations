@@ -1,7 +1,6 @@
 package demo;
 
 import dev.simplified.annotations.BuildFlag;
-import dev.simplified.annotations.BuildRule;
 import dev.simplified.annotations.ClassBuilder;
 
 /**
@@ -14,8 +13,8 @@ import dev.simplified.annotations.ClassBuilder;
  */
 @ClassBuilder
 public record User(
-        @BuildRule(flag = @BuildFlag(nonNull = true, notEmpty = true, limit = 64)) String name,
-        @BuildRule(flag = @BuildFlag(nonNull = true, pattern = "^[^@]+@[^@]+\\.[^@]+$")) String email,
+        @BuildFlag(nonNull = true, notEmpty = true, limit = 64) String name,
+        @BuildFlag(nonNull = true, pattern = "^[^@]+@[^@]+\\.[^@]+$") String email,
         int age,
         boolean verified
 ) { }

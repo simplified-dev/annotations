@@ -1,7 +1,5 @@
 package dev.simplified.classbuilder.mutate;
-
 import com.sun.tools.javac.code.Flags;
-import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.JCTree.JCBlock;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import com.sun.tools.javac.tree.JCTree.JCExpression;
@@ -9,11 +7,16 @@ import com.sun.tools.javac.tree.JCTree.JCMethodDecl;
 import com.sun.tools.javac.tree.JCTree.JCStatement;
 import com.sun.tools.javac.tree.JCTree.JCTypeParameter;
 import com.sun.tools.javac.tree.JCTree.JCVariableDecl;
+import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.TreeMaker;
 import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.shared.javac.AstMarkers;
+import dev.simplified.shared.javac.ContractAnnotations;
+import dev.simplified.shared.javac.JavacBridge;
+import dev.simplified.shared.javac.JavacTypeFactory;
 
 import javax.annotation.processing.Messager;
 import javax.tools.Diagnostic;
@@ -46,19 +49,23 @@ final class SuperBuilderMutator {
     private final TreeMaker make;
     private final Names names;
     private final Messager messager;
-    private final String annotatedSuperSimpleName; // null when root of chain
+    private final AnnotatedSuper annotatedSuper; // null when root of chain
     private final Collection<FieldSpec> chainFields;
     private final ContractAnnotations contracts;
+    private final String selfParamT;
+    private final String selfParamB;
 
-    SuperBuilderMutator(MutationContext ctx, Messager messager, String annotatedSuperSimpleName,
+    SuperBuilderMutator(MutationContext ctx, Messager messager, AnnotatedSuper annotatedSuper,
                         Collection<FieldSpec> chainFields) {
         this.ctx = ctx;
         this.make = ctx.make();
         this.names = ctx.names();
         this.messager = messager;
-        this.annotatedSuperSimpleName = annotatedSuperSimpleName;
+        this.annotatedSuper = annotatedSuper;
         this.chainFields = chainFields;
-        this.contracts = new ContractAnnotations(ctx);
+        this.contracts = ctx.contracts();
+        this.selfParamT = ctx.selfTypeName();
+        this.selfParamB = ctx.selfBuilderName();
     }
 
     void mutate() {
@@ -80,10 +87,10 @@ final class SuperBuilderMutator {
         // chain fields keep their providers on their respective declaring
         // classes. FieldMutators.defaultInitializer references them by
         // ctx.targetSimpleName() - always the field's own class.
-        new RetainedInitFactory(ctx).appendAll();
+        new RetainedInitFactory(ctx, messager).appendAll();
 
         JCClassDecl nested;
-        if (annotatedSuperSimpleName == null) {
+        if (annotatedSuper == null) {
             // Abstract root
             nested = buildAbstractRootBuilder();
         } else if (!isAbstract) {
@@ -95,11 +102,16 @@ final class SuperBuilderMutator {
         }
         ctx.bridge().compat().appendDef(ctx.target(), nested);
 
-        // Copy constructor
+        // Copy constructor. Its parameter type follows the builder's shape, not
+        // the target's: a root and a chained abstract both carry the self-typed
+        // parameters and so take the wildcard form, while a concrete link's
+        // builder binds them and is referenced plainly. Only the root has no
+        // annotated super to delegate to.
         if (ctx.config().generateCopyConstructor()
             && !CopyConstructorFactory.hasCopyConstructor(ctx.target(), ctx.builderName())) {
-            CopyConstructorFactory cc = new CopyConstructorFactory(ctx);
-            JCMethodDecl ctor = annotatedSuperSimpleName == null ? cc.abstractRoot() : cc.concreteLink();
+            boolean selfTypedBuilder = annotatedSuper == null || isAbstract;
+            JCMethodDecl ctor = new CopyConstructorFactory(ctx)
+                .build(selfTypedBuilder, annotatedSuper != null);
             ctx.bridge().compat().appendDef(ctx.target(), ctor);
         }
 
@@ -119,8 +131,13 @@ final class SuperBuilderMutator {
         FieldMutators fm = new FieldMutators(ctx);
         for (FieldSpec f : ctx.fields()) {
             JCVariableDecl fd = fm.fieldDecl(f);
-            AstMarkers.markGenerated(fd);
+            AstMarkers.markGenerated(fd, ctx.generated());
             defs.append(fd);
+            JCVariableDecl marker = fm.replacedMarkerDecl(f);
+            if (marker != null) {
+                AstMarkers.markGenerated(marker, ctx.generated());
+                defs.append(marker);
+            }
         }
         // Self-typed setters
         SelfTypedSetters self = new SelfTypedSetters(ctx);
@@ -128,11 +145,11 @@ final class SuperBuilderMutator {
             for (JCMethodDecl s : self.setters(f)) defs.append(s);
         }
         // protected abstract B self(); - returns this under self-typed generics.
-        defs.append(abstractMethod(Flags.PROTECTED, "self", identType("B"), List.nil(),
+        defs.append(abstractMethod(Flags.PROTECTED, "self", identType(selfParamB), List.nil(),
             contracts.thisReturnNullary()));
         // public abstract T build(); - each concrete subclass produces a fresh T.
         defs.append(abstractMethod(Flags.PUBLIC, ctx.config().buildMethodName(),
-            identType("T"), List.nil(), contracts.newReturnNullary()));
+            identType(selfParamT), List.nil(), contracts.newReturnNullary()));
 
         JCClassDecl nested = make.ClassDef(
             make.Modifiers(ctx.accessFlag() | Flags.STATIC | Flags.ABSTRACT),
@@ -142,7 +159,7 @@ final class SuperBuilderMutator {
             List.nil(),
             defs.toList()
         );
-        AstMarkers.markGenerated(nested);
+        AstMarkers.markGenerated(nested, ctx.generated());
         return nested;
     }
 
@@ -160,52 +177,48 @@ final class SuperBuilderMutator {
         FieldMutators fm = new FieldMutators(ctx);
         for (FieldSpec f : ctx.fields()) {
             JCVariableDecl fd = fm.fieldDecl(f);
-            AstMarkers.markGenerated(fd);
+            AstMarkers.markGenerated(fd, ctx.generated());
             defs.append(fd);
+            JCVariableDecl marker = fm.replacedMarkerDecl(f);
+            if (marker != null) {
+                AstMarkers.markGenerated(marker, ctx.generated());
+                defs.append(marker);
+            }
         }
         for (FieldSpec f : ctx.fields()) {
             for (JCMethodDecl s : fm.setters(f)) defs.append(s);
         }
 
         // @Override protected Builder self() { return this; }
-        defs.append(concreteMethod(Flags.PROTECTED, "self", identType(ctx.builderName()),
+        defs.append(concreteMethod(Flags.PROTECTED, "self", ctx.builderType(),
             List.nil(), List.of(make.Return(make.Ident(names._this))),
             contracts.thisReturnNullary()));
 
         // @Override public Target build() { return new Target(this); }
         JCStatement buildReturn = make.Return(make.NewClass(
             null, List.nil(),
-            make.Ident(names.fromString(ctx.targetSimpleName())),
+            ctx.targetType(),
             List.of(make.Ident(names._this)),
             null
         ));
         defs.append(concreteMethod(Flags.PUBLIC, ctx.config().buildMethodName(),
-            make.Ident(names.fromString(ctx.targetSimpleName())),
+            ctx.targetType(),
             List.nil(),
             List.of(buildReturn),
             contracts.newReturnNullary()));
 
-        // extends Super.Builder<Target, Builder>
-        JCExpression extendsExpr = make.TypeApply(
-            make.Select(
-                make.Ident(names.fromString(annotatedSuperSimpleName)),
-                names.fromString(ctx.builderName())
-            ),
-            List.of(
-                make.Ident(names.fromString(ctx.targetSimpleName())),
-                make.Ident(names.fromString(ctx.builderName()))
-            )
-        );
+        // extends Super.Builder<superArgs..., Target, Builder>
+        JCExpression extendsExpr = superBuilderType(List.of(ctx.targetType(), ctx.builderType()));
 
         JCClassDecl nested = make.ClassDef(
             make.Modifiers(ctx.accessFlag() | Flags.STATIC),
             names.fromString(ctx.builderName()),
-            List.nil(),
+            ctx.typeParams(),
             extendsExpr,
             List.nil(),
             defs.toList()
         );
-        AstMarkers.markGenerated(nested);
+        AstMarkers.markGenerated(nested, ctx.generated());
         return nested;
     }
 
@@ -218,8 +231,13 @@ final class SuperBuilderMutator {
         FieldMutators fm = new FieldMutators(ctx);
         for (FieldSpec f : ctx.fields()) {
             JCVariableDecl fd = fm.fieldDecl(f);
-            AstMarkers.markGenerated(fd);
+            AstMarkers.markGenerated(fd, ctx.generated());
             defs.append(fd);
+            JCVariableDecl marker = fm.replacedMarkerDecl(f);
+            if (marker != null) {
+                AstMarkers.markGenerated(marker, ctx.generated());
+                defs.append(marker);
+            }
         }
         SelfTypedSetters self = new SelfTypedSetters(ctx);
         for (FieldSpec f : ctx.fields()) {
@@ -227,16 +245,12 @@ final class SuperBuilderMutator {
         }
         // self() and build() stay abstract - inherited.
 
-        JCExpression extendsExpr = make.TypeApply(
-            make.Select(
-                make.Ident(names.fromString(annotatedSuperSimpleName)),
-                names.fromString(ctx.builderName())
-            ),
-            List.of(
-                make.Ident(names.fromString("T")),
-                make.Ident(names.fromString("B"))
-            )
-        );
+        // The two self-type arguments forward this builder's own parameters up
+        // the chain rather than binding them, keeping the link abstract.
+        JCExpression extendsExpr = superBuilderType(List.of(
+            make.Ident(names.fromString(selfParamT)),
+            make.Ident(names.fromString(selfParamB))
+        ));
 
         JCClassDecl nested = make.ClassDef(
             make.Modifiers(ctx.accessFlag() | Flags.STATIC | Flags.ABSTRACT),
@@ -246,7 +260,7 @@ final class SuperBuilderMutator {
             List.nil(),
             defs.toList()
         );
-        AstMarkers.markGenerated(nested);
+        AstMarkers.markGenerated(nested, ctx.generated());
         return nested;
     }
 
@@ -254,18 +268,54 @@ final class SuperBuilderMutator {
     // Helpers
     // ------------------------------------------------------------------
 
-    /** Builds {@code <T extends Target, B extends Builder<T, B>>}. */
+    /**
+     * Builds {@code <T extends Target, B extends Builder<T, B>>}, or on a
+     * generic target {@code <V, T extends Target<V>, B extends Builder<V, T, B>>}
+     * - the target's own parameters lead, so a subclass binds them in the same
+     * order the target declares them.
+     */
     private List<JCTypeParameter> selfTypedTypeParameters() {
+        ListBuffer<JCTypeParameter> out = new ListBuffer<>();
+        out.appendList(ctx.typeParams());
         JCTypeParameter tpT = make.TypeParameter(
-            names.fromString("T"),
-            List.of(make.Ident(names.fromString(ctx.targetSimpleName())))
+            names.fromString(selfParamT),
+            List.of(ctx.targetType())
         );
-        JCExpression builderWithTB = make.TypeApply(
+        ListBuffer<JCExpression> builderArgs = new ListBuffer<>();
+        builderArgs.appendList(ctx.typeArgs());
+        builderArgs.append(make.Ident(names.fromString(selfParamT)));
+        builderArgs.append(make.Ident(names.fromString(selfParamB)));
+        JCExpression builderApplied = make.TypeApply(
             make.Ident(names.fromString(ctx.builderName())),
-            List.of(make.Ident(names.fromString("T")), make.Ident(names.fromString("B")))
+            builderArgs.toList()
         );
-        JCTypeParameter tpB = make.TypeParameter(names.fromString("B"), List.of(builderWithTB));
-        return List.of(tpT, tpB);
+        JCTypeParameter tpB = make.TypeParameter(names.fromString(selfParamB), List.of(builderApplied));
+        out.append(tpT);
+        out.append(tpB);
+        return out.toList();
+    }
+
+    /**
+     * The {@code extends Super.Builder<...>} clause. The leading arguments are
+     * whatever the target passes to its superclass ({@code String} for
+     * {@code class StringBox extends Box<String>}), followed by the two
+     * self-type arguments - bound to the concrete types on a concrete link, and
+     * forwarded as this builder's own parameters on a chained abstract.
+     *
+     * @param selfArgs the two trailing self-type arguments
+     * @return the parameterised supertype expression
+     */
+    private JCExpression superBuilderType(List<JCExpression> selfArgs) {
+        ListBuffer<JCExpression> args = new ListBuffer<>();
+        for (String arg : annotatedSuper.typeArguments()) args.append(ctx.types().parseType(arg));
+        args.appendList(selfArgs);
+        return make.TypeApply(
+            make.Select(
+                make.Ident(names.fromString(annotatedSuper.simpleName())),
+                names.fromString(ctx.builderName())
+            ),
+            args.toList()
+        );
     }
 
     private JCExpression identType(String simpleName) {
@@ -285,7 +335,7 @@ final class SuperBuilderMutator {
             null,
             null
         );
-        AstMarkers.markGenerated(m);
+        AstMarkers.markGenerated(m, ctx.generated());
         return m;
     }
 
@@ -303,7 +353,7 @@ final class SuperBuilderMutator {
             block,
             null
         );
-        AstMarkers.markGenerated(m);
+        AstMarkers.markGenerated(m, ctx.generated());
         return m;
     }
 
