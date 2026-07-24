@@ -260,6 +260,15 @@
                 displayName="@Log misuse"
                 groupName="Simplified Annotations"
         />
+        <localInspection
+                language="JAVA"
+                implementationClass="dev.simplified.equality.inspect.EqualityConsistencyInspection"
+                enabledByDefault="true"
+                level="WARNING"
+                shortName="EqualityConsistencyInspection"
+                displayName="Hand-written equals and hashCode read different state"
+                groupName="Simplified Annotations"
+        />
         <custom.exception.handler implementation="dev.simplified.silentthrows.editor.SilentThrowsExceptionHandler"/>
         <lang.inspectionSuppressor language="JAVA" implementationClass="dev.simplified.cleanup.inspect.CleanupSuppressor"/>
         <lang.inferredAnnotationProvider implementation="dev.simplified.xcontract.XContractInferredAnnotationProvider"/>
