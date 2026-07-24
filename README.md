@@ -1,9 +1,11 @@
 # Simplified Annotations
 
-Four Java annotations with matching IntelliJ IDEA tooling - covering static resource-path validation, an extended `@Contract` grammar, a full-featured builder generator with runtime validation, and lazy field memoisation via AST mutation.
+Seventeen Java annotations with matching IntelliJ IDEA tooling - a Lombok-compatible generator set covering builders, accessors, constructors, equality, `toString`, logging, utility classes, lazy fields and enum lookups, plus two inspection-only families for resource-path validation and an extended `@Contract` grammar, and the two body rewrites for checked exceptions and resource cleanup.
+
+Every annotation that generates has an IDE half, and that pairing is the point: a green editor over source javac rejects, or a red editor over source that builds, is the failure mode nearly every design decision here is defending against.
 
 > [!IMPORTANT]
-> `@ClassBuilder` uses javac AST mutation and **requires javac** (ecj is not supported). The processor opens `jdk.compiler` internals automatically at load time via `sun.misc.Unsafe` + `MethodHandles.Lookup.IMPL_LOOKUP` (same technique Lombok uses), so **no `--add-exports` flags are needed** in consumer builds. `@ResourcePath` and `@XContract` have no compiler dependency and work on any build.
+> The generating annotations mutate the javac AST in place and **require javac** (ecj is not supported). The processor opens `jdk.compiler` internals automatically at load time via `sun.misc.Unsafe` + `MethodHandles.Lookup.IMPL_LOOKUP` (the same technique Lombok uses), so **no `--add-exports` flags are needed** in consumer builds. `@ResourcePath` and `@XContract` generate nothing, have no compiler dependency, and work on any build.
 
 ## Table of Contents
 
@@ -17,10 +19,19 @@ Four Java annotations with matching IntelliJ IDEA tooling - covering static reso
   - [@XContract](#xcontract)
   - [@ClassBuilder](#classbuilder)
   - [@Lazy](#lazy)
+  - [@Getter and @Setter](#getter-and-setter)
+  - [Constructors](#constructors)
+  - [@EqualsAndHashCode and @ToString](#equalsandhashcode-and-tostring)
+  - [@Log](#log)
+  - [@UtilityClass](#utilityclass)
+  - [@SilentThrows and @Cleanup](#silentthrows-and-cleanup)
+  - [@EnumLookup](#enumlookup)
 - [Annotation Reference](#annotation-reference)
   - [@ClassBuilder Attributes](#classbuilder-attributes)
+  - [Naming](#naming)
   - [Field Annotations](#field-annotations)
   - [Field-Level Companions](#field-level-companions)
+  - [Optional&lt;T&gt; fields](#optionalt-fields)
 - [Documentation](#documentation)
 - [License](#license)
 
@@ -38,6 +49,15 @@ Four Java annotations with matching IntelliJ IDEA tooling - covering static reso
   - An all-args constructor synthesised when the class declares none, so a plain class needs nothing but the annotation
   - `@BuildFlag` runtime validator enforcing `nonNull` / `notEmpty` / `group` / `pattern` / `limit` in the generated `build()`
 - **`@Lazy`** - field-level annotation that defers a field's value computation until first access and caches it thereafter. The processor rewrites the storage from `T` to `Lazy<T>`, wraps the initializer as `Lazy.of(() -> <init>)`, and synthesises a memoizing getter. With `@ClassBuilder` the builder gets a dual `field(T)` / `field(Supplier<T>)` setter pair so deferred computations can flow through the builder unchanged.
+- **`@Getter` / `@Setter`** - read and write accessors on classes and enums. Both default to bean-shaped names, so a bare `@Getter` keeps producing `getX()` / `isX()` and renames no existing call site; `style = NamingStyle.FLUENT` mints `x()` instead, which is what replaces Lombok's `@Accessors(fluent = true)`. A field-level annotation beats the enclosing type's, and `AccessLevel.NONE` on a field opts it out of a type-level fan-out.
+- **`@AllArgsConstructor` / `@RequiredArgsConstructor` / `@NoArgsConstructor` / `@BuilderArgsConstructor`** - one field-selection policy with four settings. "Required" means `final` without an initializer, since an initialized `final` is already definitely assigned. These **add** a constructor rather than backing off when one exists, so a constant-carrying enum still works, and a duplicate erasure between two of them is reported here rather than reaching javac on a line you cannot open.
+- **`@EqualsAndHashCode` / `@ToString`** - the whole-object members, over one shared member selector. **Records are the shape they exist for and the shape Lombok refuses**, so a record whose implicit `equals` compares an array component by reference can finally stop hand-writing the pair. `hashCode` accumulates rather than calling `Objects.hash`, because `Objects.hash` takes `Object...` and would hash an array member by identity - inconsistently with the `equals` beside it. `identity` selects between `EXACT_CLASS`, `INSTANCE_OF` and `INSTANCE_OF_CANEQUAL`; `cacheHashCode` adds a `transient` memo.
+- **`@Log`** - one `private static final org.apache.logging.log4j.Logger`, byte-for-byte what Lombok's `@Log4j2` emits, named through the same pattern grammar. Single backend by decision. The library stays zero-dependency by naming log4j2 only as strings, so a module missing `log4j-api` gets an error on the annotation naming the artifact rather than an unresolved symbol inside a field it cannot open.
+- **`@UtilityClass`** - `final` plus a throwing constructor. **Deliberately splits Lombok's feature in two**: the implicit-`static`-on-members half - the one that changes the meaning of a declaration you wrote - is opt-in behind `members = MAKE_STATIC`, and the default reports an instance member with a quick fix instead of silently rewriting it.
+- **`@SilentThrows` / `@Cleanup`** - the two body rewrites. `@SilentThrows` wraps the body so a checked exception leaves a method that declares none, emitting the rethrow helper rather than shipping a runtime type. `@Cleanup` splits the enclosing block and wraps the remainder in `try (name) { ... }` - it produces exactly the tree javac's parser builds for the existing-variable form, so the result *is* try-with-resources, which means a close failure is suppressed rather than masking the primary exception.
+- **`@EnumLookup`** - a cached values array plus a uniform set of static lookup helpers on an enum, with `@KeyField` adding a parallel key array and `of<Name>` / `findBy<Name>` per field.
+
+Two IDE-only inspections read *hand-written* `equals` / `hashCode` pairs on classes carrying none of these annotations: one reports a pair whose two halves compare different state, the other reports the pairs `@EqualsAndHashCode` would generate and offers to replace them. Between them a hand-written pair gets an answer either way.
 
 ## Getting Started
 
@@ -48,8 +68,8 @@ Four Java annotations with matching IntelliJ IDEA tooling - covering static reso
 
 ```kotlin
 dependencies {
-    implementation("io.github.simplified-dev:annotations:2.1.0")
-    annotationProcessor("io.github.simplified-dev:annotations:2.1.0")
+    implementation("io.github.simplified-dev:annotations:2.5.0")
+    annotationProcessor("io.github.simplified-dev:annotations:2.5.0")
 }
 ```
 
@@ -60,8 +80,8 @@ dependencies {
 
 ```groovy
 dependencies {
-    implementation 'io.github.simplified-dev:annotations:2.1.0'
-    annotationProcessor 'io.github.simplified-dev:annotations:2.1.0'
+    implementation 'io.github.simplified-dev:annotations:2.5.0'
+    annotationProcessor 'io.github.simplified-dev:annotations:2.5.0'
 }
 ```
 
@@ -74,7 +94,7 @@ dependencies {
 <dependency>
     <groupId>io.github.simplified-dev</groupId>
     <artifactId>annotations</artifactId>
-    <version>2.1.0</version>
+    <version>2.5.0</version>
 </dependency>
 ```
 
@@ -236,6 +256,129 @@ When the enclosing class also carries `@ClassBuilder`, the generated builder rec
 
 > [!NOTE]
 > `@Lazy` only supports reference types (use `Boolean` rather than `boolean`), is not allowed on static fields or record components, and standalone use (no `@ClassBuilder`) requires a field initializer.
+
+### `@Getter` and `@Setter`
+
+```java
+import dev.simplified.annotations.*;
+
+@Getter
+@Setter
+public class Account {
+    private final String id;                          // final - read accessor only
+    private String email;
+    @Getter(AccessLevel.NONE) private char[] token;   // opts out of the read accessor
+}
+```
+
+Generates `getId()`, `getEmail()`, `setEmail(String)` and `setToken(char[])`. A type-level annotation fans out over the type's fields and silently skips the ones it cannot serve - the `final` field above takes no setter - while a field-level annotation beats the enclosing type's and reports when it cannot be honoured, since annotating one field is a claim about that field.
+
+Both default to `NamingStyle.SIMPLIFIED`, which is bean-shaped on purpose: a bare `@Getter` has to keep producing `getX()` or every existing call site is renamed. `@Getter(style = NamingStyle.FLUENT)` mints `id()` / `email()` instead.
+
+### Constructors
+
+```java
+@RequiredArgsConstructor
+public class Session {
+    private final String id;                        // required
+    private final Instant opened = Instant.now();   // initialized final - already assigned
+    private String label;                           // mutable - not required
+}
+
+// Session(String id)
+```
+
+"Required" means `final` **without** an initializer. `@AllArgsConstructor` takes every instance field, `@NoArgsConstructor` takes none, and `@BuilderArgsConstructor` matches whatever the builder would pass. `access` sets the visibility; on an enum it is forced `private` whatever you write, since nothing else is legal.
+
+> [!NOTE]
+> These add a constructor rather than declining when one exists. `transient` fields are parameters - shortening the constructor of a type a reflective framework populates would bind the next same-typed argument to the wrong slot with nothing failing - but `@Lazy` fields are not, and their omission is reported rather than silent.
+
+### `@EqualsAndHashCode` and `@ToString`
+
+```java
+@EqualsAndHashCode
+@ToString
+public record Chunk(int x, int z, byte[] data) { }
+```
+
+A record's implicit `equals` compares `data` by **reference**, so two chunks holding identical bytes are unequal. The generated pair compares it by content and hashes it consistently - and a record is exactly the shape Lombok refuses to touch.
+
+```java
+@EqualsAndHashCode(of = "id")
+@ToString(exclude = "secret")
+public class User {
+    private final UUID id;
+    private String displayName;
+    private char[] secret;
+}
+```
+
+`of` and `exclude` narrow the member set, `identity` picks between `EXACT_CLASS` (the default), `INSTANCE_OF` and `INSTANCE_OF_CANEQUAL`, and `callSuper` defaults to `AUTO`. The two annotations share one member selector, so a type whose `equals` counts an inherited field while its `toString` hides one is not a shape you can accidentally produce; the one sanctioned divergence is `transient`, which `@ToString` keeps and `@EqualsAndHashCode` drops.
+
+### `@Log`
+
+```java
+@Log
+public class Worker {
+    void run() {
+        log.info("started");
+    }
+}
+
+// private static final Logger log = LogManager.getLogger(Worker.class);
+```
+
+`topic = "..."` passes a string literal to the factory instead of the class literal, and `name` renames the field. The IDE half contributes the field so `log.*` resolves before the first javac round; supply `org.apache.logging.log4j:log4j-api` yourself, since the library links nothing.
+
+### `@UtilityClass`
+
+```java
+@UtilityClass
+public class MathUtil {
+    static int clamp(int v, int lo, int hi) { ... }
+}
+```
+
+Marks the class `final` and retrofits the constructor javac already generated into one that throws. An **instance** member is reported as an error with a "Make static" quick fix rather than silently rewritten - that half is opt-in behind `@UtilityClass(members = MAKE_STATIC)`, because changing the meaning of a declaration you wrote is the source of every sharp edge in Lombok's version.
+
+### `@SilentThrows` and `@Cleanup`
+
+```java
+@SilentThrows
+public String read(Path path) {
+    return Files.readString(path);   // IOException, with no throws clause
+}
+
+public void copy(Path in, Path out) throws IOException {
+    @Cleanup InputStream source = Files.newInputStream(in);
+    Files.copy(source, out);
+}   // source closed here, by a real try-with-resources
+```
+
+`@SilentThrows` wraps the body and rethrows through a helper injected once per class, so no runtime dependency is added. `@Cleanup` splits the enclosing block at the declaration and wraps the remainder in `try (source) { ... }` - the exact tree javac's parser builds for the existing-variable form, so javac's own lowering generates the close, the null skip and the `addSuppressed` bookkeeping. A close failure is therefore **suppressed rather than masking** the primary exception, the one place this deliberately improves on Lombok.
+
+The IDE half is subtractive: an exception handler stops the editor reporting the checked exception the wrap absorbs, and a suppressor silences the resource-leak inspections on a variable the rewrite closes.
+
+### `@EnumLookup`
+
+```java
+@EnumLookup
+public enum Status {
+    OK(200, "ok"),
+    NOT_FOUND(404, "not-found");
+
+    @KeyField private final int code;
+    @KeyField private final String slug;
+
+    Status(int code, String slug) { this.code = code; this.slug = slug; }
+}
+
+Status s = Status.ofCode(404);                  // NOT_FOUND
+Optional<Status> o = Status.findBySlug("ok");   // Optional[OK]
+Status.forEach((i, v) -> ...);                  // i is the ordinal
+```
+
+Injects a cached `values()` array plus `size()`, `forEach`, `stream()`, `parallelStream()`, `ofName(String)`, `ofOrdinal(int)`, `findByName` and `findByOrdinal`. Each `@KeyField` adds a parallel key array - primitive-typed when the field is - and its own `of<Name>` / `findBy<Name>` pair, renameable via `@KeyField(methodName = "...")`.
 
 ## Annotation Reference
 
@@ -419,6 +562,7 @@ other method it is silently inert, which the IDE inspection warns about.
 | `@Collector` | `Collection`, `List`, `Set`, `Map` | Emits varargs + `Iterable` bulk setters; opt-in `singular`, `clearable`, `compute` (maps: `putIfAbsent(K, Supplier<V>)`) |
 | `@Negate("inverse")` | `boolean` | Emits an inverse setter pair (`inverse(boolean)` plus the zero-arg `isInverse()`) alongside the direct pair |
 | `@Formattable` | `String`, `Optional<String>` | Emits a `@PrintFormat` overload (`withField(String fmt, Object... args)`) with null-safe `String.format` |
+| `@Lazy` | any reference-typed field | Rewrites storage to `Lazy<T>`, wraps the initializer as a supplier, and synthesises a memoizing getter; with `@ClassBuilder` adds a dual `field(T)` / `field(Supplier<T>)` setter pair |
 
 ### `Optional<T>` fields
 
@@ -439,7 +583,6 @@ overload off:
 Box.builder().label(null);              // ambiguous
 Box.builder().label(Optional.empty());  // ← Alt+Enter: Replace 'null' with 'Optional.empty()'
 ```
-| `@Lazy` | any reference-typed field | Rewrites storage to `Lazy<T>`, wraps the initializer as a supplier, and synthesises a memoizing getter; with `@ClassBuilder` adds a dual `field(T)` / `field(Supplier<T>)` setter pair |
 
 ## Documentation
 
