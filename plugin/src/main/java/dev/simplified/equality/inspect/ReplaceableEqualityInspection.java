@@ -92,8 +92,12 @@ public class ReplaceableEqualityInspection extends LocalInspectionTool {
     private static final String OBJECTS_FQN = "java.util.Objects";
     private static final String ARRAYS_FQN = "java.util.Arrays";
 
-    /** How a written term compares one member. */
-    private enum Comparison { PRIMITIVE_EQ, NUMERIC_COMPARE, OBJECTS_EQUALS, ARRAYS_EQUALS, ARRAYS_DEEP_EQUALS }
+    /**
+     * How a written term compares one member. These name the shape the author
+     * wrote rather than the type it was written over, which is why {@code ==}
+     * is one constant covering every type it can legally appear on.
+     */
+    private enum Comparison { OPERATOR_EQ, NUMERIC_COMPARE, OBJECTS_EQUALS, ARRAYS_EQUALS, ARRAYS_DEEP_EQUALS }
 
     /** How a written term lines up with what the annotation would emit. */
     private enum Verdict { EXACT, ARRAY_BY_REFERENCE, MISMATCH }
@@ -325,7 +329,7 @@ public class ReplaceableEqualityInspection extends LocalInspectionTool {
             return null;
         }
         String member = sameMember(left, right, target);
-        return member == null ? null : new Term(member, Comparison.PRIMITIVE_EQ);
+        return member == null ? null : new Term(member, Comparison.OPERATOR_EQ);
     }
 
     private static boolean isZero(@Nullable PsiExpression expression) {
@@ -452,12 +456,32 @@ public class ReplaceableEqualityInspection extends LocalInspectionTool {
         return null;
     }
 
+    /**
+     * Whether a declared type is an enum class.
+     *
+     * <p>Deliberately narrowed to the declared type rather than to what the
+     * member can hold. A field typed as an interface an enum happens to
+     * implement is an ordinary reference, and there {@code ==} and
+     * {@code Objects.equals} part company.
+     *
+     * @param type the member's declared type
+     * @return {@code true} if the type resolves to an enum class
+     */
+    private static boolean isEnum(@NotNull PsiType type) {
+        PsiClass resolved = PsiUtil.resolveClassInClassTypeOnly(type);
+        return resolved != null && resolved.isEnum();
+    }
+
     /** Whether a written comparison is the one the annotation emits for that type. */
     private static @NotNull Verdict validate(@NotNull Comparison comparison, @NotNull PsiType type) {
         PsiType component = type instanceof PsiArrayType arrayType ? arrayType.getComponentType() : null;
         boolean array = component != null;
         return switch (comparison) {
-            case PRIMITIVE_EQ -> {
+            case OPERATOR_EQ -> {
+                // The annotation emits Objects.equals here, which on an enum is
+                // the same relation: Enum.equals is final and identity-based, so
+                // the two agree on every pair, two nulls included.
+                if (isEnum(type)) yield Verdict.EXACT;
                 if (!(type instanceof PsiPrimitiveType)) yield Verdict.MISMATCH;
                 // The annotation emits Float.compare, which separates NaN from
                 // itself and -0.0 from 0.0 the other way round than ==.

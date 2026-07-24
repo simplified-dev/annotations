@@ -321,6 +321,82 @@ public class ReplaceableEqualityInspectionTest extends LightJavaCodeInsightFixtu
         assertTrue(reports("emits the same relation"));
     }
 
+    /**
+     * {@code Enum.equals} is final and identity-based, so the {@code Objects.equals}
+     * the annotation emits and a written {@code ==} agree on every pair, two nulls
+     * included. Only the spelling differs, so the pair is still replaceable.
+     */
+    public void testAnEnumComparedWithEqualsOperatorIsOffered() {
+        configure("app/Signal.java",
+            """
+            package app;
+            public class Signal {
+                public enum Kind { UP, DOWN }
+                private Kind kind;
+                public boolean equals(Object o) {
+                    if (o == null || getClass() != o.getClass()) return false;
+                    Signal that = (Signal) o;
+                    return this.kind == that.kind;
+                }
+                public int hashCode() { return this.kind.hashCode(); }
+            }
+            """);
+        assertTrue(reports("emits the same relation"));
+
+        String result = applyFix("Replace equals/hashCode with @EqualsAndHashCode");
+        assertTrue("the annotation is written on the class",
+            result.contains("@EqualsAndHashCode\npublic class Signal"));
+        assertFalse("equals is gone", result.contains("boolean equals"));
+        assertFalse("hashCode is gone", result.contains("int hashCode"));
+        assertTrue("the nested enum survives", result.contains("public enum Kind { UP, DOWN }"));
+    }
+
+    /**
+     * The enum reasoning does not generalise. On any other reference type
+     * {@code ==} asks about identity where the annotation asks about value, and
+     * two equal strings that were never interned answer differently.
+     */
+    public void testANonEnumReferenceComparedWithEqualsOperatorIsSilent() {
+        configure("app/Token.java",
+            """
+            package app;
+            public class Token {
+                private String value;
+                public boolean equals(Object o) {
+                    if (o == null || getClass() != o.getClass()) return false;
+                    Token that = (Token) o;
+                    return this.value == that.value;
+                }
+                public int hashCode() { return this.value.hashCode(); }
+            }
+            """);
+        assertSilent("== on a reference is identity, not the value comparison the annotation emits");
+    }
+
+    /**
+     * The type is read as declared rather than as whatever the field can hold.
+     * A constant reaching this member is an enum, but the slot is an interface,
+     * so a non-enum implementation could be assigned to it tomorrow.
+     */
+    public void testAnEnumBehindAnInterfaceTypeIsSilent() {
+        configure("app/Route.java",
+            """
+            package app;
+            public class Route {
+                public interface Step { }
+                public enum Hop implements Step { A, B }
+                private Step step;
+                public boolean equals(Object o) {
+                    if (o == null || getClass() != o.getClass()) return false;
+                    Route that = (Route) o;
+                    return this.step == that.step;
+                }
+                public int hashCode() { return this.step.hashCode(); }
+            }
+            """);
+        assertSilent("the declared type is an interface, so == is not Objects.equals");
+    }
+
     /** A guard reading the object's own state is doing work the annotation does not. */
     public void testAGuardThatReadsStateIsSilent() {
         configure("app/Token.java",
