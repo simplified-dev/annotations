@@ -158,6 +158,19 @@ intellijPlatform {
 }
 
 // ----------------------------------------------------------------------------
+// HandWrittenPairCorpusTest measures the two hand-written-pair inspections
+// against a real source tree, which has to be named from outside the build.
+// Forwarded rather than hardcoded: the test skips when the property is absent,
+// so an ordinary run is unaffected and no checkout needs the directory to exist.
+//
+//   ./gradlew :plugin:test --tests "*HandWrittenPairCorpusTest" -Pcorpus.dir=<path>
+// ----------------------------------------------------------------------------
+
+tasks.test {
+    (project.findProperty("corpus.dir") as String?)?.let { systemProperty("corpus.dir", it) }
+}
+
+// ----------------------------------------------------------------------------
 // Changelog plugin: drives changeNotes above by parsing CHANGELOG.md.
 // Lives at the repo root so both modules can reference the same source.
 // ----------------------------------------------------------------------------
