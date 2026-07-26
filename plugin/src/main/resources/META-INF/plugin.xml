@@ -280,6 +280,8 @@
         />
         <custom.exception.handler implementation="dev.simplified.silentthrows.editor.SilentThrowsExceptionHandler"/>
         <lang.inspectionSuppressor language="JAVA" implementationClass="dev.simplified.cleanup.inspect.CleanupSuppressor"/>
+        <lang.inspectionSuppressor language="JAVA" implementationClass="dev.simplified.shared.inspect.GeneratedMemberSuppressor"/>
+        <daemon.highlightInfoFilter implementation="dev.simplified.shared.inspect.GeneratedMemberHighlightFilter"/>
         <lang.inferredAnnotationProvider implementation="dev.simplified.xcontract.XContractInferredAnnotationProvider"/>
         <lang.inferredAnnotationProvider implementation="dev.simplified.classbuilder.editor.ClassBuilderInferredAnnotationProvider"/>
         <lang.inferredAnnotationProvider implementation="dev.simplified.args.editor.ArgsInferredAnnotationProvider"/>

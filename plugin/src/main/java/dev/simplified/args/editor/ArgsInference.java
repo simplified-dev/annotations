@@ -113,7 +113,14 @@ public record ArgsInference(ArgsMode mode, String accessKeyword, List<PsiField> 
         return out.append(')').toString();
     }
 
-    private static List<String> excluded(PsiAnnotation classBuilder) {
+    /**
+     * The field names {@code @ClassBuilder(exclude)} drops from the builder's
+     * selection.
+     *
+     * @param classBuilder the resolved {@code @ClassBuilder}
+     * @return the excluded names, empty when none are written
+     */
+    public static List<String> excluded(PsiAnnotation classBuilder) {
         List<String> out = new java.util.ArrayList<>();
         var value = classBuilder.findAttributeValue("exclude");
         if (value instanceof com.intellij.psi.PsiArrayInitializerMemberValue array) {

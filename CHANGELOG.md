@@ -9,6 +9,40 @@ Versions 1.0.0 through 1.0.5 were published under the legacy plugin ID
 Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations` /
 `io.github.simplified-dev:annotations`. See the 2.0.0 entry for the rename details.
 
+## [2.5.1]
+
+### Fixed
+
+- **The editor no longer reports a generated constructor's fields as uninitialized.** A
+  `@RequiredArgsConstructor` / `@AllArgsConstructor` / `@BuilderArgsConstructor` /
+  `@ClassBuilder` target marked every `final` field with no initializer
+  `Field 'x' might not have been initialized`, and every `@NotNull` one
+  `Not-null fields must be initialized` - on source javac compiles. An augment provider makes a
+  generated constructor **resolve**, which is what call sites need, but definite-assignment
+  analysis walks written constructors and an augmented one is not among them. Because both
+  reports come from the Java highlighter rather than from an inspection, no severity setting and
+  no `InspectionSuppressor` could reach the first of them; `GeneratedMemberHighlightFilter`
+  registers the `daemon.highlightInfoFilter` extension point that can. The first real consumer
+  migration off Lombok hit this on 64 files and 328 fields, and the plugin's own demo fixture had
+  hidden it by hand-writing the constructor it was meant to be generating.
+- **A field whose only reader is a generated accessor is no longer offered up as a local
+  variable.** `@Getter` fields drew `Field can be converted to a local variable`, because
+  reference search sees no reader: the generated getter is a light method holding no reference
+  into the source tree. This one shipped a quick fix, so the warning was not merely wrong -
+  taking its offer deleted the field the accessor reads. `GeneratedMemberSuppressor` answers it
+  along with the unused-field reports that share the cause, per field rather than per class, so
+  an unannotated field on an annotated target keeps every report it should.
+- **`@ClassBuilder`'s lifted blank finals no longer read as double assignment.** `retainInit`
+  keeps a `final` field's initializer as a builder default and strips it from the field, so a
+  constructor assigning that field is correct in the class javac emits and
+  `Cannot assign a value to final variable` in the source the platform reads. Handled through the
+  same filter, gated on the builder's own field selection rather than on a second reading of the
+  rule, so a field `exclude` or `@BuilderIgnore` drops keeps the error it has earned.
+
+Both new extension points route every selection question through `ArgsSelection`, the decision
+class the processor itself calls, so a suppression cannot come to cover a field javac still
+rejects. `ArgsInference.excluded` becomes public to serve them.
+
 ## [2.5.0]
 
 The lombok-parity release. Grouped by feature rather than by change type, since

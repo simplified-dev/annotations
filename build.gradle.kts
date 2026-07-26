@@ -14,5 +14,5 @@ plugins {
 
 allprojects {
     group = "io.github.simplified-dev"
-    version = "2.5.0"
+    version = "2.5.1"
 }
