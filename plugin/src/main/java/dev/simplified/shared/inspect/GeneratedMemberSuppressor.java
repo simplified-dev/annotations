@@ -4,7 +4,6 @@ import com.intellij.codeInspection.InspectionSuppressor;
 import com.intellij.codeInspection.SuppressQuickFix;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiField;
-import com.intellij.psi.PsiIdentifier;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -36,7 +35,15 @@ import java.util.Set;
  * guaranteed-wrong warning on every {@code @NotNull final} field in every
  * annotated class.
  *
+ * <p>Which element of a declaration a tool reports on is the tool's choice - the
+ * field, its name, or the nullability annotation the report is about - so the
+ * field is resolved by walking up from whatever was handed in rather than by
+ * expecting one of them. The tool set is tested before that walk because this
+ * runs for every element every tool in the IDE reports on in a Java file, and a
+ * lookup against two small sets of names is what keeps the other tools free.
+ *
  * @see GeneratedFieldAccess
+ * @see ReportAnchors
  */
 public final class GeneratedMemberSuppressor implements InspectionSuppressor {
 
@@ -67,7 +74,7 @@ public final class GeneratedMemberSuppressor implements InspectionSuppressor {
     public boolean isSuppressedFor(@NotNull PsiElement element, @NotNull String toolId) {
         boolean assignment = ASSIGNMENT_TOOL_IDS.contains(toolId);
         if (!assignment && !USAGE_TOOL_IDS.contains(toolId)) return false;
-        PsiField field = enclosingField(element);
+        PsiField field = ReportAnchors.declaredField(element);
         if (field == null) return false;
         return assignment
             ? GeneratedFieldAccess.constructorAssigns(field)
@@ -81,24 +88,6 @@ public final class GeneratedMemberSuppressor implements InspectionSuppressor {
         // suppression - a comment saying the same thing less precisely is not
         // worth offering.
         return SuppressQuickFix.EMPTY_ARRAY;
-    }
-
-    /**
-     * The field a report belongs to.
-     *
-     * <p>Bounded at one step deliberately. Every tool here reports on a field
-     * declaration or its name identifier, so a climb would only ever find a
-     * field the report is not about, and this runs for every element every other
-     * tool reports on in a Java file.
-     *
-     * @param element the element an inspection is reporting on
-     * @return the field, or {@code null} when the report is about something else
-     */
-    private static @Nullable PsiField enclosingField(@NotNull PsiElement element) {
-        if (element instanceof PsiField field) return field;
-        if (element instanceof PsiIdentifier && element.getParent() instanceof PsiField field)
-            return field;
-        return null;
     }
 
 }

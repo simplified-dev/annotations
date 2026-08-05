@@ -1,41 +1,242 @@
 package dev.simplified.shared.inspect;
 
+import com.intellij.codeInsight.daemon.impl.HighlightInfo;
+import com.intellij.codeInspection.LanguageInspectionSuppressors;
+import com.intellij.codeInspection.SuppressQuickFix;
+import com.intellij.codeInspection.nullable.NotNullFieldNotInitializedInspection;
+import com.intellij.codeInspection.nullable.NullableStuffInspection;
+import com.intellij.codeInspection.varScopeCanBeNarrowed.FieldCanBeLocalInspection;
+import com.intellij.lang.java.JavaLanguage;
+import com.intellij.openapi.application.AccessToken;
+import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiExpression;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiJavaFile;
+import com.intellij.psi.PsiLocalVariable;
+import com.intellij.psi.util.PsiTreeUtil;
+import com.intellij.testFramework.LightProjectDescriptor;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
+import dev.simplified.testutil.JSvgErrorSuppressor;
+import org.jetbrains.annotations.NotNull;
 
 /**
- * Behaviour of {@link GeneratedMemberSuppressor}: a field a generated member
- * initializes or reads stops drawing the inspections that say otherwise, and
- * every other field keeps them.
+ * Behaviour of {@link GeneratedMemberSuppressor}: the inspections that read a
+ * field as uninitialized, unread or needlessly a field stop firing on the fields
+ * a generated member initializes and reads, and keep firing everywhere else.
  *
- * <p>{@code FieldCanBeLocal} carries the weight here. It is the only report in
- * the set that ships a quick fix, and its fix deletes the field the generated
- * accessor reads - so a test that it stops firing is a test that the fix stops
- * being offered.
+ * <p>The warnings are provoked by the platform's own tools over a real
+ * highlighting pass, because which element of a declaration a tool reports on is
+ * the tool's choice and not this suppressor's. A suppressor that resolves the
+ * wrong element answers {@code false}, the warning is drawn, and a test that
+ * hands the suppressor a field of its own choosing sees none of it. The cases
+ * that call the suppressor directly cover the anchors and tool ids no bundled
+ * tool can be made to draw on demand.
+ *
+ * <p>Nothing is registered here. The fixture loads the plugin descriptor, so the
+ * extension under test is the one the plugin ships.
+ *
+ * <p>{@code FieldCanBeLocal} is the report with the worst consequence. It is the
+ * only one in the set that ships a quick fix, and its fix deletes the field the
+ * generated accessor reads, so a test that it stops firing is a test that the
+ * fix stops being offered. It is not the report that pins the walk, though: it
+ * is drawn on the field's own name, the one element no walk has to leave. The
+ * not-null cases are the pair that pins it, since their report is drawn on the
+ * nullability annotation two steps below the declaration and stops being
+ * suppressed the moment the walk stops short of it.
  */
 public class GeneratedMemberSuppressorTest extends LightJavaCodeInsightFixtureTestCase {
 
     private static final String FIELD_CAN_BE_LOCAL = "FieldCanBeLocal";
     private static final String NULLABLE_PROBLEMS = "NullableProblems";
+    private static final String NOT_NULL_NOT_INITIALIZED = "NotNullFieldNotInitialized";
     private static final String UNUSED = "unused";
 
+    /** The wording of the report {@code NotNullFieldNotInitialized} draws. */
+    private static final String MUST_BE_INITIALIZED = "must be initialized";
+
+    /** The wording of the report {@code FieldCanBeLocal} draws. */
+    private static final String CAN_BE_LOCAL = "converted to a local variable";
+
     private final GeneratedMemberSuppressor suppressor = new GeneratedMemberSuppressor();
+
+    private AccessToken jsvgSuppressor;
+
+    @Override
+    protected @NotNull LightProjectDescriptor getProjectDescriptor() {
+        return JAVA_17;
+    }
 
     @Override
     protected void setUp() throws Exception {
         super.setUp();
+        jsvgSuppressor = JSvgErrorSuppressor.install();
+        myFixture.enableInspections(
+            new NullableStuffInspection(),
+            new NotNullFieldNotInitializedInspection(),
+            new FieldCanBeLocalInspection());
         GeneratedMemberTestSources.install(myFixture);
+    }
+
+    @Override
+    protected void tearDown() throws Exception {
+        try {
+            if (jsvgSuppressor != null) jsvgSuppressor.close();
+        } finally {
+            super.tearDown();
+        }
+    }
+
+    /** The Java language consults what the plugin descriptor registers. */
+    public void testTheSuppressorIsContributedToJava() {
+        assertTrue("Java has no GeneratedMemberSuppressor to consult",
+            LanguageInspectionSuppressors.INSTANCE.allForLanguage(JavaLanguage.INSTANCE).stream()
+                .anyMatch(GeneratedMemberSuppressor.class::isInstance));
     }
 
     // ------------------------------------------------------------------
     // Not-null fields must be initialized
     // ------------------------------------------------------------------
 
-    public void testGeneratedConstructorSuppressesNullableProblems() {
-        PsiField x = field(
+    /**
+     * Pins where the not-null report lands: on the annotation it is about, which
+     * is two steps below the declaration it belongs to and is not the field's
+     * name.
+     */
+    public void testTheNotNullReportIsAnchoredOnTheAnnotation() {
+        PsiFile file = configure(
+            """
+            import org.jetbrains.annotations.NotNull;
+            public final class Target {
+                private final @NotNull String a;
+            }
+            """);
+        HighlightInfo report = firstReport(MUST_BE_INITIALIZED);
+        assertNotNull("the not-null report was never drawn", report);
+        PsiElement anchor = file.findElementAt(report.getStartOffset());
+        assertNotNull("the report is anchored on nothing", anchor);
+        PsiField declared = field(file, "a");
+        assertNotSame("the report is anchored on the field's name",
+            declared.getNameIdentifier(), anchor);
+        assertNotNull("the report is anchored outside the annotation",
+            PsiTreeUtil.getParentOfType(anchor, PsiAnnotation.class, false));
+        assertSame("the report belongs to the declaration", declared,
+            PsiTreeUtil.getParentOfType(anchor, PsiField.class, false));
+    }
+
+    public void testUnannotatedNotNullFinalFieldIsReportedUninitialized() {
+        configure(
+            """
+            import org.jetbrains.annotations.NotNull;
+            public final class Target {
+                private final @NotNull String a;
+                private final int b;
+                private final String c;
+            }
+            """);
+        assertTrue(reports(MUST_BE_INITIALIZED));
+    }
+
+    /** The generated constructor initializes it, so the report is answered. */
+    public void testRequiredArgsConstructorSilencesTheNotNullReport() {
+        configure(
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.Getter;
+            import dev.simplified.annotations.RequiredArgsConstructor;
+            import org.jetbrains.annotations.NotNull;
+            @Getter
+            @RequiredArgsConstructor(access = AccessLevel.PRIVATE)
+            public final class Target {
+                private final @NotNull String a;
+                private final int b;
+                private final String c;
+            }
+            """);
+        assertFalse(reports(MUST_BE_INITIALIZED));
+    }
+
+    // ------------------------------------------------------------------
+    // Field can be converted to a local variable
+    // ------------------------------------------------------------------
+
+    public void testUnannotatedFieldIsReportedAsConvertibleToALocal() {
+        configure(
+            """
+            public class Target {
+                private int count;
+                int run() {
+                    count = 1;
+                    return count;
+                }
+            }
+            """);
+        assertTrue(reports(CAN_BE_LOCAL));
+    }
+
+    /** The generated accessor is a second reader, so the field has to stay one. */
+    public void testGetterSilencesFieldCanBeLocal() {
+        configure(
+            """
+            import dev.simplified.annotations.Getter;
+            @Getter
+            public class Target {
+                private int count;
+                int run() {
+                    count = 1;
+                    return count;
+                }
+            }
+            """);
+        assertFalse(reports(CAN_BE_LOCAL));
+    }
+
+    /** A field-level {@code AccessLevel.NONE} opts out, so the report is right again. */
+    public void testGetterNoneKeepsFieldCanBeLocal() {
+        configure(
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.Getter;
+            public class Target {
+                @Getter(AccessLevel.NONE)
+                private int count;
+                int run() {
+                    count = 1;
+                    return count;
+                }
+            }
+            """);
+        assertTrue("AccessLevel.NONE generates no accessor, so nothing reads the field",
+            reports(CAN_BE_LOCAL));
+    }
+
+    /** A type-level {@code exclude} is the other way one field opts out. */
+    public void testExcludedFieldKeepsFieldCanBeLocal() {
+        configure(
+            """
+            import dev.simplified.annotations.Getter;
+            @Getter(exclude = "count")
+            public class Target {
+                private int count;
+                private int kept;
+                int run() {
+                    count = 1;
+                    return count;
+                }
+            }
+            """);
+        assertTrue(reports(CAN_BE_LOCAL));
+    }
+
+    // ------------------------------------------------------------------
+    // The anchors a tool hands in
+    // ------------------------------------------------------------------
+
+    /** The annotation a nullability report is about belongs to its field. */
+    public void testTheNullabilityAnnotationResolvesToItsField() {
+        PsiFile file = configure(
             """
             import dev.simplified.annotations.RequiredArgsConstructor;
             import org.jetbrains.annotations.NotNull;
@@ -43,117 +244,85 @@ public class GeneratedMemberSuppressorTest extends LightJavaCodeInsightFixtureTe
             public class Target {
                 private final @NotNull String x;
             }
-            """, "x");
+            """);
+        PsiAnnotation notNull = PsiTreeUtil.findChildOfType(field(file, "x"), PsiAnnotation.class);
+        assertNotNull("fixture has no annotation on the field", notNull);
+        assertTrue(suppressor.isSuppressedFor(notNull, NOT_NULL_NOT_INITIALIZED));
+    }
+
+    /** A tool that hands in the declaration itself is answered the same way. */
+    public void testGeneratedConstructorSuppressesNullableProblems() {
+        PsiField x = field(configure(
+            """
+            import dev.simplified.annotations.RequiredArgsConstructor;
+            import org.jetbrains.annotations.NotNull;
+            @RequiredArgsConstructor
+            public class Target {
+                private final @NotNull String x;
+            }
+            """), "x");
         assertTrue(suppressor.isSuppressedFor(x, NULLABLE_PROBLEMS));
     }
 
     public void testUnannotatedClassKeepsNullableProblems() {
-        PsiField x = field(
+        PsiField x = field(configure(
             """
             import org.jetbrains.annotations.NotNull;
             public class Target {
                 private final @NotNull String x;
             }
-            """, "x");
+            """), "x");
         assertFalse(suppressor.isSuppressedFor(x, NULLABLE_PROBLEMS));
     }
 
     // ------------------------------------------------------------------
-    // Field can be converted to a local variable
+    // What the walk must not reach
     // ------------------------------------------------------------------
 
-    /** The report whose quick fix deletes the field the generated getter reads. */
-    public void testGetterSuppressesFieldCanBeLocal() {
-        PsiField x = field(
+    /**
+     * A report about an expression the author wrote in an initializer is about
+     * that expression. The field it initializes is the one a generated
+     * constructor assigns, and answering for it would silence a warning nothing
+     * generated has anything to say about.
+     */
+    public void testAnExpressionInsideAFieldInitializerIsNotSuppressed() {
+        PsiFile file = configure(
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import org.jetbrains.annotations.NotNull;
+            @ClassBuilder
+            public class Target {
+                private final @NotNull String a = compute();
+                static String compute() {
+                    return null;
+                }
+            }
+            """);
+        PsiField a = field(file, "a");
+        PsiExpression initializer = a.getInitializer();
+        assertNotNull("fixture has no initializer", initializer);
+        assertTrue("the declaration is the suppressor's",
+            suppressor.isSuppressedFor(a, NULLABLE_PROBLEMS));
+        assertFalse("an expression the author wrote is not",
+            suppressor.isSuppressedFor(initializer, NULLABLE_PROBLEMS));
+    }
+
+    /** A body is below every field declaration and belongs to none of them. */
+    public void testAnElementInsideAMethodBodyIsNotSuppressed() {
+        PsiFile file = configure(
             """
             import dev.simplified.annotations.Getter;
             @Getter
             public class Target {
                 private String x;
+                void run() {
+                    String local = x;
+                }
             }
-            """, "x");
-        assertTrue(suppressor.isSuppressedFor(x, FIELD_CAN_BE_LOCAL));
-    }
-
-    /** A field-level {@code AccessLevel.NONE} opts out, so the report is right again. */
-    public void testGetterNoneKeepsFieldCanBeLocal() {
-        PsiField x = field(
-            """
-            import dev.simplified.annotations.AccessLevel;
-            import dev.simplified.annotations.Getter;
-            public class Target {
-                @Getter(AccessLevel.NONE)
-                private String x;
-            }
-            """, "x");
-        assertFalse("AccessLevel.NONE generates no accessor, so nothing reads the field",
-            suppressor.isSuppressedFor(x, FIELD_CAN_BE_LOCAL));
-    }
-
-    /** A type-level {@code exclude} is the other way one field opts out. */
-    public void testExcludedFieldKeepsFieldCanBeLocal() {
-        PsiField x = field(
-            """
-            import dev.simplified.annotations.Getter;
-            @Getter(exclude = "x")
-            public class Target {
-                private String x;
-                private String kept;
-            }
-            """, "x");
-        assertFalse(suppressor.isSuppressedFor(x, FIELD_CAN_BE_LOCAL));
-    }
-
-    public void testSetterSuppressesFieldCanBeLocal() {
-        PsiField x = field(
-            """
-            import dev.simplified.annotations.Setter;
-            @Setter
-            public class Target {
-                private String x;
-            }
-            """, "x");
-        assertTrue(suppressor.isSuppressedFor(x, FIELD_CAN_BE_LOCAL));
-    }
-
-    public void testUnannotatedClassKeepsFieldCanBeLocal() {
-        PsiField x = field(
-            """
-            public class Target {
-                private String x;
-            }
-            """, "x");
-        assertFalse(suppressor.isSuppressedFor(x, FIELD_CAN_BE_LOCAL));
-    }
-
-    // ------------------------------------------------------------------
-    // Scope
-    // ------------------------------------------------------------------
-
-    /** A generated accessor is a reader, so the field is not unused. */
-    public void testGetterSuppressesUnused() {
-        PsiField x = field(
-            """
-            import dev.simplified.annotations.Getter;
-            @Getter
-            public class Target {
-                private String x;
-            }
-            """, "x");
-        assertTrue(suppressor.isSuppressedFor(x, UNUSED));
-    }
-
-    /** A tool outside both sets is never this suppressor's to answer. */
-    public void testUnrelatedToolIsNeverSuppressed() {
-        PsiField x = field(
-            """
-            import dev.simplified.annotations.Getter;
-            @Getter
-            public class Target {
-                private String x;
-            }
-            """, "x");
-        assertFalse(suppressor.isSuppressedFor(x, "SillyAssignment"));
+            """);
+        PsiLocalVariable local = PsiTreeUtil.findChildOfType(file, PsiLocalVariable.class);
+        assertNotNull("fixture has no local variable", local);
+        assertFalse(suppressor.isSuppressedFor(local, UNUSED));
     }
 
     /**
@@ -161,7 +330,7 @@ public class GeneratedMemberSuppressorTest extends LightJavaCodeInsightFixtureTe
      * does not blanket-suppress it.
      */
     public void testStaticFieldKeepsItsReports() {
-        PsiField x = field(
+        PsiField x = field(configure(
             """
             import dev.simplified.annotations.Getter;
             @Getter
@@ -169,13 +338,13 @@ public class GeneratedMemberSuppressorTest extends LightJavaCodeInsightFixtureTe
                 private static String x;
                 private String kept;
             }
-            """, "x");
+            """), "x");
         assertFalse(suppressor.isSuppressedFor(x, FIELD_CAN_BE_LOCAL));
     }
 
     /** Nothing here reports on a method, so a method never resolves to a field. */
     public void testNonFieldElementIsNotSuppressed() {
-        PsiFile file = myFixture.configureByText("Target.java",
+        PsiFile file = configure(
             """
             import dev.simplified.annotations.Getter;
             @Getter
@@ -189,15 +358,96 @@ public class GeneratedMemberSuppressorTest extends LightJavaCodeInsightFixtureTe
     }
 
     // ------------------------------------------------------------------
+    // Scope
+    // ------------------------------------------------------------------
+
+    public void testSetterSuppressesFieldCanBeLocal() {
+        PsiField x = field(configure(
+            """
+            import dev.simplified.annotations.Setter;
+            @Setter
+            public class Target {
+                private String x;
+            }
+            """), "x");
+        assertTrue(suppressor.isSuppressedFor(x, FIELD_CAN_BE_LOCAL));
+    }
+
+    /** A generated accessor is a reader, so the field is not unused. */
+    public void testGetterSuppressesUnused() {
+        PsiField x = field(configure(
+            """
+            import dev.simplified.annotations.Getter;
+            @Getter
+            public class Target {
+                private String x;
+            }
+            """), "x");
+        assertTrue(suppressor.isSuppressedFor(x, UNUSED));
+    }
+
+    /** A tool outside both sets is never this suppressor's to answer. */
+    public void testUnrelatedToolIsNeverSuppressed() {
+        PsiField x = field(configure(
+            """
+            import dev.simplified.annotations.Getter;
+            @Getter
+            public class Target {
+                private String x;
+            }
+            """), "x");
+        assertFalse(suppressor.isSuppressedFor(x, "SillyAssignment"));
+    }
+
+    public void testNoSuppressActionsAreOffered() {
+        assertSame(SuppressQuickFix.EMPTY_ARRAY,
+            suppressor.getSuppressActions(null, FIELD_CAN_BE_LOCAL));
+    }
+
+    // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
 
-    private PsiField field(String source, String name) {
-        PsiFile file = myFixture.configureByText("Target.java", source);
+    private PsiFile configure(String source) {
+        return myFixture.configureByText("Target.java", source);
+    }
+
+    /**
+     * The named field of the fixture's only class.
+     *
+     * @param file the configured file
+     * @param name the field's name
+     * @return the declaration
+     */
+    private static PsiField field(PsiFile file, String name) {
         PsiClass target = ((PsiJavaFile) file).getClasses()[0];
         PsiField found = target.findFieldByName(name, false);
         assertNotNull("fixture has no field named " + name, found);
         return found;
+    }
+
+    /**
+     * Whether the highlighting pass draws a report carrying the message.
+     *
+     * @param needle the substring to look for
+     * @return whether a report survived suppression
+     */
+    private boolean reports(String needle) {
+        return firstReport(needle) != null;
+    }
+
+    /**
+     * The first report carrying the message.
+     *
+     * @param needle the substring to look for
+     * @return the report, or {@code null} when none survived suppression
+     */
+    private HighlightInfo firstReport(String needle) {
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            String description = info.getDescription();
+            if (description != null && description.contains(needle)) return info;
+        }
+        return null;
     }
 
 }

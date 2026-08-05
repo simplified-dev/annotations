@@ -1,12 +1,11 @@
 package dev.simplified.shared.inspect;
 
-import com.intellij.codeInsight.daemon.impl.HighlightInfoFilter;
 import com.intellij.codeInsight.daemon.impl.HighlightInfo;
+import com.intellij.codeInsight.daemon.impl.HighlightInfoFilter;
 import com.intellij.lang.annotation.HighlightSeverity;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiFile;
-import com.intellij.psi.PsiIdentifier;
 import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiStatement;
 import com.intellij.psi.util.PsiTreeUtil;
@@ -35,11 +34,20 @@ import org.jetbrains.annotations.Nullable;
  * one a generated member assigns. The message test alone would swallow the same
  * error on a class carrying no annotation of ours; the field test alone would
  * swallow every other error reported on an annotated class's field.
+ *
+ * <p>The two messages anchor in different places, so each has its own resolver.
+ * Definite assignment ranges over a declaration, where the element under the
+ * report is some part of the field's annotations, modifiers or type and the
+ * field is above it. The blank-final write ranges over an assignment's left-hand
+ * reference inside a body, where the field is what the reference resolves to and
+ * is nowhere above. One resolver for both would have to try the walk and the
+ * resolve in some order, and that order - not the report - would decide which
+ * field a write inside a field initializer counts against.
  */
 public final class GeneratedMemberHighlightFilter implements HighlightInfoFilter {
 
     /**
-     * Definite assignment, reported on the field's name identifier.
+     * Definite assignment, ranged over the declaration of the field it names.
      *
      * <p>Matched as a substring because the platform words it over both
      * "Variable" and "Field" depending on version, and the run-together
@@ -57,41 +65,48 @@ public final class GeneratedMemberHighlightFilter implements HighlightInfoFilter
         String description = info.getDescription();
         if (description == null) return true;
 
-        boolean uninitialized = description.contains(NOT_INITIALIZED);
-        if (!uninitialized && !description.contains(FINAL_ASSIGNMENT)) return true;
-
-        PsiField field = reportedField(file, info.getStartOffset());
-        if (field == null) return true;
-        return uninitialized
-            ? !GeneratedFieldAccess.constructorAssigns(field)
-            : !GeneratedFieldAccess.liftedBlankFinal(field);
+        if (description.contains(NOT_INITIALIZED)) {
+            PsiField declared = declaredField(file, info.getStartOffset());
+            return declared == null || !GeneratedFieldAccess.constructorAssigns(declared);
+        }
+        if (description.contains(FINAL_ASSIGNMENT)) {
+            PsiField assigned = assignedField(file, info.getStartOffset());
+            return assigned == null || !GeneratedFieldAccess.liftedBlankFinal(assigned);
+        }
+        return true;
     }
 
     /**
-     * The field a report at this offset is about.
-     *
-     * <p>The two messages land on different elements - a declaration's name
-     * identifier and an assignment's left-hand reference - so both shapes are
-     * resolved here rather than at either call site.
+     * Resolves the field a declaration-anchored report declares.
      *
      * @param file the file being highlighted
      * @param offset the report's start offset
-     * @return the field, or {@code null} when the report is about something else
+     * @return the field, or {@code null} when the report is not on a field declaration
      */
-    private static @Nullable PsiField reportedField(@NotNull PsiFile file, int offset) {
-        PsiElement element = file.findElementAt(offset);
-        if (element == null) return null;
-        if (element instanceof PsiIdentifier && element.getParent() instanceof PsiField field)
-            return field;
-        // A qualified assignment reports from its first token, so `this.x = x`
-        // anchors on `this` and the reference is two steps up rather than one.
-        // Bounded at the statement so an element in no reference costs a step
-        // or two rather than a climb to the file.
+    private static @Nullable PsiField declaredField(@NotNull PsiFile file, int offset) {
+        PsiElement anchor = file.findElementAt(offset);
+        return anchor == null ? null : ReportAnchors.declaredField(anchor);
+    }
+
+    /**
+     * Resolves the field an assignment-anchored report writes to.
+     *
+     * <p>A qualified assignment reports from its first token, so {@code this.x = x}
+     * anchors on {@code this} and the reference is two steps up rather than one.
+     * Bounded at the statement so an element in no reference costs a step or two
+     * rather than a climb to the file.
+     *
+     * @param file the file being highlighted
+     * @param offset the report's start offset
+     * @return the field, or {@code null} when the report is not on a write to one
+     */
+    private static @Nullable PsiField assignedField(@NotNull PsiFile file, int offset) {
+        PsiElement anchor = file.findElementAt(offset);
+        if (anchor == null) return null;
         PsiReferenceExpression reference =
-            PsiTreeUtil.getParentOfType(element, PsiReferenceExpression.class, false,
+            PsiTreeUtil.getParentOfType(anchor, PsiReferenceExpression.class, false,
                 PsiStatement.class);
-        if (reference != null && reference.resolve() instanceof PsiField field) return field;
-        return null;
+        return reference != null && reference.resolve() instanceof PsiField field ? field : null;
     }
 
 }
