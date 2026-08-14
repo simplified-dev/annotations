@@ -150,7 +150,8 @@
                 level="WARNING"
                 shortName="ClassBuilderFieldInspection"
                 displayName="@ClassBuilder field annotation misuse"
-                groupName="Simplified Annotations"
+                groupPath="Simplified Annotations"
+                groupName="Misuse"
         />
         <localInspection
                 language="JAVA"
@@ -159,7 +160,8 @@
                 level="ERROR"
                 shortName="LazyFieldInspection"
                 displayName="@Lazy field misuse"
-                groupName="Simplified Annotations"
+                groupPath="Simplified Annotations"
+                groupName="Misuse"
         />
         <localInspection
                 language="JAVA"
@@ -168,7 +170,8 @@
                 level="ERROR"
                 shortName="EnumLookupInspection"
                 displayName="@EnumLookup misuse"
-                groupName="Simplified Annotations"
+                groupPath="Simplified Annotations"
+                groupName="Misuse"
         />
         <localInspection
                 language="JAVA"
@@ -186,7 +189,8 @@
                 level="ERROR"
                 shortName="ArgsConstructorInspection"
                 displayName="Constructor annotation misuse"
-                groupName="Simplified Annotations"
+                groupPath="Simplified Annotations"
+                groupName="Misuse"
         />
         <localInspection
                 language="JAVA"
@@ -195,7 +199,8 @@
                 level="ERROR"
                 shortName="AccessorInspection"
                 displayName="@Getter / @Setter misuse"
-                groupName="Simplified Annotations"
+                groupPath="Simplified Annotations"
+                groupName="Misuse"
         />
         <localInspection
                 language="JAVA"
@@ -204,7 +209,8 @@
                 level="ERROR"
                 shortName="UtilityClassInspection"
                 displayName="@UtilityClass misuse"
-                groupName="Simplified Annotations"
+                groupPath="Simplified Annotations"
+                groupName="Misuse"
         />
         <localInspection
                 language="JAVA"
@@ -222,7 +228,8 @@
                 level="ERROR"
                 shortName="SilentThrowsInspection"
                 displayName="@SilentThrows misuse"
-                groupName="Simplified Annotations"
+                groupPath="Simplified Annotations"
+                groupName="Misuse"
         />
         <localInspection
                 language="JAVA"
@@ -231,7 +238,8 @@
                 level="ERROR"
                 shortName="CleanupInspection"
                 displayName="@Cleanup misuse"
-                groupName="Simplified Annotations"
+                groupPath="Simplified Annotations"
+                groupName="Misuse"
         />
         <localInspection
                 language="JAVA"
@@ -240,7 +248,8 @@
                 level="ERROR"
                 shortName="EqualsAndHashCodeInspection"
                 displayName="@EqualsAndHashCode misuse"
-                groupName="Simplified Annotations"
+                groupPath="Simplified Annotations"
+                groupName="Misuse"
         />
         <localInspection
                 language="JAVA"
@@ -249,7 +258,8 @@
                 level="ERROR"
                 shortName="ToStringInspection"
                 displayName="@ToString misuse"
-                groupName="Simplified Annotations"
+                groupPath="Simplified Annotations"
+                groupName="Misuse"
         />
         <localInspection
                 language="JAVA"
@@ -258,7 +268,8 @@
                 level="ERROR"
                 shortName="LogInspection"
                 displayName="@Log misuse"
-                groupName="Simplified Annotations"
+                groupPath="Simplified Annotations"
+                groupName="Misuse"
         />
         <localInspection
                 language="JAVA"
