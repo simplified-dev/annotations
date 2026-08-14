@@ -546,10 +546,19 @@ public class ReplaceableEqualityInspection extends LocalInspectionTool {
         };
     }
 
+    /**
+     * A single name is written bare, which is what the attribute reads like
+     * everywhere else in this annotation surface.
+     *
+     * <p>Indexed access rather than {@code getFirst()}: this class runs inside
+     * whatever JDK the host IDE ships, and the oldest one the plugin supports
+     * predates {@code SequencedCollection}, so the sequenced call resolves at
+     * compile time here and throws {@link NoSuchMethodError} there.
+     */
     private static @NotNull String arrayLiteral(@NotNull List<String> names) {
         List<String> quoted = new ArrayList<>(names.size());
         for (String name : names) quoted.add("\"" + name + "\"");
-        return quoted.size() == 1 ? quoted.getFirst() : "{" + String.join(", ", quoted) + "}";
+        return quoted.size() == 1 ? quoted.get(0) : "{" + String.join(", ", quoted) + "}";
     }
 
     private static @NotNull String render(@NotNull List<String> names) {

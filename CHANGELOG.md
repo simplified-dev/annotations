@@ -61,6 +61,15 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
 
 ### Fixed
 
+- **The plugin no longer calls a JDK 21 method on IDEs that run 17.** `ReplaceableEqualityInspection`
+  built its `exclude` attribute through `List.getFirst()`, which arrived with `SequencedCollection`
+  well after the oldest IDE this plugin supports, so the call resolved when compiled and would have
+  thrown `NoSuchMethodError` in an editor. Indexed access replaces it. `sourceCompatibility` and
+  `targetCompatibility` settle the language level and the bytecode version and neither looks at
+  which API is being called, so compiling on a newer JDK still linked against that JDK's class
+  library and nothing objected; the plugin module now compiles with `release`, which links against
+  the 17 API itself and turns the same mistake into a compile error rather than something an
+  IDE-compatibility check finds later.
 - **The accessor-width search no longer races itself across files.** The search deciding how far
   an accessor is read hands the platform a processor, and the platform runs it over several files
   at once; it collected into a plain list and tested its overflow ceiling by re-reading that

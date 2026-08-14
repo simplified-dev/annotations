@@ -71,6 +71,17 @@ java {
     targetCompatibility = JavaVersion.VERSION_17
 }
 
+// Those two settle the language level and the bytecode version, and neither
+// looks at which API is being called: compiling on a newer JDK still links
+// against that JDK's class library, so a method added after 17 resolves here
+// and is missing in the IDE that loads the plugin. `release` links against the
+// 17 API itself, which turns that into a compile error instead of a
+// NoSuchMethodError somebody hits in an editor. The oldest IDE this plugin
+// supports runs 17, so 17 is the surface it may use.
+tasks.withType<JavaCompile>().configureEach {
+    options.release.set(17)
+}
+
 // ----------------------------------------------------------------------------
 // IntelliJ platform: plugin metadata + verifier
 // ----------------------------------------------------------------------------
