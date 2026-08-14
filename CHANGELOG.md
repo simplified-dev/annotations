@@ -9,6 +9,17 @@ Versions 1.0.0 through 1.0.5 were published under the legacy plugin ID
 Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations` /
 `io.github.simplified-dev:annotations`. See the 2.0.0 entry for the rename details.
 
+## [2.5.2]
+
+### Fixed
+
+- **A Central upload bundle no longer carries the release before it.** The staging repository the
+  bundle is zipped from is an ordinary directory under `build/`, and nothing in an ordinary build
+  removes it, so publishing into one that still held the last release produced a bundle containing
+  both - and an upload that tried to publish a version Central already has. Nothing about it
+  surfaced in the build log; the bundle's size was the only tell. Clearing it is now wired into
+  the task graph ahead of the publish rather than left as a step to remember.
+
 ## [2.5.1]
 
 ### Added

@@ -311,6 +311,26 @@ if (signArtifacts) {
 // Central Publisher Portal upload bundle
 // ----------------------------------------------------------------------------
 
+// The staging repository is an ordinary directory under build/, and nothing in
+// an ordinary build removes it, so a release published into one that still
+// holds the last release bundles both and the upload tries to publish a version
+// Central already has. Nothing about that is visible in the build log - only the
+// bundle's size gives it away - so the clear is wired into the graph rather than
+// left as a step to remember.
+//
+// It hangs off the publish task rather than the zip's own doFirst: the zip runs
+// after the publish, so clearing there would delete exactly what it came to
+// package.
+val clearCentralStaging by tasks.registering(Delete::class) {
+    description = "Empties the staging repository so a bundle carries one version."
+    group = "publishing"
+    delete(layout.buildDirectory.dir("central-staging"))
+}
+
+tasks.named("publishReleasePublicationToCentralStagingRepository") {
+    dependsOn(clearCentralStaging)
+}
+
 val centralBundle by tasks.registering(Zip::class) {
     description = "Builds the Maven Central Publisher Portal upload bundle from the staged publication."
     group = "publishing"
