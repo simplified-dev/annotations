@@ -56,6 +56,10 @@ import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Reports a generated read accessor whose visibility is wider than anything
@@ -180,14 +184,25 @@ public class GetterVisibilityInspection extends LocalInspectionTool {
      * method of the same name counts as a reader, which can only ever suppress
      * a report - the direction a review aid should fail in.
      *
+     * <p>The search runs the processor on several files at once, so everything
+     * it touches has to tolerate concurrent callbacks. A collector that does not
+     * fails in two directions and only one of them is visible: an unsynchronised
+     * list can throw out of the search and abort the whole inspection for the
+     * file, and can equally well drop a reader and answer with a reach narrower
+     * than the truth - a quick fix that cuts a member something really does read.
+     * Counting through the value {@link AtomicInteger#incrementAndGet} returns,
+     * rather than re-reading the collector, is what keeps the overflow test from
+     * seeing a size another thread has already moved.
+     *
      * @param target the declaring class
      * @param name the accessor name
      * @return the reach, or {@code null} when the accessor is read widely
      *         enough that nothing can be narrowed
      */
     private static @Nullable Reach reachOf(@NotNull PsiClass target, @NotNull String name) {
-        List<PsiReferenceExpression> hits = new ArrayList<>();
-        boolean[] overflowed = {false};
+        Queue<PsiReferenceExpression> hits = new ConcurrentLinkedQueue<>();
+        AtomicInteger seen = new AtomicInteger();
+        AtomicBoolean overflowed = new AtomicBoolean();
         SearchScope scope = target.getUseScope();
         PsiSearchHelper.getInstance(target.getProject()).processElementsWithWord(
             (element, offsetInElement) -> {
@@ -195,11 +210,11 @@ public class GetterVisibilityInspection extends LocalInspectionTool {
                 if (!name.equals(ref.getReferenceName())) return true;
                 if (PsiTreeUtil.isAncestor(target, ref, true)) return true;
                 hits.add(ref);
-                if (hits.size() <= MAX_OCCURRENCES) return true;
-                overflowed[0] = true;
+                if (seen.incrementAndGet() <= MAX_OCCURRENCES) return true;
+                overflowed.set(true);
                 return false;
             }, scope, name, UsageSearchContext.IN_CODE, true);
-        if (overflowed[0]) return null;
+        if (overflowed.get()) return null;
         if (hits.isEmpty()) return Reach.UNREAD;
 
         String home = packageOf(target);
