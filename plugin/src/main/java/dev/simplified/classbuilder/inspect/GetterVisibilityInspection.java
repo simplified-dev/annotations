@@ -7,6 +7,7 @@ import com.intellij.codeInspection.LocalQuickFix;
 import com.intellij.codeInspection.ProblemDescriptor;
 import com.intellij.codeInspection.ProblemHighlightType;
 import com.intellij.codeInspection.ProblemsHolder;
+import com.intellij.codeInspection.options.OptPane;
 import com.intellij.notification.NotificationGroupManager;
 import com.intellij.notification.NotificationType;
 import com.intellij.openapi.command.WriteCommandAction;
@@ -46,6 +47,7 @@ import com.intellij.psi.search.searches.ReferencesSearch;
 import com.intellij.psi.util.InheritanceUtil;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.psi.util.PsiUtil;
+import com.intellij.util.xmlb.annotations.OptionTag;
 import dev.simplified.accessor.inspect.AccessorConstants;
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.NamingStyle;
@@ -78,6 +80,11 @@ import java.util.concurrent.atomic.AtomicInteger;
  * serve one field would silently move every sibling. The promotion fix does
  * write a type-level annotation, since proposing one for the whole class is
  * what it is for.
+ *
+ * <p>The width trigger stays quiet on a type visible outside its project. The
+ * reader search behind it stops at the project boundary, so on such a type it
+ * cannot tell an accessor nothing reads from one a consumer elsewhere depends
+ * on, and every narrowing it offers would break the second case.
  */
 public class GetterVisibilityInspection extends LocalInspectionTool {
 
@@ -95,19 +102,51 @@ public class GetterVisibilityInspection extends LocalInspectionTool {
      */
     private static final int MAX_OCCURRENCES = 200;
 
+    /**
+     * The annotation an author writes to say a public type is not published
+     * surface, which puts it back inside what the reader search can measure.
+     */
+    private static final String API_STATUS_INTERNAL_FQN =
+        "org.jetbrains.annotations.ApiStatus.Internal";
+
+    /**
+     * Whether to report an accessor on a type visible outside its project.
+     *
+     * <p>Off because the reader search is bounded by the project, and every
+     * narrowing offered here - to package-private, to protected, away entirely -
+     * removes reachability a consumer outside it may be using. For a type the
+     * project cannot export, or one the author marked internal, the search sees
+     * every reader there is and the report is exact. Turning this on measures
+     * every type that way, which is right for a project that publishes nothing.
+     */
+    @OptionTag("REPORT_EXTERNALLY_REACHABLE")
+    public boolean reportExternallyReachableTypes = false;
+
     @Override
     public @NotNull PsiElementVisitor buildVisitor(@NotNull ProblemsHolder holder,
                                                    boolean isOnTheFly) {
+        final boolean measureEveryType = this.reportExternallyReachableTypes;
         return new JavaElementVisitor() {
             @Override
             public void visitClass(@NotNull PsiClass target) {
                 super.visitClass(target);
                 if (!isSupportedKind(target)) return;
                 if (target.getName() == null) return;
-                checkWidth(holder, target);
+                checkWidth(holder, target, measureEveryType);
                 checkPromotable(holder, target);
             }
         };
+    }
+
+    @Override
+    public @NotNull OptPane getOptionsPane() {
+        return OptPane.pane(
+            OptPane.group(
+                "Reader search",
+                OptPane.checkbox("reportExternallyReachableTypes",
+                    "Report accessors on types visible outside their project")
+            )
+        );
     }
 
     /**
@@ -120,8 +159,10 @@ public class GetterVisibilityInspection extends LocalInspectionTool {
 
     // Trigger A - a generated accessor wider than its readers.
 
-    private static void checkWidth(@NotNull ProblemsHolder holder, @NotNull PsiClass target) {
+    private static void checkWidth(@NotNull ProblemsHolder holder, @NotNull PsiClass target,
+                                   boolean measureEveryType) {
         PsiAnnotation typeLevel = target.getAnnotation(AccessorConstants.GETTER_FQN);
+        boolean measured = measureEveryType || measurable(target);
         for (PsiField field : ownFields(target)) {
             // An enum's constants are fields of the enum type as far as the PSI
             // is concerned; the mutator skips them and generates nothing.
@@ -135,6 +176,10 @@ public class GetterVisibilityInspection extends LocalInspectionTool {
             // this pipeline's to move.
             if (field.getAnnotation(AccessorConstants.LAZY_FQN) != null) continue;
 
+            // Cheaper than the search it guards, and the field's own marker is
+            // how one accessor of an otherwise published type is measured.
+            if (!measured && field.getAnnotation(API_STATUS_INTERNAL_FQN) == null) continue;
+
             String name = accessorName(effective, field);
             if (declares(target, name)) continue;
 
@@ -142,6 +187,48 @@ public class GetterVisibilityInspection extends LocalInspectionTool {
             if (reach == null) continue;
             report(holder, field, target, name, reach);
         }
+    }
+
+    /**
+     * Whether the project holds every reader the type can have.
+     *
+     * <p>The reader search runs over the project, so it answers for the whole
+     * world only when the world is the project. A type no artifact can export
+     * qualifies outright; a type the author has marked internal qualifies
+     * because the marking says the published surface does not include it.
+     *
+     * @param target the declaring class
+     * @return whether a reach measured here is the whole truth
+     */
+    private static boolean measurable(@NotNull PsiClass target) {
+        return !externallyReachable(target) || markedInternal(target);
+    }
+
+    /**
+     * Whether code outside the project could name the type.
+     *
+     * <p>Public the whole way out, or protected inside one that is - a subclass
+     * in another artifact reaches a protected nested type. A top-level type
+     * cannot be protected, so the walk collapses to a public test there.
+     */
+    private static boolean externallyReachable(@NotNull PsiClass target) {
+        for (PsiClass owner = target; owner != null; owner = owner.getContainingClass()) {
+            if (!owner.hasModifierProperty(PsiModifier.PUBLIC)
+                && !owner.hasModifierProperty(PsiModifier.PROTECTED)) return false;
+        }
+        return true;
+    }
+
+    /**
+     * Whether the type, or one enclosing it, is marked as unpublished surface.
+     * A marked outer type carries its nested types with it, since a consumer
+     * with no way to name the outer has no way to reach them either.
+     */
+    private static boolean markedInternal(@NotNull PsiClass target) {
+        for (PsiClass owner = target; owner != null; owner = owner.getContainingClass()) {
+            if (owner.getAnnotation(API_STATUS_INTERNAL_FQN) != null) return true;
+        }
+        return false;
     }
 
     private static void report(@NotNull ProblemsHolder holder, @NotNull PsiField field,

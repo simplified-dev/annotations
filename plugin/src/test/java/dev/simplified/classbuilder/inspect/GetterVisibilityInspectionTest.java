@@ -14,10 +14,12 @@ import java.util.List;
  */
 public class GetterVisibilityInspectionTest extends LightJavaCodeInsightFixtureTestCase {
 
+    private final GetterVisibilityInspection inspection = new GetterVisibilityInspection();
+
     @Override
     protected void setUp() throws Exception {
         super.setUp();
-        myFixture.enableInspections(new GetterVisibilityInspection());
+        myFixture.enableInspections(this.inspection);
         myFixture.addFileToProject("dev/simplified/annotations/AccessLevel.java",
             """
             package dev.simplified.annotations;
@@ -40,11 +42,29 @@ public class GetterVisibilityInspectionTest extends LightJavaCodeInsightFixtureT
                 String[] exclude() default {};
             }
             """);
+        myFixture.addFileToProject("org/jetbrains/annotations/ApiStatus.java",
+            """
+            package org.jetbrains.annotations;
+            import java.lang.annotation.*;
+            public final class ApiStatus {
+                @Retention(RetentionPolicy.CLASS)
+                @Target({ElementType.TYPE, ElementType.FIELD, ElementType.METHOD})
+                public @interface Internal { }
+            }
+            """);
     }
 
     private void configure(String path, String source) {
         PsiFile file = myFixture.addFileToProject(path, source);
         myFixture.configureFromExistingVirtualFile(file.getVirtualFile());
+    }
+
+    /**
+     * Lifts the published-API guard, for the tests whose subject is the reach
+     * classification rather than the guard itself.
+     */
+    private void measureEveryType() {
+        this.inspection.reportExternallyReachableTypes = true;
     }
 
     /**
@@ -73,6 +93,7 @@ public class GetterVisibilityInspectionTest extends LightJavaCodeInsightFixtureT
     // Trigger A - a generated accessor wider than its readers.
 
     public void testUnreadAccessorOffersBothNoneAndPrivate() {
+        measureEveryType();
         configure("app/Widget.java",
             """
             package app;
@@ -92,6 +113,7 @@ public class GetterVisibilityInspectionTest extends LightJavaCodeInsightFixtureT
     }
 
     public void testNarrowingFixLeavesTheTypeLevelAnnotationAlone() {
+        measureEveryType();
         configure("app/Widget.java",
             """
             package app;
@@ -111,6 +133,7 @@ public class GetterVisibilityInspectionTest extends LightJavaCodeInsightFixtureT
     }
 
     public void testAccessorWrittenOnTheFieldIsRewrittenInPlace() {
+        measureEveryType();
         configure("app/Widget.java",
             """
             package app;
@@ -128,6 +151,7 @@ public class GetterVisibilityInspectionTest extends LightJavaCodeInsightFixtureT
     }
 
     public void testPackageOnlyReaderNarrowsToPackage() {
+        measureEveryType();
         myFixture.addFileToProject("app/Neighbour.java",
             """
             package app;
@@ -150,6 +174,7 @@ public class GetterVisibilityInspectionTest extends LightJavaCodeInsightFixtureT
     }
 
     public void testSubclassOnlyReaderNarrowsToProtected() {
+        measureEveryType();
         myFixture.addFileToProject("sub/Child.java",
             """
             package sub;
@@ -246,6 +271,136 @@ public class GetterVisibilityInspectionTest extends LightJavaCodeInsightFixtureT
             }
             """);
         assertFalse("the author's own method's visibility is theirs", reportsAnything());
+    }
+
+    // The bound on the reader search - a reach is only reportable when the
+    // project holds every reader the type can have.
+
+    public void testPublicTypeIsSilentByDefault() {
+        configure("app/Widget.java",
+            """
+            package app;
+            import dev.simplified.annotations.Getter;
+            @Getter
+            public class Widget {
+                private String label;
+            }
+            """);
+        assertFalse("a consumer elsewhere may read it, and the search stops at the project",
+            reportsAnything());
+    }
+
+    public void testPackagePrivateTypeIsMeasured() {
+        configure("app/Widget.java",
+            """
+            package app;
+            import dev.simplified.annotations.Getter;
+            @Getter
+            class Widget {
+                private String label;
+            }
+            """);
+        assertTrue("no artifact can export the type, so the project is the whole world",
+            reports("nothing outside Widget reads it", HighlightSeverity.WEAK_WARNING));
+    }
+
+    public void testProtectedNestedTypeIsSilentByDefault() {
+        configure("app/Outer.java",
+            """
+            package app;
+            import dev.simplified.annotations.Getter;
+            public class Outer {
+                @Getter
+                protected static class Inner {
+                    private String label;
+                }
+            }
+            """);
+        assertFalse("a subclass in another artifact reaches a protected nested type",
+            reportsAnything());
+    }
+
+    public void testPrivateNestedTypeIsMeasured() {
+        configure("app/Outer.java",
+            """
+            package app;
+            import dev.simplified.annotations.Getter;
+            public class Outer {
+                @Getter
+                private static class Inner {
+                    private String label;
+                }
+            }
+            """);
+        assertTrue("a public outer does not carry a private nested type out with it",
+            reports("nothing outside Inner reads it", HighlightSeverity.WEAK_WARNING));
+    }
+
+    public void testInternalMarkerRestoresTheReport() {
+        configure("app/Widget.java",
+            """
+            package app;
+            import dev.simplified.annotations.Getter;
+            import org.jetbrains.annotations.ApiStatus;
+            @ApiStatus.Internal
+            @Getter
+            public class Widget {
+                private String label;
+            }
+            """);
+        assertTrue("the author has said the type is not published surface",
+            reports("nothing outside Widget reads it", HighlightSeverity.WEAK_WARNING));
+    }
+
+    public void testInternalMarkerOnAnEnclosingTypeCarriesToTheNested() {
+        configure("app/Outer.java",
+            """
+            package app;
+            import dev.simplified.annotations.Getter;
+            import org.jetbrains.annotations.ApiStatus;
+            @ApiStatus.Internal
+            public class Outer {
+                @Getter
+                public static class Inner {
+                    private String label;
+                }
+            }
+            """);
+        assertTrue("a consumer with no way to name the outer cannot reach the nested one",
+            reports("nothing outside Inner reads it", HighlightSeverity.WEAK_WARNING));
+    }
+
+    public void testInternalMarkerOnTheFieldMeasuresThatAccessorAlone() {
+        configure("app/Widget.java",
+            """
+            package app;
+            import dev.simplified.annotations.Getter;
+            import org.jetbrains.annotations.ApiStatus;
+            @Getter
+            public class Widget {
+                @ApiStatus.Internal private String label;
+                private String title;
+            }
+            """);
+        assertTrue("the marked field's accessor is measured",
+            reports("getLabel() is generated public", HighlightSeverity.WEAK_WARNING));
+        assertFalse("its unmarked sibling stays published surface",
+            reports("getTitle() is generated public", HighlightSeverity.WEAK_WARNING));
+    }
+
+    public void testTheOptionMeasuresAPublicTypeToo() {
+        measureEveryType();
+        configure("app/Widget.java",
+            """
+            package app;
+            import dev.simplified.annotations.Getter;
+            @Getter
+            public class Widget {
+                private String label;
+            }
+            """);
+        assertTrue("a project that publishes nothing wants every type measured",
+            reports("nothing outside Widget reads it", HighlightSeverity.WEAK_WARNING));
     }
 
     // Trigger B - hand-written accessors a @Getter subsumes.
@@ -572,6 +727,7 @@ public class GetterVisibilityInspectionTest extends LightJavaCodeInsightFixtureT
      * annotation outright, so its naming has to travel with the access level.
      */
     public void testNarrowingCarriesTheTypeLevelStyle() {
+        measureEveryType();
         myFixture.addFileToProject("app/Neighbour.java",
             """
             package app;

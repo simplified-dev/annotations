@@ -22,12 +22,22 @@ Reviews the read accessors a class generates or hand-writes:
 <!-- tooltip end -->
 
 <p>
-The narrowing checks report at <b>weak warning</b> and will not be raised. A
-public accessor is part of what a module publishes, and this library ships to
-Maven Central - narrowing one is a downstream break that no amount of local
-evidence can rule out, since the search can only see this project. Treat the
-report as a review aid on a member nobody here reads, not as a cleanup sweep to
-run across a package.
+The narrowing checks report at <b>weak warning</b> and will not be raised, and
+on a type visible outside its project they stay quiet altogether. A public
+accessor is part of what a module publishes, and the reader search stops at the
+project boundary - so where a consumer elsewhere can name the type, that search
+cannot tell an accessor nothing reads from one something depends on, and every
+narrowing offered would break the second case.
+</p>
+
+<p>
+Two things bring such a type back into range. Marking it, an enclosing type, or
+the field itself <code>@ApiStatus.Internal</code> says the published surface
+does not include it, so the project holds every reader there is. The
+<b>Report accessors on types visible outside their project</b> option does the
+same for every type at once, which is what a project that publishes nothing
+wants. Either way, treat the report as a review aid on a member nobody here
+reads, not as a cleanup sweep to run across a package.
 </p>
 
 <p>
