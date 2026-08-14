@@ -56,8 +56,9 @@
           this-return shapes.</li>
       <li>IDE inspections: <b>Bootstrap-methods missing</b> (ERROR-level) with
           a quick-fix that inserts <code>builder()</code> / <code>from(T)</code>
-          / <code>mutate()</code> all at once; <b>Field annotation misuse</b>
-          catches mistakes like <code>@Formattable</code> on a non-String field.</li>
+          / <code>mutate()</code> all at once; <b>@ClassBuilder field
+          annotations</b> catches mistakes like <code>@Formattable</code> on a
+          non-String field.</li>
     </ul>
 
     <h3>@ResourcePath</h3>
@@ -149,7 +150,7 @@
                 enabledByDefault="true"
                 level="WARNING"
                 shortName="ClassBuilderFieldInspection"
-                displayName="@ClassBuilder field annotation misuse"
+                displayName="@ClassBuilder field annotations"
                 groupPath="Simplified Annotations"
                 groupName="Misuse"
         />
@@ -159,7 +160,7 @@
                 enabledByDefault="true"
                 level="ERROR"
                 shortName="LazyFieldInspection"
-                displayName="@Lazy field misuse"
+                displayName="@Lazy field"
                 groupPath="Simplified Annotations"
                 groupName="Misuse"
         />
@@ -169,7 +170,7 @@
                 enabledByDefault="true"
                 level="ERROR"
                 shortName="EnumLookupInspection"
-                displayName="@EnumLookup misuse"
+                displayName="@EnumLookup"
                 groupPath="Simplified Annotations"
                 groupName="Misuse"
         />
@@ -188,7 +189,7 @@
                 enabledByDefault="true"
                 level="ERROR"
                 shortName="ArgsConstructorInspection"
-                displayName="Constructor annotation misuse"
+                displayName="Constructor annotations"
                 groupPath="Simplified Annotations"
                 groupName="Misuse"
         />
@@ -198,7 +199,7 @@
                 enabledByDefault="true"
                 level="ERROR"
                 shortName="AccessorInspection"
-                displayName="@Getter / @Setter misuse"
+                displayName="@Getter / @Setter"
                 groupPath="Simplified Annotations"
                 groupName="Misuse"
         />
@@ -208,7 +209,7 @@
                 enabledByDefault="true"
                 level="ERROR"
                 shortName="UtilityClassInspection"
-                displayName="@UtilityClass misuse"
+                displayName="@UtilityClass"
                 groupPath="Simplified Annotations"
                 groupName="Misuse"
         />
@@ -227,7 +228,7 @@
                 enabledByDefault="true"
                 level="ERROR"
                 shortName="SilentThrowsInspection"
-                displayName="@SilentThrows misuse"
+                displayName="@SilentThrows"
                 groupPath="Simplified Annotations"
                 groupName="Misuse"
         />
@@ -237,7 +238,7 @@
                 enabledByDefault="true"
                 level="ERROR"
                 shortName="CleanupInspection"
-                displayName="@Cleanup misuse"
+                displayName="@Cleanup"
                 groupPath="Simplified Annotations"
                 groupName="Misuse"
         />
@@ -247,7 +248,7 @@
                 enabledByDefault="true"
                 level="ERROR"
                 shortName="EqualsAndHashCodeInspection"
-                displayName="@EqualsAndHashCode misuse"
+                displayName="@EqualsAndHashCode"
                 groupPath="Simplified Annotations"
                 groupName="Misuse"
         />
@@ -257,7 +258,7 @@
                 enabledByDefault="true"
                 level="ERROR"
                 shortName="ToStringInspection"
-                displayName="@ToString misuse"
+                displayName="@ToString"
                 groupPath="Simplified Annotations"
                 groupName="Misuse"
         />
@@ -267,7 +268,7 @@
                 enabledByDefault="true"
                 level="ERROR"
                 shortName="LogInspection"
-                displayName="@Log misuse"
+                displayName="@Log"
                 groupPath="Simplified Annotations"
                 groupName="Misuse"
         />
