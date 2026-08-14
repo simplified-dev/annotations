@@ -13,6 +13,7 @@ import com.intellij.psi.PsiRecordComponent;
 import com.intellij.psi.PsiSubstitutor;
 import com.intellij.psi.PsiTypeParameter;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
+import dev.simplified.shared.psi.WrittenAnnotations;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -156,10 +157,7 @@ final class PsiFieldShapeExtractor {
     }
 
     private static PsiAnnotation findAnnotation(PsiModifierListOwner owner, String fqn) {
-        for (PsiAnnotation a : owner.getAnnotations()) {
-            if (fqn.equals(a.getQualifiedName())) return a;
-        }
-        return null;
+        return WrittenAnnotations.find(owner, fqn);
     }
 
     private static String stringAttr(PsiAnnotation annotation, String attr, String fallback) {
@@ -176,10 +174,7 @@ final class PsiFieldShapeExtractor {
 
     /** Reads the {@code @ClassBuilder} annotation on {@code target}. */
     static PsiAnnotation classBuilderAnnotation(PsiClass target) {
-        for (PsiAnnotation a : target.getAnnotations()) {
-            if (ClassBuilderConstants.ANNOTATION_FQN.equals(a.getQualifiedName())) return a;
-        }
-        return null;
+        return WrittenAnnotations.find(target, ClassBuilderConstants.ANNOTATION_FQN);
     }
 
     /**

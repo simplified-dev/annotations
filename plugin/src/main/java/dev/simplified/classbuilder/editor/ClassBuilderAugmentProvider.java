@@ -12,6 +12,7 @@ import com.intellij.psi.util.PsiModificationTracker;
 import com.intellij.util.IdempotenceChecker;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
+import dev.simplified.shared.psi.WrittenAnnotations;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -267,10 +268,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
     }
 
     private static PsiAnnotation findClassBuilderAnnotation(PsiClass target) {
-        for (PsiAnnotation a : target.getAnnotations()) {
-            if (ClassBuilderConstants.ANNOTATION_FQN.equals(a.getQualifiedName())) return a;
-        }
-        return null;
+        return WrittenAnnotations.find(target, ClassBuilderConstants.ANNOTATION_FQN);
     }
 
 }

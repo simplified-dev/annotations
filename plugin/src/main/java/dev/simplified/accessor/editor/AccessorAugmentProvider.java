@@ -27,6 +27,7 @@ import dev.simplified.classbuilder.apt.AccessorScheme;
 import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
 import dev.simplified.shared.psi.AnnotatedLightModifierList;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
+import dev.simplified.shared.psi.WrittenAnnotations;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -195,7 +196,8 @@ public final class AccessorAugmentProvider extends AbstractRecursionSafeAugmentP
         if (!access.isEmpty()) modifiers.addModifier(access);
         if (field.hasModifierProperty(PsiModifier.STATIC)) modifiers.addModifier(PsiModifier.STATIC);
         for (PsiAnnotation a : nullness(elements, target, field)) {
-            String fqn = a.getQualifiedName();
+            String fqn = WrittenAnnotations.spelledAmong(a,
+                AccessorConstants.NOT_NULL_FQN, AccessorConstants.NULLABLE_FQN);
             if (fqn != null) modifiers.add(fqn, a);
         }
         return modifiers;
@@ -212,10 +214,9 @@ public final class AccessorAugmentProvider extends AbstractRecursionSafeAugmentP
                                                 PsiField field) {
         List<PsiAnnotation> out = new ArrayList<>(2);
         for (PsiAnnotation a : field.getAnnotations()) {
-            String fqn = a.getQualifiedName();
+            String fqn = WrittenAnnotations.spelledAmong(a,
+                AccessorConstants.NOT_NULL_FQN, AccessorConstants.NULLABLE_FQN);
             if (fqn == null) continue;
-            if (!AccessorConstants.NOT_NULL_FQN.equals(fqn)
-                && !AccessorConstants.NULLABLE_FQN.equals(fqn)) continue;
             try {
                 out.add(elements.createAnnotationFromText("@" + fqn, target));
             } catch (Exception ignored) {

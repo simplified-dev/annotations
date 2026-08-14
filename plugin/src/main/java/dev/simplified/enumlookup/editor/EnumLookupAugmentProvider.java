@@ -21,6 +21,7 @@ import com.intellij.psi.util.PsiModificationTracker;
 import dev.simplified.enumlookup.inspect.EnumLookupConstants;
 import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
+import dev.simplified.shared.psi.WrittenAnnotations;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -78,10 +79,7 @@ public final class EnumLookupAugmentProvider extends AbstractRecursionSafeAugmen
     }
 
     private static boolean hasEnumLookup(PsiClass target) {
-        for (PsiAnnotation a : target.getAnnotations()) {
-            if (EnumLookupConstants.ENUM_LOOKUP_FQN.equals(a.getQualifiedName())) return true;
-        }
-        return false;
+        return WrittenAnnotations.has(target, EnumLookupConstants.ENUM_LOOKUP_FQN);
     }
 
     /**
@@ -108,10 +106,7 @@ public final class EnumLookupAugmentProvider extends AbstractRecursionSafeAugmen
     }
 
     private static @Nullable PsiAnnotation findKeyFieldAnnotation(PsiField field) {
-        for (PsiAnnotation a : field.getAnnotations()) {
-            if (EnumLookupConstants.KEY_FIELD_FQN.equals(a.getQualifiedName())) return a;
-        }
-        return null;
+        return WrittenAnnotations.find(field, EnumLookupConstants.KEY_FIELD_FQN);
     }
 
     private static String resolveMethodSuffix(PsiAnnotation annotation, String fieldName) {

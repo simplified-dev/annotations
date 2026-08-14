@@ -26,6 +26,7 @@ import dev.simplified.lazy.mutate.LazyFieldMutator;
 import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
 import dev.simplified.shared.psi.AnnotatedLightModifierList;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
+import dev.simplified.shared.psi.WrittenAnnotations;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -167,6 +168,11 @@ public final class LazyAugmentProvider extends AbstractRecursionSafeAugmentProvi
      * belong on a getter (the @Lazy marker itself + ClassBuilder field-only
      * companions). Returns a map keyed by FQN to keep iteration order
      * deterministic for cache equality.
+     *
+     * <p>The one place here that has to resolve every annotation it sees
+     * rather than gate on a name it already knows: what it propagates is
+     * whatever the field carries, so the qualified name is the output, not a
+     * test. The skip set is applied to both spellings for that reason.
      */
     private static Map<String, PsiAnnotation> collectPropagatedAnnotations(PsiElementFactory elements,
                                                                           PsiClass target,
@@ -196,7 +202,7 @@ public final class LazyAugmentProvider extends AbstractRecursionSafeAugmentProvi
      * Java modifier. Default when unset is {@code "public"}.
      */
     private static String readAccessKeyword(PsiField field) {
-        PsiAnnotation lazy = field.getAnnotation(LAZY_FQN);
+        PsiAnnotation lazy = WrittenAnnotations.find(field, LAZY_FQN);
         if (lazy == null) return PsiModifier.PUBLIC;
         PsiAnnotationMemberValue value = lazy.findAttributeValue("access");
         if (value instanceof PsiReferenceExpression ref) {
@@ -217,12 +223,7 @@ public final class LazyAugmentProvider extends AbstractRecursionSafeAugmentProvi
         List<PsiField> out = new ArrayList<>();
         for (PsiField field : target.getFields()) {
             if (field.hasModifierProperty(PsiModifier.STATIC)) continue;
-            for (PsiAnnotation a : field.getAnnotations()) {
-                if (LAZY_FQN.equals(a.getQualifiedName())) {
-                    out.add(field);
-                    break;
-                }
-            }
+            if (WrittenAnnotations.has(field, LAZY_FQN)) out.add(field);
         }
         return out;
     }

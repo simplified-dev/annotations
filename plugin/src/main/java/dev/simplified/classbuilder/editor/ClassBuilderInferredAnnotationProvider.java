@@ -9,6 +9,7 @@ import com.intellij.psi.PsiModifierListOwner;
 import com.intellij.psi.impl.light.LightMethodBuilder;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
+import dev.simplified.shared.psi.WrittenAnnotations;
 import org.jetbrains.annotations.Contract;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -130,10 +131,7 @@ public final class ClassBuilderInferredAnnotationProvider implements InferredAnn
     }
 
     private static @Nullable PsiAnnotation findClassBuilderAnnotation(@NotNull PsiClass target) {
-        for (PsiAnnotation a : target.getAnnotations()) {
-            if (ClassBuilderConstants.ANNOTATION_FQN.equals(a.getQualifiedName())) return a;
-        }
-        return null;
+        return WrittenAnnotations.find(target, ClassBuilderConstants.ANNOTATION_FQN);
     }
 
     /**

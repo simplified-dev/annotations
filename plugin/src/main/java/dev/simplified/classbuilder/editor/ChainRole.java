@@ -4,6 +4,7 @@ import com.intellij.psi.CommonClassNames;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiModifier;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
+import dev.simplified.shared.psi.WrittenAnnotations;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -82,10 +83,7 @@ enum ChainRole {
     }
 
     private static boolean hasClassBuilder(@NotNull PsiClass cls) {
-        for (var annotation : cls.getAnnotations()) {
-            if (ClassBuilderConstants.ANNOTATION_FQN.equals(annotation.getQualifiedName())) return true;
-        }
-        return false;
+        return WrittenAnnotations.has(cls, ClassBuilderConstants.ANNOTATION_FQN);
     }
 
 }

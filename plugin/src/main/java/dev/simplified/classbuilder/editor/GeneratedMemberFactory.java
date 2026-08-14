@@ -37,6 +37,7 @@ import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.shared.psi.AnnotatedLightModifierList;
 import dev.simplified.shared.psi.DocProxyingLightMethodBuilder;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
+import dev.simplified.shared.psi.WrittenAnnotations;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -895,9 +896,8 @@ public final class GeneratedMemberFactory {
         PsiModifierList modifiers = field.getModifierList();
         if (modifiers == null) return NO_ANNOTATIONS;
         for (PsiAnnotation annotation : modifiers.getAnnotations()) {
-            String fqn = annotation.getQualifiedName();
-            if (NOT_NULL_FQN.equals(fqn)) return new String[] {NOT_NULL_FQN};
-            if (NULLABLE_FQN.equals(fqn)) return new String[] {NULLABLE_FQN};
+            String fqn = WrittenAnnotations.spelledAmong(annotation, NOT_NULL_FQN, NULLABLE_FQN);
+            if (fqn != null) return new String[] {fqn};
         }
         return NO_ANNOTATIONS;
     }
