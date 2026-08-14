@@ -189,6 +189,15 @@ public final class AccessorMutator {
                             TypeElement targetElement) {
         if (fieldName.startsWith("$")) return false;
 
+        // A type-level annotation fans out over the class's state, and a static
+        // field holds the class's own rather than any instance's. Without this
+        // every constant in an annotated class grows a public accessor as a side
+        // effect of annotating the class. Naming the field directly is how a
+        // static accessor is asked for, and that route still builds one.
+        boolean isStatic = (decl.mods.flags & Flags.STATIC) != 0
+            || element.getModifiers().contains(Modifier.STATIC);
+        if (isStatic && fromType) return false;
+
         boolean isFinal = (decl.mods.flags & Flags.FINAL) != 0
             || element.getModifiers().contains(Modifier.FINAL);
 

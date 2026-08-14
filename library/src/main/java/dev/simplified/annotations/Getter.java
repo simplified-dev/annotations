@@ -10,10 +10,16 @@ import java.lang.annotation.Target;
 /**
  * Generates a read accessor for a field, or for every field of a type.
  *
- * <p>Written on a type it fans out over the fields that type declares; written
- * on a field it governs that field alone and overrides whatever the enclosing
- * type said. {@link AccessLevel#NONE} is how one field opts out of a
+ * <p>Written on a type it fans out over the instance fields that type declares;
+ * written on a field it governs that field alone and overrides whatever the
+ * enclosing type said. {@link AccessLevel#NONE} is how one field opts out of a
  * type-level annotation.
+ *
+ * <p>The fan-out passes over static fields, which hold the class's own state
+ * rather than any instance's - otherwise every constant in an annotated class
+ * publishes an accessor as a side effect of annotating the class. Writing the
+ * annotation on a static field is how a static accessor is asked for, and that
+ * route mints one.
  *
  * <p>Naming comes from {@link NamingStyle}, so the accessor and the builder
  * setter for the same field are minted by one mechanism rather than two that

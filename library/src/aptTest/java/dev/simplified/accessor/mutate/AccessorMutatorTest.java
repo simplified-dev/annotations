@@ -462,6 +462,40 @@ public class AccessorMutatorTest {
     }
 
     @Test
+    public void typeLevelAccessorsPassOverStaticFields() throws Exception {
+        // A static field is the class's own state rather than an instance's, so
+        // annotating the class does not reach it. Without this every constant in
+        // an annotated class publishes an accessor nobody asked for.
+        Class<?> t = compileAndLoad("demo.Widget",
+            "package demo;",
+            "import dev.simplified.annotations.Getter;",
+            "import dev.simplified.annotations.Setter;",
+            "@Getter",
+            "@Setter",
+            "public class Widget {",
+            "    private static String shared = \"s\";",
+            "    private String label;",
+            "}");
+        assertEquals("getLabel,setLabel", methodNames(t));
+    }
+
+    @Test
+    public void aStaticFieldNamedDirectlyKeepsItsAccessor() throws Exception {
+        // The field-level annotation is the way to ask for a static accessor, so
+        // it has to survive the rule that keeps the type-level one away.
+        Class<?> t = compileAndLoad("demo.Widget",
+            "package demo;",
+            "import dev.simplified.annotations.Getter;",
+            "@Getter",
+            "public class Widget {",
+            "    @Getter private static final String CONSTANT = \"c\";",
+            "    private String label;",
+            "}");
+        assertEquals("getCONSTANT,getLabel", methodNames(t));
+        assertTrue(Modifier.isStatic(t.getDeclaredMethod("getCONSTANT").getModifiers()));
+    }
+
+    @Test
     public void enumTargetsWork() throws Exception {
         // No mutator had ever touched an ElementKind.ENUM before this feature,
         // and enum constants are fields of the enum type - they must not grow

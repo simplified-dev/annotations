@@ -120,6 +120,7 @@ public final class AccessorAugmentProvider extends AbstractRecursionSafeAugmentP
         if (effective == null) return;
 
         String fieldName = field.getName();
+        if (fieldLevel == null && !AccessorConstants.reachedByTypeLevel(field)) return;
         if (fieldLevel == null && AccessorConstants.excludes(typeLevel, fieldName)) return;
 
         String access = AccessorConstants.accessKeyword(effective);

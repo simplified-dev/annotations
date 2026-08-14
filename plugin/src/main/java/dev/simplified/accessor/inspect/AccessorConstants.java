@@ -94,7 +94,24 @@ public final class AccessorConstants {
         PsiAnnotation fieldLevel = field.getAnnotation(GETTER_FQN);
         if (fieldLevel != null) return fieldLevel;
         if (typeLevel == null) return null;
+        if (!reachedByTypeLevel(field)) return null;
         return excludes(typeLevel, field.getName()) ? null : typeLevel;
+    }
+
+    /**
+     * Whether a type-level annotation fans out over the field.
+     *
+     * <p>A static field holds the class's own state rather than any instance's,
+     * so a blanket request written across the class passes it by - otherwise
+     * every constant in the class grows a public accessor nobody asked for.
+     * Writing the annotation on the field is how a static accessor is asked
+     * for, and it still mints one.
+     *
+     * @param field the field a type-level annotation would reach
+     * @return whether the fan-out includes it
+     */
+    public static boolean reachedByTypeLevel(PsiField field) {
+        return !field.hasModifierProperty(PsiModifier.STATIC);
     }
 
     /** Whether a type-level annotation excludes this field by name. */

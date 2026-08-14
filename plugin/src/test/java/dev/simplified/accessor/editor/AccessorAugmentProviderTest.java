@@ -169,6 +169,34 @@ public class AccessorAugmentProviderTest extends LightJavaCodeInsightFixtureTest
         assertEquals(0, widget.findMethodsByName("getCache", false).length);
     }
 
+    public void testTypeLevelAnnotationPassesOverStaticFields() {
+        PsiClass widget = configure("Widget",
+            """
+            import dev.simplified.annotations.Getter;
+            @Getter
+            public class Widget {
+                private static final String CONSTANT = "c";
+                private String label;
+            }
+            """);
+        assertEquals(1, widget.findMethodsByName("getLabel", false).length);
+        assertEquals("the processor generates nothing here, so neither may the editor",
+            0, widget.findMethodsByName("getCONSTANT", false).length);
+    }
+
+    public void testStaticFieldNamedDirectlyKeepsItsAccessor() {
+        PsiClass widget = configure("Widget",
+            """
+            import dev.simplified.annotations.Getter;
+            public class Widget {
+                @Getter private static final String CONSTANT = "c";
+            }
+            """);
+        PsiMethod[] found = widget.findMethodsByName("getCONSTANT", false);
+        assertEquals(1, found.length);
+        assertTrue(found[0].hasModifierProperty(PsiModifier.STATIC));
+    }
+
     public void testUnannotatedClassGetsNothing() {
         PsiClass plain = configure("Plain",
             """
