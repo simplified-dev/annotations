@@ -1,5 +1,6 @@
 package dev.simplified.accessor.editor;
 
+import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiJavaFile;
@@ -49,6 +50,19 @@ public class AccessorAugmentProviderTest extends LightJavaCodeInsightFixtureTest
                 NamingStyle style() default NamingStyle.SIMPLIFIED;
                 String name() default "";
                 String[] exclude() default {};
+            }
+            """);
+        myFixture.addFileToProject("org/jetbrains/annotations/ApiStatus.java",
+            """
+            package org.jetbrains.annotations;
+            import java.lang.annotation.*;
+            public final class ApiStatus {
+                @Retention(RetentionPolicy.CLASS)
+                @Target({ElementType.TYPE, ElementType.FIELD, ElementType.METHOD})
+                public @interface Internal { }
+                @Retention(RetentionPolicy.CLASS)
+                @Target({ElementType.TYPE, ElementType.FIELD, ElementType.METHOD})
+                public @interface AvailableSince { String value(); }
             }
             """);
     }
@@ -195,6 +209,33 @@ public class AccessorAugmentProviderTest extends LightJavaCodeInsightFixtureTest
         PsiMethod[] found = widget.findMethodsByName("getCONSTANT", false);
         assertEquals(1, found.length);
         assertTrue(found[0].hasModifierProperty(PsiModifier.STATIC));
+    }
+
+    public void testApiStatusMarkingsRideOntoTheAccessor() {
+        PsiClass widget = configure("Widget",
+            """
+            import dev.simplified.annotations.Getter;
+            import org.jetbrains.annotations.ApiStatus;
+            @Getter
+            public class Widget {
+                @ApiStatus.Internal private String hidden;
+                @ApiStatus.AvailableSince("2.0") private String dated;
+                private String plain;
+            }
+            """);
+        PsiMethod hidden = widget.findMethodsByName("getHidden", false)[0];
+        assertTrue("the accessor is the member a consumer reaches, so it carries the marking",
+            hidden.getModifierList().hasAnnotation("org.jetbrains.annotations.ApiStatus.Internal"));
+
+        PsiMethod dated = widget.findMethodsByName("getDated", false)[0];
+        PsiAnnotation since = dated.getModifierList()
+            .findAnnotation("org.jetbrains.annotations.ApiStatus.AvailableSince");
+        assertNotNull("the whole family travels, not the one member that names it", since);
+        assertTrue("and an argument travels with it", since.getText().contains("\"2.0\""));
+
+        PsiMethod plain = widget.findMethodsByName("getPlain", false)[0];
+        assertFalse("an unmarked field's accessor must not gain one",
+            plain.getModifierList().hasAnnotation("org.jetbrains.annotations.ApiStatus.Internal"));
     }
 
     public void testUnannotatedClassGetsNothing() {

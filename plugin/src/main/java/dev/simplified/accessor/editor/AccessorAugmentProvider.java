@@ -8,6 +8,7 @@ import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiElementFactory;
 import com.intellij.psi.PsiField;
+import com.intellij.psi.PsiJavaCodeReferenceElement;
 import com.intellij.psi.PsiManager;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
@@ -201,7 +202,56 @@ public final class AccessorAugmentProvider extends AbstractRecursionSafeAugmentP
                 AccessorConstants.NOT_NULL_FQN, AccessorConstants.NULLABLE_FQN);
             if (fqn != null) modifiers.add(fqn, a);
         }
+        addApiStatus(modifiers, elements, target, field);
         return modifiers;
+    }
+
+    /**
+     * Copies the field's {@code @ApiStatus} markings onto the accessor.
+     *
+     * <p>They ride onto the accessor because that is the member a consumer can
+     * reach - the field they came from is private, so a marking left there
+     * states the author's intent in the one place nobody outside the class
+     * reads. The whole family travels rather than one member of it:
+     * experimental or obsolete surface is still surface, and the marking is
+     * what says which.
+     *
+     * <p>The written text is reused verbatim so an argument survives -
+     * {@code @ApiStatus.AvailableSince} carries one and declares no default for
+     * it, so a rebuild that dropped arguments would synthesise a member javac
+     * rejects.
+     *
+     * <p>A marking written without its enclosing name does not travel. The
+     * qualifier gate costs no resolution and keeps the resolve to annotations
+     * already shaped like the family, where deciding it from the written name
+     * alone would mean resolving every annotation on every field. The processor
+     * half declines the same case, so both agree on what a generated member
+     * carries.
+     */
+    private static void addApiStatus(AnnotatedLightModifierList modifiers,
+                                     PsiElementFactory elements, PsiClass target, PsiField field) {
+        for (PsiAnnotation written : field.getAnnotations()) {
+            if (!qualifiedByOwner(written)) continue;
+            String fqn = written.getQualifiedName();
+            if (fqn == null || !fqn.startsWith(AccessorConstants.API_STATUS_PREFIX)) continue;
+            try {
+                modifiers.add(fqn, elements.createAnnotationFromText(written.getText(), target));
+            } catch (Exception ignored) {
+                // As with nullness, an annotation the IDE cannot reconstruct is
+                // skipped rather than halting synthesis for the whole class.
+            }
+        }
+    }
+
+    /** Whether the family's enclosing type is written as the annotation's qualifier. */
+    private static boolean qualifiedByOwner(PsiAnnotation annotation) {
+        PsiJavaCodeReferenceElement reference = annotation.getNameReferenceElement();
+        if (reference == null) return false;
+        PsiElement qualifier = reference.getQualifier();
+        if (qualifier == null) return false;
+        String text = qualifier.getText();
+        return text.equals(AccessorConstants.API_STATUS_OWNER)
+            || text.endsWith("." + AccessorConstants.API_STATUS_OWNER);
     }
 
     /**

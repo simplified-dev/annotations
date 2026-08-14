@@ -5,6 +5,11 @@ import com.google.testing.compile.Compiler;
 import com.google.testing.compile.JavaFileObjects;
 import dev.simplified.classbuilder.apt.ClassBuilderProcessor;
 import org.junit.Test;
+import org.objectweb.asm.AnnotationVisitor;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
 
 import javax.tools.JavaFileObject;
 import java.io.ByteArrayOutputStream;
@@ -17,12 +22,15 @@ import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static com.google.testing.compile.CompilationSubject.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 /**
  * {@code @Getter} and {@code @Setter}: naming, precedence, collision and the
@@ -493,6 +501,99 @@ public class AccessorMutatorTest {
             "}");
         assertEquals("getCONSTANT,getLabel", methodNames(t));
         assertTrue(Modifier.isStatic(t.getDeclaredMethod("getCONSTANT").getModifiers()));
+    }
+
+    // ------------------------------------------------------------------
+    // @ApiStatus travelling onto the generated accessor
+    // ------------------------------------------------------------------
+
+    private static final String INTERNAL = "Lorg/jetbrains/annotations/ApiStatus$Internal;";
+    private static final String AVAILABLE_SINCE =
+        "Lorg/jetbrains/annotations/ApiStatus$AvailableSince;";
+
+    /**
+     * The field is private, so the accessor is the member a consumer reaches -
+     * a marking that stayed behind would describe nothing anyone can call.
+     *
+     * <p>The family is {@code @Retention(CLASS)}, so reflection cannot see it
+     * and the class-file bytes are the only place to look.
+     */
+    @Test
+    public void generatedAccessorsCarryTheFieldsApiStatus() throws Exception {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.Marked",
+            "package demo;",
+            "import dev.simplified.annotations.Getter;",
+            "import dev.simplified.annotations.Setter;",
+            "import org.jetbrains.annotations.ApiStatus;",
+            "@Getter",
+            "@Setter",
+            "public class Marked {",
+            "    @ApiStatus.Internal private String hidden;",
+            "    private String plain;",
+            "}"));
+        assertThat(c).succeeded();
+
+        assertTrue("the getter must carry the field's marking",
+            methodAnnotations(c, "demo.Marked", "getHidden").contains(INTERNAL));
+        assertTrue("and the setter with it - both are reachable, both are surface",
+            methodAnnotations(c, "demo.Marked", "setHidden").contains(INTERNAL));
+        assertFalse("an unmarked field's accessor must not gain one",
+            methodAnnotations(c, "demo.Marked", "getPlain").contains(INTERNAL));
+    }
+
+    @Test
+    public void aMarkingWithAnArgumentKeepsIt() throws Exception {
+        // AvailableSince declares no default for its value, so an accessor that
+        // copied the marking without the argument would not compile at all -
+        // which is why this asserts the compilation as well as the bytes.
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.Dated",
+            "package demo;",
+            "import dev.simplified.annotations.Getter;",
+            "import org.jetbrains.annotations.ApiStatus;",
+            "@Getter",
+            "public class Dated {",
+            "    @ApiStatus.AvailableSince(\"2.0\") private String since;",
+            "}"));
+        assertThat(c).succeeded();
+        assertTrue("the whole family travels, not the one member that names it",
+            methodAnnotations(c, "demo.Dated", "getSince").contains(AVAILABLE_SINCE));
+    }
+
+    /** Declaration-channel annotation descriptors on one method of a compiled class. */
+    private static Set<String> methodAnnotations(Compilation c, String binaryName, String method)
+        throws Exception {
+        Set<String> out = new LinkedHashSet<>();
+        new ClassReader(classFileBytes(c, binaryName)).accept(new ClassVisitor(Opcodes.ASM9) {
+            @Override
+            public MethodVisitor visitMethod(int access, String name, String descriptor,
+                                             String signature, String[] exceptions) {
+                if (!name.equals(method)) return null;
+                return new MethodVisitor(Opcodes.ASM9) {
+                    @Override
+                    public AnnotationVisitor visitAnnotation(String desc, boolean visible) {
+                        out.add(desc);
+                        return null;
+                    }
+                };
+            }
+        }, ClassReader.SKIP_CODE | ClassReader.SKIP_FRAMES);
+        return out;
+    }
+
+    private static byte[] classFileBytes(Compilation compilation, String binaryName)
+        throws Exception {
+        String want = binaryName.replace('.', '/') + ".class";
+        for (JavaFileObject f : compilation.generatedFiles()) {
+            if (f.getKind() != JavaFileObject.Kind.CLASS) continue;
+            if (!f.toUri().toString().endsWith(want)) continue;
+            try (InputStream in = f.openInputStream()) {
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                in.transferTo(baos);
+                return baos.toByteArray();
+            }
+        }
+        fail("no generated class file for '" + binaryName + "'");
+        return null;
     }
 
     @Test

@@ -18,6 +18,7 @@ import dev.simplified.annotations.Getter;
 import dev.simplified.annotations.NamingStyle;
 import dev.simplified.annotations.Setter;
 import dev.simplified.classbuilder.apt.AccessorScheme;
+import dev.simplified.shared.javac.ApiStatusAnnotations;
 import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.ContractAnnotations;
 import dev.simplified.shared.javac.GeneratedAnnotations;
@@ -265,6 +266,9 @@ public final class AccessorMutator {
             // describes it verbatim - the condition NullnessAnnotations exists
             // to state.
             anno = anno.appendList(NullnessAnnotations.copy(element, make, types));
+            // The accessor, not the private field behind it, is what a consumer
+            // can reach, so the markings have to sit here to mean anything.
+            anno = anno.appendList(ApiStatusAnnotations.copy(element, decl, make));
             method = make.MethodDef(
                 make.Modifiers(flags, anno),
                 names.fromString(methodName),
@@ -287,12 +291,14 @@ public final class AccessorMutator {
             );
             JCStatement assign = make.Exec(make.Assign(
                 receiver, make.Ident(names.fromString(fieldName))));
+            // A static setter mutates the class, not an instance, so the
+            // this-mutation clause would be a lie there.
+            List<JCAnnotation> anno = isStatic
+                ? contracts.contract(null, false, null)
+                : contracts.contract(null, false, "this");
+            anno = anno.appendList(ApiStatusAnnotations.copy(element, decl, make));
             method = make.MethodDef(
-                // A static setter mutates the class, not an instance, so the
-                // this-mutation clause would be a lie there.
-                make.Modifiers(flags, isStatic
-                    ? contracts.contract(null, false, null)
-                    : contracts.contract(null, false, "this")),
+                make.Modifiers(flags, anno),
                 names.fromString(methodName),
                 make.TypeIdent(TypeTag.VOID),
                 List.nil(),

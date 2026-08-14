@@ -103,13 +103,6 @@ public class GetterVisibilityInspection extends LocalInspectionTool {
     private static final int MAX_OCCURRENCES = 200;
 
     /**
-     * The annotation an author writes to say a public type is not published
-     * surface, which puts it back inside what the reader search can measure.
-     */
-    private static final String API_STATUS_INTERNAL_FQN =
-        "org.jetbrains.annotations.ApiStatus.Internal";
-
-    /**
      * Whether to report an accessor on a type visible outside its project.
      *
      * <p>Off because the reader search is bounded by the project, and every
@@ -178,7 +171,8 @@ public class GetterVisibilityInspection extends LocalInspectionTool {
 
             // Cheaper than the search it guards, and the field's own marker is
             // how one accessor of an otherwise published type is measured.
-            if (!measured && field.getAnnotation(API_STATUS_INTERNAL_FQN) == null) continue;
+            if (!measured
+                && field.getAnnotation(AccessorConstants.API_STATUS_INTERNAL_FQN) == null) continue;
 
             String name = accessorName(effective, field);
             if (declares(target, name)) continue;
@@ -226,7 +220,7 @@ public class GetterVisibilityInspection extends LocalInspectionTool {
      */
     private static boolean markedInternal(@NotNull PsiClass target) {
         for (PsiClass owner = target; owner != null; owner = owner.getContainingClass()) {
-            if (owner.getAnnotation(API_STATUS_INTERNAL_FQN) != null) return true;
+            if (owner.getAnnotation(AccessorConstants.API_STATUS_INTERNAL_FQN) != null) return true;
         }
         return false;
     }

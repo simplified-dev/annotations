@@ -19,14 +19,33 @@ import java.util.List;
  */
 public final class AccessorConstants {
 
+    /** The type every marking in the JetBrains family is nested in, as written. */
+    public static final String JETBRAINS_OWNER = "org.jetbrains.annotations.";
+
     public static final String GETTER_FQN = "dev.simplified.annotations.Getter";
     public static final String SETTER_FQN = "dev.simplified.annotations.Setter";
     public static final String LAZY_FQN = "dev.simplified.annotations.Lazy";
-    public static final String NOT_NULL_FQN = "org.jetbrains.annotations.NotNull";
-    public static final String NULLABLE_FQN = "org.jetbrains.annotations.Nullable";
+    public static final String NOT_NULL_FQN = JETBRAINS_OWNER + "NotNull";
+    public static final String NULLABLE_FQN = JETBRAINS_OWNER + "Nullable";
 
-    private AccessorConstants() {
-    }
+    /** The type every marking in the family is nested in, as written. */
+    public static final String API_STATUS_OWNER = "ApiStatus";
+
+    /**
+     * What any marking in the family is called once resolved. The whole family
+     * travels from a field onto the accessor generated from it, since the
+     * private field is not the thing a consumer can reach.
+     */
+    public static final String API_STATUS_PREFIX = JETBRAINS_OWNER + API_STATUS_OWNER + ".";
+
+    /**
+     * The marking an author writes to say a member is not published surface,
+     * which is the one member of its family that says so - experimental or
+     * obsolete surface is still surface.
+     */
+    public static final String API_STATUS_INTERNAL_FQN = API_STATUS_PREFIX + "Internal";
+
+    private AccessorConstants() { }
 
     /**
      * The access modifier keyword the annotation asks for.
