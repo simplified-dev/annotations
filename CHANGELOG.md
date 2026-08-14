@@ -11,8 +11,72 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
 
 ## [2.5.1]
 
+### Added
+
+- **A field's `@ApiStatus` markings travel onto the accessors generated from it.** The field is
+  private, so it was never the member a consumer could reach - the generated accessor is, and it
+  carried nothing, so an author could mark a value internal or experimental while every reader,
+  and every tool that reads a marking, still saw ordinary public surface. The whole family travels
+  rather than the one member that names it, and setters travel with getters, since both are
+  reachable and both are surface. Written trees are copied rather than rebuilt so an argument
+  survives: `@ApiStatus.AvailableSince` declares no default for its value, and a copy that dropped
+  arguments would emit a member javac rejects rather than merely losing information. A marking
+  written without its enclosing name does not travel - the family is nested, so it can be imported
+  directly and written bare, and settling that case would mean resolving every annotation on every
+  field; the processor and the editor decline it alike, so the two agree on what a generated
+  member carries.
+
+### Changed
+
+- **A type-level `@Getter` / `@Setter` no longer fans out over static fields** - *breaking*.
+  Annotating a class asked for an accessor on every field it declared, static ones included, so
+  each constant in the class published a static accessor as a side effect of annotating the class.
+  The first consumer swept for it carried a dozen of them and read none anywhere. A static field
+  holds the class's own state rather than any instance's - the rule Lombok already applies - so a
+  blanket request written across the class now passes it by. Writing the annotation on the field
+  is how a static accessor is asked for, and that route still mints one, so nothing that wants the
+  shape loses it. The rejection is silent, matching the rule already governing a `final` field
+  under a type-level `@Setter`: fanning out over a class is a blanket request rather than a claim
+  about any one field.
+- **The accessor-width report is bounded to types whose readers the project holds.** The reader
+  search runs over the project, so on a type visible outside one it cannot tell an accessor
+  nothing reads from an accessor something depends on - and every narrowing it offers, to the
+  package, to subclasses, or away entirely, removes reachability a consumer elsewhere may be
+  using. The report now stays quiet on a type reachable from outside: public the whole way out, or
+  protected inside one that is, since a subclass in another artifact reaches a protected nested
+  type. Two things bring such a type back into range - `@ApiStatus.Internal` written on it, on a
+  type enclosing it, or on the field itself, and a *Report accessors on types visible outside
+  their project* option for a project that publishes nothing. The promotion trigger is left
+  unbounded on purpose: it replaces hand-written accessors with generated ones of the same name
+  and width, so it removes no reachability and needs no bound.
+- **The annotation-misuse inspections moved into a Misuse subgroup.** Nineteen inspections sat in
+  one flat list and eleven of them answered the same question - whether an annotation is written
+  somewhere it cannot work - so reaching the ones that report on code rather than on annotation
+  placement meant reading past all eleven. Those now sit under *Simplified Annotations > Misuse*,
+  each having dropped *misuse* from its own name, since the heading already says what kind of
+  check it is. What stays at the top level is what is not about placement: the two resource-path
+  checks, the two contract checks, the duplicate-key check, the accessor-width check and the two
+  hand-written-equality checks. Per-inspection severity and enablement carry over untouched, since
+  those key on the short name rather than on the group.
+
 ### Fixed
 
+- **The accessor-width search no longer races itself across files.** The search deciding how far
+  an accessor is read hands the platform a processor, and the platform runs it over several files
+  at once; it collected into a plain list and tested its overflow ceiling by re-reading that
+  list's size. Only one of the two failure directions was visible - a corrupt append threw out of
+  the search and aborted the inspection for whichever file was being analysed, which at least left
+  a stack trace, while a lost update did not throw at all: it dropped a reader, and the reach came
+  back narrower than the truth, so the report offered to cut a member something really does read.
+  The symptom of the silent half is that asking the same file twice gives different answers.
+- **A synthesis pass no longer resolves every annotation it walks past.** Reading an annotation's
+  qualified name resolves its name reference, and a resolve started inside an augment or
+  inferred-annotation provider runs while the platform already holds the class being augmented -
+  the name lookup consults that class's nested types before its imports, the nested-type lookup is
+  augment-aware, and so the resolve can re-enter the provider that started it. Every such read now
+  passes a written-simple-name test first, which costs no resolution and rejects nothing the
+  qualified-name test would have accepted, since a qualified name ends with the reference's own
+  name either way.
 - **The editor no longer reports a generated constructor's fields as uninitialized.** A
   `@RequiredArgsConstructor` / `@AllArgsConstructor` / `@BuilderArgsConstructor` /
   `@ClassBuilder` target marked every `final` field with no initializer
