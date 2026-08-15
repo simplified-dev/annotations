@@ -121,6 +121,8 @@ public class AssignViaParityTest extends LightJavaCodeInsightFixtureTestCase {
                 boolean clearable() default false;
                 boolean compute() default false;
                 boolean append() default false;
+                boolean removable() default false;
+                String key() default "";
             }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/AssignVia.java",

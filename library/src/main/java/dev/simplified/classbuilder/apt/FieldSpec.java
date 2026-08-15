@@ -100,6 +100,13 @@ public final class FieldSpec {
     public final boolean clearable;                 // @Collector(clearable = true) - clear() method
     public final boolean compute;                   // @Collector(compute = true) - maps only, putIfAbsent(K, Supplier<V>)
     public final boolean append;                    // @Collector(append = true) - bulk setters add rather than replace
+    public final boolean removable;                 // @Collector(removable = true) - single-element remove
+    /**
+     * The no-argument method named by {@code @Collector(key)}, called on the map's
+     * value type to supply each entry's key, or {@code null} when the put takes a
+     * key of its own.
+     */
+    public final String keyMethod;
     public final boolean ignored;                   // @BuilderIgnore or listed in @ClassBuilder.exclude
     public final boolean lazy;                       // @Lazy: storage rewritten to Lazy<T>, getter synthesised
     /**
@@ -172,6 +179,8 @@ public final class FieldSpec {
         this.singularName = b.singularName;
         this.clearable = b.clearable;
         this.append = b.append;
+        this.removable = b.removable;
+        this.keyMethod = b.keyMethod;
         this.compute = b.compute;
         this.ignored = b.ignored;
         this.lazy = b.lazy;
@@ -352,7 +361,8 @@ public final class FieldSpec {
             lookup.stringAttr(written, "add", null),
             lookup.stringAttr(written, "put", null),
             lookup.stringAttr(written, "compute", null),
-            lookup.stringAttr(written, "clear", null));
+            lookup.stringAttr(written, "clear", null),
+            lookup.stringAttr(written, "remove", null));
     }
 
     /**
@@ -446,6 +456,9 @@ public final class FieldSpec {
         b.clearable = lookup.booleanAttr(owner, "dev.simplified.annotations.Collector", "clearable", false);
         b.compute = lookup.booleanAttr(owner, "dev.simplified.annotations.Collector", "compute", false);
         b.append = lookup.booleanAttr(owner, "dev.simplified.annotations.Collector", "append", false);
+        b.removable = lookup.booleanAttr(owner, "dev.simplified.annotations.Collector", "removable", false);
+        String key = lookup.stringAttr(owner, "dev.simplified.annotations.Collector", "key", "");
+        b.keyMethod = key.isEmpty() ? null : key;
         String written = lookup.stringAttr(owner, "dev.simplified.annotations.Collector",
             "singularMethodName", "");
         b.singularName = written.isEmpty() ? NamePattern.singularSubject(b.name) : written;
@@ -641,7 +654,8 @@ public final class FieldSpec {
         String collectionElement, mapKey, mapValue;
         boolean formattable;
         String negateName;
-        boolean collector, singular, clearable, compute, append;
+        boolean collector, singular, clearable, compute, append, removable;
+        String keyMethod;
         String singularName;
         boolean ignored, lazy, seed, builderDefault, builderDefaultExplicit;
         String sourceInitializer, defaultProvider;

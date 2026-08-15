@@ -24,8 +24,8 @@ import java.lang.annotation.Target;
  * <p>A pattern contains exactly one {@code {}} placeholder, which expands to the
  * name the setter is built from - the field name for {@link #set} and
  * {@link #clear}, the {@link Negate} stem for the inverse {@link #flag}, and the
- * {@link Collector} singular for {@link #add}, {@link #put}, and
- * {@link #compute}. The expansion is capitalised unless the placeholder opens
+ * {@link Collector} singular for {@link #add}, {@link #put}, {@link #compute}
+ * and {@link #remove}. The expansion is capitalised unless the placeholder opens
  * the pattern, which is what makes {@code {}} yield {@code animated} and
  * {@code is{}} yield {@code isAnimated}. Because the placeholder may sit
  * anywhere, a pattern expresses a suffix ({@code {}Value}) or a wrapped form
@@ -105,5 +105,10 @@ public @interface SetterNames {
 
     /** The {@link Collector} clear on a collection or map field. */
     @NotNull String clear() default INHERIT;
+
+    /**
+     * The {@link Collector} single-element remove on a collection or map field.
+     */
+    @NotNull String remove() default INHERIT;
 
 }

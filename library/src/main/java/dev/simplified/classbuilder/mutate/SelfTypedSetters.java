@@ -95,6 +95,7 @@ final class SelfTypedSetters {
                     if (field.singular && field.setters.emitsAdd()) out.append(singularCollectionAdd(field));
                 }
                 if (field.clearable && field.setters.emitsClear()) out.append(singularClear(field));
+                if (field.removable && field.setters.emitsRemove()) out.append(singularRemove(field));
             }
         } else if (field.isString && field.formattable) {
             out.append(plainSetter(field));
@@ -421,23 +422,57 @@ final class SelfTypedSetters {
             withReplacedMark(field, List.of(assignFresh, returnSelf())));
     }
 
-    /** {@code B putEntry(K key, V value)} - put one entry into the existing map. */
+    /**
+     * {@code B putEntry(K key, V value)} - put one entry into the existing map,
+     * or {@code B putEntry(V value)} keying on {@code value.<key>()} under
+     * {@code @Collector(key)}. Mirrors {@link FieldMutators#singularMapPut}.
+     */
     private JCMethodDecl singularMapPut(FieldSpec field) {
         String putName = field.setters.putName(field.singularName);
-        JCExpression keyType = types.parseType(field.mapKey);
         JCExpression valueType = types.parseType(field.mapValue);
-        JCVariableDecl keyParam = param("key", keyType);
         JCVariableDecl valueParam = param("value", valueType);
+        JCExpression keyArgument = field.keyMethod == null
+            ? make.Ident(names.fromString("key"))
+            : make.Apply(List.nil(),
+                make.Select(make.Ident(names.fromString("value")),
+                    names.fromString(field.keyMethod)),
+                List.nil());
         JCStatement put = make.Exec(make.Apply(
             List.nil(),
             make.Select(
                 make.Select(make.Ident(names._this), names.fromString(field.name)),
                 names.fromString("put")),
-            List.of(make.Ident(names.fromString("key")),
-                make.Ident(names.fromString("value")))
+            List.of(keyArgument, make.Ident(names.fromString("value")))
         ));
+        if (field.keyMethod != null) {
+            return method(putName, List.of(valueParam), List.of(put, returnSelf()));
+        }
+        JCVariableDecl keyParam = param("key", types.parseType(field.mapKey));
         return method(putName, List.of(keyParam, valueParam),
             List.of(put, returnSelf()));
+    }
+
+    /**
+     * {@code B removeEntry(T entry)} or {@code B removeEntry(K key)} - one
+     * element or entry back out. Mirrors {@link FieldMutators#singularRemove},
+     * cast to {@link Object} on a collection for the reason given there.
+     */
+    private JCMethodDecl singularRemove(FieldSpec field) {
+        String removeName = field.setters.removeName(field.singularName);
+        String subjectType = field.isMap ? field.mapKey : field.collectionElement;
+        JCVariableDecl subject = param(field.singularName, types.parseType(subjectType));
+        JCExpression argument = make.Ident(names.fromString(field.singularName));
+        if (!field.isMap) {
+            argument = make.TypeCast(types.qualIdent("java.lang.Object"), argument);
+        }
+        JCStatement remove = make.Exec(make.Apply(
+            List.nil(),
+            make.Select(
+                make.Select(make.Ident(names._this), names.fromString(field.name)),
+                names.fromString("remove")),
+            List.of(argument)
+        ));
+        return method(removeName, List.of(subject), List.of(remove, returnSelf()));
     }
 
     /**

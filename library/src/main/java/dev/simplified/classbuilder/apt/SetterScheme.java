@@ -20,6 +20,7 @@ import dev.simplified.annotations.NamingStyle;
  * @param put pattern for the single-entry map put
  * @param compute pattern for the map put-if-absent
  * @param clear pattern for the collection or map clear
+ * @param remove pattern for the collection or map single-element remove
  */
 public record SetterScheme(
     String set,
@@ -27,7 +28,8 @@ public record SetterScheme(
     String add,
     String put,
     String compute,
-    String clear
+    String clear,
+    String remove
 ) {
 
     /**
@@ -42,23 +44,25 @@ public record SetterScheme(
      * @param put the written {@code put} pattern, or {@code null}
      * @param compute the written {@code compute} pattern, or {@code null}
      * @param clear the written {@code clear} pattern, or {@code null}
+     * @param remove the written {@code remove} pattern, or {@code null}
      * @return the resolved scheme
      */
     public static SetterScheme resolve(NamingStyle style, String set, String flag, String add,
-                                       String put, String compute, String clear) {
+                                       String put, String compute, String clear, String remove) {
         return new SetterScheme(
             NamePattern.inherit(set, style.set()),
             NamePattern.inherit(flag, style.flag()),
             NamePattern.inherit(add, style.add()),
             NamePattern.inherit(put, style.put()),
             NamePattern.inherit(compute, style.compute()),
-            NamePattern.inherit(clear, style.clear())
+            NamePattern.inherit(clear, style.clear()),
+            NamePattern.inherit(remove, style.remove())
         );
     }
 
     /** Resolves a scheme carrying nothing but the style's own patterns. */
     public static SetterScheme of(NamingStyle style) {
-        return resolve(style, null, null, null, null, null, null);
+        return resolve(style, null, null, null, null, null, null, null);
     }
 
     /**
@@ -77,17 +81,19 @@ public record SetterScheme(
      * @param put the written {@code put} pattern, or {@code null}
      * @param compute the written {@code compute} pattern, or {@code null}
      * @param clear the written {@code clear} pattern, or {@code null}
+     * @param remove the written {@code remove} pattern, or {@code null}
      * @return the resolved scheme for that slot
      */
     public static SetterScheme override(SetterScheme base, String set, String flag, String add,
-                                        String put, String compute, String clear) {
+                                        String put, String compute, String clear, String remove) {
         return new SetterScheme(
             NamePattern.inherit(set, base.set()),
             NamePattern.inherit(flag, base.flag()),
             NamePattern.inherit(add, base.add()),
             NamePattern.inherit(put, base.put()),
             NamePattern.inherit(compute, base.compute()),
-            NamePattern.inherit(clear, base.clear())
+            NamePattern.inherit(clear, base.clear()),
+            NamePattern.inherit(remove, base.remove())
         );
     }
 
@@ -123,6 +129,11 @@ public record SetterScheme(
     /** Whether the collection or map clear is generated. */
     public boolean emitsClear() {
         return NamePattern.emits(clear);
+    }
+
+    /** Whether the collection or map single-element remove is generated. */
+    public boolean emitsRemove() {
+        return NamePattern.emits(remove);
     }
 
     /**
@@ -196,6 +207,16 @@ public record SetterScheme(
      */
     public String clearName(String subject) {
         return emitsClear() ? NamePattern.expand(clear, subject) : null;
+    }
+
+    /**
+     * Name of the single-element remove for a collection or map field.
+     *
+     * @param subject the collector singular
+     * @return the method name, or {@code null} when the role is suppressed
+     */
+    public String removeName(String subject) {
+        return emitsRemove() ? NamePattern.expand(remove, subject) : null;
     }
 
 }

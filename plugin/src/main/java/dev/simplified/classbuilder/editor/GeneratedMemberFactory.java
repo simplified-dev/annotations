@@ -825,6 +825,7 @@ public final class GeneratedMemberFactory {
                 if (field.singular && field.setters.emitsAdd()) out.add(singularCollectionAdd(ctx, field));
             }
             if (field.clearable && field.setters.emitsClear()) out.add(singularClear(ctx, field));
+            if (field.removable && field.setters.emitsRemove()) out.add(singularRemove(ctx, field));
         } else if (field.isString && field.formattable) {
             out.add(plainSetter(ctx, field));
             out.add(stringFormattable(ctx, field));
@@ -1001,7 +1002,12 @@ public final class GeneratedMemberFactory {
         return m;
     }
 
-    /** {@code Builder putEntry(K key, V value)} - put a single entry into the existing map. */
+    /**
+     * {@code Builder putEntry(K key, V value)} - put a single entry into the
+     * existing map, or {@code Builder putEntry(V value)} when
+     * {@code @Collector(key)} says the value supplies its own key. The one
+     * collector opt-in that moves a signature, so the editor has to follow it.
+     */
     private static PsiMethod singularMapPut(SetterCtx ctx, PsiFieldShape field) {
         String name = field.setters.putName(field.singularName);
         PsiType keyType = field.mapKey != null
@@ -1011,8 +1017,24 @@ public final class GeneratedMemberFactory {
             ? field.mapValue
             : ctx.elements.createTypeFromText("java.lang.Object", ctx.target);
         LightMethodBuilder m = newSetter(ctx, field, name);
-        m.addParameter(buildParam(m, "key", keyType, false, primaryNullability(field)));
+        if (field.keyMethod == null) {
+            m.addParameter(buildParam(m, "key", keyType, false, primaryNullability(field)));
+        }
         m.addParameter(buildParam(m, "value", valueType, false, primaryNullability(field)));
+        return m;
+    }
+
+    /**
+     * {@code Builder removeEntry(T entry)} on a collection or
+     * {@code Builder removeEntry(K key)} on a map - one element or entry back
+     * out. Gated on {@code @Collector(removable = true)}.
+     */
+    private static PsiMethod singularRemove(SetterCtx ctx, PsiFieldShape field) {
+        String name = field.setters.removeName(field.singularName);
+        PsiType subject = field.isMap ? field.mapKey : field.collectionElement;
+        if (subject == null) subject = ctx.elements.createTypeFromText("java.lang.Object", ctx.target);
+        LightMethodBuilder m = newSetter(ctx, field, name);
+        m.addParameter(buildParam(m, field.singularName, subject, false, primaryNullability(field)));
         return m;
     }
 

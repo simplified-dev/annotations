@@ -17,6 +17,7 @@ import com.intellij.psi.PsiPrimitiveType;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypes;
 import com.intellij.psi.util.InheritanceUtil;
+import com.intellij.psi.util.PsiUtil;
 import dev.simplified.annotations.SetterNames;
 import dev.simplified.classbuilder.apt.NamePattern;
 import org.jetbrains.annotations.NotNull;
@@ -40,6 +41,9 @@ import java.util.Map;
  *       limit is not meaningful</li>
  *   <li>{@code @BuildFlag(min/max = N)} on a field a numeric range says
  *       nothing about</li>
+ *   <li>{@code @Collector(key = "...")} on a field that is not a map, without
+ *       the put it reshapes, beside {@code compute}, or naming no no-argument
+ *       method on the map's value type</li>
  *   <li>{@code @BuildFlag} on a method that is not an interface target's
  *       accessor, where nothing will read it</li>
  *   <li>a {@code @SetterNames} pattern that cannot expand to a Java
@@ -110,6 +114,7 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
                 }
 
                 checkBuildFlag(holder, field.getAnnotation(BUILD_FLAG_FQN), type);
+                checkCollectorKey(holder, field.getAnnotation(COLLECTOR_FQN), type);
             }
 
             /**
@@ -163,6 +168,59 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
                     + "or Optional<Number>",
                 ProblemHighlightType.WARNING);
         }
+    }
+
+    /**
+     * Reports a {@code @Collector(key)} the field cannot support, mirroring the
+     * processor's own rejections.
+     *
+     * <p>It earns the check that {@code @BuilderDefault(provider)} does not,
+     * because this one <b>moves a signature</b>: the put drops its key parameter,
+     * so a name that resolves to nothing leaves the editor offering a method the
+     * build refuses to emit.
+     *
+     * @param holder sink for the diagnostics
+     * @param collector the annotation, or null when absent
+     * @param type the field's declared type
+     */
+    private static void checkCollectorKey(@NotNull ProblemsHolder holder,
+                                          @Nullable PsiAnnotation collector,
+                                          @Nullable PsiType type) {
+        if (collector == null || type == null) return;
+        String key = ClassBuilderConstants.stringAttr(collector, "key", "");
+        if (key.isEmpty()) return;
+        if (!InheritanceUtil.isInheritor(type, "java.util.Map")) {
+            holder.registerProblem(collector,
+                "@Collector(key) derives a map entry's key from its value, and this field is not "
+                    + "a map",
+                ProblemHighlightType.GENERIC_ERROR);
+            return;
+        }
+        if (!ClassBuilderConstants.booleanAttr(collector, "singular", false)) {
+            holder.registerProblem(collector,
+                "@Collector(key) reshapes the single-entry put, which this collector does not "
+                    + "emit - add singular = true",
+                ProblemHighlightType.GENERIC_ERROR);
+            return;
+        }
+        if (ClassBuilderConstants.booleanAttr(collector, "compute", false)) {
+            holder.registerProblem(collector,
+                "@Collector(key) cannot be combined with compute - a key read off a value the "
+                    + "put-if-absent has not created yet is nothing to generate",
+                ProblemHighlightType.GENERIC_ERROR);
+            return;
+        }
+        PsiType value = PsiUtil.substituteTypeParameter(type, "java.util.Map", 1, false);
+        if (!(value instanceof PsiClassType valueClass)) return;
+        PsiClass resolved = valueClass.resolve();
+        if (resolved == null) return;
+        for (PsiMethod method : resolved.findMethodsByName(key, true)) {
+            if (method.getParameterList().isEmpty()) return;
+        }
+        holder.registerProblem(collector,
+            "@Collector(key = \"" + key + "\") names no no-argument method on "
+                + resolved.getName() + ", this map's value type",
+            ProblemHighlightType.GENERIC_ERROR);
     }
 
     /**

@@ -101,6 +101,17 @@ public final class PsiFieldShape {
      */
     public final boolean append;
 
+    /** True when the field carries {@code @Collector(removable = true)}. */
+    public final boolean removable;
+
+    /**
+     * The no-argument method named by {@code @Collector(key)}, called on the
+     * map's value type to supply each entry's key, or {@code null} when the put
+     * takes a key of its own. Unlike the other collector opt-ins this one moves a
+     * signature - the put drops its key parameter - so the editor has to read it.
+     */
+    public final String keyMethod;
+
     /**
      * True when the field carries {@code @BuildFlag(nonNull = true)}. Drives the
      * editor-side emission of {@code @NotNull} on the matching setter parameter
@@ -178,6 +189,8 @@ public final class PsiFieldShape {
         this.clearable = b.clearable;
         this.append = b.append;
         this.compute = b.compute;
+        this.removable = b.removable;
+        this.keyMethod = b.keyMethod;
         this.nonNullByBuildFlag = b.nonNullByBuildFlag;
         this.lazy = b.lazy;
         this.seed = b.seed;
@@ -314,8 +327,8 @@ public final class PsiFieldShape {
         PsiType collectionElement, mapKey, mapValue;
         boolean nullable, notNull, formattable;
         String negateName;
-        boolean collector, singular, clearable, compute, append;
-        String singularName;
+        boolean collector, singular, clearable, compute, append, removable;
+        String singularName, keyMethod;
         boolean nonNullByBuildFlag;
         boolean lazy;
         boolean seed;

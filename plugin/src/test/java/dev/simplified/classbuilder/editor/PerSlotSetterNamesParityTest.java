@@ -85,6 +85,7 @@ public class PerSlotSetterNamesParityTest extends LightJavaCodeInsightFixtureTes
                 String put() default INHERIT;
                 String compute() default INHERIT;
                 String clear() default INHERIT;
+                String remove() default INHERIT;
             }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/BuilderNames.java",
@@ -125,6 +126,8 @@ public class PerSlotSetterNamesParityTest extends LightJavaCodeInsightFixtureTes
                 boolean clearable() default false;
                 boolean compute() default false;
                 boolean append() default false;
+                boolean removable() default false;
+                String key() default "";
             }
             """);
     }

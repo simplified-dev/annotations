@@ -362,10 +362,14 @@ final class BuilderEmitter {
 
             if (f.singular && f.setters.emitsPut()) {
                 String putName = f.setters.putName(f.singularName);
-                emitContract("_, _ -> this", false, "this");
+                boolean derived = f.keyMethod != null;
+                emitContract(derived ? "_ -> this" : "_, _ -> this", false, "this");
                 body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ').append(putName)
-                    .append('(').append(notNull()).append(k).append(" key, ").append(v).append(" value) {\n");
-                body.append("        this.").append(f.name).append(".put(key, value);\n");
+                    .append('(');
+                if (!derived) body.append(notNull()).append(k).append(" key, ");
+                body.append(v).append(" value) {\n");
+                body.append("        this.").append(f.name).append(".put(")
+                    .append(derived ? "value." + f.keyMethod + "()" : "key").append(", value);\n");
                 body.append("        return this;\n    }\n\n");
             }
 
@@ -383,6 +387,15 @@ final class BuilderEmitter {
                 emitContract("-> this", false, "this");
                 body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ').append(clear).append("() {\n");
                 body.append("        this.").append(f.name).append(".clear();\n");
+                body.append("        return this;\n    }\n\n");
+            }
+
+            if (f.removable && f.setters.emitsRemove()) {
+                String removeName = f.setters.removeName(f.singularName);
+                emitContract("_ -> this", false, "this");
+                body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ').append(removeName)
+                    .append('(').append(notNull()).append(k).append(' ').append(f.singularName).append(") {\n");
+                body.append("        this.").append(f.name).append(".remove(").append(f.singularName).append(");\n");
                 body.append("        return this;\n    }\n\n");
             }
             return;
@@ -420,6 +433,19 @@ final class BuilderEmitter {
             emitContract("-> this", false, "this");
             body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ').append(clear).append("() {\n");
             body.append("        this.").append(f.name).append(".clear();\n");
+            body.append("        return this;\n    }\n\n");
+        }
+
+        // Cast to Object for the reason FieldMutators.singularRemove gives: a
+        // List<Integer> would otherwise bind remove(int) and take out the
+        // element at that index rather than the one equal to it.
+        if (f.removable && f.setters.emitsRemove()) {
+            String removeName = f.setters.removeName(f.singularName);
+            emitContract("_ -> this", false, "this");
+            body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ').append(removeName)
+                .append('(').append(notNull()).append(elem).append(' ').append(f.singularName).append(") {\n");
+            body.append("        this.").append(f.name).append(".remove((").append(imports.use("java.lang.Object"))
+                .append(") ").append(f.singularName).append(");\n");
             body.append("        return this;\n    }\n\n");
         }
     }

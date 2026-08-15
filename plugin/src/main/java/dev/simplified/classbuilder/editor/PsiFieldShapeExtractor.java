@@ -193,6 +193,9 @@ final class PsiFieldShapeExtractor {
             b.clearable = booleanAttr(collector, "clearable", false);
             b.append = booleanAttr(collector, "append", false);
             b.compute = booleanAttr(collector, "compute", false);
+            b.removable = booleanAttr(collector, "removable", false);
+            String key = stringAttr(collector, "key", "");
+            b.keyMethod = key.isEmpty() ? null : key;
             String methodName = stringAttr(collector, "singularMethodName", "");
             b.singularName = methodName.isEmpty() ? NamePattern.singularSubject(name) : methodName;
         }

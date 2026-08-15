@@ -64,6 +64,8 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
                 boolean singular() default false;
                 boolean clearable() default false;
                 boolean compute() default false;
+                boolean removable() default false;
+                String key() default "";
             }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/BuildFlag.java",
@@ -253,6 +255,71 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
             }
             """);
         assertFalse(hasErrorContaining("@BuildFlag(min/max = ...)"));
+    }
+
+    // ------------------------------------------------------------------
+    // @Collector(key) - the one collector opt-in that moves a signature
+    // ------------------------------------------------------------------
+
+    public void testCollectorKeyOnANonMap_flagged() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.Collector;
+            import java.util.List;
+            public class Foo {
+                @Collector(singular = true, key = "toString") List<String> tags;
+            }
+            """);
+        assertTrue(hasErrorContaining("this field is not a map"));
+    }
+
+    public void testCollectorKeyWithoutSingular_flagged() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.Collector;
+            import java.util.Map;
+            public class Foo {
+                @Collector(key = "toString") Map<String, String> entries;
+            }
+            """);
+        assertTrue(hasErrorContaining("add singular = true"));
+    }
+
+    public void testCollectorKeyBesideCompute_flagged() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.Collector;
+            import java.util.Map;
+            public class Foo {
+                @Collector(singular = true, compute = true, key = "toString")
+                Map<String, String> entries;
+            }
+            """);
+        assertTrue(hasErrorContaining("cannot be combined with compute"));
+    }
+
+    public void testCollectorKeyNamingNoSuchMethod_flagged() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.Collector;
+            import java.util.Map;
+            public class Foo {
+                @Collector(singular = true, key = "nope") Map<String, String> entries;
+            }
+            """);
+        assertTrue(hasErrorContaining("names no no-argument method on String"));
+    }
+
+    public void testCollectorKeyNamingARealMethod_clean() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.Collector;
+            import java.util.Map;
+            public class Foo {
+                @Collector(singular = true, key = "toString") Map<String, Integer> entries;
+            }
+            """);
+        assertFalse(hasErrorContaining("@Collector(key"));
     }
 
     /** An unwritten range is the annotation's own infinite default, not a bound. */

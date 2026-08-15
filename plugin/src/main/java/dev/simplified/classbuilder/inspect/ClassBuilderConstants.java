@@ -100,7 +100,8 @@ public final class ClassBuilderConstants {
     public static final @NotNull String ATTR_FACTORY_METHOD = "factoryMethod";
 
     /** Attribute names of {@code @SetterNames}, in declaration order. */
-    public static final @NotNull String[] SETTER_ROLES = {"set", "flag", "add", "put", "compute", "clear"};
+    public static final @NotNull String[] SETTER_ROLES =
+        {"set", "flag", "add", "put", "compute", "clear", "remove"};
 
     /** Attribute names of {@code @BuilderNames}, in declaration order. */
     public static final @NotNull String[] BUILDER_ROLES = {"type", "builder", "build", "from", "toBuilder"};
@@ -168,7 +169,8 @@ public final class ClassBuilderConstants {
             writtenStringAttr(setters, "add"),
             writtenStringAttr(setters, "put"),
             writtenStringAttr(setters, "compute"),
-            writtenStringAttr(setters, "clear"));
+            writtenStringAttr(setters, "clear"),
+            writtenStringAttr(setters, "remove"));
     }
 
     /**
@@ -189,7 +191,8 @@ public final class ClassBuilderConstants {
             writtenStringAttr(written, "add"),
             writtenStringAttr(written, "put"),
             writtenStringAttr(written, "compute"),
-            writtenStringAttr(written, "clear"));
+            writtenStringAttr(written, "clear"),
+            writtenStringAttr(written, "remove"));
     }
 
     /**

@@ -42,8 +42,12 @@ import java.util.function.Supplier;
  *     underlying collection or map.</li>
  *   <li>{@link #compute} - (maps only) {@code putEntryIfAbsent(K, Supplier<V>)}
  *     that lazily computes a value when the key is missing.</li>
+ *   <li>{@link #removable} - {@code removeEntry(T)} for collections,
+ *     {@code removeEntry(K)} for maps, taking a single element or key back out.</li>
  *   <li>{@link #append} - makes the bulk setters add to the container instead
  *     of replacing it, so repeated calls accumulate.</li>
+ *   <li>{@link #key} - (maps only) derives each entry's key from the value, so
+ *     the single-entry put takes the value alone.</li>
  * </ul>
  *
  * <p>The put-if-absent form takes a {@link Supplier} rather than a value, which is
@@ -179,5 +183,38 @@ public @interface Collector {
      * identically and differ only in what the second call does.
      */
     boolean append() default false;
+
+    /**
+     * Adds a single-element remove: {@code removeEntry(T)} on a collection and
+     * {@code removeEntry(K)} on a map, taking one element or one key back out
+     * again. Method name derives from {@link #singularMethodName} (or the
+     * defaulted singular form), as the add and put do.
+     *
+     * <p>The collection form removes by value on every element type, including a
+     * {@code List<Integer>} - where {@code remove(int)} would otherwise remove by
+     * index and quietly take out the wrong element.
+     *
+     * <p>Unlike {@link #clearable} this does not discard a declared initializer:
+     * a remove takes one thing out of what the builder has collected, and saying
+     * that the default is gone is what {@code clear} is for.
+     */
+    boolean removable() default false;
+
+    /**
+     * (Maps only) The name of a no-argument method on the map's <b>value</b> type
+     * supplying each entry's key, so the single-entry put takes the value alone -
+     * {@code function(MathFunction)} storing under {@code function.getName()}
+     * rather than {@code putFunction(String, MathFunction)}.
+     *
+     * <p>The method's return type has to supply the map's key type, and both are
+     * checked at the annotation. Requires {@link #singular}, which is the put
+     * this reshapes; empty (the default) leaves the put taking a key and a value.
+     *
+     * <p>Rejected beside {@link #compute}, whose put-if-absent takes a key and a
+     * {@link Supplier} precisely so the value is not created unless it is needed -
+     * and a key read off a value that does not exist yet is a contradiction
+     * rather than a shape to generate.
+     */
+    @NotNull String key() default "";
 
 }

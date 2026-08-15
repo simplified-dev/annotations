@@ -703,6 +703,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         }
         validateSlotNaming(slots, config.setters(), executable, messager);
         validateAssignVia(enclosing, slots, executable, messager);
+        validateCollectorKeys(slots, executable, messager);
 
         if (javacBridge.isEmpty()) {
             messager.printMessage(Diagnostic.Kind.ERROR,
@@ -758,6 +759,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         validateSlotNaming(fields, config.setters(), target, messager);
         validateDefaultProviders(target, fields, messager);
         validateAssignVia(target, fields, target, messager);
+        validateCollectorKeys(fields, target, messager);
 
         if (javacBridge.isEmpty()) {
             messager.printMessage(Diagnostic.Kind.ERROR,
@@ -829,6 +831,84 @@ public class ClassBuilderProcessor extends AbstractProcessor {
                     site);
             }
         }
+    }
+
+    /**
+     * Reports a {@code @Collector(key)} that cannot supply the map it is written
+     * on, at the annotation rather than inside the generated put that would have
+     * called it.
+     *
+     * <p>{@code removable} needs no check of its own: it names nothing, and a
+     * collector already has to be a collection or a map for any of its roles to
+     * exist.
+     *
+     * @param slots the builder's slots
+     * @param fallbackSite where to report when a slot has no element of its own
+     * @param messager sink for diagnostics
+     */
+    private void validateCollectorKeys(List<FieldSpec> slots, Element fallbackSite, Messager messager) {
+        for (FieldSpec slot : slots) {
+            if (slot.keyMethod == null) continue;
+            Element site = slot.element != null ? slot.element : fallbackSite;
+            if (!slot.isMap) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@Collector(key) derives a map entry's key from its value, and '" + slot.name
+                        + "' is not a map",
+                    site);
+                continue;
+            }
+            if (!slot.singular) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@Collector(key = '" + slot.keyMethod + "') reshapes the single-entry put, "
+                        + "which this collector does not emit - add singular = true",
+                    site);
+                continue;
+            }
+            if (slot.compute) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@Collector(key) cannot be combined with compute - the put-if-absent takes a "
+                        + "key and a supplier precisely so the value is not created unless it is "
+                        + "needed, and a key read off a value that does not exist yet is nothing "
+                        + "to generate",
+                    site);
+                continue;
+            }
+            validateKeyMethod(slot, site, messager);
+        }
+    }
+
+    /**
+     * Checks that the named method exists on the map's value type, takes no
+     * arguments and returns something the map's key type accepts. Inherited
+     * members count, a value type routinely declaring its key accessor on a
+     * supertype.
+     */
+    private void validateKeyMethod(FieldSpec slot, Element site, Messager messager) {
+        List<? extends TypeMirror> arguments = slot.type instanceof DeclaredType declared
+            ? declared.getTypeArguments() : List.of();
+        if (arguments.size() < 2) return;
+        TypeMirror valueType = arguments.get(1);
+        if (!(valueType instanceof DeclaredType value)
+            || !(value.asElement() instanceof TypeElement valueElement)) {
+            return;
+        }
+        for (Element member : processingEnv.getElementUtils().getAllMembers(valueElement)) {
+            if (member.getKind() != ElementKind.METHOD) continue;
+            if (!member.getSimpleName().contentEquals(slot.keyMethod)) continue;
+            ExecutableElement method = (ExecutableElement) member;
+            if (!method.getParameters().isEmpty()) continue;
+            if (!suppliesType(method.getReturnType(), arguments.getFirst())) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@Collector(key = '" + slot.keyMethod + "') returns " + method.getReturnType()
+                        + ", which cannot key '" + slot.name + "' on " + arguments.getFirst(),
+                    site);
+            }
+            return;
+        }
+        messager.printMessage(Diagnostic.Kind.ERROR,
+            "@Collector(key = '" + slot.keyMethod + "') names no no-argument method on "
+                + valueElement.getSimpleName() + ", the value type of '" + slot.name + "'",
+            site);
     }
 
     /**
@@ -1280,7 +1360,8 @@ public class ClassBuilderProcessor extends AbstractProcessor {
             lookup.stringAttr(setters, "add", null),
             lookup.stringAttr(setters, "put", null),
             lookup.stringAttr(setters, "compute", null),
-            lookup.stringAttr(setters, "clear", null));
+            lookup.stringAttr(setters, "clear", null),
+            lookup.stringAttr(setters, "remove", null));
     }
 
     /** Reads the nested {@code builder} attribute, on the same inherit-when-unwritten terms. */

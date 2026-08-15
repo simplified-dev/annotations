@@ -147,6 +147,7 @@ public class AnnotationSurfaceTest {
             assertPattern(style, "put", style.put(), true);
             assertPattern(style, "compute", style.compute(), true);
             assertPattern(style, "clear", style.clear(), true);
+            assertPattern(style, "remove", style.remove(), true);
             assertPattern(style, "builderType", style.builderType(), false);
             assertPattern(style, "builderMethod", style.builderMethod(), false);
             assertPattern(style, "buildMethod", style.buildMethod(), false);
@@ -305,6 +306,10 @@ public class AnnotationSurfaceTest {
         assertDefault(Collector.class, "compute", false);
         // Replace is what a setter normally means, so accumulating is opt-in.
         assertDefault(Collector.class, "append", false);
+        assertDefault(Collector.class, "removable", false);
+        // Empty leaves the put taking a key of its own, which is the shape a map
+        // has when nothing says the value already knows its key.
+        assertDefault(Collector.class, "key", "");
     }
 
     @Test
