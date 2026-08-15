@@ -336,9 +336,9 @@ final class FieldMutators {
         return List.of(slotAssign(field, make.Ident(names.fromString(field.name))), returnThis());
     }
 
-    /** Whether the field's declared initializer was captured for reuse as a builder default. */
+    /** Whether anything seeds the slot - a captured initializer or a named provider. */
     private static boolean hasInit(FieldSpec field) {
-        return field.sourceInitializer != null && !field.sourceInitializer.isEmpty();
+        return field.hasDefault();
     }
 
     /** Call to the target's synthesised {@code $default$<field>()} initializer provider. */

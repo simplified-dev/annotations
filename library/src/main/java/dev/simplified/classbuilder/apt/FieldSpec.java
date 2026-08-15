@@ -101,6 +101,12 @@ public final class FieldSpec {
     public final boolean builderDefault;
     /** True only when the field itself carried {@code @BuilderDefault}, not when it inherited the class policy. */
     public final boolean builderDefaultExplicit;
+    /**
+     * The static method named by {@code @BuilderDefault(provider)}, or
+     * {@code null} when none is written. Supplies the slot's default where there
+     * is no initializer to retain, which is every record component.
+     */
+    public final String defaultProvider;
     public final String sourceInitializer;          // copied source text of the field's declared initializer
     public final Set<String> initializerImports;    // type FQNs referenced by sourceInitializer
     // The javac parse-time tree for the initializer (a JCExpression at
@@ -155,6 +161,7 @@ public final class FieldSpec {
         this.seed = b.seed;
         this.builderDefault = b.builderDefault;
         this.builderDefaultExplicit = b.builderDefaultExplicit;
+        this.defaultProvider = b.defaultProvider;
         this.sourceInitializer = b.sourceInitializer;
         this.initializerImports = b.initializerImports == null ? Set.of() : b.initializerImports;
         this.sourceInitializerTree = b.sourceInitializerTree;
@@ -167,6 +174,21 @@ public final class FieldSpec {
     /** Whether this field uses {@code is*} setters (booleans) vs the configured prefix. */
     boolean usesBooleanPrefix() {
         return isBoolean;
+    }
+
+    /**
+     * Whether the slot has a default to seed from - a captured initializer, or a
+     * method named by {@code @BuilderDefault(provider)}.
+     *
+     * <p>One reading for both, because everything downstream of the seeding
+     * treats them identically: the value is fetched through the same
+     * {@code $default$} provider, copied before a {@code @Collector} container's
+     * setters can mutate it, and discarded by a wholesale replace.
+     *
+     * @return whether anything seeds this slot
+     */
+    public boolean hasDefault() {
+        return defaultProvider != null || (sourceInitializer != null && !sourceInitializer.isEmpty());
     }
 
     /**
@@ -408,6 +430,8 @@ public final class FieldSpec {
         if (declaredDefault != null) {
             b.builderDefault = lookup.booleanAttr(declaredDefault, "value", true);
             b.builderDefaultExplicit = b.builderDefault;
+            String provider = lookup.stringAttr(declaredDefault, "provider", "");
+            b.defaultProvider = provider.isEmpty() ? null : provider;
         } else {
             b.builderDefault = classRetainInit;
         }
@@ -463,7 +487,7 @@ public final class FieldSpec {
         boolean collector, singular, clearable, compute, append;
         String singularName;
         boolean ignored, lazy, seed, builderDefault, builderDefaultExplicit;
-        String sourceInitializer;
+        String sourceInitializer, defaultProvider;
         Set<String> initializerImports;
         com.sun.source.tree.Tree sourceInitializerTree;
         String obtainViaMethod, obtainViaField;

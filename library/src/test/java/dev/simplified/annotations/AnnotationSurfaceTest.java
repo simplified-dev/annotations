@@ -244,6 +244,9 @@ public class AnnotationSurfaceTest {
         // Bare @BuilderDefault means "retain", so the opt-out has to be written
         // explicitly as @BuilderDefault(false).
         assertDefault(BuilderDefault.class, "value", true);
+        // Empty means "retain the initializer", which is what a field has and a
+        // record component does not - naming a provider is the opt-in.
+        assertDefault(BuilderDefault.class, "provider", "");
     }
 
     @Test

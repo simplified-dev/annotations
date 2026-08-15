@@ -40,6 +40,8 @@ import javax.lang.model.element.Modifier;
 import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.TypeMirror;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 import java.io.IOException;
@@ -743,6 +745,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         BuilderConfig config = extractConfig(target);
         validateNaming(target, config, messager);
         List<FieldSpec> fields = collectFields(target, config);
+        validateDefaultProviders(target, fields, messager);
 
         if (javacBridge.isEmpty()) {
             messager.printMessage(Diagnostic.Kind.ERROR,
@@ -763,6 +766,110 @@ public class ClassBuilderProcessor extends AbstractProcessor {
                     + "; mutation requires the annotated element to have a source declaration.",
                 target);
         }
+    }
+
+    /**
+     * Reports every way a {@code @BuilderDefault(provider)} cannot supply the
+     * slot it is written on, at the annotation rather than inside the generated
+     * body that would have called it.
+     *
+     * <p>Being checkable at the declaration is the whole argument for naming a
+     * method instead of carrying a source string: a missing, non-static or
+     * wrongly-typed provider is an error on a line the author wrote.
+     *
+     * @param target the annotated type
+     * @param fields the builder-visible fields
+     * @param messager sink for diagnostics
+     */
+    private void validateDefaultProviders(TypeElement target, List<FieldSpec> fields,
+                                          Messager messager) {
+        for (FieldSpec field : fields) {
+            if (field.defaultProvider == null) continue;
+            Element site = field.element != null ? field.element : target;
+            if (!field.builderDefault) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@BuilderDefault(value = false) asks for no default at all, and provider = '"
+                        + field.defaultProvider + "' supplies one - keep whichever was meant",
+                    site);
+                continue;
+            }
+            ExecutableElement provider = findNullaryMethod(target, field.defaultProvider);
+            if (provider == null) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@BuilderDefault(provider = '" + field.defaultProvider + "') names no "
+                        + "no-argument method on " + target.getSimpleName(),
+                    site);
+                continue;
+            }
+            if (!provider.getModifiers().contains(Modifier.STATIC)) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@BuilderDefault(provider = '" + field.defaultProvider + "') names an instance "
+                        + "method - the default is read when the builder is created, before any "
+                        + target.getSimpleName() + " exists to read it from",
+                    site);
+                continue;
+            }
+            if (!suppliesType(provider.getReturnType(), field.type)) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@BuilderDefault(provider = '" + field.defaultProvider + "') returns "
+                        + provider.getReturnType() + ", which does not supply '" + field.name
+                        + "' of type " + field.typeDisplay,
+                    site);
+            }
+        }
+    }
+
+    /** The target's own no-argument method of that name, or {@code null}. */
+    private static ExecutableElement findNullaryMethod(TypeElement target, String name) {
+        for (Element enclosed : target.getEnclosedElements()) {
+            if (enclosed.getKind() != ElementKind.METHOD) continue;
+            if (!enclosed.getSimpleName().contentEquals(name)) continue;
+            ExecutableElement method = (ExecutableElement) enclosed;
+            if (method.getParameters().isEmpty()) return method;
+        }
+        return null;
+    }
+
+    /**
+     * Whether a provider's return type can seed a slot of the given type.
+     *
+     * <p>Where either side mentions a type variable the comparison drops to
+     * erasures, and it has to. A generic target's provider declares its own
+     * parameters - a {@code static} method cannot name the class's - so
+     * {@code static <T> List<T> none()} seeding a {@code List<V>} component is
+     * two distinct variables that no assignability test relates, while the call
+     * javac ends up attributing infers one from the other and is perfectly
+     * legal. The erasure comparison still catches the mistake worth catching
+     * here, a provider of an unrelated kind, and javac catches the rest on the
+     * generated call.
+     */
+    private boolean suppliesType(TypeMirror provided, TypeMirror slot) {
+        var types = processingEnv.getTypeUtils();
+        if (mentionsTypeVariable(provided) || mentionsTypeVariable(slot)) {
+            return types.isAssignable(types.erasure(provided), types.erasure(slot));
+        }
+        return types.isAssignable(provided, slot);
+    }
+
+    /** Whether a type is, or is parameterised by, a type variable. */
+    private static boolean mentionsTypeVariable(TypeMirror type) {
+        return switch (type.getKind()) {
+            case TYPEVAR -> true;
+            case ARRAY -> mentionsTypeVariable(((javax.lang.model.type.ArrayType) type).getComponentType());
+            case WILDCARD -> {
+                var wildcard = (javax.lang.model.type.WildcardType) type;
+                TypeMirror bound = wildcard.getExtendsBound() != null
+                    ? wildcard.getExtendsBound() : wildcard.getSuperBound();
+                yield bound != null && mentionsTypeVariable(bound);
+            }
+            case DECLARED -> {
+                for (TypeMirror argument : ((DeclaredType) type).getTypeArguments()) {
+                    if (mentionsTypeVariable(argument)) yield true;
+                }
+                yield false;
+            }
+            default -> false;
+        };
     }
 
     /**

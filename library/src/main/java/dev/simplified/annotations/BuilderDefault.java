@@ -1,5 +1,7 @@
 package dev.simplified.annotations;
 
+import org.jetbrains.annotations.NotNull;
+
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -16,7 +18,12 @@ import java.lang.annotation.Target;
  * setting; a field carrying no {@code @BuilderDefault} inherits it.
  *
  * <p>A field with no initializer expression is unaffected either way - there is
- * nothing to retain, so it starts at the JVM default regardless.
+ * nothing to retain, so it starts at the JVM default regardless. {@link #provider}
+ * is how such a field states a default anyway, and is the only way a record
+ * component can: a component has no initializer to retain, so without it the
+ * builder hands the canonical constructor a JVM zero. That is silent on a
+ * {@code boolean}, where an unset slot and an explicit {@code false} are
+ * indistinguishable at every point downstream.
  *
  * <p>The initializer is evaluated <b>fresh per builder instance</b>: a
  * {@code UUID.randomUUID()} default produces a new UUID for each builder, and a
@@ -84,6 +91,14 @@ import java.lang.annotation.Target;
  *     &#64;BuilderDefault
  *     String kept = "retained";
  * }
+ *
+ * // A record component, which has no initializer to retain
+ * &#64;ClassBuilder
+ * public record TgaWriteOptions(
+ *     &#64;BuilderDefault(provider = "defaultRle") boolean rle
+ * ) {
+ *     private static boolean defaultRle() { return true; }
+ * }
  * </code></pre>
  *
  * @see ClassBuilder#retainInit
@@ -99,5 +114,24 @@ public @interface BuilderDefault {
      * retains initializers.
      */
     boolean value() default true;
+
+    /**
+     * Names a method on the target that supplies this slot's default, for a
+     * field or record component with no initializer to retain.
+     *
+     * <p>The method must be declared on the target, be {@code static}, take no
+     * parameters, and return the slot's own type; anything else is reported at
+     * this annotation, naming the method. Being a real declaration rather than a
+     * source string is the point - it is type-checked where the author can see
+     * it, instead of failing inside a generated body they cannot.
+     *
+     * <p>It is called exactly where a retained initializer's expression would
+     * be, so the two behave identically downstream: evaluated fresh per builder,
+     * copied before a {@link Collector} container's setters mutate it, and
+     * discarded by a wholesale replace. Writing both is not a conflict - the
+     * provider is the more specific statement and wins - but writing it beside
+     * {@code value = false} is, since that asks for no default at all.
+     */
+    @NotNull String provider() default "";
 
 }
