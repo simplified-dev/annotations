@@ -522,10 +522,13 @@ public class ClassBuilderProcessor extends AbstractProcessor {
      * Reports a {@code name} pattern on {@code @Getter} or {@code @Setter} that
      * cannot expand into a distinct accessor.
      *
-     * <p>Checked on a type-level annotation as well as a field-level one, and
-     * the placeholder is mandatory in both. It matters more on the type, where a
-     * pattern without it gives every field on the class the same accessor name;
-     * on a field it only collides with whatever else claims that name.
+     * <p>Checked on a type-level annotation as well as a field-level one, but
+     * the placeholder is mandatory only on the type. There it fans out over
+     * every field, so a pattern without one gives them all the same accessor
+     * name - which is a defect with no legitimate reading. On a single field the
+     * pattern expands exactly once, so a placeholder-free literal is simply the
+     * accessor's name, and that is the only way to spell an accessor that does
+     * not contain its field's name at all.
      *
      * <p>The suppression sentinel is rejected rather than honoured. These
      * annotations suppress through {@link AccessLevel#NONE}, so nothing on this
@@ -552,7 +555,10 @@ public class ClassBuilderProcessor extends AbstractProcessor {
                     + "' - write AccessLevel.NONE to generate nothing", annotated);
             return;
         }
-        String error = NamePattern.patternError(written, true);
+        // Mandatory on a type, where the pattern fans out; optional on a field,
+        // where it expands once and a literal is just the accessor's name.
+        boolean fansOut = annotated instanceof TypeElement;
+        String error = NamePattern.patternError(written, fansOut);
         if (error != null) {
             messager.printMessage(Diagnostic.Kind.ERROR,
                 annotation + " naming pattern for 'name' " + error, annotated);
@@ -690,10 +696,11 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         List<FieldSpec> slots = new ArrayList<>();
         for (VariableElement parameter : executable.getParameters()) {
             FieldSpec slot = FieldSpec.fromParameter(parameter, lookup,
-                processingEnv.getTypeUtils());
+                processingEnv.getTypeUtils(), config.setters());
             if (slot.seed) rejectSeedCompanions(parameter, messager);
             slots.add(slot);
         }
+        validateSlotNaming(slots, config.setters(), executable, messager);
 
         if (javacBridge.isEmpty()) {
             messager.printMessage(Diagnostic.Kind.ERROR,
@@ -720,6 +727,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         {"dev.simplified.annotations.Collector", "Collector"},
         {"dev.simplified.annotations.Negate", "Negate"},
         {"dev.simplified.annotations.Formattable", "Formattable"},
+        {"dev.simplified.annotations.SetterNames", "SetterNames"},
     };
 
     /**
@@ -745,6 +753,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         BuilderConfig config = extractConfig(target);
         validateNaming(target, config, messager);
         List<FieldSpec> fields = collectFields(target, config);
+        validateSlotNaming(fields, config.setters(), target, messager);
         validateDefaultProviders(target, fields, messager);
 
         if (javacBridge.isEmpty()) {
@@ -915,9 +924,10 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         for (Element enclosed : target.getEnclosedElements()) {
             if (enclosed.getKind() != ElementKind.FIELD) continue;
             rejectUnsupportedLazyCompanions((VariableElement) enclosed, messager);
-            // Standalone @Lazy path - no @ClassBuilder, so no retainInit policy.
+            // Standalone @Lazy path - no @ClassBuilder, so no retainInit policy
+            // and no builder to name setters for either.
             out.add(FieldSpec.from((VariableElement) enclosed, lookup, introspector,
-                processingEnv.getTypeUtils(), false));
+                processingEnv.getTypeUtils(), false, SetterScheme.of(NamingStyle.SIMPLIFIED)));
         }
         return out;
     }
@@ -939,6 +949,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         }
 
         List<FieldSpec> fields = collectFieldsFromInterface(target, config);
+        validateSlotNaming(fields, config.setters(), target, messager);
         String packageName = packageOf(target);
 
         String implName = target.getSimpleName().toString() + "Impl";
@@ -1001,7 +1012,8 @@ public class ClassBuilderProcessor extends AbstractProcessor {
             if (method.getReturnType().getKind() == javax.lang.model.type.TypeKind.VOID) continue;
             String name = method.getSimpleName().toString();
             if (config.excludeSet().contains(name)) continue;
-            FieldSpec spec = FieldSpec.fromInterfaceAccessor(method, lookup, processingEnv.getTypeUtils());
+            FieldSpec spec = FieldSpec.fromInterfaceAccessor(method, lookup,
+                processingEnv.getTypeUtils(), config.setters());
             if (spec.ignored) continue;
             out.add(spec);
         }
@@ -1098,7 +1110,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
             String name = enclosed.getSimpleName().toString();
             if (config.excludeSet().contains(name)) continue;
             FieldSpec spec = FieldSpec.from((VariableElement) enclosed, lookup, introspector,
-                processingEnv.getTypeUtils(), config.retainInit());
+                processingEnv.getTypeUtils(), config.retainInit(), config.setters());
             if (spec.ignored) continue;
             out.add(spec);
         }
@@ -1171,24 +1183,58 @@ public class ClassBuilderProcessor extends AbstractProcessor {
      * intended. A genuine duplicate is javac's own error to raise.
      */
     private void validateNaming(Element target, BuilderConfig config, Messager messager) {
-        SetterScheme setters = config.setters();
+        validateSetterScheme(config.setters(), target, true, messager);
+        validateBuilderNames(target, messager);
+    }
+
+    /**
+     * Checks each slot's resolved patterns, which a {@code @SetterNames} written
+     * on the slot may differ from the target's.
+     *
+     * <p>Reported at the slot rather than at the type, because that is where the
+     * override was written. A slot inheriting the target's scheme unchanged is
+     * skipped - the same defect would otherwise be reported once per field.
+     *
+     * <p>The placeholder is optional here, and mandatory on the target, for the
+     * reason it is on {@code @Getter} and {@code @Setter}: a target's pattern
+     * fans out over every slot, so a literal would give them all the same method
+     * name, while a slot's expands exactly once and a literal is simply that
+     * setter's name. Any role a slot inherited was already checked at the
+     * target, so nothing is let through by asking less of it here.
+     *
+     * @param slots the builder-visible slots
+     * @param base the target's own resolved scheme, already reported on
+     * @param target the annotated element, for a slot with no element of its own
+     * @param messager sink for diagnostics
+     */
+    private void validateSlotNaming(List<FieldSpec> slots, SetterScheme base, Element target,
+                                    Messager messager) {
+        for (FieldSpec slot : slots) {
+            if (slot.setters.equals(base)) continue;
+            validateSetterScheme(slot.setters, slot.element != null ? slot.element : target,
+                false, messager);
+        }
+    }
+
+    /** Reports every pattern in a resolved scheme that cannot mint a member. */
+    private void validateSetterScheme(SetterScheme setters, Element site, boolean fansOut,
+                                      Messager messager) {
         String[][] roles = {
             {"set", setters.set()}, {"flag", setters.flag()}, {"add", setters.add()},
             {"put", setters.put()}, {"compute", setters.compute()}, {"clear", setters.clear()}
         };
         for (String[] role : roles) {
-            String error = NamePattern.patternError(role[1], true);
+            String error = NamePattern.patternError(role[1], fansOut);
             if (error != null) {
                 messager.printMessage(Diagnostic.Kind.ERROR,
-                    "@SetterNames pattern for '" + role[0] + "' " + error, target);
+                    "@SetterNames pattern for '" + role[0] + "' " + error, site);
             }
         }
         if (!setters.emitsSet()) {
             messager.printMessage(Diagnostic.Kind.ERROR,
                 "@SetterNames cannot suppress the 'set' role - a field would then have no way to "
-                    + "be assigned on the builder", target);
+                    + "be assigned on the builder", site);
         }
-        validateBuilderNames(target, messager);
     }
 
     /**

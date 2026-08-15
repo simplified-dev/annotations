@@ -394,16 +394,46 @@ public class AccessorMutatorTest {
         assertThat(c).hadErrorContaining("must contain the '{}' placeholder");
     }
 
+    /**
+     * A field-level pattern expands exactly once, so a placeholder-free literal
+     * is simply the accessor's name - and the only way to spell one that does
+     * not contain its field's name at all.
+     */
     @Test
-    public void fieldLevelNameWithoutThePlaceholderIsAnError() {
+    public void fieldLevelNameWithoutThePlaceholderIsTheAccessorName() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Widget",
+                "package demo;",
+                "import dev.simplified.annotations.Getter;",
+                "public class Widget {",
+                "    @Getter(name = \"gateway\") private String gatewayClient = \"g\";",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseWidget",
+                "package demo;",
+                "public class UseWidget {",
+                "    public static String go() { return new Widget().gateway(); }",
+                "}"));
+        assertThat(c).succeeded();
+    }
+
+    /**
+     * The type-level pattern still requires it, and for a reason a field's does
+     * not have: it fans out over every field, so a literal would give them all
+     * the same accessor name.
+     */
+    @Test
+    public void typeLevelNameWithoutThePlaceholderIsStillAnError() {
         Compilation c = compile(JavaFileObjects.forSourceLines("demo.Widget",
             "package demo;",
             "import dev.simplified.annotations.Setter;",
+            "@Setter(name = \"assign\")",
             "public class Widget {",
-            "    @Setter(name = \"assign\") private String label;",
+            "    private String label;",
+            "    private String other;",
             "}"));
         assertThat(c).failed();
         assertThat(c).hadErrorContaining("@Setter naming pattern for 'name'");
+        assertThat(c).hadErrorContaining("must contain the '{}' placeholder");
     }
 
     /**
@@ -417,7 +447,7 @@ public class AccessorMutatorTest {
             "package demo;",
             "import dev.simplified.annotations.Getter;",
             "public class Widget {",
-            "    @Getter(name = \"value\") private String label;",
+            "    @Getter(name = \"{}Or{}\") private String label;",
             "}");
         Compilation c = compile(source);
         assertThat(c).failed();

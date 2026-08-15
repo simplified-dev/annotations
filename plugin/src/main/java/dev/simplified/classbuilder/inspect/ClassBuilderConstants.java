@@ -33,6 +33,7 @@ public final class ClassBuilderConstants {
     public static final @NotNull String BUILDER_DEFAULT_FQN = "dev.simplified.annotations.BuilderDefault";
     public static final @NotNull String BUILDER_IGNORE_FQN = "dev.simplified.annotations.BuilderIgnore";
     public static final @NotNull String BUILDER_SEED_FQN = "dev.simplified.annotations.BuilderSeed";
+    public static final @NotNull String SETTER_NAMES_FQN = "dev.simplified.annotations.SetterNames";
     public static final @NotNull String BUILD_FLAG_FQN = "dev.simplified.annotations.BuildFlag";
     public static final @NotNull String OBTAIN_VIA_FQN = "dev.simplified.annotations.ObtainVia";
     public static final @NotNull String COLLECTOR_FQN = "dev.simplified.annotations.Collector";
@@ -50,6 +51,7 @@ public final class ClassBuilderConstants {
         BUILDER_DEFAULT_FQN,
         BUILDER_IGNORE_FQN,
         BUILDER_SEED_FQN,
+        SETTER_NAMES_FQN,
         BUILD_FLAG_FQN,
         OBTAIN_VIA_FQN,
         COLLECTOR_FQN,
@@ -69,6 +71,7 @@ public final class ClassBuilderConstants {
         "BuilderDefault",
         "BuilderIgnore",
         "BuilderSeed",
+        "SetterNames",
         "BuildFlag",
         "ObtainVia",
         "Collector",
@@ -156,6 +159,27 @@ public final class ClassBuilderConstants {
             writtenStringAttr(setters, "put"),
             writtenStringAttr(setters, "compute"),
             writtenStringAttr(setters, "clear"));
+    }
+
+    /**
+     * Resolves one slot's patterns over the target's, from a
+     * {@code @SetterNames} written on the field, record component or parameter
+     * itself.
+     *
+     * @param written the annotation on the slot, or {@code null}
+     * @param base the target's resolved scheme
+     * @return the scheme that slot's members are named from
+     */
+    public static @NotNull SetterScheme setterOverride(@Nullable PsiAnnotation written,
+                                                       @NotNull SetterScheme base) {
+        if (written == null) return base;
+        return SetterScheme.override(base,
+            writtenStringAttr(written, "set"),
+            writtenStringAttr(written, "flag"),
+            writtenStringAttr(written, "add"),
+            writtenStringAttr(written, "put"),
+            writtenStringAttr(written, "compute"),
+            writtenStringAttr(written, "clear"));
     }
 
     /**

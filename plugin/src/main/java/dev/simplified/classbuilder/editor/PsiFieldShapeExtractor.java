@@ -14,6 +14,7 @@ import com.intellij.psi.PsiParameter;
 import com.intellij.psi.PsiRecordComponent;
 import com.intellij.psi.PsiSubstitutor;
 import com.intellij.psi.PsiTypeParameter;
+import dev.simplified.classbuilder.apt.SetterScheme;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.shared.psi.WrittenAnnotations;
 
@@ -39,6 +40,7 @@ final class PsiFieldShapeExtractor {
     private static final String FORMATTABLE_FQN = ClassBuilderConstants.FORMATTABLE_FQN;
     private static final String LAZY_FQN = ClassBuilderConstants.LAZY_FQN;
     private static final String BUILDER_SEED_FQN = ClassBuilderConstants.BUILDER_SEED_FQN;
+    private static final String SETTER_NAMES_FQN = ClassBuilderConstants.SETTER_NAMES_FQN;
 
     private PsiFieldShapeExtractor() {
     }
@@ -47,8 +49,8 @@ final class PsiFieldShapeExtractor {
      * Extracts shapes from a concrete or abstract target class. Record
      * components are handled separately by {@link #fromRecord}.
      */
-    static List<PsiFieldShape> fromClass(PsiClass target, Set<String> excluded) {
-        return fromClass(target, excluded, PsiSubstitutor.EMPTY);
+    static List<PsiFieldShape> fromClass(PsiClass target, Set<String> excluded, SetterScheme setters) {
+        return fromClass(target, excluded, PsiSubstitutor.EMPTY, setters);
     }
 
     /**
@@ -65,31 +67,33 @@ final class PsiFieldShapeExtractor {
      * @param substitutor mapping to apply to each declared type
      * @return the extracted shapes
      */
-    static List<PsiFieldShape> fromClass(PsiClass target, Set<String> excluded, PsiSubstitutor substitutor) {
+    static List<PsiFieldShape> fromClass(PsiClass target, Set<String> excluded,
+                                        PsiSubstitutor substitutor, SetterScheme setters) {
         List<PsiFieldShape> out = new ArrayList<>();
         for (PsiField field : target.getFields()) {
             if (field.hasModifierProperty(PsiModifier.STATIC)) continue;
             if (field.hasModifierProperty(PsiModifier.TRANSIENT)) continue;
             if (excluded.contains(field.getName())) continue;
             if (isIgnored(field)) continue;
-            out.add(buildShape(field, field.getName(), substitutor.substitute(field.getType())));
+            out.add(buildShape(field, field.getName(), substitutor.substitute(field.getType()), setters));
         }
         return out;
     }
 
     /** Record-component variant; records expose fields via {@link PsiRecordComponent}. */
-    static List<PsiFieldShape> fromRecord(PsiClass record, Set<String> excluded) {
-        return fromRecord(record, excluded, PsiSubstitutor.EMPTY);
+    static List<PsiFieldShape> fromRecord(PsiClass record, Set<String> excluded, SetterScheme setters) {
+        return fromRecord(record, excluded, PsiSubstitutor.EMPTY, setters);
     }
 
-    /** Substituting variant of {@link #fromRecord(PsiClass, Set)}. */
-    static List<PsiFieldShape> fromRecord(PsiClass record, Set<String> excluded, PsiSubstitutor substitutor) {
+    /** Substituting variant of {@link #fromRecord(PsiClass, Set, SetterScheme)}. */
+    static List<PsiFieldShape> fromRecord(PsiClass record, Set<String> excluded,
+                                         PsiSubstitutor substitutor, SetterScheme setters) {
         List<PsiFieldShape> out = new ArrayList<>();
         for (PsiRecordComponent c : record.getRecordComponents()) {
             String name = c.getName();
             if (excluded.contains(name)) continue;
             if (isIgnored(c)) continue;
-            out.add(buildShape(c, name, substitutor.substitute(c.getType())));
+            out.add(buildShape(c, name, substitutor.substitute(c.getType()), setters));
         }
         return out;
     }
@@ -108,11 +112,12 @@ final class PsiFieldShapeExtractor {
      * @param substitutor mapping into the synth Builder's own type parameters
      * @return the extracted shapes, in parameter order
      */
-    static List<PsiFieldShape> fromExecutable(PsiMethod executable, PsiSubstitutor substitutor) {
+    static List<PsiFieldShape> fromExecutable(PsiMethod executable, PsiSubstitutor substitutor,
+                                             SetterScheme setters) {
         List<PsiFieldShape> out = new ArrayList<>();
         for (PsiParameter parameter : executable.getParameterList().getParameters()) {
             String name = parameter.getName();
-            PsiFieldShape.Builder b = classify(parameter, name, substitutor.substitute(parameter.getType()));
+            PsiFieldShape.Builder b = classify(parameter, name, substitutor.substitute(parameter.getType()), setters);
             b.seed = hasAnnotation(parameter, BUILDER_SEED_FQN);
             out.add(b.build());
         }
@@ -129,8 +134,9 @@ final class PsiFieldShapeExtractor {
      * pulling type classification from the type mirror and companion-
      * annotation state from the owner's annotations.
      */
-    private static PsiFieldShape buildShape(PsiModifierListOwner owner, String name, com.intellij.psi.PsiType type) {
-        return classify(owner, name, type).build();
+    private static PsiFieldShape buildShape(PsiModifierListOwner owner, String name,
+                                            com.intellij.psi.PsiType type, SetterScheme setters) {
+        return classify(owner, name, type, setters).build();
     }
 
     /**
@@ -139,8 +145,11 @@ final class PsiFieldShapeExtractor {
      * marker, which is a parameter's alone.
      */
     private static PsiFieldShape.Builder classify(PsiModifierListOwner owner, String name,
-                                                  com.intellij.psi.PsiType type) {
+                                                  com.intellij.psi.PsiType type,
+                                                  SetterScheme setters) {
         PsiFieldShape.Builder b = PsiFieldShape.classify(name, type);
+        b.setters = ClassBuilderConstants.setterOverride(
+            findAnnotation(owner, SETTER_NAMES_FQN), setters);
         if (owner instanceof PsiDocCommentOwner docOwner) b.docSource = docOwner;
         // Use NullableNotNullManager so every configured nullability
         // annotation flavour (JetBrains / javax / Checker Framework / etc.)

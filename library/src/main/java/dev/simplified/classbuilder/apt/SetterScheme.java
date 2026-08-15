@@ -62,6 +62,36 @@ public record SetterScheme(
     }
 
     /**
+     * Resolves one slot's scheme over the target's, for a {@code @SetterNames}
+     * written on a field, record component or parameter.
+     *
+     * <p>Unwritten roles inherit from {@code base} rather than from the style,
+     * which is the composition that makes the override readable: a target
+     * spelling every setter {@code with{}} and one field spelling itself
+     * {@code is{}} keeps {@code with{}} for that field's other five roles.
+     *
+     * @param base the target's resolved scheme
+     * @param set the written {@code set} pattern, or {@code null}
+     * @param flag the written {@code flag} pattern, or {@code null}
+     * @param add the written {@code add} pattern, or {@code null}
+     * @param put the written {@code put} pattern, or {@code null}
+     * @param compute the written {@code compute} pattern, or {@code null}
+     * @param clear the written {@code clear} pattern, or {@code null}
+     * @return the resolved scheme for that slot
+     */
+    public static SetterScheme override(SetterScheme base, String set, String flag, String add,
+                                        String put, String compute, String clear) {
+        return new SetterScheme(
+            NamePattern.inherit(set, base.set()),
+            NamePattern.inherit(flag, base.flag()),
+            NamePattern.inherit(add, base.add()),
+            NamePattern.inherit(put, base.put()),
+            NamePattern.inherit(compute, base.compute()),
+            NamePattern.inherit(clear, base.clear())
+        );
+    }
+
+    /**
      * Whether the value-taking setter is generated. Always true for a valid
      * scheme; suppressing it leaves a field with no way to be assigned, which
      * the processor rejects.
@@ -98,21 +128,34 @@ public record SetterScheme(
     /**
      * Name of the value-taking setter for a field.
      *
-     * @param subject the field name
+     * <p>A {@code boolean} subject expands through
+     * {@link NamePattern#booleanSubject}, so a field already named {@code isX}
+     * under a pattern that prefixes {@code is} does not double it. That is why
+     * the flag is asked for rather than inferred: the same field name on a
+     * {@code String} means something else entirely, and stripping there would
+     * rename an unrelated accessor.
+     *
+     * @param subject the field name, or the {@code @Negate} stem for the inverse
+     * @param isBoolean whether the slot's declared type is {@code boolean}
      * @return the setter name
      */
-    public String setName(String subject) {
-        return NamePattern.expand(set, subject);
+    public String setName(String subject, boolean isBoolean) {
+        return NamePattern.expand(set, isBoolean ? NamePattern.booleanSubject(set, subject) : subject);
     }
 
     /**
      * Name of the zero-arg boolean setter for a field or its negate stem.
      *
+     * <p>Takes no flag: this role exists only on a {@code boolean}, so the
+     * subject is always one and always strips.
+     *
      * @param subject the field name, or the {@code @Negate} stem for the inverse
      * @return the setter name, or {@code null} when the role is suppressed
      */
     public String flagName(String subject) {
-        return emitsFlag() ? NamePattern.expand(flag, subject) : null;
+        return emitsFlag()
+            ? NamePattern.expand(flag, NamePattern.booleanSubject(flag, subject))
+            : null;
     }
 
     /**

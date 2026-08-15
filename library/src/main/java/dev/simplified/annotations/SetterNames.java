@@ -2,14 +2,24 @@ package dev.simplified.annotations;
 
 import org.jetbrains.annotations.NotNull;
 
+import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
  * Naming patterns for the setters a {@link ClassBuilder} target generates once
- * per field. Used only as the value of {@link ClassBuilder#setters()}; every
- * attribute left unwritten inherits from {@link ClassBuilder#style()}.
+ * per field. Written as the value of {@link ClassBuilder#setters()} it sets the
+ * whole target's; written on a single field, record component or constructor
+ * parameter it overrides the target's for that one slot. Every attribute left
+ * unwritten inherits - from {@link ClassBuilder#style()} at the target, and from
+ * the target's resolved patterns at a slot.
+ *
+ * <p>The per-slot form is what lets one type pair setters that do not share a
+ * shape: a {@code boolean lossless} spelled {@code isLossless(boolean)} beside a
+ * {@code float quality} spelled {@code withQuality(float)}. Without it the
+ * target's single pattern has to fit every field it has, and a type whose fields
+ * disagree keeps its whole builder hand-written.
  *
  * <p>A pattern contains exactly one {@code {}} placeholder, which expands to the
  * name the setter is built from - the field name for {@link #set} and
@@ -21,9 +31,12 @@ import java.lang.annotation.Target;
  * anywhere, a pattern expresses a suffix ({@code {}Value}) or a wrapped form
  * ({@code put{}IfAbsent}) as readily as a prefix.
  *
- * <p>The placeholder is mandatory here: these setters are generated once per
- * field, so a pattern without one would give every field the same method name.
- * Contrast {@link BuilderNames}, whose members exist exactly once per target.
+ * <p>The placeholder is mandatory on the target, where the pattern fans out over
+ * every field and one without it would give them all the same method name. On a
+ * single slot it expands exactly once, so a placeholder-free literal is simply
+ * that setter's name - and the only way to spell one that does not contain its
+ * field's name at all. Contrast {@link BuilderNames}, whose members exist
+ * exactly once per target and never require it.
  *
  * <pre><code>
  * // JavaBean setters, every other role left at the style's default
@@ -34,6 +47,16 @@ import java.lang.annotation.Target;
  *
  * // Drop the zero-arg boolean convenience entirely
  * &#64;ClassBuilder(setters = &#64;SetterNames(flag = SetterNames.NONE))
+ *
+ * // One field spelled differently from the rest of its type
+ * &#64;ClassBuilder(setters = &#64;SetterNames(set = "with{}"))
+ * public final class WebPWriteOptions {
+ *
+ *     float quality;                        // withQuality(float)
+ *
+ *     &#64;SetterNames(set = "is{}")
+ *     boolean lossless;                     // isLossless(boolean)
+ * }
  * </code></pre>
  *
  * @see NamingStyle
@@ -41,12 +64,13 @@ import java.lang.annotation.Target;
  * @see ClassBuilder#setters()
  */
 @Retention(RetentionPolicy.CLASS)
-@Target({})
+@Target({ ElementType.FIELD, ElementType.PARAMETER })
 public @interface SetterNames {
 
     /**
-     * Pattern value meaning "take this role from {@link ClassBuilder#style()}".
-     * The default of every attribute here.
+     * Pattern value meaning "take this role from whatever encloses it" - the
+     * target's {@link ClassBuilder#style()} on the target, and the target's
+     * resolved pattern on a single slot. The default of every attribute here.
      */
     String INHERIT = "";
 

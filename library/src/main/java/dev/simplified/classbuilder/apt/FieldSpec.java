@@ -23,7 +23,7 @@ import java.util.Set;
 /**
  * Intermediate representation of a single field on a {@code @ClassBuilder}-annotated class.
  * All classification the emitter needs happens once in
- * {@link #from(VariableElement, AnnotationLookup, SourceIntrospector, Types, boolean)},
+ * {@link #from(VariableElement, AnnotationLookup, SourceIntrospector, Types, boolean, SetterScheme)},
  * so the emitter only reads already-resolved properties.
  */
 public final class FieldSpec {
@@ -45,6 +45,17 @@ public final class FieldSpec {
     public final VariableElement element;
     public final TypeMirror type;
     public final String typeDisplay;
+
+    /**
+     * The setter patterns this slot's members are named from - the target's,
+     * overridden by a {@code @SetterNames} written on the slot itself.
+     *
+     * <p>Resolved once here rather than read from the config at each emitter,
+     * because a per-slot override means "the config's scheme" is no longer the
+     * answer for every slot and an emitter reaching past this one would silently
+     * mint the target's name instead.
+     */
+    public final SetterScheme setters;
 
     public final boolean notNull;
     public final boolean nullable;
@@ -131,6 +142,7 @@ public final class FieldSpec {
         this.element = b.element;
         this.type = b.type;
         this.typeDisplay = b.typeDisplay;
+        this.setters = b.setters;
         this.notNull = b.notNull;
         this.nullable = b.nullable;
         this.isBoolean = b.isBoolean;
@@ -207,12 +219,14 @@ public final class FieldSpec {
      * the generated {@code <Name>Impl} field, so preserving exactly what the
      * author wrote beats round-tripping it through five typed accessors.
      */
-    public static FieldSpec fromInterfaceAccessor(ExecutableElement method, AnnotationLookup lookup, Types typeUtils) {
+    public static FieldSpec fromInterfaceAccessor(ExecutableElement method, AnnotationLookup lookup,
+                                                  Types typeUtils, SetterScheme setters) {
         Builder b = new Builder();
         b.element = null;
         b.name = method.getSimpleName().toString();
         b.type = method.getReturnType();
         b.typeDisplay = b.type.toString();
+        b.setters = resolveSetters(method, lookup, setters);
 
         b.notNull = lookup.hasAnnotation(method, "org.jetbrains.annotations.NotNull");
         b.nullable = lookup.hasAnnotation(method, "org.jetbrains.annotations.Nullable");
@@ -251,13 +265,14 @@ public final class FieldSpec {
      * @return the slot IR for this parameter
      */
     public static FieldSpec fromParameter(VariableElement parameter, AnnotationLookup lookup,
-                                          Types typeUtils) {
+                                          Types typeUtils, SetterScheme setters) {
         Builder b = new Builder();
         b.element = parameter;
         b.name = parameter.getSimpleName().toString();
         b.type = parameter.asType();
         b.typeDisplay = b.type.toString();
         b.isFinal = parameter.getModifiers().contains(Modifier.FINAL);
+        b.setters = resolveSetters(parameter, lookup, setters);
 
         b.notNull = lookup.hasAnnotation(parameter, "org.jetbrains.annotations.NotNull");
         b.nullable = lookup.hasAnnotation(parameter, "org.jetbrains.annotations.Nullable");
@@ -276,6 +291,29 @@ public final class FieldSpec {
      * parameter cannot come out with a different setter matrix from a field of
      * the same shape.
      */
+    /**
+     * Resolves the slot's setter patterns: the target's, overridden by a
+     * {@code @SetterNames} written on the slot itself.
+     *
+     * @param owner the field, component or parameter declaring the slot
+     * @param lookup the annotation reader
+     * @param base the target's resolved scheme
+     * @return the scheme this slot's members are named from
+     */
+    private static SetterScheme resolveSetters(Element owner, AnnotationLookup lookup,
+                                               SetterScheme base) {
+        AnnotationMirror written =
+            lookup.findMirror(owner, "dev.simplified.annotations.SetterNames");
+        if (written == null) return base;
+        return SetterScheme.override(base,
+            lookup.stringAttr(written, "set", null),
+            lookup.stringAttr(written, "flag", null),
+            lookup.stringAttr(written, "add", null),
+            lookup.stringAttr(written, "put", null),
+            lookup.stringAttr(written, "compute", null),
+            lookup.stringAttr(written, "clear", null));
+    }
+
     private static void readSetterCompanions(Builder b, Element owner, AnnotationLookup lookup) {
         b.formattable = lookup.hasAnnotation(owner, "dev.simplified.annotations.Formattable");
         b.negateName = lookup.stringAttr(owner, "dev.simplified.annotations.Negate", "value", null);
@@ -399,13 +437,14 @@ public final class FieldSpec {
 
 
     public static FieldSpec from(VariableElement element, AnnotationLookup lookup, SourceIntrospector introspector,
-                                 Types typeUtils, boolean classRetainInit) {
+                                 Types typeUtils, boolean classRetainInit, SetterScheme setters) {
         Builder b = new Builder();
         b.element = element;
         b.name = element.getSimpleName().toString();
         b.type = element.asType();
         b.typeDisplay = element.asType().toString();
         b.isFinal = element.getModifiers().contains(Modifier.FINAL);
+        b.setters = resolveSetters(element, lookup, setters);
 
         // Nullability
         b.notNull = lookup.hasAnnotation(element, "org.jetbrains.annotations.NotNull");
@@ -475,6 +514,7 @@ public final class FieldSpec {
         VariableElement element;
         TypeMirror type;
         String typeDisplay;
+        SetterScheme setters;
         boolean notNull, nullable;
         boolean isBoolean, isString, isPrimitive, isArray, isFinal;
         boolean isOptional;

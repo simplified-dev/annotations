@@ -9,6 +9,7 @@ import com.intellij.psi.PsiTypes;
 import com.intellij.psi.util.InheritanceUtil;
 import com.intellij.psi.util.PsiUtil;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.classbuilder.apt.SetterScheme;
 import org.jetbrains.annotations.Nullable;
 
 /**
@@ -28,6 +29,16 @@ public final class PsiFieldShape {
 
     public final String name;
     public final PsiType type;
+
+    /**
+     * The setter patterns this slot's members are named from - the target's,
+     * overridden by a {@code @SetterNames} written on the slot itself. Mirrors
+     * {@link FieldSpec#setters}, and for the same reason: with a per-slot
+     * override the config's scheme is no longer the answer for every slot, so a
+     * synthesiser reaching past this one would put the target's name in
+     * completion where the build emits the slot's.
+     */
+    public final SetterScheme setters;
 
     public final boolean isBoolean;
     public final boolean isString;
@@ -122,6 +133,7 @@ public final class PsiFieldShape {
     PsiFieldShape(Builder b) {
         this.name = b.name;
         this.type = b.type;
+        this.setters = b.setters;
         this.isBoolean = b.isBoolean;
         this.isString = b.isString;
         this.isArray = b.isArray;
@@ -272,6 +284,7 @@ public final class PsiFieldShape {
     static final class Builder {
         String name;
         PsiType type;
+        SetterScheme setters;
         boolean isBoolean, isString, isArray;
         PsiType arrayComponent;
         boolean isOptional, isOptionalString;

@@ -103,10 +103,12 @@ public class AnnotationSurfaceTest {
 
     @Test
     public void setterNames_metadata() {
-        // Only ever an attribute value on @ClassBuilder, so an empty @Target is
-        // what stops it being written anywhere else.
         assertRetention(SetterNames.class, RetentionPolicy.CLASS);
-        assertTargets(SetterNames.class);
+        // Written on a slot it overrides the target's patterns for that one
+        // field, component or parameter. Being usable as @ClassBuilder's
+        // attribute value costs nothing here - @Target restricts declaration
+        // sites, and an annotation used as another's element value is not one.
+        assertTargets(SetterNames.class, ElementType.FIELD, ElementType.PARAMETER);
     }
 
     @Test

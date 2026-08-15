@@ -103,7 +103,8 @@ public final class BuilderMutator {
             // inherited fields too - private fields on the parent Builder are
             // not accessible from the subclass, so we route through the
             // inherited public setters using the full chain of fields.
-            List<FieldSpec> chainFields = isAbstract ? fields : collectChainFields(targetElement, fields);
+            List<FieldSpec> chainFields =
+                isAbstract ? fields : collectChainFields(ctx, targetElement, fields);
             new SuperBuilderMutator(ctx, messager, annotatedSuper, chainFields).mutate();
             return true;
         }
@@ -224,7 +225,8 @@ public final class BuilderMutator {
      * {@code from(T)} populates parent slots before child slots, matching
      * the invocation order of inherited setters.
      */
-    private List<FieldSpec> collectChainFields(TypeElement start, List<FieldSpec> ownFields) {
+    private List<FieldSpec> collectChainFields(MutationContext ctx, TypeElement start,
+                                               List<FieldSpec> ownFields) {
         List<FieldSpec> ancestors = new ArrayList<>();
         TypeMirror superMirror = start.getSuperclass();
         AnnotationLookup lookup = new AnnotationLookup();
@@ -245,7 +247,14 @@ public final class BuilderMutator {
                 // Inherited fields use the plain classification (no Types walk):
                 // their initializers aren't accessible cross-class, so a custom
                 // container on a parent falls back to a plain setter here.
-                FieldSpec spec = FieldSpec.from((VariableElement) enc, lookup, null, null, superRetainInit);
+                //
+                // The base scheme is this subclass's, not the ancestor's, which
+                // is the assumption the chain already ran on - from(T) calls the
+                // inherited setters through it. An ancestor field carrying its
+                // own @SetterNames still wins, since that is read off the field
+                // and both builders read the same one.
+                FieldSpec spec = FieldSpec.from((VariableElement) enc, lookup, null, null,
+                    superRetainInit, ctx.config().setters());
                 if (spec.ignored) continue;
                 ancestors.add(spec);
             }

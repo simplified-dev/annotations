@@ -435,9 +435,14 @@ final class BootstrapMethodFactory {
      * {@code set} role as every other field kind, so seeding needs no special
      * case; the zero-arg {@code flag} setter takes no argument and is never the
      * one called here.
+     *
+     * <p>Read off the field rather than off the config, and it has to be: a
+     * {@code @SetterNames} written on the field renames the setter this call is
+     * about to name, and asking the target would emit a call to a method the
+     * builder does not have.
      */
     private String setterName(FieldSpec f) {
-        return ctx.config().setters().setName(f.name);
+        return f.setters.setName(f.name, f.isBoolean);
     }
 
     private static String capitalise(String s) {
