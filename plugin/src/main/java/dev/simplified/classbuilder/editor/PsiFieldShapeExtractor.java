@@ -1,6 +1,5 @@
 package dev.simplified.classbuilder.editor;
 
-import com.intellij.codeInsight.NullableNotNullManager;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationMemberValue;
 import com.intellij.psi.PsiClass;
@@ -41,6 +40,8 @@ final class PsiFieldShapeExtractor {
     private static final String LAZY_FQN = ClassBuilderConstants.LAZY_FQN;
     private static final String BUILDER_SEED_FQN = ClassBuilderConstants.BUILDER_SEED_FQN;
     private static final String SETTER_NAMES_FQN = ClassBuilderConstants.SETTER_NAMES_FQN;
+    private static final String NOT_NULL_FQN = "org.jetbrains.annotations.NotNull";
+    private static final String NULLABLE_FQN = "org.jetbrains.annotations.Nullable";
 
     private PsiFieldShapeExtractor() {
     }
@@ -151,12 +152,23 @@ final class PsiFieldShapeExtractor {
         b.setters = ClassBuilderConstants.setterOverride(
             findAnnotation(owner, SETTER_NAMES_FQN), setters);
         if (owner instanceof PsiDocCommentOwner docOwner) b.docSource = docOwner;
-        // Use NullableNotNullManager so every configured nullability
-        // annotation flavour (JetBrains / javax / Checker Framework / etc.)
-        // propagates, not only @org.jetbrains.annotations.Nullable.
-        NullableNotNullManager nnm = NullableNotNullManager.getInstance(owner.getProject());
-        b.nullable = nnm.isNullable(owner, false);
-        b.notNull = nnm.isNotNull(owner, false);
+        // The two JetBrains names, matched off the source text - not
+        // NullableNotNullManager, which this used to ask, for two reasons that
+        // point the same way.
+        //
+        // It resolves, and a resolve started from an annotation written inside a
+        // class body walks that class's nested types, which is augment-aware and
+        // re-enters the provider that asked. The platform can already be
+        // resolving that very annotation when it enters us, so the nesting is
+        // not ours to unwind and it kills the synthesis outright.
+        //
+        // And its answer was wider than the processor's. The processor reads
+        // exactly org.jetbrains.annotations.NotNull / Nullable, so a field
+        // carrying javax.annotation.Nonnull got @NotNull on its setter in the
+        // editor and nothing in the class file - a claim the build does not
+        // make, which is the drift this pairing exists to prevent.
+        b.notNull = WrittenAnnotations.hasOnMember(owner, NOT_NULL_FQN);
+        b.nullable = WrittenAnnotations.hasOnMember(owner, NULLABLE_FQN);
 
         b.formattable = hasAnnotation(owner, FORMATTABLE_FQN);
         b.lazy = hasAnnotation(owner, LAZY_FQN);
@@ -204,8 +216,13 @@ final class PsiFieldShapeExtractor {
         return findAnnotation(owner, fqn) != null;
     }
 
+    /**
+     * Every lookup here is on a field, record component or parameter - a
+     * declaration inside a class body - so all of them take the resolve-free
+     * match for the reason the nullness pair does.
+     */
     private static PsiAnnotation findAnnotation(PsiModifierListOwner owner, String fqn) {
-        return WrittenAnnotations.find(owner, fqn);
+        return WrittenAnnotations.findOnMember(owner, fqn);
     }
 
     private static String stringAttr(PsiAnnotation annotation, String attr, String fallback) {

@@ -116,8 +116,45 @@ public final class WrittenAnnotations {
     public static @Nullable PsiAnnotation findOnMember(@NotNull PsiModifierListOwner owner,
                                                        @NotNull String fqn) {
         for (PsiAnnotation annotation : owner.getAnnotations()) {
-            if (!namesMatch(annotation, fqn)) continue;
-            if (resolvesToPackage(annotation, fqn)) return annotation;
+            if (spellsOnMember(annotation, fqn)) return annotation;
+        }
+        return null;
+    }
+
+    /**
+     * Whether an owner carries the annotation, matched without resolving.
+     *
+     * @param owner the member to read
+     * @param fqn the fully-qualified name to match
+     * @return whether it is written on the owner
+     */
+    public static boolean hasOnMember(@NotNull PsiModifierListOwner owner, @NotNull String fqn) {
+        return findOnMember(owner, fqn) != null;
+    }
+
+    /**
+     * The resolve-free counterpart of {@link #spells}, for an annotation written
+     * on a member.
+     *
+     * @param annotation the written annotation
+     * @param fqn the fully-qualified name to match
+     * @return whether the annotation can only mean that name
+     */
+    public static boolean spellsOnMember(@NotNull PsiAnnotation annotation, @NotNull String fqn) {
+        return namesMatch(annotation, fqn) && resolvesToPackage(annotation, fqn);
+    }
+
+    /**
+     * The resolve-free counterpart of {@link #spelledAmong}.
+     *
+     * @param annotation the written annotation
+     * @param fqns the fully-qualified names to match, in priority order
+     * @return the matched name, or {@code null} when it is none of them
+     */
+    public static @Nullable String spelledAmongOnMember(@NotNull PsiAnnotation annotation,
+                                                        @NotNull String @NotNull ... fqns) {
+        for (String fqn : fqns) {
+            if (spellsOnMember(annotation, fqn)) return fqn;
         }
         return null;
     }

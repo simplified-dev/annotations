@@ -201,9 +201,10 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         // Wrap synthesis in the recursion guard. Eagerly resolving the self-
         // reference type re-enters getAugments() for the same target via the
         // inner-class lookup; the guard ensures the inner call returns empty
-        // rather than looping until stack overflow.
-        IN_PROGRESS.get().add(target);
-        try {
+        // rather than looping until stack overflow. Through withInProgress
+        // rather than a hand-rolled add/remove, so a nested guard for this same
+        // target - BuilderSite.of takes one - cannot clear it on the way out.
+        return withInProgress(target, () -> {
             PsiClass builderClass = GeneratedMemberFactory.synthesizeBuilderClass(site, config);
             List<PsiMethod> bootstrap = GeneratedMemberFactory.bootstrapMethods(site, config, builderClass);
             // The annotated member is what build() calls on the executable path,
@@ -214,9 +215,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             SynthesizedMembers fresh = new SynthesizedMembers(config, bootstrap, builderClass, ctor);
             target.putUserData(SYNTHESIZED, fresh);
             return fresh;
-        } finally {
-            IN_PROGRESS.get().remove(target);
-        }
+        });
     }
 
     /**

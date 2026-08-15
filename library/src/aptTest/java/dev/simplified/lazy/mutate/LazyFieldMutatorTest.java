@@ -672,8 +672,12 @@ public class LazyFieldMutatorTest {
         assertThat(c).hadErrorContaining("primitive");
     }
 
+    /**
+     * Neither an initializer nor a constructor assignment leaves nothing to
+     * defer, which is still the one shape this rejects.
+     */
     @Test
-    public void negative_missingInitializerStandalone_isRejected() {
+    public void negative_neitherInitializerNorAssignment_isRejected() {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.Bad",
             "package demo;",
             "import dev.simplified.annotations.Lazy;",
@@ -682,7 +686,7 @@ public class LazyFieldMutatorTest {
             "    public Bad() {}",
             "}");
         Compilation c = compile(src);
-        assertThat(c).hadErrorContaining("requires an initializer");
+        assertThat(c).hadErrorContaining("has nothing to defer");
     }
 
     // ------------------------------------------------------------------

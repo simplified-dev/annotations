@@ -54,13 +54,20 @@ public abstract class AbstractRecursionSafeAugmentProvider extends PsiAugmentPro
      * thread. Any re-entrant call to a provider extending this class that
      * checks {@link #IN_PROGRESS} for the same target will see the marker and
      * return early.
+     *
+     * <p>Nesting for the same target is safe: an inner call that finds the
+     * marker already set leaves it alone on the way out. It has to be, because
+     * the marker is a set rather than a count - an inner {@code remove} would
+     * clear the <em>outer</em> guard while the outer synthesis was still
+     * running, and the next re-entry would then recurse for real. That is a
+     * cycle the platform kills rather than one that resolves.
      */
     public static <T> T withInProgress(PsiClass target, Supplier<T> body) {
-        IN_PROGRESS.get().add(target);
+        boolean outermost = IN_PROGRESS.get().add(target);
         try {
             return body.get();
         } finally {
-            IN_PROGRESS.get().remove(target);
+            if (outermost) IN_PROGRESS.get().remove(target);
         }
     }
 }

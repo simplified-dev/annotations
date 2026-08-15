@@ -404,6 +404,41 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
     }
 
     /**
+     * Highlighting a target whose <b>field</b> carries an annotation, which is
+     * a different path from one whose fields are bare - the platform's folding
+     * pass resolves that annotation, and the resolve walks the class's nested
+     * types, which is augment-aware and enters this provider mid-resolve.
+     *
+     * <p>Coverage rather than a regression pin: this shape alone does not go
+     * deep enough to trip the platform's limit. What does is the same shape with
+     * a second provider in the chain, which
+     * {@code LazyFieldInspectionTest.testClassBuilderSuppliesTheValue} holds.
+     */
+    public void testHighlighting_targetWithAnAnnotatedFieldSynthesisesNormally() {
+        myFixture.configureByText("Doc.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Negate;
+            @ClassBuilder
+            public class Doc {
+                @Negate("hidden") boolean visible;
+                int rank;
+                public static Doc make() {
+                    return Doc.builder().isHidden().rank(7).build();
+                }
+            }
+            """);
+        java.util.List<com.intellij.codeInsight.daemon.impl.HighlightInfo> highlights =
+            myFixture.doHighlighting();
+        for (com.intellij.codeInsight.daemon.impl.HighlightInfo info : highlights) {
+            String desc = info.getDescription();
+            if (desc != null && (desc.contains("Cannot access") || desc.contains("Cannot resolve"))) {
+                fail("an annotated field must not cost the target its builder, got: " + desc);
+            }
+        }
+    }
+
+    /**
      * Cross-package variant - exercises {@link ClassBuilderElementFinder}'s
      * bridge from {@link JavaPsiFacade#findClass} to the
      * augmented inner class. Without that finder the highlighter calls

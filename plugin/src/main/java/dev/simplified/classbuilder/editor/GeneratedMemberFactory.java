@@ -1071,10 +1071,9 @@ public final class GeneratedMemberFactory {
      * it in the class file and must carry nothing here.
      *
      * <p>Matched on the two JetBrains names exactly, which is the set the
-     * processor copies. The wider {@code NullableNotNullManager} view
-     * {@link PsiFieldShape} carries also answers to the javax / jakarta /
-     * androidx spellings, none of which reach a class file through this
-     * pipeline.
+     * processor copies, and matched without resolving - this reads a field, a
+     * declaration inside a class body, and a resolve started there re-enters the
+     * provider that asked.
      *
      * @param field the backing field, or {@code null} when there is none
      * @return the annotation to attach, empty when the field carries neither
@@ -1084,7 +1083,7 @@ public final class GeneratedMemberFactory {
         PsiModifierList modifiers = field.getModifierList();
         if (modifiers == null) return NO_ANNOTATIONS;
         for (PsiAnnotation annotation : modifiers.getAnnotations()) {
-            String fqn = WrittenAnnotations.spelledAmong(annotation, NOT_NULL_FQN, NULLABLE_FQN);
+            String fqn = WrittenAnnotations.spelledAmongOnMember(annotation, NOT_NULL_FQN, NULLABLE_FQN);
             if (fqn != null) return new String[] {fqn};
         }
         return NO_ANNOTATIONS;
