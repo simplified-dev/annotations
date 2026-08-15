@@ -138,7 +138,7 @@ public final class AccessorAugmentProvider extends AbstractRecursionSafeAugmentP
         boolean isBoolean = PsiTypes.booleanType().equals(field.getType());
         String methodName = read
             ? scheme.readName(fieldName, isBoolean)
-            : scheme.writeName(fieldName);
+            : scheme.writeName(fieldName, isBoolean);
 
         String signature = methodName + "/" + (read ? 0 : 1);
         if (!declared.add(signature)) return;

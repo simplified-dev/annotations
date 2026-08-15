@@ -9,10 +9,12 @@ import dev.simplified.annotations.NamingStyle;
  *
  * <p>Third member of the naming trio beside {@link SetterScheme} and
  * {@link BuilderScheme}, with the same {@code resolve} / {@code of} factory
- * pair. Its one non-mechanical member is {@link #readName(String, boolean)},
- * which picks {@code is} over {@code get} in one place - that selection is the
- * whole reason a boolean needs its own pattern, and centralising it is what
- * stops the processor and the editor disagreeing about it.
+ * pair. Two decisions here are not mechanical, and both are about
+ * {@code boolean}: {@link #readName(String, boolean)} picks {@code is} over
+ * {@code get}, and both accessor names expand against
+ * {@link NamePattern#booleanSubject(String, String)} so a field already named
+ * {@code isX} does not double the prefix. Centralising the pair is what stops
+ * the processor and the editor disagreeing about either.
  *
  * <p>Deliberately free of javac, PSI, and {@link FieldSpec} references so both
  * modules can depend on it.
@@ -60,17 +62,23 @@ public record AccessorScheme(
      * @return the accessor name
      */
     public String readName(String field, boolean isBoolean) {
-        return NamePattern.expand(isBoolean ? is : get, field);
+        String pattern = isBoolean ? is : get;
+        return NamePattern.expand(pattern, subject(pattern, field, isBoolean));
     }
 
     /**
      * Name of the write accessor for a field.
      *
      * @param field the field name
+     * @param isBoolean whether the field's declared type is {@code boolean}
      * @return the accessor name
      */
-    public String writeName(String field) {
-        return NamePattern.expand(set, field);
+    public String writeName(String field, boolean isBoolean) {
+        return NamePattern.expand(set, subject(set, field, isBoolean));
+    }
+
+    private static String subject(String pattern, String field, boolean isBoolean) {
+        return isBoolean ? NamePattern.booleanSubject(pattern, field) : field;
     }
 
     /**
@@ -88,7 +96,7 @@ public record AccessorScheme(
     public java.util.List<String> readCandidates(String field, boolean isBoolean) {
         java.util.List<String> out = new java.util.ArrayList<>(3);
         out.add(readName(field, isBoolean));
-        if (isBoolean) addIfAbsent(out, NamePattern.expand("get{}", field));
+        if (isBoolean) addIfAbsent(out, NamePattern.expand("get{}", subject("get{}", field, true)));
         addIfAbsent(out, field);
         return out;
     }

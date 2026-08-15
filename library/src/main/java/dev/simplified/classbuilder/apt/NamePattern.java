@@ -37,6 +37,34 @@ public final class NamePattern {
         return pattern.substring(0, at) + value + pattern.substring(at + PLACEHOLDER.length());
     }
 
+    /**
+     * The subject a pattern expands against for a {@code boolean} field, which
+     * is the field's own name minus a leading {@code is} when keeping it would
+     * double the prefix the pattern is about to add.
+     *
+     * <p>A {@code boolean} field named {@code isPermaLink} under {@code is{}}
+     * would otherwise mint {@code isIsPermaLink()}. The condition is on the
+     * pattern rather than on the style, so it holds for a written
+     * {@code name = "is{}"} as readily as for a style's, and it is skipped
+     * exactly when the pattern opens with the placeholder - a fluent
+     * {@code "{}"} adds no prefix to double, and its accessor is the field's own
+     * name.
+     *
+     * <p>The trailing character test accepts anything that is not lower case, so
+     * {@code isPermaLink} strips while a field genuinely named {@code island}
+     * does not.
+     *
+     * @param pattern the pattern the subject will be expanded into
+     * @param field the field name
+     * @return the name to expand, stripped or unchanged
+     */
+    public static String booleanSubject(String pattern, String field) {
+        if (pattern == null || field == null) return field;
+        if (pattern.indexOf(PLACEHOLDER) == 0) return field;
+        if (!field.startsWith("is") || field.length() <= 2) return field;
+        return Character.isLowerCase(field.charAt(2)) ? field : field.substring(2);
+    }
+
     /** Whether a pattern asks for its member to be generated at all. */
     public static boolean emits(String pattern) {
         return !SetterNames.NONE.equals(pattern);

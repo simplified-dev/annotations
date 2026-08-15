@@ -111,6 +111,71 @@ public class AccessorMutatorTest {
     }
 
     @Test
+    public void booleanFieldAlreadyNamedIsDoesNotDoubleThePrefix() throws Exception {
+        // A bare import swap from Lombok must not rename a public accessor, and
+        // this is the shape that would: Lombok reads isPermaLink as the accessor
+        // name already, so the pattern applies to PermaLink and not to the whole
+        // field name. Nothing in the build can see the difference - only a
+        // consumer outside the module or a bytecode diff.
+        Class<?> t = compileAndLoad("demo.Widget",
+            "package demo;",
+            "import dev.simplified.annotations.Getter;",
+            "import dev.simplified.annotations.Setter;",
+            "@Getter @Setter",
+            "public class Widget {",
+            "    private boolean isPermaLink;",
+            "}");
+        assertEquals("isPermaLink,setPermaLink", methodNames(t));
+        assertEquals(boolean.class, t.getMethod("isPermaLink").getReturnType());
+
+        Object w = t.getDeclaredConstructor().newInstance();
+        t.getMethod("setPermaLink", boolean.class).invoke(w, true);
+        assertEquals(true, t.getMethod("isPermaLink").invoke(w));
+    }
+
+    @Test
+    public void aFieldMerelyOpeningWithIsKeepsItsWholeName() throws Exception {
+        // The other side of the same rule. Stripping on the two letters alone
+        // would rename island to land, so the character after them has to be
+        // one that could not be part of the same word.
+        Class<?> t = compileAndLoad("demo.Widget",
+            "package demo;",
+            "import dev.simplified.annotations.Getter;",
+            "public class Widget {",
+            "    @Getter private boolean island;",
+            "    @Getter private boolean is;",
+            "    @Getter private String isPermaLink;",
+            "}");
+        // 'is' is too short to carry a suffix, and a String field is not the
+        // boolean pattern's business however it is spelled.
+        assertEquals("getIsPermaLink,isIs,isIsland", methodNames(t));
+    }
+
+    @Test
+    public void aPlaceholderOnlyPatternKeepsTheFieldNameOnAnIsField() throws Exception {
+        // Nothing is prepended, so there is no prefix to double and the accessor
+        // is the field's own name. Covers FLUENT and a written name alike.
+        Class<?> fluent = compileAndLoad("demo.Widget",
+            "package demo;",
+            "import dev.simplified.annotations.Getter;",
+            "import dev.simplified.annotations.NamingStyle;",
+            "@Getter(style = NamingStyle.FLUENT)",
+            "public class Widget {",
+            "    private boolean isPermaLink;",
+            "}");
+        assertEquals("isPermaLink", methodNames(fluent));
+
+        Class<?> written = compileAndLoad("demo.Other",
+            "package demo;",
+            "import dev.simplified.annotations.Getter;",
+            "@Getter(name = \"{}\")",
+            "public class Other {",
+            "    private boolean isPermaLink;",
+            "}");
+        assertEquals("isPermaLink", methodNames(written));
+    }
+
+    @Test
     public void fluentStyleDropsThePrefix() throws Exception {
         Class<?> t = compileAndLoad("demo.Widget",
             "package demo;",

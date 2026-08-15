@@ -93,6 +93,43 @@ public class AccessorAugmentProviderTest extends LightJavaCodeInsightFixtureTest
             1, widget.findMethodsByName("isAnimated", false).length);
     }
 
+    public void testBooleanFieldAlreadyNamedIsDoesNotDoubleThePrefix() {
+        PsiClass widget = configure("Widget",
+            """
+            import dev.simplified.annotations.Getter;
+            import dev.simplified.annotations.Setter;
+            @Getter @Setter
+            public class Widget {
+                private boolean isPermaLink;
+                private boolean island;
+            }
+            """);
+
+        assertEquals("the pattern applies to PermaLink, not to the whole field name",
+            1, widget.findMethodsByName("isPermaLink", false).length);
+        assertEquals(0, widget.findMethodsByName("isIsPermaLink", false).length);
+        assertEquals(1, widget.findMethodsByName("setPermaLink", false).length);
+        assertEquals(0, widget.findMethodsByName("setIsPermaLink", false).length);
+
+        assertEquals("island is one word, so nothing is stripped",
+            1, widget.findMethodsByName("isIsland", false).length);
+        assertEquals(1, widget.findMethodsByName("setIsland", false).length);
+    }
+
+    public void testPlaceholderOnlyPatternKeepsTheFieldNameOnAnIsField() {
+        PsiClass widget = configure("Widget",
+            """
+            import dev.simplified.annotations.Getter;
+            import dev.simplified.annotations.NamingStyle;
+            @Getter(style = NamingStyle.FLUENT)
+            public class Widget {
+                private boolean isPermaLink;
+            }
+            """);
+        assertEquals(1, widget.findMethodsByName("isPermaLink", false).length);
+        assertEquals(0, widget.findMethodsByName("permaLink", false).length);
+    }
+
     public void testFluentStyleDropsThePrefix() {
         PsiClass widget = configure("Widget",
             """
