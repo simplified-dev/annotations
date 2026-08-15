@@ -88,9 +88,17 @@ final class BootstrapMethodFactory {
         // An empty name is the single opt-out signal: BuilderScheme resolves a
         // @BuilderNames(x = NONE) to the empty string, so there is no second
         // generate-flag to consult.
+        int seeds = ctx.seeds().size();
         if (!builderMethod.isEmpty())
-            appendUnless(target, builderMethod, "/0",
-                BootstrapCollisions.declaresNullary(target, builderMethod), this::builderFactory);
+            appendUnless(target, builderMethod, "/" + seeds,
+                BootstrapCollisions.declaresArity(target, builderMethod, seeds), this::builderFactory);
+
+        // from(T) and mutate() read every slot back off a built instance, and on
+        // the executable path there is nothing to read them through: a slot is a
+        // parameter, and no mapping from one to an accessor exists to be guessed
+        // at. Both are suppressed rather than emitted against a guess.
+        if (ctx.isExecutableTarget()) return;
+
         if (!fromMethod.isEmpty())
             appendUnless(target, fromMethod, "(" + ctx.targetSimpleName() + ")",
                 BootstrapCollisions.declaresCopyFactory(ctx.targetElement(), fromMethod),
@@ -130,7 +138,22 @@ final class BootstrapMethodFactory {
     // ------------------------------------------------------------------
 
     private JCMethodDecl builderFactory() {
-        JCExpression newBuilder = make.NewClass(null, List.nil(), ctx.builderType(), List.nil(), null);
+        // A seeded slot has no setter, so the value has to enter here and be
+        // forwarded to the builder's constructor, which is the only thing that
+        // can assign a final slot.
+        ListBuffer<JCVariableDecl> params = new ListBuffer<>();
+        ListBuffer<JCExpression> args = new ListBuffer<>();
+        for (FieldSpec seed : ctx.seeds()) {
+            params.append(make.VarDef(
+                make.Modifiers(Flags.PARAMETER),
+                names.fromString(seed.name),
+                ctx.types().parseType(seed.typeDisplay),
+                null
+            ));
+            args.append(make.Ident(names.fromString(seed.name)));
+        }
+        JCExpression newBuilder =
+            make.NewClass(null, List.nil(), ctx.builderType(), args.toList(), null);
         JCBlock body = make.Block(0, List.of(make.Return(newBuilder)));
 
         // builder() constructs a fresh Builder; "-> new" mirrors build().
@@ -138,17 +161,34 @@ final class BootstrapMethodFactory {
         // parameters - it is static, so the class's are not in scope, and the
         // caller infers them from the assignment context.
         JCMethodDecl method = make.MethodDef(
-            make.Modifiers(ctx.accessFlag() | Flags.STATIC, contracts.newReturnNullary()),
+            make.Modifiers(ctx.accessFlag() | Flags.STATIC, newReturnContract(params.size())),
             names.fromString(ctx.config().builderMethodName()),
             ctx.builderType(),
             ctx.typeParams(),
-            List.nil(),
+            params.toList(),
             List.nil(),
             body,
             null
         );
         AstMarkers.markGenerated(method, ctx.generated());
         return method;
+    }
+
+    /**
+     * The fresh-return {@code @XContract} for an entry point of this arity.
+     * A seeded {@code builder(...)} takes as many parameters as there are
+     * seeds, and the contract's left-hand side has to match; past the two
+     * shapes the vocabulary carries, no contract is emitted rather than one
+     * that does not parse.
+     */
+    private List<JCTree.JCAnnotation> newReturnContract(int arity) {
+        return switch (arity) {
+            case 0 -> contracts.newReturnNullary();
+            // The same shape from(T) carries: reads its argument, returns a
+            // fresh builder, touches nothing else.
+            case 1 -> contracts.newReturnPureUnary();
+            default -> List.nil();
+        };
     }
 
     // ------------------------------------------------------------------

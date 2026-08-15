@@ -35,12 +35,27 @@ public abstract class AbstractRecursionSafeAugmentProvider extends PsiAugmentPro
         ThreadLocal.withInitial(HashSet::new);
 
     /**
+     * Whether a target is already undergoing synthesis on this thread.
+     *
+     * <p>Public because the guard is not only a provider's own business: the
+     * helpers a provider calls before it starts synthesising can themselves
+     * trigger an augment-aware resolve, and they need the same answer to break
+     * the same cycle.
+     *
+     * @param target the class to test
+     * @return whether synthesis for it is already under way here
+     */
+    public static boolean isInProgress(PsiClass target) {
+        return IN_PROGRESS.get().contains(target);
+    }
+
+    /**
      * Runs {@code body} with {@code target} marked in-progress on the current
      * thread. Any re-entrant call to a provider extending this class that
      * checks {@link #IN_PROGRESS} for the same target will see the marker and
      * return early.
      */
-    protected static <T> T withInProgress(PsiClass target, Supplier<T> body) {
+    public static <T> T withInProgress(PsiClass target, Supplier<T> body) {
         IN_PROGRESS.get().add(target);
         try {
             return body.get();

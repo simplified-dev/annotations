@@ -49,10 +49,27 @@ final class BootstrapCollisions {
      * @return whether the injection should be skipped
      */
     static boolean declaresNullary(JCClassDecl targetTree, String name) {
+        return declaresArity(targetTree, name, 0);
+    }
+
+    /**
+     * Whether a method of that name and parameter count is already on the tree.
+     *
+     * <p>A seeded {@code builder(...)} carries the seeds as parameters, so the
+     * arity it collides at is not zero. Everything else the nullary rule says
+     * still holds: the tree is the right place to ask, and it is what the author
+     * wrote plus whatever an earlier pass appended.
+     *
+     * @param targetTree the target's source tree
+     * @param name the bootstrap name being considered
+     * @param arity how many parameters the injection would declare
+     * @return whether the injection should be skipped
+     */
+    static boolean declaresArity(JCClassDecl targetTree, String name, int arity) {
         for (JCTree def : targetTree.defs) {
             if (def instanceof JCMethodDecl m
                 && m.name.toString().equals(name)
-                && m.params.isEmpty()) {
+                && m.params.size() == arity) {
                 return true;
             }
         }

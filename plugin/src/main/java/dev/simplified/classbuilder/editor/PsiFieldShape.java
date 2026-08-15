@@ -105,6 +105,14 @@ public final class PsiFieldShape {
     public final boolean lazy;
 
     /**
+     * True when the slot is a {@code @BuilderSeed} parameter - supplied to
+     * {@code builder(...)} and emitting no setter. Only ever set on a slot
+     * derived from a constructor or factory parameter, that being the one place
+     * the annotation can be written.
+     */
+    public final boolean seed;
+
+    /**
      * Source element whose Javadoc the generated setter should surface.
      * Typically the backing field or record component. Null when no Javadoc
      * owner is available (e.g. interface accessor extraction paths).
@@ -140,6 +148,7 @@ public final class PsiFieldShape {
         this.compute = b.compute;
         this.nonNullByBuildFlag = b.nonNullByBuildFlag;
         this.lazy = b.lazy;
+        this.seed = b.seed;
         this.docSource = b.docSource;
     }
 
@@ -275,6 +284,7 @@ public final class PsiFieldShape {
         String singularName;
         boolean nonNullByBuildFlag;
         boolean lazy;
+        boolean seed;
         @Nullable PsiDocCommentOwner docSource;
 
         PsiFieldShape build() {

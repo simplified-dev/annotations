@@ -92,11 +92,23 @@ public final class GeneratedMemberFactory {
     private GeneratedMemberFactory() {
     }
 
-    static List<PsiMethod> bootstrapMethods(PsiClass target, EditorBuilderConfig config,
+    static List<PsiMethod> bootstrapMethods(BuilderSite site, EditorBuilderConfig config,
                                             PsiClass builderClass) {
+        PsiClass target = site.owner();
         Project project = target.getProject();
         PsiManager psiManager = PsiManager.getInstance(project);
         PsiElementFactory elements = JavaPsiFacade.getElementFactory(project);
+
+        // An executable target gets the entry point and nothing else. from(T)
+        // and mutate() seed every slot by reading a built instance, and a
+        // parameter has no accessor to be read through - so the processor emits
+        // neither, and offering them here would put two methods in completion
+        // that the build does not produce.
+        if (site.isExecutable()) {
+            if (config.builderMethodName().isEmpty()) return List.of();
+            return List.of(buildEntryPoint(psiManager, elements, site, builderClass,
+                config.builderMethodName(), config.access()));
+        }
 
         // Use createType(builderClass) instead of createTypeFromText(FQN):
         // textual resolution requires the IDE's symbol-lookup chain to find
@@ -293,6 +305,40 @@ public final class GeneratedMemberFactory {
         return m;
     }
 
+    /**
+     * The entry point for an executable target: {@code static Builder builder()},
+     * carrying one parameter per {@code @BuilderSeed} slot.
+     *
+     * <p>A seeded slot has no setter, so this is the only place its value can be
+     * given - which is what makes it required rather than optional. The
+     * parameters carry no nullness of their own, matching the processor, which
+     * forwards them verbatim to the builder's constructor.
+     *
+     * <p>Type parameters come from the site rather than from the class: a
+     * {@code static} factory runs under its own and cannot name the enclosing
+     * type's, so the seeds' declared types have to be re-expressed in this
+     * method's copies before they mean anything at a call site.
+     */
+    private static PsiMethod buildEntryPoint(PsiManager manager, PsiElementFactory elements,
+                                             BuilderSite site, PsiClass builderClass,
+                                             String name, String access) {
+        DocProxyingLightMethodBuilder m = new DocProxyingLightMethodBuilder(manager, name);
+        m.withTypeParameters(site.typeParameterSource());
+        PsiTypeParameter[] own = m.getTypeParameters();
+        m.setMethodReturnType(applied(elements, builderClass, own))
+            .addModifier(PsiModifier.STATIC)
+            .setContainingClass(site.owner());
+        PsiSubstitutor toMethod = remap(elements, site.typeParameterSource(), own);
+        for (PsiFieldShape slot : PsiFieldShapeExtractor.fromExecutable(site.executable(), toMethod)) {
+            if (!slot.seed) continue;
+            m.addParameter(buildParam(m, slot.name, slot.type, false));
+        }
+        applyAccess(m, access);
+        GeneratedMemberMarker.mark(m);
+        m.setNavigationElement(site.executable());
+        return m;
+    }
+
     private static PsiMethod buildStaticOneArg(PsiManager manager, PsiElementFactory elements,
                                                PsiClass target, PsiClass builderClass,
                                                String name, String paramName, String access) {
@@ -418,11 +464,13 @@ public final class GeneratedMemberFactory {
      * paths through the augment provider's re-entry is the only way to
      * keep things in sync.
      */
-    static PsiClass synthesizeBuilderClass(PsiClass target, EditorBuilderConfig config) {
+    static PsiClass synthesizeBuilderClass(BuilderSite site, EditorBuilderConfig config) {
+        PsiClass target = site.owner();
         PsiElementFactory elements = JavaPsiFacade.getElementFactory(target.getProject());
-        ChainRole role = ChainRole.of(target);
+        ChainRole role = roleOf(site);
 
-        GeneratedBuilderClass builder = new GeneratedBuilderClass(target, config.builderName());
+        GeneratedBuilderClass builder =
+            new GeneratedBuilderClass(target, config.builderName(), site.typeParameterSource());
         if (!config.access().isEmpty()) builder.getModifierList().addModifier(config.access());
         builder.getModifierList().addModifier(PsiModifier.STATIC);
         if (role.isSelfTyped()) {
@@ -436,6 +484,22 @@ public final class GeneratedMemberFactory {
         builder.setNavigationElement(target);
         GeneratedMemberMarker.mark(builder);
         return builder;
+    }
+
+    /**
+     * Where the target sits in a SuperBuilder chain.
+     *
+     * <p>An executable target is never in one: a constructor has no chain to
+     * find, so the processor's third path never looks for an annotated super and
+     * neither does this. Asking {@link ChainRole#of} anyway would read the
+     * enclosing class's own shape - abstract, or extending an annotated parent -
+     * and synthesise a self-typed Builder javac does not emit.
+     *
+     * @param site where the annotation is written
+     * @return the chain role, {@link ChainRole#STANDALONE} for an executable target
+     */
+    private static ChainRole roleOf(BuilderSite site) {
+        return site.isExecutable() ? ChainRole.STANDALONE : ChainRole.of(site.owner());
     }
 
     /**
@@ -489,7 +553,7 @@ public final class GeneratedMemberFactory {
         PsiClass parentBuilder = synthBuilderOf(parent);
         if (parentBuilder == null) return;
 
-        PsiTypeParameter[] ownCopies = ownTypeParameters(builder, target);
+        PsiTypeParameter[] ownCopies = ownTypeParameters(builder, target.getTypeParameters().length);
         // Field types and superclass arguments are written in the target's type
         // parameters; re-express them in this Builder's copies.
         PsiSubstitutor toBuilder = remap(elements, target.getTypeParameters(), ownCopies);
@@ -501,7 +565,7 @@ public final class GeneratedMemberFactory {
             for (PsiType arg : superType.getParameters()) args.add(toBuilder.substitute(arg));
         }
         if (role.isSelfTyped()) {
-            PsiTypeParameter[] selfTypes = selfTypeParameters(builder, target);
+            PsiTypeParameter[] selfTypes = selfTypeParameters(builder, target.getTypeParameters().length);
             if (selfTypes.length != 2) return;
             args.add(elements.createType(selfTypes[0]));
             args.add(elements.createType(selfTypes[1]));
@@ -529,17 +593,15 @@ public final class GeneratedMemberFactory {
     }
 
     /** The Builder's copies of the target's own parameters, excluding any self-types. */
-    private static PsiTypeParameter[] ownTypeParameters(PsiClass builder, PsiClass target) {
+    private static PsiTypeParameter[] ownTypeParameters(PsiClass builder, int own) {
         PsiTypeParameter[] all = builder.getTypeParameters();
-        int own = target.getTypeParameters().length;
         if (all.length <= own) return all;
         return java.util.Arrays.copyOfRange(all, 0, own);
     }
 
     /** The trailing {@code T} / {@code B} parameters on a self-typed Builder. */
-    private static PsiTypeParameter[] selfTypeParameters(PsiClass builder, PsiClass target) {
+    private static PsiTypeParameter[] selfTypeParameters(PsiClass builder, int own) {
         PsiTypeParameter[] all = builder.getTypeParameters();
-        int own = target.getTypeParameters().length;
         if (all.length != own + 2) return PsiTypeParameter.EMPTY_ARRAY;
         return java.util.Arrays.copyOfRange(all, own, all.length);
     }
@@ -557,8 +619,9 @@ public final class GeneratedMemberFactory {
      * {@link ClassBuilderAugmentProvider#getAugments} when the IDE asks
      * "what are the augmented methods of {@code Target.Builder}?".
      */
-    static List<PsiMethod> synthesizeBuilderMethods(PsiClass target, EditorBuilderConfig config,
+    static List<PsiMethod> synthesizeBuilderMethods(BuilderSite site, EditorBuilderConfig config,
                                                     PsiClass builder) {
+        PsiClass target = site.owner();
         Project project = target.getProject();
         PsiManager psiManager = PsiManager.getInstance(project);
         PsiElementFactory elements = JavaPsiFacade.getElementFactory(project);
@@ -573,17 +636,23 @@ public final class GeneratedMemberFactory {
         // is static and carries its own copies. Using the target's would leave
         // the setter chain returning a type nothing can substitute, and
         // build() yielding a raw target whose getters read as Object.
-        ChainRole role = ChainRole.of(target);
-        PsiTypeParameter[] ownParams = ownTypeParameters(builder, target);
+        ChainRole role = roleOf(site);
+        PsiTypeParameter[] sourceParams = site.typeParameterSource();
+        PsiTypeParameter[] ownParams = ownTypeParameters(builder, sourceParams.length);
+
+        // Slot types are declared in the source's type parameters; re-express
+        // them in the Builder's copies so a Builder<String> receiver actually
+        // substitutes them.
+        PsiSubstitutor toBuilder = remap(elements, sourceParams, ownParams);
 
         // On a self-typed Builder the setters return the B parameter, so a
         // subclass builder flows through inherited setters as its own type and
         // the chain can be called in any order. Elsewhere they return the
         // Builder itself.
         PsiClassType selfType;
-        PsiClassType targetType;
+        PsiType targetType;
         if (role.isSelfTyped()) {
-            PsiTypeParameter[] selfTypes = selfTypeParameters(builder, target);
+            PsiTypeParameter[] selfTypes = selfTypeParameters(builder, sourceParams.length);
             selfType = selfTypes.length == 2
                 ? elements.createType(selfTypes[1])
                 : applied(elements, builder, ownParams);
@@ -592,22 +661,17 @@ public final class GeneratedMemberFactory {
                 : applied(elements, target, ownParams);
         } else {
             selfType = applied(elements, builder, ownParams);
-            targetType = applied(elements, target, ownParams);
+            targetType = builtType(elements, site, ownParams, toBuilder);
         }
 
-        // Field types are declared in the target's type parameters; re-express
-        // them in the Builder's copies so a Builder<String> receiver actually
-        // substitutes them.
-        PsiSubstitutor toBuilder = remap(elements, target.getTypeParameters(), ownParams);
-
-        Set<String> excluded = excludedNames(target);
-        List<PsiFieldShape> fields = target.isRecord()
-            ? PsiFieldShapeExtractor.fromRecord(target, excluded, toBuilder)
-            : PsiFieldShapeExtractor.fromClass(target, excluded, toBuilder);
+        List<PsiFieldShape> fields = slotsOf(site, toBuilder);
 
         SetterCtx ctx = new SetterCtx(psiManager, elements, target, builder, selfType, config);
         List<PsiMethod> methods = new ArrayList<>();
         for (PsiFieldShape field : fields) {
+            // A seeded slot is supplied to builder(...) and is final from there
+            // on, so every setter shape would write over a committed value.
+            if (field.seed) continue;
             methods.addAll(settersFor(ctx, field));
         }
 
@@ -634,18 +698,61 @@ public final class GeneratedMemberFactory {
         // `new Target.Builder()` as a second entry point the processor no longer
         // publishes. Without this the editor resolves a cross-package call that
         // javac then refuses.
-        methods.add(builderConstructor(psiManager, builder, config.builderConstructorAccess()));
+        methods.add(builderConstructor(psiManager, builder, config.builderConstructorAccess(), fields));
 
         return methods;
     }
 
-    /** The synth Builder's no-arg constructor, at the configured access. */
-    private static PsiMethod builderConstructor(PsiManager manager, PsiClass builder, String access) {
+    /**
+     * The slots the builder is built from - the target's fields or record
+     * components, or the annotated member's parameters.
+     *
+     * @param site where the annotation is written
+     * @param toBuilder mapping into the synth Builder's own type parameters
+     * @return the slot shapes, in declaration order
+     */
+    private static List<PsiFieldShape> slotsOf(BuilderSite site, PsiSubstitutor toBuilder) {
+        if (site.isExecutable()) {
+            return PsiFieldShapeExtractor.fromExecutable(site.executable(), toBuilder);
+        }
+        PsiClass target = site.owner();
+        Set<String> excluded = excludedNames(target);
+        return target.isRecord()
+            ? PsiFieldShapeExtractor.fromRecord(target, excluded, toBuilder)
+            : PsiFieldShapeExtractor.fromClass(target, excluded, toBuilder);
+    }
+
+    /**
+     * The type {@code build()} returns.
+     *
+     * <p>A {@code static} factory is the one case where this is not the target:
+     * it hands back whatever it declares, under its own type parameters, which
+     * have to be re-expressed in the Builder's copies before a call site can
+     * substitute them.
+     */
+    private static PsiType builtType(PsiElementFactory elements, BuilderSite site,
+                                     PsiTypeParameter[] ownParams, PsiSubstitutor toBuilder) {
+        if (!site.isStaticFactory()) return applied(elements, site.owner(), ownParams);
+        PsiType declared = site.executable().getReturnType();
+        return declared == null
+            ? applied(elements, site.owner(), ownParams)
+            : toBuilder.substitute(declared);
+    }
+
+    /**
+     * The synth Builder's constructor, at the configured access and carrying one
+     * parameter per seeded slot - the only way a slot with no setter is filled.
+     */
+    private static PsiMethod builderConstructor(PsiManager manager, PsiClass builder, String access,
+                                                List<PsiFieldShape> slots) {
         LightMethodBuilder ctor = new LightMethodBuilder(manager, JavaLanguage.INSTANCE, builder.getName());
         ctor.setConstructor(true);
         ctor.setContainingClass(builder);
         ctor.setNavigationElement(builder);
         if (!access.isEmpty()) ctor.addModifier(access);
+        for (PsiFieldShape slot : slots) {
+            if (slot.seed) ctor.addParameter(buildParam(ctor, slot.name, slot.type, false));
+        }
         GeneratedMemberMarker.mark(ctor);
         return ctor;
     }
@@ -1008,7 +1115,7 @@ public final class GeneratedMemberFactory {
         Set<String> out = new HashSet<>();
         PsiAnnotation annotation = PsiFieldShapeExtractor.classBuilderAnnotation(target);
         if (annotation == null) return out;
-        PsiAnnotationMemberValue value = annotation.findAttributeValue("exclude");
+        PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue("exclude");
         if (value instanceof PsiArrayInitializerMemberValue arr) {
             for (PsiAnnotationMemberValue elem : arr.getInitializers()) {
                 if (elem instanceof PsiLiteralExpression lit && lit.getValue() instanceof String s) {

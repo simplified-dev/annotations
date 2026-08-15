@@ -19,6 +19,8 @@ import dev.simplified.shared.javac.ContractAnnotations;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.JavacTypeFactory;
 
+import javax.lang.model.element.ElementKind;
+
 /**
  * Builds the nested {@code Builder} {@link JCClassDecl} that gets appended to
  * the target class's {@code defs} list. Handles fields, setters via
@@ -83,22 +85,41 @@ final class NestedBuilderFactory {
     }
 
     /**
-     * Emits the builder's no-arg constructor at
+     * Emits the builder's constructor at
      * {@link BuilderConfig#builderConstructorAccess()}.
      *
-     * <p>An empty body: every field carries its own initializer, including the
-     * retained defaults, so there is nothing for a constructor to do beyond
-     * existing at the right visibility.
+     * <p>Empty and no-arg in the ordinary case: every slot carries its own
+     * initializer, including the retained defaults, so there is nothing for a
+     * constructor to do beyond existing at the right visibility.
+     *
+     * <p>A seeded slot is the exception, and the only way in for it. It has no
+     * setter and is declared {@code final}, so the constructor takes it as a
+     * parameter and assigns it - which is what makes {@code builder(seed)} the
+     * required entry point rather than a convenience beside a setter.
      */
     private JCMethodDecl builderConstructor() {
+        ListBuffer<JCVariableDecl> params = new ListBuffer<>();
+        ListBuffer<JCStatement> body = new ListBuffer<>();
+        for (FieldSpec seed : ctx.seeds()) {
+            params.append(make.VarDef(
+                make.Modifiers(Flags.PARAMETER),
+                names.fromString(seed.name),
+                ctx.types().parseType(seed.typeDisplay),
+                null
+            ));
+            body.append(make.Exec(make.Assign(
+                make.Select(make.Ident(names._this), names.fromString(seed.name)),
+                make.Ident(names.fromString(seed.name))
+            )));
+        }
         JCMethodDecl ctor = make.MethodDef(
             make.Modifiers(MutationContext.accessFlagFor(ctx.config().builderConstructorAccess())),
             names.init,
             null,
             List.nil(),
+            params.toList(),
             List.nil(),
-            List.nil(),
-            make.Block(0, List.nil()),
+            make.Block(0, body.toList()),
             null
         );
         AstMarkers.markGenerated(ctor, ctx.generated());
@@ -131,7 +152,17 @@ final class NestedBuilderFactory {
 
         JCExpression instantiation;
         String factory = ctx.config().factoryMethod();
-        if (factory != null && !factory.isEmpty()) {
+        String annotatedFactory = annotatedFactoryName();
+        if (annotatedFactory != null) {
+            // The annotated member IS what build() calls, and the slots are its
+            // parameters - so factoryMethod has nothing left to redirect.
+            instantiation = make.Apply(
+                List.nil(),
+                make.Select(make.Ident(names.fromString(ctx.targetSimpleName())),
+                    names.fromString(annotatedFactory)),
+                args.toList()
+            );
+        } else if (factory != null && !factory.isEmpty()) {
             instantiation = make.Apply(
                 List.nil(),
                 make.Select(make.Ident(names.fromString(ctx.targetSimpleName())), names.fromString(factory)),
@@ -151,7 +182,7 @@ final class NestedBuilderFactory {
 
         if (ctx.config().validate() && ctx.declaresBuildFlag()) {
             // Target t = new Target(...); BuildFlagValidator.validate(t); return t;
-            JCExpression targetType = ctx.targetType();
+            JCExpression targetType = ctx.builtType();
             JCVariableDecl targetVar = make.VarDef(
                 make.Modifiers(Flags.FINAL),
                 names.fromString("$result"),
@@ -173,7 +204,7 @@ final class NestedBuilderFactory {
         }
 
         JCBlock block = make.Block(0, body.toList());
-        JCExpression returnType = ctx.targetType();
+        JCExpression returnType = ctx.builtType();
         // build() always returns a fresh target instance; "-> new" without
         // mutates or pure matches BuilderEmitter.emitBuildMethod.
         JCMethodDecl method = make.MethodDef(
@@ -188,6 +219,21 @@ final class NestedBuilderFactory {
         );
         AstMarkers.markGenerated(method, ctx.generated());
         return method;
+    }
+
+    /**
+     * The name of the annotated {@code static} factory {@code build()} calls, or
+     * {@code null} when it calls a constructor.
+     *
+     * <p>An annotated constructor answers {@code null} too: {@code new Target(..)}
+     * is what builds it, which is the same expression an unannotated target
+     * takes.
+     */
+    private String annotatedFactoryName() {
+        if (!ctx.isExecutableTarget()) return null;
+        var executable = ctx.executable();
+        if (executable.getKind() != ElementKind.METHOD) return null;
+        return executable.getSimpleName().toString();
     }
 
 }

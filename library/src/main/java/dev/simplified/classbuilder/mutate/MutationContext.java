@@ -50,17 +50,50 @@ public final class MutationContext {
     private final Set<String> declaredAccessors;
     private final String selfTypeName;
     private final String selfBuilderName;
+    private final ExecutableElement executable;
+    private final List<? extends TypeParameterElement> typeParameters;
 
     public MutationContext(JavacBridge bridge,
                            TypeElement targetElement,
                            JCClassDecl target,
                            BuilderConfig config,
                            List<FieldSpec> fields) {
+        this(bridge, targetElement, target, config, fields, null);
+    }
+
+    /**
+     * Builds the context for a target whose slots come from an executable
+     * member's parameters rather than from the enclosing type's fields.
+     *
+     * <p>The builder still nests in {@code targetElement} and is entered
+     * through it; what changes is what {@code build()} calls and which type
+     * parameters the generated members carry. A constructor runs under the
+     * enclosing type's parameters, because that is what {@code new Target<V>(..)}
+     * produces. A {@code static} factory cannot see those at all, so it runs
+     * under its own and {@link #builtType()} is the return type it declares.
+     *
+     * @param bridge the javac services
+     * @param targetElement the type the builder nests in
+     * @param target that type's declaration
+     * @param config resolved builder configuration
+     * @param fields the slot IR, one per parameter, in declaration order
+     * @param executable the annotated constructor or static factory
+     */
+    public MutationContext(JavacBridge bridge,
+                           TypeElement targetElement,
+                           JCClassDecl target,
+                           BuilderConfig config,
+                           List<FieldSpec> fields,
+                           ExecutableElement executable) {
         this.bridge = bridge;
         this.targetElement = targetElement;
         this.target = target;
         this.config = config;
         this.fields = fields;
+        this.executable = executable;
+        this.typeParameters = executable != null && isStaticFactory(executable)
+            ? executable.getTypeParameters()
+            : targetElement.getTypeParameters();
         this.targetSimpleName = targetElement.getSimpleName().toString();
         this.builderName = config.builderName();
         this.types = new JavacTypeFactory(bridge.treeMaker(), bridge.names());
@@ -174,9 +207,37 @@ public final class MutationContext {
         return "$replaced$" + fieldName;
     }
 
-    /** Whether the target declares type parameters of its own. */
+    /** Whether the generated builder carries type parameters. */
     public boolean isGeneric() {
-        return !targetElement.getTypeParameters().isEmpty();
+        return !typeParameters.isEmpty();
+    }
+
+    /**
+     * The annotated constructor or static factory, or {@code null} when the
+     * annotation is on the type and the slots are its fields.
+     *
+     * @return the annotated executable member, when there is one
+     */
+    public ExecutableElement executable() {
+        return executable;
+    }
+
+    /**
+     * Whether the slots come from an executable member's parameters.
+     *
+     * @return whether this is the executable-target path
+     */
+    public boolean isExecutableTarget() {
+        return executable != null;
+    }
+
+    /** The slots supplied to {@code builder(...)} rather than through a setter. */
+    public List<FieldSpec> seeds() {
+        return fields.stream().filter(f -> f.seed).toList();
+    }
+
+    private static boolean isStaticFactory(ExecutableElement executable) {
+        return executable.getKind() == ElementKind.METHOD;
     }
 
     /**
@@ -269,7 +330,7 @@ public final class MutationContext {
         TreeMaker make = make();
         Names names = names();
         ListBuffer<JCTypeParameter> out = new ListBuffer<>();
-        for (TypeParameterElement tp : targetElement.getTypeParameters()) {
+        for (TypeParameterElement tp : typeParameters) {
             ListBuffer<JCExpression> bounds = new ListBuffer<>();
             for (TypeMirror bound : tp.getBounds()) {
                 if ("java.lang.Object".equals(bound.toString())) continue;
@@ -292,7 +353,7 @@ public final class MutationContext {
         TreeMaker make = make();
         Names names = names();
         ListBuffer<JCExpression> out = new ListBuffer<>();
-        for (TypeParameterElement tp : targetElement.getTypeParameters()) {
+        for (TypeParameterElement tp : typeParameters) {
             out.append(make.Ident(names.fromString(tp.getSimpleName().toString())));
         }
         return out.toList();
@@ -307,6 +368,21 @@ public final class MutationContext {
     public JCExpression targetType() {
         JCExpression raw = make().Ident(names().fromString(targetSimpleName));
         return isGeneric() ? make().TypeApply(raw, typeArgs()) : raw;
+    }
+
+    /**
+     * A reference to the type {@code build()} returns.
+     *
+     * <p>The same as {@link #targetType()} everywhere but on a {@code static}
+     * factory, where the two genuinely differ: the factory's return type is what
+     * it hands back, and its type parameters are its own rather than the
+     * enclosing type's - which a static member cannot name at all.
+     *
+     * @return a fresh type reference to the built type
+     */
+    public JCExpression builtType() {
+        if (executable == null || !isStaticFactory(executable)) return targetType();
+        return types.parseType(executable.getReturnType().toString());
     }
 
     /**
@@ -356,18 +432,26 @@ public final class MutationContext {
      * deliberately looser than the validator's own test: erring towards emitting
      * the call costs a no-op scan, while erring the other way drops a check.
      *
-     * <p><b>A {@link BuilderConfig#factoryMethod()} answers true outright.</b>
-     * The validator reads {@code target.getClass()}, so it sees the flags of
-     * whatever the factory actually returned - which may be a subtype this type
-     * has never heard of, declaring constraints of its own. Nothing at compile
-     * time can enumerate those, so a target that hands construction to a factory
-     * keeps the call unconditionally.
+     * <p><b>A {@link BuilderConfig#factoryMethod()} answers true outright</b>,
+     * and so does an annotated {@code static} factory, which is the same shape
+     * one level up. The validator reads {@code target.getClass()}, so it sees
+     * the flags of whatever the factory actually returned - which may be a
+     * subtype this type has never heard of, declaring constraints of its own.
+     * Nothing at compile time can enumerate those, so a target that hands
+     * construction to a factory keeps the call unconditionally.
+     *
+     * <p>An annotated <em>constructor</em> needs no such allowance: {@code new
+     * Target(..)} produces exactly {@code Target}, so the field walk below
+     * decides it as surely as it decides a target-level annotation. Its slots
+     * being parameters changes nothing here - {@code @BuildFlag} is read off the
+     * built object's fields at runtime, and that is where it stays.
      *
      * @return whether {@code build()} needs the validator
      */
     public boolean declaresBuildFlag() {
         String factory = config.factoryMethod();
         if (factory != null && !factory.isEmpty()) return true;
+        if (executable != null && isStaticFactory(executable)) return true;
         for (TypeElement type = targetElement; type != null; type = superclassOf(type)) {
             for (Element enclosed : type.getEnclosedElements()) {
                 if (enclosed.getKind() != ElementKind.FIELD) continue;

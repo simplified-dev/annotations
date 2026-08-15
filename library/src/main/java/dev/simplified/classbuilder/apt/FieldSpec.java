@@ -91,6 +91,13 @@ public final class FieldSpec {
     public final boolean append;                    // @Collector(append = true) - bulk setters add rather than replace
     public final boolean ignored;                   // @BuilderIgnore or listed in @ClassBuilder.exclude
     public final boolean lazy;                       // @Lazy: storage rewritten to Lazy<T>, getter synthesised
+    /**
+     * {@code @BuilderSeed} on a constructor or factory parameter - the slot is
+     * supplied to {@code builder(...)} and emits no setter. Always false on the
+     * field and interface-accessor paths, where the annotation cannot be
+     * written.
+     */
+    public final boolean seed;
     public final boolean builderDefault;
     /** True only when the field itself carried {@code @BuilderDefault}, not when it inherited the class policy. */
     public final boolean builderDefaultExplicit;
@@ -145,6 +152,7 @@ public final class FieldSpec {
         this.compute = b.compute;
         this.ignored = b.ignored;
         this.lazy = b.lazy;
+        this.seed = b.seed;
         this.builderDefault = b.builderDefault;
         this.builderDefaultExplicit = b.builderDefaultExplicit;
         this.sourceInitializer = b.sourceInitializer;
@@ -188,21 +196,76 @@ public final class FieldSpec {
         b.nullable = lookup.hasAnnotation(method, "org.jetbrains.annotations.Nullable");
         classifyType(b, typeUtils);
 
-        b.formattable = lookup.hasAnnotation(method, "dev.simplified.annotations.Formattable");
-        b.negateName = lookup.stringAttr(method, "dev.simplified.annotations.Negate", "value", null);
-        if (lookup.hasAnnotation(method, "dev.simplified.annotations.Collector")) {
-            b.collector = true;
-            b.singular = lookup.booleanAttr(method, "dev.simplified.annotations.Collector", "singular", false);
-            b.clearable = lookup.booleanAttr(method, "dev.simplified.annotations.Collector", "clearable", false);
-            b.compute = lookup.booleanAttr(method, "dev.simplified.annotations.Collector", "compute", false);
-            b.append = lookup.booleanAttr(method, "dev.simplified.annotations.Collector", "append", false);
-            String v = lookup.stringAttr(method, "dev.simplified.annotations.Collector", "singularMethodName", "");
-            b.singularName = v.isEmpty() ? defaultSingular(b.name) : v;
-        }
+        readSetterCompanions(b, method, lookup);
         b.ignored = lookup.hasAnnotation(method, "dev.simplified.annotations.BuilderIgnore");
         b.buildFlag = lookup.findMirror(method, "dev.simplified.annotations.BuildFlag");
 
         return new FieldSpec(b);
+    }
+
+    /**
+     * Factory for a parameter of a {@code @ClassBuilder}-annotated constructor
+     * or static factory. The parameter name becomes the slot name and its
+     * declared type the slot type, so the setter matrix reads exactly as it
+     * would off a field of the same shape.
+     *
+     * <p>Only the companions that shape a setter apply - {@code @Collector},
+     * {@code @Negate}, {@code @Formattable} - plus {@code @BuilderSeed}, which
+     * withdraws the setter entirely. {@code @BuilderDefault},
+     * {@code @BuilderIgnore} and {@code @ObtainVia} have nothing to act on: a
+     * parameter carries no initializer to retain, every parameter has to be
+     * passed, and there is no instance to read a slot back off. No
+     * {@link SourceIntrospector} is threaded through for the same reason.
+     *
+     * <p>{@code @BuildFlag} is not read here either, and that is where the
+     * constraint lives rather than where it is missing: the validator resolves
+     * the flagged fields of the instance {@code build()} produced, so the
+     * annotation belongs on those fields and is found there whichever member
+     * constructed them.
+     *
+     * @param parameter the declared parameter
+     * @param lookup the annotation reader
+     * @param typeUtils type utilities, for the custom-container supertype walk
+     * @return the slot IR for this parameter
+     */
+    public static FieldSpec fromParameter(VariableElement parameter, AnnotationLookup lookup,
+                                          Types typeUtils) {
+        Builder b = new Builder();
+        b.element = parameter;
+        b.name = parameter.getSimpleName().toString();
+        b.type = parameter.asType();
+        b.typeDisplay = b.type.toString();
+        b.isFinal = parameter.getModifiers().contains(Modifier.FINAL);
+
+        b.notNull = lookup.hasAnnotation(parameter, "org.jetbrains.annotations.NotNull");
+        b.nullable = lookup.hasAnnotation(parameter, "org.jetbrains.annotations.Nullable");
+        classifyType(b, typeUtils);
+
+        readSetterCompanions(b, parameter, lookup);
+        b.seed = lookup.hasAnnotation(parameter, "dev.simplified.annotations.BuilderSeed");
+
+        return new FieldSpec(b);
+    }
+
+    /**
+     * Reads the three companions that shape a setter - {@code @Formattable},
+     * {@code @Negate} and {@code @Collector} - off whichever element declares
+     * the slot. One reading for all three factories, so a slot derived from a
+     * parameter cannot come out with a different setter matrix from a field of
+     * the same shape.
+     */
+    private static void readSetterCompanions(Builder b, Element owner, AnnotationLookup lookup) {
+        b.formattable = lookup.hasAnnotation(owner, "dev.simplified.annotations.Formattable");
+        b.negateName = lookup.stringAttr(owner, "dev.simplified.annotations.Negate", "value", null);
+        if (!lookup.hasAnnotation(owner, "dev.simplified.annotations.Collector")) return;
+        b.collector = true;
+        b.singular = lookup.booleanAttr(owner, "dev.simplified.annotations.Collector", "singular", false);
+        b.clearable = lookup.booleanAttr(owner, "dev.simplified.annotations.Collector", "clearable", false);
+        b.compute = lookup.booleanAttr(owner, "dev.simplified.annotations.Collector", "compute", false);
+        b.append = lookup.booleanAttr(owner, "dev.simplified.annotations.Collector", "append", false);
+        String written = lookup.stringAttr(owner, "dev.simplified.annotations.Collector",
+            "singularMethodName", "");
+        b.singularName = written.isEmpty() ? defaultSingular(b.name) : written;
     }
 
     private static void classifyType(Builder b, Types typeUtils) {
@@ -329,18 +392,8 @@ public final class FieldSpec {
         classifyType(b, typeUtils);
 
         // Companion annotations
-        b.formattable = lookup.hasAnnotation(element, "dev.simplified.annotations.Formattable");
-        b.negateName = lookup.stringAttr(element, "dev.simplified.annotations.Negate", "value", null);
+        readSetterCompanions(b, element, lookup);
         b.lazy = lookup.hasAnnotation(element, "dev.simplified.annotations.Lazy");
-        if (lookup.hasAnnotation(element, "dev.simplified.annotations.Collector")) {
-            b.collector = true;
-            b.singular = lookup.booleanAttr(element, "dev.simplified.annotations.Collector", "singular", false);
-            b.clearable = lookup.booleanAttr(element, "dev.simplified.annotations.Collector", "clearable", false);
-            b.compute = lookup.booleanAttr(element, "dev.simplified.annotations.Collector", "compute", false);
-            b.append = lookup.booleanAttr(element, "dev.simplified.annotations.Collector", "append", false);
-            String v = lookup.stringAttr(element, "dev.simplified.annotations.Collector", "singularMethodName", "");
-            b.singularName = v.isEmpty() ? defaultSingular(b.name) : v;
-        }
         b.ignored = lookup.hasAnnotation(element, "dev.simplified.annotations.BuilderIgnore");
 
         // @BuilderDefault overrides the class-level retainInit policy. Presence
@@ -409,7 +462,7 @@ public final class FieldSpec {
         String negateName;
         boolean collector, singular, clearable, compute, append;
         String singularName;
-        boolean ignored, lazy, builderDefault, builderDefaultExplicit;
+        boolean ignored, lazy, seed, builderDefault, builderDefaultExplicit;
         String sourceInitializer;
         Set<String> initializerImports;
         com.sun.source.tree.Tree sourceInitializerTree;

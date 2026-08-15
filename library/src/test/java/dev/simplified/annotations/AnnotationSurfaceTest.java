@@ -69,22 +69,36 @@ public class AnnotationSurfaceTest {
         assertTargets(BuildFlag.class, ElementType.FIELD, ElementType.METHOD);
     }
 
+    // The three setter-shaping companions reach a PARAMETER as well as a FIELD,
+    // because @ClassBuilder on a constructor or static factory derives its slots
+    // from that member's parameters and they are the slots those shapes apply to.
+
     @Test
     public void collector_metadata() {
         assertRetention(Collector.class, RetentionPolicy.CLASS);
-        assertTargets(Collector.class, ElementType.FIELD);
+        assertTargets(Collector.class, ElementType.FIELD, ElementType.PARAMETER);
     }
 
     @Test
     public void negate_metadata() {
         assertRetention(Negate.class, RetentionPolicy.CLASS);
-        assertTargets(Negate.class, ElementType.FIELD);
+        assertTargets(Negate.class, ElementType.FIELD, ElementType.PARAMETER);
     }
 
     @Test
     public void formattable_metadata() {
         assertRetention(Formattable.class, RetentionPolicy.CLASS);
-        assertTargets(Formattable.class, ElementType.FIELD);
+        assertTargets(Formattable.class, ElementType.FIELD, ElementType.PARAMETER);
+    }
+
+    @Test
+    public void builderSeed_metadata() {
+        // APT-time only, like the rest of the builder companions - the seed's
+        // whole effect is on which members are generated.
+        assertRetention(BuilderSeed.class, RetentionPolicy.CLASS);
+        // A parameter is the only place a seed can be written: it names a value
+        // supplied at the entry point, and only the executable path has one.
+        assertTargets(BuilderSeed.class, ElementType.PARAMETER);
     }
 
     @Test

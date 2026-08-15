@@ -7,8 +7,10 @@ import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiDocCommentOwner;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiLiteralExpression;
+import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiModifierListOwner;
+import com.intellij.psi.PsiParameter;
 import com.intellij.psi.PsiRecordComponent;
 import com.intellij.psi.PsiSubstitutor;
 import com.intellij.psi.PsiTypeParameter;
@@ -36,6 +38,7 @@ final class PsiFieldShapeExtractor {
     private static final String NEGATE_FQN = ClassBuilderConstants.NEGATE_FQN;
     private static final String FORMATTABLE_FQN = ClassBuilderConstants.FORMATTABLE_FQN;
     private static final String LAZY_FQN = ClassBuilderConstants.LAZY_FQN;
+    private static final String BUILDER_SEED_FQN = ClassBuilderConstants.BUILDER_SEED_FQN;
 
     private PsiFieldShapeExtractor() {
     }
@@ -91,6 +94,31 @@ final class PsiFieldShapeExtractor {
         return out;
     }
 
+    /**
+     * Parameter variant, for a {@code @ClassBuilder} written on a constructor or
+     * static factory. Every parameter is a slot, in declaration order - there is
+     * nothing to exclude, the annotated member requiring all of them.
+     *
+     * <p>{@code @BuildFlag} is deliberately not read off a parameter, mirroring
+     * the processor: the validator resolves the flagged fields of the instance
+     * {@code build()} produced, so a constraint lives on those fields and a
+     * parameter never carries one to propagate.
+     *
+     * @param executable the annotated constructor or static factory
+     * @param substitutor mapping into the synth Builder's own type parameters
+     * @return the extracted shapes, in parameter order
+     */
+    static List<PsiFieldShape> fromExecutable(PsiMethod executable, PsiSubstitutor substitutor) {
+        List<PsiFieldShape> out = new ArrayList<>();
+        for (PsiParameter parameter : executable.getParameterList().getParameters()) {
+            String name = parameter.getName();
+            PsiFieldShape.Builder b = classify(parameter, name, substitutor.substitute(parameter.getType()));
+            b.seed = hasAnnotation(parameter, BUILDER_SEED_FQN);
+            out.add(b.build());
+        }
+        return out;
+    }
+
     /** True when the owner carries {@code @BuilderIgnore}. */
     private static boolean isIgnored(PsiModifierListOwner owner) {
         return hasAnnotation(owner, BUILDER_IGNORE_FQN);
@@ -102,6 +130,16 @@ final class PsiFieldShapeExtractor {
      * annotation state from the owner's annotations.
      */
     private static PsiFieldShape buildShape(PsiModifierListOwner owner, String name, com.intellij.psi.PsiType type) {
+        return classify(owner, name, type).build();
+    }
+
+    /**
+     * Classifies a slot's type and reads its companion annotations, leaving the
+     * result open so a caller can add what only its own path knows - the seed
+     * marker, which is a parameter's alone.
+     */
+    private static PsiFieldShape.Builder classify(PsiModifierListOwner owner, String name,
+                                                  com.intellij.psi.PsiType type) {
         PsiFieldShape.Builder b = PsiFieldShape.classify(name, type);
         if (owner instanceof PsiDocCommentOwner docOwner) b.docSource = docOwner;
         // Use NullableNotNullManager so every configured nullability
@@ -144,7 +182,7 @@ final class PsiFieldShapeExtractor {
         PsiAnnotation flag = findAnnotation(owner, BUILD_FLAG_FQN);
         if (flag != null) b.nonNullByBuildFlag = booleanAttr(flag, "nonNull", false);
 
-        return b.build();
+        return b;
     }
 
     /** True when the owner is a field carrying a declared initializer. */
@@ -162,13 +200,13 @@ final class PsiFieldShapeExtractor {
     }
 
     private static String stringAttr(PsiAnnotation annotation, String attr, String fallback) {
-        PsiAnnotationMemberValue value = annotation.findAttributeValue(attr);
+        PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(attr);
         if (value instanceof PsiLiteralExpression lit && lit.getValue() instanceof String s) return s;
         return fallback;
     }
 
     private static boolean booleanAttr(PsiAnnotation annotation, String attr, boolean fallback) {
-        PsiAnnotationMemberValue value = annotation.findAttributeValue(attr);
+        PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(attr);
         if (value instanceof PsiLiteralExpression lit && lit.getValue() instanceof Boolean b) return b;
         return fallback;
     }

@@ -58,6 +58,10 @@ final class FieldMutators {
     /** Returns every setter the field should emit on the nested Builder. */
     List<JCMethodDecl> setters(FieldSpec field) {
         ListBuffer<JCMethodDecl> out = new ListBuffer<>();
+        // A seeded slot is supplied to builder(...) and is final from there on,
+        // so every shape below would be an assignment to a value the caller has
+        // already committed to.
+        if (field.seed) return out.toList();
         if (field.lazy) {
             // @Lazy fields take a dual shape: foo(T value) wraps as a constant
             // Supplier; foo(Supplier<T>) stores the supplier verbatim. The
@@ -124,6 +128,18 @@ final class FieldMutators {
      * lazy-from-supplier semantics through the dual setter pair.
      */
     JCVariableDecl fieldDecl(FieldSpec field) {
+        // A seeded slot is assigned once, by the builder's own constructor, and
+        // has no setter to reassign it - so it is declared final and carries no
+        // initializer. Declaring it any other way would let a later shape write
+        // over the value the caller entered through.
+        if (field.seed) {
+            return make.VarDef(
+                make.Modifiers(Flags.PRIVATE | Flags.FINAL),
+                names.fromString(field.name),
+                types.parseType(field.typeDisplay),
+                null
+            );
+        }
         // A field whose default reads instance state is stored as Supplier<T>
         // for the same reason a @Lazy field is: the constructor must tell "never
         // set" from "set to null" without a parallel flag, and null is

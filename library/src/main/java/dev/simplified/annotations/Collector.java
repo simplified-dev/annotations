@@ -103,10 +103,28 @@ import java.util.function.Supplier;
  * // counts(Map), putCount(String, Integer), putCountIfAbsent(String, Supplier&lt;Integer&gt;)
  * </code></pre>
  *
+ * <h2>On a constructor or factory parameter</h2>
+ * A {@link ClassBuilder} written on a constructor or static factory derives its
+ * slots from that member's parameters, and this annotation reaches them the same
+ * way it reaches a field - the bulk overloads, the single-element add or put,
+ * the clear, and the lazy put-if-absent are all emitted against the parameter's
+ * own type.
+ *
+ * <p>A parameter carries no initializer, so the slot starts empty and there is
+ * no default for a wholesale replace to discard. {@link #append} still decides
+ * what a <em>second</em> bulk call does - {@code tags("a").tags("b")} yields
+ * {@code [a, b]} under it and {@code [b]} without.
+ *
+ * <p>One shape is out of reach there, and it is the initializer's absence that
+ * puts it there rather than a decision: a container recognised by implementing
+ * {@link Collection} or {@link Map} rather than by being a {@code java.util}
+ * type has no expression the builder could use to make a fresh instance of it,
+ * so such a parameter gets a plain replace setter and a compiler note.
+ *
  * @see ClassBuilder
  */
 @Retention(RetentionPolicy.CLASS)
-@Target(ElementType.FIELD)
+@Target({ ElementType.FIELD, ElementType.PARAMETER })
 public @interface Collector {
 
     /**

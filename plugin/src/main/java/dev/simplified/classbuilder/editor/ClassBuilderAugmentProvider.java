@@ -82,13 +82,21 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             return methods;
         }
 
-        if (findClassBuilderAnnotation(target) == null) return Collections.emptyList();
+        // The guard first, before anything that could resolve: BuilderSite.of
+        // matches an annotation by name, and a resolve started from in here
+        // walks the class's nested types straight back into this method.
         if (IN_PROGRESS.get().contains(target)) return Collections.emptyList();
+        BuilderSite site = BuilderSite.of(target);
+        if (site == null) return Collections.emptyList();
 
         if (PsiMethod.class.isAssignableFrom(type)) {
             // Bootstrap methods (builder/from/mutate) only on concrete targets;
             // abstract targets get their bootstraps from concrete subclasses.
-            if (target.hasModifierProperty(PsiModifier.ABSTRACT)) return Collections.emptyList();
+            // An executable target is never in a chain, so an abstract enclosing
+            // type is no reason to withhold its entry point.
+            if (!site.isExecutable() && target.hasModifierProperty(PsiModifier.ABSTRACT)) {
+                return Collections.emptyList();
+            }
             @SuppressWarnings("unchecked")
             List<Psi> methods = (List<Psi>) cachedMethods(target);
             return methods;
@@ -114,15 +122,15 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
                 return CachedValueProvider.Result.create(Collections.<PsiMethod>emptyList(),
                     PsiModificationTracker.MODIFICATION_COUNT);
             }
-            PsiAnnotation cb = findClassBuilderAnnotation(parentTarget);
-            if (cb == null) {
+            BuilderSite site = BuilderSite.of(parentTarget);
+            if (site == null) {
                 return CachedValueProvider.Result.create(Collections.<PsiMethod>emptyList(),
                     PsiModificationTracker.MODIFICATION_COUNT);
             }
             GeneratedMemberFactory.EditorBuilderConfig config =
-                GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(cb);
+                GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
             List<PsiMethod> methods = GeneratedMemberFactory.synthesizeBuilderMethods(
-                parentTarget, config, synthBuilder);
+                site, config, synthBuilder);
             return CachedValueProvider.Result.create(methods,
                 PsiModificationTracker.MODIFICATION_COUNT);
         });
@@ -130,12 +138,12 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
 
     private static List<PsiMethod> cachedMethods(PsiClass target) {
         return CachedValuesManager.getCachedValue(target, () -> {
-            PsiAnnotation resolved = findClassBuilderAnnotation(target);
-            if (resolved == null) {
+            BuilderSite site = BuilderSite.of(target);
+            if (site == null) {
                 return CachedValueProvider.Result.create(Collections.<PsiMethod>emptyList(),
                     PsiModificationTracker.MODIFICATION_COUNT);
             }
-            SynthesizedMembers members = synthesizeOrReuse(target, resolved);
+            SynthesizedMembers members = synthesizeOrReuse(site);
             return CachedValueProvider.Result.create(
                 members.allMethods(),
                 PsiModificationTracker.MODIFICATION_COUNT);
@@ -144,8 +152,8 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
 
     private static List<PsiClass> cachedNestedClasses(PsiClass target) {
         return CachedValuesManager.getCachedValue(target, () -> {
-            PsiAnnotation resolved = findClassBuilderAnnotation(target);
-            if (resolved == null) {
+            BuilderSite site = BuilderSite.of(target);
+            if (site == null) {
                 return CachedValueProvider.Result.create(Collections.<PsiClass>emptyList(),
                     PsiModificationTracker.MODIFICATION_COUNT);
             }
@@ -157,7 +165,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             // file highlighting); getInnerClasses() is augment-aware and would
             // recurse back into this provider.
             GeneratedMemberFactory.EditorBuilderConfig config =
-                GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(resolved);
+                GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
             if (target instanceof com.intellij.psi.impl.source.PsiExtensibleClass extensible) {
                 for (PsiClass nested : extensible.getOwnInnerClasses()) {
                     if (config.builderName().equals(nested.getName())) {
@@ -166,7 +174,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
                     }
                 }
             }
-            SynthesizedMembers members = synthesizeOrReuse(target, resolved);
+            SynthesizedMembers members = synthesizeOrReuse(site);
             return CachedValueProvider.Result.create(
                 List.of(members.builderClass()),
                 PsiModificationTracker.MODIFICATION_COUNT);
@@ -182,9 +190,10 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      * subsequent calls (including the checker's rerun) retrieve the same
      * {@link PsiClass} / {@link PsiMethod} instances.
      */
-    private static SynthesizedMembers synthesizeOrReuse(PsiClass target, PsiAnnotation resolved) {
+    private static SynthesizedMembers synthesizeOrReuse(BuilderSite site) {
+        PsiClass target = site.owner();
         GeneratedMemberFactory.EditorBuilderConfig config =
-            GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(resolved);
+            GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
         SynthesizedMembers cached = target.getUserData(SYNTHESIZED);
         if (cached != null && Objects.equals(cached.config(), config)) {
             return cached;
@@ -195,9 +204,11 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         // rather than looping until stack overflow.
         IN_PROGRESS.get().add(target);
         try {
-            PsiClass builderClass = GeneratedMemberFactory.synthesizeBuilderClass(target, config);
-            List<PsiMethod> bootstrap = GeneratedMemberFactory.bootstrapMethods(target, config, builderClass);
-            PsiMethod ctor = needsAllArgsConstructor(target, config)
+            PsiClass builderClass = GeneratedMemberFactory.synthesizeBuilderClass(site, config);
+            List<PsiMethod> bootstrap = GeneratedMemberFactory.bootstrapMethods(site, config, builderClass);
+            // The annotated member is what build() calls on the executable path,
+            // so there is no constructor to synthesise beside it.
+            PsiMethod ctor = !site.isExecutable() && needsAllArgsConstructor(target, config)
                 ? GeneratedMemberFactory.allArgsConstructor(target, config)
                 : null;
             SynthesizedMembers fresh = new SynthesizedMembers(config, bootstrap, builderClass, ctor);

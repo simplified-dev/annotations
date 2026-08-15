@@ -15,6 +15,14 @@ import java.util.Set;
 /**
  * Shared FQNs and attribute-reading helpers for the {@code @ClassBuilder}
  * IDE support. Mirrors the layout of {@code ResourcePathConstants}.
+ *
+ * <p>Every reader here asks for the <b>declared</b> attribute value and supplies
+ * the annotation's own default itself, which is what the {@code fallback}
+ * argument on each of them is. That is not a shortcut: reading the value the
+ * platform fills in resolves the annotation type, and a resolve started from an
+ * annotation written inside a class body walks that class's nested types, which
+ * is augment-aware and re-enters the provider that asked. The defaults are
+ * stated once at each call site instead.
  */
 public final class ClassBuilderConstants {
 
@@ -24,6 +32,7 @@ public final class ClassBuilderConstants {
 
     public static final @NotNull String BUILDER_DEFAULT_FQN = "dev.simplified.annotations.BuilderDefault";
     public static final @NotNull String BUILDER_IGNORE_FQN = "dev.simplified.annotations.BuilderIgnore";
+    public static final @NotNull String BUILDER_SEED_FQN = "dev.simplified.annotations.BuilderSeed";
     public static final @NotNull String BUILD_FLAG_FQN = "dev.simplified.annotations.BuildFlag";
     public static final @NotNull String OBTAIN_VIA_FQN = "dev.simplified.annotations.ObtainVia";
     public static final @NotNull String COLLECTOR_FQN = "dev.simplified.annotations.Collector";
@@ -40,6 +49,7 @@ public final class ClassBuilderConstants {
         ANNOTATION_FQN,
         BUILDER_DEFAULT_FQN,
         BUILDER_IGNORE_FQN,
+        BUILDER_SEED_FQN,
         BUILD_FLAG_FQN,
         OBTAIN_VIA_FQN,
         COLLECTOR_FQN,
@@ -58,6 +68,7 @@ public final class ClassBuilderConstants {
         ANNOTATION_SHORT_NAME,
         "BuilderDefault",
         "BuilderIgnore",
+        "BuilderSeed",
         "BuildFlag",
         "ObtainVia",
         "Collector",
@@ -85,7 +96,7 @@ public final class ClassBuilderConstants {
 
     public static @NotNull String stringAttr(@Nullable PsiAnnotation annotation, @NotNull String attr, @NotNull String fallback) {
         if (annotation == null) return fallback;
-        PsiAnnotationMemberValue value = annotation.findAttributeValue(attr);
+        PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(attr);
         if (value instanceof PsiLiteralExpression literal && literal.getValue() instanceof String s && !s.isEmpty()) return s;
         return fallback;
     }
@@ -111,7 +122,7 @@ public final class ClassBuilderConstants {
     /** Reads the {@code style} attribute, defaulting to {@link NamingStyle#SIMPLIFIED}. */
     public static @NotNull NamingStyle namingStyle(@Nullable PsiAnnotation annotation) {
         if (annotation == null) return NamingStyle.SIMPLIFIED;
-        PsiAnnotationMemberValue value = annotation.findAttributeValue(ATTR_STYLE);
+        PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(ATTR_STYLE);
         if (value instanceof PsiReferenceExpression ref) {
             String name = ref.getReferenceName();
             if (name != null) {
@@ -185,7 +196,7 @@ public final class ClassBuilderConstants {
 
     public static boolean booleanAttr(@Nullable PsiAnnotation annotation, @NotNull String attr, boolean fallback) {
         if (annotation == null) return fallback;
-        PsiAnnotationMemberValue value = annotation.findAttributeValue(attr);
+        PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(attr);
         if (value instanceof PsiLiteralExpression literal && literal.getValue() instanceof Boolean b) return b;
         return fallback;
     }
@@ -212,7 +223,7 @@ public final class ClassBuilderConstants {
                                                 @NotNull String attr,
                                                 @NotNull String fallback) {
         if (annotation == null) return fallback;
-        PsiAnnotationMemberValue value = annotation.findAttributeValue(attr);
+        PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(attr);
         if (value instanceof PsiReferenceExpression ref) {
             String name = ref.getReferenceName();
             if (name != null) {

@@ -1,7 +1,9 @@
 package dev.simplified.shared.psi;
 
 import com.intellij.psi.PsiAnnotation;
+import com.intellij.psi.PsiImportList;
 import com.intellij.psi.PsiJavaCodeReferenceElement;
+import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiModifierListOwner;
 import com.intellij.psi.augment.PsiAugmentProvider;
 import org.jetbrains.annotations.NotNull;
@@ -86,6 +88,58 @@ public final class WrittenAnnotations {
      */
     public static boolean has(@NotNull PsiModifierListOwner owner, @NotNull String fqn) {
         return find(owner, fqn) != null;
+    }
+
+    /**
+     * The annotation of a given name written on a <b>member</b>, matched without
+     * resolving anything.
+     *
+     * <p>{@link #find} cannot be used there, and the reason is structural rather
+     * than a matter of cost. Resolving a reference written inside a class body
+     * walks that class's nested types before its imports, the nested-type lookup
+     * is augment-aware, and it therefore re-enters whichever provider asked -
+     * while the platform is already resolving that same reference. The nesting
+     * is what the platform kills, so the answer has to come from the source text
+     * and the file's imports instead.
+     *
+     * <p>The name is confirmed against the file rather than merely matched:
+     * either the reference is qualified, or the file imports the type by name or
+     * by its package, or the owner sits in that package already. A same-named
+     * annotation from an unrelated package is therefore still rejected in the
+     * one shape it plausibly takes - an unqualified reference under a different
+     * import.
+     *
+     * @param owner the member to read
+     * @param fqn the fully-qualified name to match
+     * @return the annotation, or {@code null} when the owner carries none
+     */
+    public static @Nullable PsiAnnotation findOnMember(@NotNull PsiModifierListOwner owner,
+                                                       @NotNull String fqn) {
+        for (PsiAnnotation annotation : owner.getAnnotations()) {
+            if (!namesMatch(annotation, fqn)) continue;
+            if (resolvesToPackage(annotation, fqn)) return annotation;
+        }
+        return null;
+    }
+
+    /**
+     * Whether a name-matched annotation reference can only mean the type in
+     * {@code fqn}'s package, decided from the reference's own shape and the
+     * file's import list - both of which are readable without a resolve.
+     */
+    private static boolean resolvesToPackage(PsiAnnotation annotation, String fqn) {
+        PsiJavaCodeReferenceElement reference = annotation.getNameReferenceElement();
+        if (reference == null) return false;
+        // A qualified reference names its own package; nothing else it could be
+        // ends in this simple name and compiles.
+        if (reference.isQualified()) return true;
+        if (!(annotation.getContainingFile() instanceof PsiJavaFile file)) return false;
+        String packageName = fqn.substring(0, fqn.lastIndexOf('.'));
+        if (packageName.equals(file.getPackageName())) return true;
+        PsiImportList imports = file.getImportList();
+        if (imports == null) return false;
+        return imports.findSingleClassImportStatement(fqn) != null
+            || imports.findOnDemandImportStatement(packageName) != null;
     }
 
     private static boolean namesMatch(PsiAnnotation annotation, String fqn) {

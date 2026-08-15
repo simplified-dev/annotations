@@ -52,25 +52,38 @@ final class GeneratedBuilderClass extends LightPsiClassBuilder
     private final String myQualifiedName;
 
     GeneratedBuilderClass(@NotNull PsiClass containingClass, @NotNull String name) {
-        super(containingClass, name);
-        String parentFqn = containingClass.getQualifiedName();
-        this.myQualifiedName = (parentFqn != null ? parentFqn : containingClass.getName()) + "." + name;
-        copyTypeParameters(containingClass);
+        this(containingClass, name, containingClass.getTypeParameters());
     }
 
     /**
-     * Re-declares the target's type parameters on this class, bounds included.
+     * Variant naming the type parameters to re-declare, for a builder whose
+     * slots come from a {@code static} factory - which runs under its own
+     * parameters and cannot name the enclosing type's at all.
+     *
+     * @param containingClass the type this builder nests in
+     * @param name the builder class's simple name
+     * @param typeParameterSource the parameters to copy
+     */
+    GeneratedBuilderClass(@NotNull PsiClass containingClass, @NotNull String name,
+                          @NotNull PsiTypeParameter[] typeParameterSource) {
+        super(containingClass, name);
+        String parentFqn = containingClass.getQualifiedName();
+        this.myQualifiedName = (parentFqn != null ? parentFqn : containingClass.getName()) + "." + name;
+        copyTypeParameters(typeParameterSource);
+    }
+
+    /**
+     * Re-declares the given type parameters on this class, bounds included.
      * The synthesised Builder is {@code static} and so cannot see the enclosing
      * type's variables - without its own copies, a generic target's setters and
      * {@code build()} would resolve against a raw builder and the editor would
      * report {@code Object} where the target's parameter belongs.
      *
-     * <p>The copies are distinct {@link PsiTypeParameter}s from the target's,
+     * <p>The copies are distinct {@link PsiTypeParameter}s from the source's,
      * matching what javac emits, so callers building a type for use inside this
-     * class must apply <em>these</em> parameters rather than the target's.
+     * class must apply <em>these</em> parameters rather than the originals.
      */
-    private void copyTypeParameters(@NotNull PsiClass containingClass) {
-        PsiTypeParameter[] sources = containingClass.getTypeParameters();
+    private void copyTypeParameters(@NotNull PsiTypeParameter[] sources) {
         if (sources.length == 0) return;
         LightTypeParameterListBuilder list = typeParameterList();
         if (list == null) return;
