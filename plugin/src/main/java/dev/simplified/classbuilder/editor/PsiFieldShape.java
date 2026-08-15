@@ -80,6 +80,17 @@ public final class PsiFieldShape {
     public final boolean compute;
 
     /**
+     * True when the field carries {@code @Collector(append = true)}, so the bulk
+     * setters add to the container rather than replace it.
+     *
+     * <p>Changes no signature, only what the body does, so the editor's
+     * synthesised members are the same either way. Carried here because the
+     * inspections reason about whether a bulk call discards a declared
+     * initializer.
+     */
+    public final boolean append;
+
+    /**
      * True when the field carries {@code @BuildFlag(nonNull = true)}. Drives the
      * editor-side emission of {@code @NotNull} on the matching setter parameter
      * so IntelliJ's null-flow analysis flags {@code null} arguments immediately,
@@ -125,6 +136,7 @@ public final class PsiFieldShape {
         this.singular = b.singular;
         this.singularName = b.singularName;
         this.clearable = b.clearable;
+        this.append = b.append;
         this.compute = b.compute;
         this.nonNullByBuildFlag = b.nonNullByBuildFlag;
         this.lazy = b.lazy;
@@ -259,7 +271,7 @@ public final class PsiFieldShape {
         PsiType collectionElement, mapKey, mapValue;
         boolean nullable, notNull, formattable;
         String negateName;
-        boolean collector, singular, clearable, compute;
+        boolean collector, singular, clearable, compute, append;
         String singularName;
         boolean nonNullByBuildFlag;
         boolean lazy;

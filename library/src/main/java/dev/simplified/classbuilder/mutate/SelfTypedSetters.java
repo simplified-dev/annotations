@@ -291,7 +291,11 @@ final class SelfTypedSetters {
     // @Collector shapes
     // ------------------------------------------------------------------
 
-    /** {@code B withEntries(T... entries)} - reset-and-copy varargs replace. */
+    /**
+     * {@code B withEntries(T... entries)} - copies every element in, resetting
+     * the container first unless the field asked to
+     * {@link FieldSpec#append}.
+     */
     private JCMethodDecl singularCollectionVarargsReplace(FieldSpec field) {
         String setterName = setters().setName(field.name);
         JCExpression elemType = types.parseType(field.collectionElement);
@@ -301,10 +305,6 @@ final class SelfTypedSetters {
             make.TypeArray(elemType),
             null
         );
-        JCStatement assignFresh = make.Exec(make.Assign(
-            make.Select(make.Ident(names._this), names.fromString(field.name)),
-            freshContainer(field)
-        ));
         JCEnhancedForLoop loop = make.ForeachLoop(
             make.VarDef(make.Modifiers(Flags.PARAMETER), names.fromString("e"), elemType, null),
             make.Ident(names.fromString(field.name)),
@@ -316,11 +316,14 @@ final class SelfTypedSetters {
                 List.of(make.Ident(names.fromString("e")))
             ))
         );
-        return method(setterName, List.of(varargs),
-            withReplacedMark(field, List.of(assignFresh, loop, returnSelf())));
+        return method(setterName, List.of(varargs), bulkBody(field, loop));
     }
 
-    /** {@code B withEntries(Iterable<T> entries)} - reset-and-forEach replace. */
+    /**
+     * {@code B withEntries(Iterable<T> entries)} - forEach-adds every element,
+     * resetting the container first unless the field asked to
+     * {@link FieldSpec#append}.
+     */
     private JCMethodDecl singularCollectionIterableReplace(FieldSpec field) {
         String setterName = setters().setName(field.name);
         JCExpression elemType = types.parseType(field.collectionElement);
@@ -330,10 +333,6 @@ final class SelfTypedSetters {
         );
         JCVariableDecl iterableParam = param(field.name, iterableType);
 
-        JCStatement assignFresh = make.Exec(make.Assign(
-            make.Select(make.Ident(names._this), names.fromString(field.name)),
-            freshContainer(field)
-        ));
         JCExpression methodRef = make.Reference(
             JCTree.JCMemberReference.ReferenceMode.INVOKE,
             names.fromString("add"),
@@ -345,8 +344,24 @@ final class SelfTypedSetters {
             make.Select(make.Ident(names.fromString(field.name)), names.fromString("forEach")),
             List.of(methodRef)
         ));
-        return method(setterName, List.of(iterableParam),
-            withReplacedMark(field, List.of(assignFresh, forEach, returnSelf())));
+        return method(setterName, List.of(iterableParam), bulkBody(field, forEach));
+    }
+
+    /**
+     * The body of a bulk setter: the copy step, preceded by a fresh container
+     * unless the field appends into the one already there.
+     *
+     * @param field the collection or map field
+     * @param copy the statement moving the argument's contents into the slot
+     * @return the setter's statements, ending in {@code return self()}
+     */
+    private List<JCStatement> bulkBody(FieldSpec field, JCStatement copy) {
+        if (field.append) return List.of(copy, returnSelf());
+        JCStatement assignFresh = make.Exec(make.Assign(
+            make.Select(make.Ident(names._this), names.fromString(field.name)),
+            freshContainer(field)
+        ));
+        return withReplacedMark(field, List.of(assignFresh, copy, returnSelf()));
     }
 
     /** {@code B addEntry(T entry)} - append one element to the existing collection. */
@@ -374,18 +389,22 @@ final class SelfTypedSetters {
             List.of(keyType, valueType)
         );
         JCVariableDecl mapParam = param(field.name, mapType);
+        // this.field.putAll(field)
+        JCStatement putAll = make.Exec(make.Apply(
+            List.nil(),
+            make.Select(
+                make.Select(make.Ident(names._this), names.fromString(field.name)),
+                names.fromString("putAll")),
+            List.of(make.Ident(names.fromString(field.name)))
+        ));
+        if (field.append) {
+            return method(setterName, List.of(mapParam), List.of(putAll, returnSelf()));
+        }
         if (field.isCustomContainer) {
             // this.field = $default$field(); this.field.putAll(field);
             JCStatement assignFresh = make.Exec(make.Assign(
                 make.Select(make.Ident(names._this), names.fromString(field.name)),
                 freshContainer(field)
-            ));
-            JCStatement putAll = make.Exec(make.Apply(
-                List.nil(),
-                make.Select(
-                    make.Select(make.Ident(names._this), names.fromString(field.name)),
-                    names.fromString("putAll")),
-                List.of(make.Ident(names.fromString(field.name)))
             ));
             return method(setterName, List.of(mapParam),
                 withReplacedMark(field, List.of(assignFresh, putAll, returnSelf())));

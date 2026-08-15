@@ -570,8 +570,13 @@ final class FieldMutators {
     // ------------------------------------------------------------------
 
     /**
-     * {@code Builder withEntries(T... entries)} that resets the underlying
-     * collection and copies every element. Used for List/Set @Collector fields.
+     * {@code Builder withEntries(T... entries)} that copies every element into
+     * the underlying collection. Used for List/Set @Collector fields.
+     *
+     * <p>Resets the container first unless the field asked to
+     * {@link FieldSpec#append}, in which case there is nothing to reset and
+     * nothing to mark replaced - the default the initializer seeded survives the
+     * call.
      */
     private JCMethodDecl singularCollectionVarargsReplace(FieldSpec field) {
         String setterName = setters().setName(field.name);
@@ -582,11 +587,6 @@ final class FieldMutators {
             make.TypeArray(elemType),
             null
         );
-        // this.field = <fresh empty container>;
-        JCStatement assignFresh = make.Exec(make.Assign(
-            make.Select(make.Ident(names._this), names.fromString(field.name)),
-            freshContainer(field)
-        ));
         // for (T e : field) this.field.add(e);
         JCEnhancedForLoop loop = make.ForeachLoop(
             make.VarDef(make.Modifiers(Flags.PARAMETER), names.fromString("e"), elemType, null),
@@ -599,8 +599,25 @@ final class FieldMutators {
                 List.of(make.Ident(names.fromString("e")))
             ))
         );
-        return methodDefRaw(setterName, List.of(varargs),
-            withReplacedMark(field, List.of(assignFresh, loop, returnThis())));
+        return methodDefRaw(setterName, List.of(varargs), bulkBody(field, loop));
+    }
+
+    /**
+     * The body of a bulk setter: the copy step, preceded by a fresh container
+     * unless the field appends into the one already there.
+     *
+     * @param field the collection or map field
+     * @param copy the statement moving the argument's contents into the slot
+     * @return the setter's statements, ending in {@code return this}
+     */
+    private List<JCStatement> bulkBody(FieldSpec field, JCStatement copy) {
+        if (field.append) return List.of(copy, returnThis());
+        // this.field = <fresh empty container>;
+        JCStatement assignFresh = make.Exec(make.Assign(
+            make.Select(make.Ident(names._this), names.fromString(field.name)),
+            freshContainer(field)
+        ));
+        return withReplacedMark(field, List.of(assignFresh, copy, returnThis()));
     }
 
     /**
@@ -616,10 +633,6 @@ final class FieldMutators {
         );
         JCVariableDecl iterableParam = param(field.name, iterableType);
 
-        JCStatement assignFresh = make.Exec(make.Assign(
-            make.Select(make.Ident(names._this), names.fromString(field.name)),
-            freshContainer(field)
-        ));
         // entries.forEach(this.field::add)
         JCExpression methodRef = make.Reference(
             JCTree.JCMemberReference.ReferenceMode.INVOKE,
@@ -632,8 +645,7 @@ final class FieldMutators {
             make.Select(make.Ident(names.fromString(field.name)), names.fromString("forEach")),
             List.of(methodRef)
         ));
-        return methodDefRaw(setterName, List.of(iterableParam),
-            withReplacedMark(field, List.of(assignFresh, forEach, returnThis())));
+        return methodDefRaw(setterName, List.of(iterableParam), bulkBody(field, forEach));
     }
 
     /** {@code Builder addEntry(T entry)} that appends to the existing collection. */
@@ -652,7 +664,11 @@ final class FieldMutators {
             List.of(add, returnThis()));
     }
 
-    /** {@code Builder withEntries(Map<K, V> entries)} that replaces with a fresh LinkedHashMap. */
+    /**
+     * {@code Builder withEntries(Map<K, V> entries)} that replaces with a fresh
+     * LinkedHashMap, or puts every entry into the existing map when the field
+     * asked to {@link FieldSpec#append}.
+     */
     private JCMethodDecl singularMapReplace(FieldSpec field) {
         String setterName = setters().setName(field.name);
         JCExpression keyType = types.parseType(field.mapKey);
@@ -662,18 +678,22 @@ final class FieldMutators {
             List.of(keyType, valueType)
         );
         JCVariableDecl mapParam = param(field.name, mapType);
+        // this.field.putAll(field)
+        JCStatement putAll = make.Exec(make.Apply(
+            List.nil(),
+            make.Select(
+                make.Select(make.Ident(names._this), names.fromString(field.name)),
+                names.fromString("putAll")),
+            List.of(make.Ident(names.fromString(field.name)))
+        ));
+        if (field.append) {
+            return methodDefRaw(setterName, List.of(mapParam), List.of(putAll, returnThis()));
+        }
         if (field.isCustomContainer) {
             // this.field = $default$field(); this.field.putAll(field);
             JCStatement assignFresh = make.Exec(make.Assign(
                 make.Select(make.Ident(names._this), names.fromString(field.name)),
                 freshContainer(field)
-            ));
-            JCStatement putAll = make.Exec(make.Apply(
-                List.nil(),
-                make.Select(
-                    make.Select(make.Ident(names._this), names.fromString(field.name)),
-                    names.fromString("putAll")),
-                List.of(make.Ident(names.fromString(field.name)))
             ));
             return methodDefRaw(setterName, List.of(mapParam),
                 withReplacedMark(field, List.of(assignFresh, putAll, returnThis())));

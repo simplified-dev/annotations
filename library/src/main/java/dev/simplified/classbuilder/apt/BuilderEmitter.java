@@ -353,7 +353,11 @@ final class BuilderEmitter {
             emitContract("_ -> this", false, "this");
             body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ').append(whole)
                 .append('(').append(notNull()).append(map).append('<').append(k).append(", ").append(v).append("> ").append(f.name).append(") {\n");
-            body.append("        this.").append(f.name).append(" = new ").append(linkedHashMap).append("<>(").append(f.name).append(");\n");
+            if (f.append) {
+                body.append("        this.").append(f.name).append(".putAll(").append(f.name).append(");\n");
+            } else {
+                body.append("        this.").append(f.name).append(" = new ").append(linkedHashMap).append("<>(").append(f.name).append(");\n");
+            }
             body.append("        return this;\n    }\n\n");
 
             if (f.singular && config.setters().emitsPut()) {
@@ -391,7 +395,7 @@ final class BuilderEmitter {
         emitContract("_ -> this", false, "this");
         body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ').append(whole)
             .append('(').append(notNull()).append(elem).append("... ").append(f.name).append(") {\n");
-        body.append("        this.").append(f.name).append(" = new ").append(container).append("<>();\n");
+        if (!f.append) body.append("        this.").append(f.name).append(" = new ").append(container).append("<>();\n");
         body.append("        for (").append(elem).append(" e : ").append(f.name).append(") this.").append(f.name).append(".add(e);\n");
         body.append("        return this;\n    }\n\n");
 
@@ -399,7 +403,7 @@ final class BuilderEmitter {
         emitContract("_ -> this", false, "this");
         body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ').append(whole)
             .append('(').append(notNull()).append(imports.use("java.lang.Iterable")).append('<').append(elem).append("> ").append(f.name).append(") {\n");
-        body.append("        this.").append(f.name).append(" = new ").append(container).append("<>();\n");
+        if (!f.append) body.append("        this.").append(f.name).append(" = new ").append(container).append("<>();\n");
         body.append("        ").append(f.name).append(".forEach(this.").append(f.name).append("::add);\n");
         body.append("        return this;\n    }\n\n");
 

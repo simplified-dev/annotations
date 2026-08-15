@@ -253,6 +253,8 @@ public class AnnotationSurfaceTest {
         assertDefault(Collector.class, "singular", false);
         assertDefault(Collector.class, "clearable", false);
         assertDefault(Collector.class, "compute", false);
+        // Replace is what a setter normally means, so accumulating is opt-in.
+        assertDefault(Collector.class, "append", false);
     }
 
     @Test

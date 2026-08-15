@@ -236,6 +236,82 @@ public class AdvancedSetterShapesTest {
         assertTrue(((List<?>) bag.getMethod("getTags").invoke(builder.getMethod("build").invoke(b4))).isEmpty());
     }
 
+    @Test
+    public void collectorAppend_accumulatesAcrossBulkCalls() throws Exception {
+        // A hand-written bulk setter is usually entries.forEach(this.entries::add),
+        // which accumulates. The generated one replaces, so converting such a
+        // builder loses every call but the last with nothing failing.
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Feed",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Collector;",
+            "import java.util.List;",
+            "import java.util.Map;",
+            "@ClassBuilder(validate = false)",
+            "public class Feed {",
+            "    @Collector(append = true, singular = true, clearable = true) List<String> tags = List.of(\"seed\");",
+            "    @Collector(append = true) Map<String, Integer> counts;",
+            "    public Feed(List<String> tags, Map<String, Integer> counts) { this.tags = tags; this.counts = counts; }",
+            "    public List<String> getTags() { return tags; }",
+            "    public Map<String, Integer> getCounts() { return counts; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> feed = Class.forName("demo.Feed", true, cl);
+        Class<?> builder = nested(feed, "Builder");
+
+        // Varargs and Iterable both add, and the initializer survives them.
+        Object b = feed.getMethod("builder").invoke(null);
+        builder.getMethod("tags", String[].class).invoke(b, (Object) new String[]{"a"});
+        builder.getMethod("tags", Iterable.class).invoke(b, List.of("b", "c"));
+        builder.getMethod("addTag", String.class).invoke(b, "d");
+        assertEquals(List.of("seed", "a", "b", "c", "d"),
+            feed.getMethod("getTags").invoke(builder.getMethod("build").invoke(b)));
+
+        // A map puts every entry rather than starting a new map.
+        Object b2 = feed.getMethod("builder").invoke(null);
+        builder.getMethod("counts", Map.class).invoke(b2, Map.of("x", 1));
+        builder.getMethod("counts", Map.class).invoke(b2, Map.of("y", 2));
+        assertEquals(Map.of("x", 1, "y", 2),
+            feed.getMethod("getCounts").invoke(builder.getMethod("build").invoke(b2)));
+
+        // clear is still how an accumulating builder empties the container.
+        Object b3 = feed.getMethod("builder").invoke(null);
+        builder.getMethod("tags", String[].class).invoke(b3, (Object) new String[]{"a"});
+        builder.getMethod("clearTags").invoke(b3);
+        assertTrue(((List<?>) feed.getMethod("getTags").invoke(builder.getMethod("build").invoke(b3))).isEmpty());
+    }
+
+    @Test
+    public void collectorWithoutAppend_stillReplaces() throws Exception {
+        // The default has to stay replace: it is what a setter normally means,
+        // and every already-converted builder is written against it.
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Plain",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Collector;",
+            "import java.util.List;",
+            "@ClassBuilder(validate = false)",
+            "public class Plain {",
+            "    @Collector List<String> tags = List.of(\"seed\");",
+            "    public Plain(List<String> tags) { this.tags = tags; }",
+            "    public List<String> getTags() { return tags; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> plain = Class.forName("demo.Plain", true, cl);
+        Class<?> builder = nested(plain, "Builder");
+
+        Object b = plain.getMethod("builder").invoke(null);
+        builder.getMethod("tags", String[].class).invoke(b, (Object) new String[]{"a"});
+        builder.getMethod("tags", String[].class).invoke(b, (Object) new String[]{"b"});
+        assertEquals(List.of("b"), plain.getMethod("getTags").invoke(builder.getMethod("build").invoke(b)));
+    }
+
     // ------------------------------------------------------------------
     // @Collector on Map
     // ------------------------------------------------------------------

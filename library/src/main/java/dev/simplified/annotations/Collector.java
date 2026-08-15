@@ -42,6 +42,8 @@ import java.util.function.Supplier;
  *     underlying collection or map.</li>
  *   <li>{@link #compute} - (maps only) {@code putEntryIfAbsent(K, Supplier<V>)}
  *     that lazily computes a value when the key is missing.</li>
+ *   <li>{@link #append} - makes the bulk setters add to the container instead
+ *     of replacing it, so repeated calls accumulate.</li>
  * </ul>
  *
  * <p>The put-if-absent form takes a {@link Supplier} rather than a value, which is
@@ -69,6 +71,9 @@ import java.util.function.Supplier;
  * builder().items("x").build()      // [x]     - a wholesale replace discards it
  * builder().clearItems().build()    // []      - so does clear
  * }</pre>
+ *
+ * <p>Under {@link #append} the third line reads {@code [a, x]} instead, because
+ * nothing replaces the container the initializer seeded.
  *
  * <p>The default is copied per builder before any of this, so an immutable one
  * such as {@code List.of(...)} is safe to add to and a default that returns
@@ -130,5 +135,29 @@ public @interface Collector {
      * fields.
      */
     boolean compute() default false;
+
+    /**
+     * Makes the whole-collection setters add to the container rather than
+     * replace it, so repeated calls accumulate:
+     * {@code tags("a").tags("b")} yields {@code [a, b]} instead of
+     * {@code [b]}.
+     *
+     * <p>Covers every bulk shape - the varargs and {@link Iterable} forms on a
+     * collection, and the whole-{@link Map} form on a map, which then puts every
+     * entry instead of starting a new map. The single-element
+     * {@link #singular} add always appended and is unaffected, as is
+     * {@link #clearable}, which is how an accumulating builder empties the
+     * container deliberately.
+     *
+     * <p>A declared initializer therefore survives a bulk call rather than being
+     * discarded by it, since nothing replaces the container it seeded.
+     *
+     * <p>Off by default because replace is what a setter normally means and
+     * what the built object's own field would hold. Turn it on when converting a
+     * hand-written builder whose bulk setter was written as
+     * {@code entries.forEach(this.entries::add)} - the two shapes compile
+     * identically and differ only in what the second call does.
+     */
+    boolean append() default false;
 
 }

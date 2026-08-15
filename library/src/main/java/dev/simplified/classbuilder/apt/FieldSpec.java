@@ -88,6 +88,7 @@ public final class FieldSpec {
     public final String singularName;               // derived from @Collector.singularMethodName or field-name inflection; null if no @Collector
     public final boolean clearable;                 // @Collector(clearable = true) - clear() method
     public final boolean compute;                   // @Collector(compute = true) - maps only, putIfAbsent(K, Supplier<V>)
+    public final boolean append;                    // @Collector(append = true) - bulk setters add rather than replace
     public final boolean ignored;                   // @BuilderIgnore or listed in @ClassBuilder.exclude
     public final boolean lazy;                       // @Lazy: storage rewritten to Lazy<T>, getter synthesised
     public final boolean builderDefault;
@@ -140,6 +141,7 @@ public final class FieldSpec {
         this.singular = b.singular;
         this.singularName = b.singularName;
         this.clearable = b.clearable;
+        this.append = b.append;
         this.compute = b.compute;
         this.ignored = b.ignored;
         this.lazy = b.lazy;
@@ -193,6 +195,7 @@ public final class FieldSpec {
             b.singular = lookup.booleanAttr(method, "dev.simplified.annotations.Collector", "singular", false);
             b.clearable = lookup.booleanAttr(method, "dev.simplified.annotations.Collector", "clearable", false);
             b.compute = lookup.booleanAttr(method, "dev.simplified.annotations.Collector", "compute", false);
+            b.append = lookup.booleanAttr(method, "dev.simplified.annotations.Collector", "append", false);
             String v = lookup.stringAttr(method, "dev.simplified.annotations.Collector", "singularMethodName", "");
             b.singularName = v.isEmpty() ? defaultSingular(b.name) : v;
         }
@@ -334,6 +337,7 @@ public final class FieldSpec {
             b.singular = lookup.booleanAttr(element, "dev.simplified.annotations.Collector", "singular", false);
             b.clearable = lookup.booleanAttr(element, "dev.simplified.annotations.Collector", "clearable", false);
             b.compute = lookup.booleanAttr(element, "dev.simplified.annotations.Collector", "compute", false);
+            b.append = lookup.booleanAttr(element, "dev.simplified.annotations.Collector", "append", false);
             String v = lookup.stringAttr(element, "dev.simplified.annotations.Collector", "singularMethodName", "");
             b.singularName = v.isEmpty() ? defaultSingular(b.name) : v;
         }
@@ -403,7 +407,7 @@ public final class FieldSpec {
         String collectionElement, mapKey, mapValue;
         boolean formattable;
         String negateName;
-        boolean collector, singular, clearable, compute;
+        boolean collector, singular, clearable, compute, append;
         String singularName;
         boolean ignored, lazy, builderDefault, builderDefaultExplicit;
         String sourceInitializer;
