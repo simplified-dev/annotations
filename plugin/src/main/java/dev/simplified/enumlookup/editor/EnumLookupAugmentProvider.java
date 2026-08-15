@@ -54,8 +54,8 @@ public final class EnumLookupAugmentProvider extends AbstractRecursionSafeAugmen
     private static final String FQN_OPTIONAL = "java.util.Optional";
     private static final String FQN_STRING = "java.lang.String";
 
-    private static final String CACHED_VALUES = "CACHED_VALUES";
-    private static final String CACHED_KEYS_PREFIX = "CACHED_KEYS_";
+    private static final String CACHED_VALUES = EnumLookupConstants.CACHED_VALUES;
+    private static final String CACHED_KEYS_PREFIX = EnumLookupConstants.CACHED_KEYS_PREFIX;
 
     @Override
     protected @NotNull <Psi extends PsiElement> List<Psi> getAugments(@NotNull PsiElement element,

@@ -52,4 +52,38 @@ public final class TypeNames {
         return fqn.equals(fqn(type));
     }
 
+    /**
+     * Whether a type is, or is parameterised by, a type variable.
+     *
+     * <p>What it is for is knowing when a comparison between two types has to
+     * drop to erasures. A {@code static} member of a generic type declares its
+     * own parameters, being unable to name the type's, so a method relating to a
+     * slot of that type mentions a variable no assignability or sameness test
+     * relates to the slot's - while the call javac ends up attributing infers
+     * one from the other perfectly happily.
+     *
+     * @param type the type to test
+     * @return whether a type variable appears anywhere in it
+     */
+    public static boolean mentionsTypeVariable(TypeMirror type) {
+        if (type == null) return false;
+        return switch (type.getKind()) {
+            case TYPEVAR -> true;
+            case ARRAY -> mentionsTypeVariable(((javax.lang.model.type.ArrayType) type).getComponentType());
+            case WILDCARD -> {
+                var wildcard = (javax.lang.model.type.WildcardType) type;
+                TypeMirror bound = wildcard.getExtendsBound() != null
+                    ? wildcard.getExtendsBound() : wildcard.getSuperBound();
+                yield mentionsTypeVariable(bound);
+            }
+            case DECLARED -> {
+                for (TypeMirror argument : ((DeclaredType) type).getTypeArguments()) {
+                    if (mentionsTypeVariable(argument)) yield true;
+                }
+                yield false;
+            }
+            default -> false;
+        };
+    }
+
 }

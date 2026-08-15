@@ -30,6 +30,31 @@ import java.lang.annotation.Target;
  * public Result getComputed() { return computed.get(); }
  * </code></pre>
  *
+ * <h2>Assigned by a constructor</h2>
+ * A field with no initializer takes its supplier from whatever a constructor
+ * assigns it, the whole assigned expression becoming the supplier body:
+ * <pre><code>
+ * &#64;Lazy
+ * private final Headers headers;
+ *
+ * Response(HttpContext context) {
+ *     this.context = context;
+ *     this.headers = parse(context.rawHeaders());
+ * }
+ * </code></pre>
+ * Compiled to {@code this.headers = Lazy.of(() -> parse(context.rawHeaders()))},
+ * so the parse runs on the first {@code getHeaders()} rather than during
+ * construction. This is the shape for a value derived from constructor
+ * arguments or from sibling fields, which has no initializer to hold the
+ * expression - the alternative being to declare the field {@code Lazy<T>} by
+ * hand and write the wrap inline, which is what the annotation exists to
+ * replace.
+ *
+ * <p>Every assignment to the field is rewritten, including one inside an
+ * {@code if} or a {@code try}. The field becomes {@code final}, so assigning it
+ * twice, or leaving a constructor that does not assign it, is javac's ordinary
+ * error about a blank final.
+ *
  * <h2>With {@link ClassBuilder @ClassBuilder}</h2>
  * The synthesised builder receives a dual setter for the field: a value form
  * that wraps as {@code () -> value} and a {@code Supplier<T>} form that stores
@@ -60,10 +85,11 @@ import java.lang.annotation.Target;
  *       and is never touched by the constructor, so it behaves as in the
  *       standalone case.</li>
  *   <li>Standalone use (no {@code @ClassBuilder} on the enclosing class)
- *       requires a field initializer; the initializer becomes the supplier
- *       body. Because that supplier is created in the field initializer, an
- *       instance context, the expression may reference the enclosing instance
- *       freely - instance methods, instance fields, and {@code this}.</li>
+ *       requires either a field initializer or a constructor assignment; that
+ *       expression becomes the supplier body. Both are instance contexts, so it
+ *       may reference the enclosing instance freely - instance methods, instance
+ *       fields, and {@code this}. A field with neither is rejected, having
+ *       nothing to defer.</li>
  *   <li>With {@code @ClassBuilder} an instance-referencing initializer is
  *       supported as well, computed in the generated constructor rather than
  *       when the builder is created. Both branches stay deferred, so laziness

@@ -199,13 +199,88 @@ public final class LazyFieldMutator {
                 lazy.element);
             return false;
         }
-        if (decl.init == null && !classBuilderPresent) {
+        if (decl.init == null && !classBuilderPresent && !assignedByAConstructor(lazy.name)) {
             messager.printMessage(Diagnostic.Kind.ERROR,
-                "@Lazy on a field without @ClassBuilder requires an initializer expression",
+                "@Lazy on '" + lazy.name + "' has nothing to defer - give the field an initializer, "
+                    + "or assign it in a constructor, either of which becomes the supplier body",
                 lazy.element);
             return false;
         }
         return true;
+    }
+
+    /**
+     * Whether any constructor on the target assigns {@code this.<name>}.
+     *
+     * <p>The other place a supplier body can come from. A field's own
+     * initializer is the obvious one and was the only one; a field computed from
+     * constructor arguments or from sibling fields has no initializer to hold
+     * that expression and had to be written as a hand-rolled
+     * {@code Lazy.of(() -> ...)}, which is what left the type in ten field
+     * declarations that no annotation expressed.
+     *
+     * @param name the field's name
+     * @return whether a constructor assigns it
+     */
+    private boolean assignedByAConstructor(String name) {
+        for (JCTree def : target.defs) {
+            if (!(def instanceof JCMethodDecl method)) continue;
+            if (!method.name.toString().equals("<init>")) continue;
+            if (method.body != null && !assignmentsTo(method.body, name).isEmpty()) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Every {@code this.<name> = ...} in a body, nested statements included.
+     *
+     * <p>Descends through the statement forms a constructor can put an
+     * assignment inside - a block, either arm of an {@code if}, a {@code try} -
+     * because a field assigned in only one of them is still a field this pass
+     * has to rewrite. Missing one leaves the author with a type error on
+     * {@code Lazy<T>} against {@code T} at a line they wrote and did not change.
+     *
+     * <p>Lambda and anonymous-class bodies are not descended into. An assignment
+     * there runs after the constructor rather than during it, so it is not what
+     * initialises the field - and the field is {@code final} by then, which
+     * javac rejects on the author's own line.
+     */
+    private java.util.List<JCAssign> assignmentsTo(JCStatement statement, String name) {
+        java.util.List<JCAssign> out = new java.util.ArrayList<>();
+        collectAssignments(statement, name, out);
+        return out;
+    }
+
+    private void collectAssignments(JCStatement statement, String name,
+                                    java.util.List<JCAssign> out) {
+        if (statement == null) return;
+        if (statement instanceof JCBlock block) {
+            for (JCStatement nested : block.stats) collectAssignments(nested, name, out);
+        } else if (statement instanceof JCTree.JCIf branch) {
+            collectAssignments(branch.thenpart, name, out);
+            collectAssignments(branch.elsepart, name, out);
+        } else if (statement instanceof JCTree.JCTry attempt) {
+            collectAssignments(attempt.body, name, out);
+            for (JCTree.JCCatch handler : attempt.catchers) {
+                collectAssignments(handler.body, name, out);
+            }
+            collectAssignments(attempt.finalizer, name, out);
+        } else if (statement instanceof JCTree.JCSynchronized guarded) {
+            collectAssignments(guarded.body, name, out);
+        } else if (statement instanceof JCTree.JCLabeledStatement labelled) {
+            collectAssignments(labelled.body, name, out);
+        } else if (statement instanceof JCExpressionStatement expression
+            && expression.expr instanceof JCAssign assign && assignsField(assign, name)) {
+            out.add(assign);
+        }
+    }
+
+    /** Whether an assignment's left-hand side is {@code this.<name>}. */
+    private static boolean assignsField(JCAssign assign, String name) {
+        return assign.lhs instanceof JCFieldAccess lhs
+            && lhs.selected instanceof JCIdent receiver
+            && receiver.name.toString().equals("this")
+            && lhs.name.toString().equals(name);
     }
 
     private void rewriteFieldDecl(FieldSpec lazy, JCVariableDecl decl) {
@@ -256,32 +331,52 @@ public final class LazyFieldMutator {
                 }
             }
             if (method.body != null) {
-                rewriteAssignmentsInBlock(method.body, processed, rewrittenParams);
+                rewriteAssignmentsInBlock(method.body, processed, rewrittenParams,
+                    AstMarkers.isGenerated(method));
             }
         }
     }
 
     /**
-     * Rewrites {@code this.<name> = <name>} body assignments where
-     * {@code <name>} is a processed @Lazy field. The RHS becomes
-     * {@code Lazy.of(<name>)} when {@code <name>} is a param we already
-     * retyped to {@code Supplier<T>}, otherwise {@code Lazy.of(() -> <name>)}
-     * so the wrap survives type-checking against the {@code Lazy<T>} field.
+     * Rewrites every {@code this.<name> = <expr>} in a constructor body where
+     * {@code <name>} is a processed {@code @Lazy} field, so the assignment
+     * satisfies the field's rewritten {@code Lazy<T>} type.
+     *
+     * <p>A parameter this pass retyped to {@code Supplier<T>} passes straight
+     * through as {@code Lazy.of(param)} - the caller already deferred it.
+     * Everything else is <b>the value</b>, and is wrapped as
+     * {@code Lazy.of(() -> <expr>)} so it is computed on first read rather than
+     * in the constructor. That is what makes the whole expression the supplier
+     * body, which is the point: a field derived from sibling fields or from
+     * constructor arguments has no initializer to put that expression in, and
+     * writing it inline is what the annotation is supposed to replace.
+     *
+     * <p>Any {@code <expr>} qualifies in a constructor the <b>author</b> wrote,
+     * not only a parameter of the same name. Restricting it to that spelled one
+     * shape and left every other assignment un-rewritten, which javac then
+     * rejects as {@code T} against {@code Lazy<T>} - on the author's own
+     * constructor line, about a type they never wrote.
+     *
+     * <p>A constructor <b>this pipeline</b> generated is the opposite case and
+     * takes only the pass-through. {@code AllArgsConstructorFactory} already
+     * emits a complete {@code Lazy<T>} right-hand side for every shape it
+     * knows - a supplied slot wrapped verbatim, an instance default deferred
+     * over its provider - so wrapping again would nest a {@code Lazy} inside a
+     * {@code Lazy} and the field would no longer accept it.
      */
-    private void rewriteAssignmentsInBlock(JCBlock block, Set<String> processed, Set<String> rewrittenParams) {
-        for (JCStatement stmt : block.stats) {
-            if (!(stmt instanceof JCExpressionStatement es)) continue;
-            if (!(es.expr instanceof JCAssign assign)) continue;
-            if (!(assign.lhs instanceof JCFieldAccess lhs)) continue;
-            if (!(lhs.selected instanceof JCIdent thisIdent)) continue;
-            if (!thisIdent.name.toString().equals("this")) continue;
-            String fieldName = lhs.name.toString();
-            if (!processed.contains(fieldName)) continue;
-            if (!(assign.rhs instanceof JCIdent rhsIdent)) continue;
-            if (!rhsIdent.name.toString().equals(fieldName)) continue;
-            assign.rhs = rewrittenParams.contains(fieldName)
-                ? lazyOfIdent(fieldName)
-                : lazyOfLambda(make.Ident(names.fromString(fieldName)));
+    private void rewriteAssignmentsInBlock(JCBlock block, Set<String> processed,
+                                           Set<String> rewrittenParams, boolean generated) {
+        for (String name : processed) {
+            for (JCAssign assign : assignmentsTo(block, name)) {
+                boolean passesSupplierThrough = rewrittenParams.contains(name)
+                    && assign.rhs instanceof JCIdent rhs
+                    && rhs.name.toString().equals(name);
+                if (passesSupplierThrough) {
+                    assign.rhs = lazyOfIdent(name);
+                } else if (!generated) {
+                    assign.rhs = lazyOfLambda(assign.rhs);
+                }
+            }
         }
     }
 

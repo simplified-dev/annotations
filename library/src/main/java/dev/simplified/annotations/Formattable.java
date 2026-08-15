@@ -27,9 +27,13 @@ import java.util.Optional;
  * with {@code @Nullable}; the formattable overload will follow. There's no
  * need for a separate {@code nullable} attribute on this annotation.
  *
+ * <p>A parameter of a constructor or static factory carrying
+ * {@link ClassBuilder} takes the same overload, reading its nullability off the
+ * parameter's own annotation.
+ *
  * @see ClassBuilder
  */
 @Retention(RetentionPolicy.CLASS)
-@Target(ElementType.FIELD)
+@Target({ ElementType.FIELD, ElementType.PARAMETER })
 public @interface Formattable {
 }

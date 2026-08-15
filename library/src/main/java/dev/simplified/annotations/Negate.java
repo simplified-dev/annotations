@@ -18,10 +18,14 @@ import java.lang.annotation.Target;
  * hand-written pattern of paired enable/disable setters over a single
  * underlying field.
  *
+ * <p>A {@code boolean} parameter of a constructor or static factory carrying
+ * {@link ClassBuilder} takes the same pair, the slot it names being that
+ * parameter rather than a field.
+ *
  * @see ClassBuilder
  */
 @Retention(RetentionPolicy.CLASS)
-@Target(ElementType.FIELD)
+@Target({ ElementType.FIELD, ElementType.PARAMETER })
 public @interface Negate {
 
     /**

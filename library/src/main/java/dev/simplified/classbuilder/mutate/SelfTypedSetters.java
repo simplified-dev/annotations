@@ -65,10 +65,10 @@ final class SelfTypedSetters {
         if (field.isBoolean) {
             // Typed setter is the ordinary `set` role; the zero-arg form is the
             // separate `flag` role and drops out when a style suppresses it.
-            if (setters().emitsFlag()) out.append(booleanZeroArg(field, field.name, false));
+            if (field.setters.emitsFlag()) out.append(booleanZeroArg(field, field.name, false));
             out.append(booleanTyped(field, field.name, false));
             if (field.negateName != null && !field.negateName.isEmpty()) {
-                if (setters().emitsFlag()) out.append(booleanZeroArg(field, field.negateName, true));
+                if (field.setters.emitsFlag()) out.append(booleanZeroArg(field, field.negateName, true));
                 out.append(booleanTyped(field, field.negateName, true));
             }
         } else if (field.isOptional) {
@@ -87,14 +87,15 @@ final class SelfTypedSetters {
             } else {
                 if (field.isMap) {
                     out.append(singularMapReplace(field));
-                    if (field.singular && setters().emitsPut()) out.append(singularMapPut(field));
-                    if (field.compute && setters().emitsCompute()) out.append(singularMapPutIfAbsent(field));
+                    if (field.singular && field.setters.emitsPut()) out.append(singularMapPut(field));
+                    if (field.compute && field.setters.emitsCompute()) out.append(singularMapPutIfAbsent(field));
                 } else {
                     out.append(singularCollectionVarargsReplace(field));
                     out.append(singularCollectionIterableReplace(field));
-                    if (field.singular && setters().emitsAdd()) out.append(singularCollectionAdd(field));
+                    if (field.singular && field.setters.emitsAdd()) out.append(singularCollectionAdd(field));
                 }
-                if (field.clearable && setters().emitsClear()) out.append(singularClear(field));
+                if (field.clearable && field.setters.emitsClear()) out.append(singularClear(field));
+                if (field.removable && field.setters.emitsRemove()) out.append(singularRemove(field));
             }
         } else if (field.isString && field.formattable) {
             out.append(plainSetter(field));
@@ -102,6 +103,7 @@ final class SelfTypedSetters {
         } else {
             out.append(plainSetter(field));
         }
+        appendAssignViaOverloads(field, out);
         return out.toList();
     }
 
@@ -111,7 +113,7 @@ final class SelfTypedSetters {
 
     /** {@code B withFoo(T value)} - eager value form, stores {@code () -> value}. */
     private JCMethodDecl lazyValueSetter(FieldSpec field) {
-        String setterName = setters().setName(field.name);
+        String setterName = field.setters.setName(field.name, field.isBoolean);
         JCExpression valueType = types.parseType(field.typeDisplay);
         JCVariableDecl p = param(field.name, valueType);
         JCExpression lambda = make.Lambda(List.nil(), make.Ident(names.fromString(field.name)));
@@ -124,7 +126,7 @@ final class SelfTypedSetters {
 
     /** {@code B withFoo(Supplier<T> supplier)} - true lazy form, stores the supplier. */
     private JCMethodDecl lazySupplierSetter(FieldSpec field) {
-        String setterName = setters().setName(field.name);
+        String setterName = field.setters.setName(field.name, field.isBoolean);
         JCExpression supplierType = make.TypeApply(
             types.qualIdent("java.util.function.Supplier"),
             List.of(types.parseType(field.typeDisplay))
@@ -140,7 +142,7 @@ final class SelfTypedSetters {
     private JCMethodDecl plainSetter(FieldSpec field) {
         JCExpression fieldType = types.parseType(field.typeDisplay);
         JCVariableDecl p = nullnessParam(field.name, fieldType, field);
-        return method(setters().setName(field.name), List.of(p), assignAndReturnSelf(field));
+        return method(field.setters.setName(field.name, field.isBoolean), List.of(p), assignAndReturnSelf(field));
     }
 
     private JCMethodDecl arrayVarargs(FieldSpec field) {
@@ -151,17 +153,17 @@ final class SelfTypedSetters {
             make.TypeArray(elemType),
             null
         );
-        return method(setters().setName(field.name), List.of(p), assignAndReturnSelf(field));
+        return method(field.setters.setName(field.name, field.isBoolean), List.of(p), assignAndReturnSelf(field));
     }
 
     private JCMethodDecl booleanZeroArg(FieldSpec field, String methodBase, boolean inverse) {
-        String setterName = setters().flagName(methodBase);
+        String setterName = field.setters.flagName(methodBase);
         JCStatement assign = slotAssign(field, make.Literal(!inverse));
         return method(setterName, List.nil(), List.of(assign, returnSelf()));
     }
 
     private JCMethodDecl booleanTyped(FieldSpec field, String methodBase, boolean inverse) {
-        String setterName = setters().setName(methodBase);
+        String setterName = field.setters.setName(methodBase, true);
         JCExpression paramRef = make.Ident(names.fromString(methodBase));
         JCExpression value = inverse ? make.Unary(JCTree.Tag.NOT, paramRef) : paramRef;
         JCStatement assign = slotAssign(field, value);
@@ -175,7 +177,7 @@ final class SelfTypedSetters {
 
     /** {@code B withX(T x)} - inner-type overload that wraps via {@code Optional.ofNullable}. */
     private JCMethodDecl optionalNullableRaw(FieldSpec field) {
-        String setterName = setters().setName(field.name);
+        String setterName = field.setters.setName(field.name, field.isBoolean);
         JCExpression inner = types.parseType(field.optionalInner);
         JCVariableDecl p = param(field.name, inner);
 
@@ -195,7 +197,7 @@ final class SelfTypedSetters {
 
     /** {@code B withX(Optional<T> x)} - direct Optional assignment. */
     private JCMethodDecl optionalWrapped(FieldSpec field) {
-        String setterName = setters().setName(field.name);
+        String setterName = field.setters.setName(field.name, field.isBoolean);
         JCExpression optType = make.TypeApply(
             types.qualIdent("java.util.Optional"),
             List.of(types.parseType(field.optionalInner))
@@ -214,7 +216,7 @@ final class SelfTypedSetters {
      * field carries {@code @Nullable}.
      */
     private JCMethodDecl stringFormattable(FieldSpec field) {
-        String setterName = setters().setName(field.name);
+        String setterName = field.setters.setName(field.name, field.isBoolean);
         boolean nullable = field.nullable;
         JCExpression stringType = types.qualIdent("java.lang.String");
         JCVariableDecl formatParam = annotatedParam(
@@ -262,7 +264,7 @@ final class SelfTypedSetters {
      * is preserved.
      */
     private JCMethodDecl optionalFormattable(FieldSpec field) {
-        String setterName = setters().setName(field.name);
+        String setterName = field.setters.setName(field.name, field.isBoolean);
         JCExpression stringType = types.qualIdent("java.lang.String");
         JCVariableDecl formatParam = annotatedParam(
             field.name, stringType,
@@ -291,9 +293,13 @@ final class SelfTypedSetters {
     // @Collector shapes
     // ------------------------------------------------------------------
 
-    /** {@code B withEntries(T... entries)} - reset-and-copy varargs replace. */
+    /**
+     * {@code B withEntries(T... entries)} - copies every element in, resetting
+     * the container first unless the field asked to
+     * {@link FieldSpec#append}.
+     */
     private JCMethodDecl singularCollectionVarargsReplace(FieldSpec field) {
-        String setterName = setters().setName(field.name);
+        String setterName = field.setters.setName(field.name, field.isBoolean);
         JCExpression elemType = types.parseType(field.collectionElement);
         JCVariableDecl varargs = make.VarDef(
             make.Modifiers(Flags.PARAMETER | Flags.VARARGS),
@@ -301,10 +307,6 @@ final class SelfTypedSetters {
             make.TypeArray(elemType),
             null
         );
-        JCStatement assignFresh = make.Exec(make.Assign(
-            make.Select(make.Ident(names._this), names.fromString(field.name)),
-            freshContainer(field)
-        ));
         JCEnhancedForLoop loop = make.ForeachLoop(
             make.VarDef(make.Modifiers(Flags.PARAMETER), names.fromString("e"), elemType, null),
             make.Ident(names.fromString(field.name)),
@@ -316,13 +318,16 @@ final class SelfTypedSetters {
                 List.of(make.Ident(names.fromString("e")))
             ))
         );
-        return method(setterName, List.of(varargs),
-            withReplacedMark(field, List.of(assignFresh, loop, returnSelf())));
+        return method(setterName, List.of(varargs), bulkBody(field, loop));
     }
 
-    /** {@code B withEntries(Iterable<T> entries)} - reset-and-forEach replace. */
+    /**
+     * {@code B withEntries(Iterable<T> entries)} - forEach-adds every element,
+     * resetting the container first unless the field asked to
+     * {@link FieldSpec#append}.
+     */
     private JCMethodDecl singularCollectionIterableReplace(FieldSpec field) {
-        String setterName = setters().setName(field.name);
+        String setterName = field.setters.setName(field.name, field.isBoolean);
         JCExpression elemType = types.parseType(field.collectionElement);
         JCExpression iterableType = make.TypeApply(
             types.qualIdent("java.lang.Iterable"),
@@ -330,10 +335,6 @@ final class SelfTypedSetters {
         );
         JCVariableDecl iterableParam = param(field.name, iterableType);
 
-        JCStatement assignFresh = make.Exec(make.Assign(
-            make.Select(make.Ident(names._this), names.fromString(field.name)),
-            freshContainer(field)
-        ));
         JCExpression methodRef = make.Reference(
             JCTree.JCMemberReference.ReferenceMode.INVOKE,
             names.fromString("add"),
@@ -345,13 +346,29 @@ final class SelfTypedSetters {
             make.Select(make.Ident(names.fromString(field.name)), names.fromString("forEach")),
             List.of(methodRef)
         ));
-        return method(setterName, List.of(iterableParam),
-            withReplacedMark(field, List.of(assignFresh, forEach, returnSelf())));
+        return method(setterName, List.of(iterableParam), bulkBody(field, forEach));
+    }
+
+    /**
+     * The body of a bulk setter: the copy step, preceded by a fresh container
+     * unless the field appends into the one already there.
+     *
+     * @param field the collection or map field
+     * @param copy the statement moving the argument's contents into the slot
+     * @return the setter's statements, ending in {@code return self()}
+     */
+    private List<JCStatement> bulkBody(FieldSpec field, JCStatement copy) {
+        if (field.append) return List.of(copy, returnSelf());
+        JCStatement assignFresh = make.Exec(make.Assign(
+            make.Select(make.Ident(names._this), names.fromString(field.name)),
+            freshContainer(field)
+        ));
+        return withReplacedMark(field, List.of(assignFresh, copy, returnSelf()));
     }
 
     /** {@code B addEntry(T entry)} - append one element to the existing collection. */
     private JCMethodDecl singularCollectionAdd(FieldSpec field) {
-        String addName = setters().addName(field.singularName);
+        String addName = field.setters.addName(field.singularName);
         JCExpression elemType = types.parseType(field.collectionElement);
         JCVariableDecl entryParam = param(field.singularName, elemType);
         JCStatement add = make.Exec(make.Apply(
@@ -366,7 +383,7 @@ final class SelfTypedSetters {
 
     /** {@code B withEntries(Map<K, V> entries)} - replace with a fresh LinkedHashMap. */
     private JCMethodDecl singularMapReplace(FieldSpec field) {
-        String setterName = setters().setName(field.name);
+        String setterName = field.setters.setName(field.name, field.isBoolean);
         JCExpression keyType = types.parseType(field.mapKey);
         JCExpression valueType = types.parseType(field.mapValue);
         JCExpression mapType = make.TypeApply(
@@ -374,18 +391,22 @@ final class SelfTypedSetters {
             List.of(keyType, valueType)
         );
         JCVariableDecl mapParam = param(field.name, mapType);
+        // this.field.putAll(field)
+        JCStatement putAll = make.Exec(make.Apply(
+            List.nil(),
+            make.Select(
+                make.Select(make.Ident(names._this), names.fromString(field.name)),
+                names.fromString("putAll")),
+            List.of(make.Ident(names.fromString(field.name)))
+        ));
+        if (field.append) {
+            return method(setterName, List.of(mapParam), List.of(putAll, returnSelf()));
+        }
         if (field.isCustomContainer) {
             // this.field = $default$field(); this.field.putAll(field);
             JCStatement assignFresh = make.Exec(make.Assign(
                 make.Select(make.Ident(names._this), names.fromString(field.name)),
                 freshContainer(field)
-            ));
-            JCStatement putAll = make.Exec(make.Apply(
-                List.nil(),
-                make.Select(
-                    make.Select(make.Ident(names._this), names.fromString(field.name)),
-                    names.fromString("putAll")),
-                List.of(make.Ident(names.fromString(field.name)))
             ));
             return method(setterName, List.of(mapParam),
                 withReplacedMark(field, List.of(assignFresh, putAll, returnSelf())));
@@ -401,23 +422,57 @@ final class SelfTypedSetters {
             withReplacedMark(field, List.of(assignFresh, returnSelf())));
     }
 
-    /** {@code B putEntry(K key, V value)} - put one entry into the existing map. */
+    /**
+     * {@code B putEntry(K key, V value)} - put one entry into the existing map,
+     * or {@code B putEntry(V value)} keying on {@code value.<key>()} under
+     * {@code @Collector(key)}. Mirrors {@link FieldMutators#singularMapPut}.
+     */
     private JCMethodDecl singularMapPut(FieldSpec field) {
-        String putName = setters().putName(field.singularName);
-        JCExpression keyType = types.parseType(field.mapKey);
+        String putName = field.setters.putName(field.singularName);
         JCExpression valueType = types.parseType(field.mapValue);
-        JCVariableDecl keyParam = param("key", keyType);
         JCVariableDecl valueParam = param("value", valueType);
+        JCExpression keyArgument = field.keyMethod == null
+            ? make.Ident(names.fromString("key"))
+            : make.Apply(List.nil(),
+                make.Select(make.Ident(names.fromString("value")),
+                    names.fromString(field.keyMethod)),
+                List.nil());
         JCStatement put = make.Exec(make.Apply(
             List.nil(),
             make.Select(
                 make.Select(make.Ident(names._this), names.fromString(field.name)),
                 names.fromString("put")),
-            List.of(make.Ident(names.fromString("key")),
-                make.Ident(names.fromString("value")))
+            List.of(keyArgument, make.Ident(names.fromString("value")))
         ));
+        if (field.keyMethod != null) {
+            return method(putName, List.of(valueParam), List.of(put, returnSelf()));
+        }
+        JCVariableDecl keyParam = param("key", types.parseType(field.mapKey));
         return method(putName, List.of(keyParam, valueParam),
             List.of(put, returnSelf()));
+    }
+
+    /**
+     * {@code B removeEntry(T entry)} or {@code B removeEntry(K key)} - one
+     * element or entry back out. Mirrors {@link FieldMutators#singularRemove},
+     * cast to {@link Object} on a collection for the reason given there.
+     */
+    private JCMethodDecl singularRemove(FieldSpec field) {
+        String removeName = field.setters.removeName(field.singularName);
+        String subjectType = field.isMap ? field.mapKey : field.collectionElement;
+        JCVariableDecl subject = param(field.singularName, types.parseType(subjectType));
+        JCExpression argument = make.Ident(names.fromString(field.singularName));
+        if (!field.isMap) {
+            argument = make.TypeCast(types.qualIdent("java.lang.Object"), argument);
+        }
+        JCStatement remove = make.Exec(make.Apply(
+            List.nil(),
+            make.Select(
+                make.Select(make.Ident(names._this), names.fromString(field.name)),
+                names.fromString("remove")),
+            List.of(argument)
+        ));
+        return method(removeName, List.of(subject), List.of(remove, returnSelf()));
     }
 
     /**
@@ -426,7 +481,7 @@ final class SelfTypedSetters {
      * Gated on {@code @Collector(compute = true)}.
      */
     private JCMethodDecl singularMapPutIfAbsent(FieldSpec field) {
-        String putName = setters().computeName(field.singularName);
+        String putName = field.setters.computeName(field.singularName);
         JCExpression keyType = types.parseType(field.mapKey);
         JCExpression supplierType = make.TypeApply(
             types.qualIdent("java.util.function.Supplier"),
@@ -460,7 +515,7 @@ final class SelfTypedSetters {
 
     /** {@code B clearEntries()} - empty the underlying collection or map. */
     private JCMethodDecl singularClear(FieldSpec field) {
-        String clearName = setters().clearName(field.name);
+        String clearName = field.setters.clearName(field.name);
         JCStatement clear = make.Exec(make.Apply(
             List.nil(),
             make.Select(
@@ -485,12 +540,22 @@ final class SelfTypedSetters {
     }
 
     /**
-     * Assigns the builder slot, wrapping the value as {@code () -> value} when
-     * the field takes the constructor-computed path. Mirrors
-     * {@link FieldMutators#slotAssign}: the slot is {@code Supplier<T>} there,
-     * and every setter has to wrap so null keeps meaning "never set".
+     * Assigns the builder slot, routing the value through the slot's direct
+     * {@code @AssignVia} transform where one is written. Mirrors
+     * {@link FieldMutators#slotAssign}.
      */
     private JCStatement slotAssign(FieldSpec field, JCExpression value) {
+        return slotAssignRaw(field, coerce(field, value));
+    }
+
+    /**
+     * Assigns the builder slot verbatim, wrapping the value as
+     * {@code () -> value} when the field takes the constructor-computed path.
+     * Mirrors {@link FieldMutators#slotAssignRaw}: the slot is
+     * {@code Supplier<T>} there, and every setter has to wrap so null keeps
+     * meaning "never set".
+     */
+    private JCStatement slotAssignRaw(FieldSpec field, JCExpression value) {
         JCExpression rhs = ctx.isInstanceDefault(field.name)
             ? make.Lambda(List.nil(), value)
             : value;
@@ -498,6 +563,40 @@ final class SelfTypedSetters {
             make.Select(make.Ident(names._this), names.fromString(field.name)),
             rhs
         ));
+    }
+
+    /** Mirrors {@link FieldMutators#coerce}. */
+    private JCExpression coerce(FieldSpec field, JCExpression value) {
+        String transform = field.directAssign();
+        return transform == null ? value : staticCall(transform, value);
+    }
+
+    /** {@code Target.method(argument)}. */
+    private JCExpression staticCall(String method, JCExpression argument) {
+        return make.Apply(
+            List.nil(),
+            make.Select(make.Ident(names.fromString(ctx.targetSimpleName())),
+                names.fromString(method)),
+            List.of(argument)
+        );
+    }
+
+    /** Mirrors {@link FieldMutators#assignViaOverload}, returning {@code self()}. */
+    private JCMethodDecl assignViaOverload(FieldSpec field, FieldSpec.AssignTransform transform) {
+        String setterName = field.setters.setName(field.name, field.isBoolean);
+        JCVariableDecl p = param(field.name, types.parseType(transform.paramDisplay()));
+        JCStatement assign = slotAssignRaw(field,
+            staticCall(transform.method(), make.Ident(names.fromString(field.name))));
+        return method(setterName, List.of(p), List.of(assign, returnSelf()));
+    }
+
+    /** Mirrors {@link FieldMutators#appendAssignViaOverloads}. */
+    private void appendAssignViaOverloads(FieldSpec field, ListBuffer<JCMethodDecl> out) {
+        if (field.collector) return;
+        for (FieldSpec.AssignTransform transform : field.assignVia) {
+            if (transform.direct() || !transform.resolved()) continue;
+            out.append(assignViaOverload(field, transform));
+        }
     }
 
     /**
@@ -642,8 +741,5 @@ final class SelfTypedSetters {
         return m;
     }
 
-    private SetterScheme setters() {
-        return ctx.config().setters();
-    }
 
 }

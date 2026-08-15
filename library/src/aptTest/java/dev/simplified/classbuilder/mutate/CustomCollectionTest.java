@@ -86,7 +86,7 @@ public class CustomCollectionTest {
         Class<?> builder = nested(shelfClass, "Builder");
 
         // Varargs replace: builds a fresh custom Bag, not a java.util.ArrayList.
-        Object b = builder.getDeclaredConstructor().newInstance();
+        Object b = builder.getEnclosingClass().getMethod("builder").invoke(null);
         builder.getMethod("tags", String[].class).invoke(b, (Object) new String[]{"a", "b"});
         Object result = builder.getMethod("build").invoke(b);
         List<?> tags = (List<?>) shelfClass.getMethod("getTags").invoke(result);
@@ -95,14 +95,14 @@ public class CustomCollectionTest {
             "demo.BagImpl", tags.getClass().getName());
 
         // Singular add appends to the existing custom Bag.
-        Object b2 = builder.getDeclaredConstructor().newInstance();
+        Object b2 = builder.getEnclosingClass().getMethod("builder").invoke(null);
         builder.getMethod("addTag", String.class).invoke(b2, "x");
         builder.getMethod("addTag", String.class).invoke(b2, "y");
         List<?> added = (List<?>) shelfClass.getMethod("getTags").invoke(builder.getMethod("build").invoke(b2));
         assertEquals(List.of("x", "y"), added);
 
         // Clear empties the custom Bag after a bulk set.
-        Object b3 = builder.getDeclaredConstructor().newInstance();
+        Object b3 = builder.getEnclosingClass().getMethod("builder").invoke(null);
         builder.getMethod("tags", String[].class).invoke(b3, (Object) new String[]{"z"});
         builder.getMethod("clearTags").invoke(b3);
         List<?> cleared = (List<?>) shelfClass.getMethod("getTags").invoke(builder.getMethod("build").invoke(b3));
@@ -130,7 +130,7 @@ public class CustomCollectionTest {
         Class<?> builder = nested(bookClass, "Builder");
 
         // Map replace: fresh custom Ledger + putAll of the supplied map.
-        Object b = builder.getDeclaredConstructor().newInstance();
+        Object b = builder.getEnclosingClass().getMethod("builder").invoke(null);
         Map<String, Integer> seed = new LinkedHashMap<>();
         seed.put("one", 1);
         seed.put("two", 2);
@@ -178,7 +178,7 @@ public class CustomCollectionTest {
         assertFalse("no @Collector bulk overloads when the field can't be built",
             hasMethod(builder, "addTag"));
 
-        Object b = builder.getDeclaredConstructor().newInstance();
+        Object b = builder.getEnclosingClass().getMethod("builder").invoke(null);
         Object bagValue = Class.forName("demo.Bags", true, cl).getMethod("newBag").invoke(null);
         @SuppressWarnings("unchecked")
         List<Object> asList = (List<Object>) bagValue;

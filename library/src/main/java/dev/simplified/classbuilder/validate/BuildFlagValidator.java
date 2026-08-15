@@ -92,6 +92,11 @@ public final class BuildFlagValidator {
                         ff.field().getName(), typeName, measured, flag.limit()
                     );
             }
+
+            if (hasBound(flag)) {
+                Number bounded = boundTarget(value);
+                if (bounded != null) checkBounds(flag, bounded, ff.field().getName(), typeName);
+            }
         }
 
         for (Map.Entry<String, List<GroupMember>> entry : groupResults.entrySet()) {
@@ -138,7 +143,53 @@ public final class BuildFlagValidator {
             || flag.notEmpty()
             || !flag.pattern().isEmpty()
             || flag.limit() >= 0
-            || flag.group().length > 0;
+            || flag.group().length > 0
+            || hasBound(flag);
+    }
+
+    /** Whether either end of the numeric range is written. */
+    private static boolean hasBound(@NotNull BuildFlag flag) {
+        return flag.min() != Double.NEGATIVE_INFINITY || flag.max() != Double.POSITIVE_INFINITY;
+    }
+
+    /**
+     * The number a bound applies to - the value itself, or what an
+     * {@link Optional} holds. Null when there is nothing to bound, which covers
+     * an unset field, an empty {@code Optional}, and a type a range says nothing
+     * about.
+     */
+    private static @Nullable Number boundTarget(@Nullable Object value) {
+        if (value instanceof Number number) return number;
+        if (value instanceof Optional<?> optional && optional.orElse(null) instanceof Number number) {
+            return number;
+        }
+        return null;
+    }
+
+    /**
+     * Rejects a value outside its declared range, reporting the bound the way it
+     * was written rather than as the {@code double} it is stored in - a
+     * {@code min = 0} on an {@code int} field reads as {@code 0}, not {@code 0.0}.
+     */
+    private static void checkBounds(@NotNull BuildFlag flag, @NotNull Number value,
+                                    @NotNull String fieldName, @NotNull String typeName) {
+        double measured = value.doubleValue();
+        if (measured < flag.min())
+            throw new BuilderValidationException(
+                "Field '%s' in '%s' is %s, below the minimum of %s",
+                fieldName, typeName, value, bound(flag.min())
+            );
+        if (measured > flag.max())
+            throw new BuilderValidationException(
+                "Field '%s' in '%s' is %s, above the maximum of %s",
+                fieldName, typeName, value, bound(flag.max())
+            );
+    }
+
+    /** A bound rendered without a fractional part when it has none. */
+    private static @NotNull String bound(double value) {
+        if (value == Math.rint(value) && !Double.isInfinite(value)) return String.valueOf((long) value);
+        return String.valueOf(value);
     }
 
     private static @Nullable Object readValue(@NotNull Field field, @NotNull Object target) {

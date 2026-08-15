@@ -27,7 +27,7 @@ public enum NamingStyle {
      * this project's {@code Type.Builder} / {@code mutate()} builder naming.
      */
     SIMPLIFIED(
-        new Setters("{}", "is{}", "add{}", "put{}", "put{}IfAbsent", "clear{}"),
+        new Setters("{}", "is{}", "add{}", "put{}", "put{}IfAbsent", "clear{}", "remove{}"),
         new Builder("Builder", "builder", "build", "from", "mutate"),
         Shared.BEAN_ACCESSORS
     ),
@@ -37,10 +37,12 @@ public enum NamingStyle {
      * {@code Type.TypeBuilder}, {@code toBuilder()}, bare-name setters, bare
      * singular add/put, and no zero-arg boolean form. Lombok has no
      * put-if-absent analogue, so that role is suppressed; a target wanting it
-     * back writes {@code @SetterNames(compute = "put{}IfAbsent")}.
+     * back writes {@code @SetterNames(compute = "put{}IfAbsent")}. Lombok has no
+     * single-element remove either, and that role is suppressed for the same
+     * reason.
      */
     LOMBOK(
-        new Setters("{}", SetterNames.NONE, "{}", "{}", SetterNames.NONE, "clear{}"),
+        new Setters("{}", SetterNames.NONE, "{}", "{}", SetterNames.NONE, "clear{}", SetterNames.NONE),
         new Builder("{}Builder", "builder", "build", "from", "toBuilder"),
         Shared.BEAN_ACCESSORS
     ),
@@ -51,7 +53,7 @@ public enum NamingStyle {
      * read as commands rather than as field names.
      */
     BEAN(
-        new Setters("set{}", "is{}", "add{}", "put{}", "put{}IfAbsent", "clear{}"),
+        new Setters("set{}", "is{}", "add{}", "put{}", "put{}IfAbsent", "clear{}", "remove{}"),
         new Builder("Builder", "builder", "build", "from", "mutate"),
         Shared.BEAN_ACCESSORS
     ),
@@ -69,13 +71,14 @@ public enum NamingStyle {
      * common case here rather than a contradiction.
      */
     FLUENT(
-        new Setters("{}", "is{}", "add{}", "put{}", "put{}IfAbsent", "clear{}"),
+        new Setters("{}", "is{}", "add{}", "put{}", "put{}IfAbsent", "clear{}", "remove{}"),
         new Builder("Builder", "builder", "build", "from", "mutate"),
         new Accessors("{}", "{}", "{}")
     );
 
-    /** The six patterns generated once per field. */
-    private record Setters(String set, String flag, String add, String put, String compute, String clear) { }
+    /** The seven patterns generated once per field. */
+    private record Setters(String set, String flag, String add, String put, String compute,
+                           String clear, String remove) { }
 
     /** The five names generated exactly once per target. */
     private record Builder(String type, String builder, String build, String from, String toBuilder) { }
@@ -141,6 +144,14 @@ public enum NamingStyle {
     /** Pattern for the {@link Collector} clear on a collection or map field. */
     public @NotNull String clear() {
         return setters.clear();
+    }
+
+    /**
+     * Pattern for the {@link Collector} single-element remove on a collection or
+     * map field.
+     */
+    public @NotNull String remove() {
+        return setters.remove();
     }
 
     /** Name of the generated builder class. */

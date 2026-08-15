@@ -18,8 +18,10 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Surfaces the bootstrap methods ({@code builder()}, {@code from(T)},
@@ -82,13 +84,29 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             return methods;
         }
 
-        if (findClassBuilderAnnotation(target) == null) return Collections.emptyList();
+        // The guard first, before anything that could resolve: BuilderSite.of
+        // matches an annotation by name, and a resolve started from in here
+        // walks the class's nested types straight back into this method.
         if (IN_PROGRESS.get().contains(target)) return Collections.emptyList();
+        BuilderSite site = BuilderSite.of(target);
+        if (site == null) {
+            // The class carries no annotation of its own, which is also what a
+            // declared Builder being merged into looks like. Its members come
+            // from the annotation on the class around it.
+            if (!PsiMethod.class.isAssignableFrom(type)) return Collections.emptyList();
+            @SuppressWarnings("unchecked")
+            List<Psi> merged = (List<Psi>) cachedMergedBuilderMethods(target);
+            return merged;
+        }
 
         if (PsiMethod.class.isAssignableFrom(type)) {
             // Bootstrap methods (builder/from/mutate) only on concrete targets;
             // abstract targets get their bootstraps from concrete subclasses.
-            if (target.hasModifierProperty(PsiModifier.ABSTRACT)) return Collections.emptyList();
+            // An executable target is never in a chain, so an abstract enclosing
+            // type is no reason to withhold its entry point.
+            if (!site.isExecutable() && target.hasModifierProperty(PsiModifier.ABSTRACT)) {
+                return Collections.emptyList();
+            }
             @SuppressWarnings("unchecked")
             List<Psi> methods = (List<Psi>) cachedMethods(target);
             return methods;
@@ -114,28 +132,83 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
                 return CachedValueProvider.Result.create(Collections.<PsiMethod>emptyList(),
                     PsiModificationTracker.MODIFICATION_COUNT);
             }
-            PsiAnnotation cb = findClassBuilderAnnotation(parentTarget);
-            if (cb == null) {
+            BuilderSite site = BuilderSite.of(parentTarget);
+            if (site == null) {
                 return CachedValueProvider.Result.create(Collections.<PsiMethod>emptyList(),
                     PsiModificationTracker.MODIFICATION_COUNT);
             }
             GeneratedMemberFactory.EditorBuilderConfig config =
-                GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(cb);
+                GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
             List<PsiMethod> methods = GeneratedMemberFactory.synthesizeBuilderMethods(
-                parentTarget, config, synthBuilder);
+                site, config, synthBuilder);
             return CachedValueProvider.Result.create(methods,
                 PsiModificationTracker.MODIFICATION_COUNT);
         });
     }
 
+    /**
+     * The generated members for a {@code Builder} the target declares itself and
+     * asked to have merged into.
+     *
+     * <p>Without this the editor would show only what the author wrote there
+     * while the build emits every setter beside it - completion missing the
+     * whole generated surface, which is the drift in its most literal form.
+     *
+     * <p>The collision rule is the processor's: a generated method is offered
+     * only when the declared class spells no method of that name and parameter
+     * count, and the builder's constructor is never offered, that class always
+     * having one by the time either half looks. Read through
+     * {@code getOwnMethods()} rather than {@code getMethods()}, the latter being
+     * augment-aware and answering with whatever this provider contributed last.
+     *
+     * @param declared the class that might be a merged builder
+     * @return the members to add, empty when it is not one
+     */
+    private static List<PsiMethod> cachedMergedBuilderMethods(PsiClass declared) {
+        return CachedValuesManager.getCachedValue(declared, () -> {
+            List<PsiMethod> members = mergedBuilderMethods(declared);
+            return CachedValueProvider.Result.create(members,
+                PsiModificationTracker.MODIFICATION_COUNT);
+        });
+    }
+
+    private static List<PsiMethod> mergedBuilderMethods(PsiClass declared) {
+        String name = declared.getName();
+        if (name == null) return Collections.emptyList();
+        PsiClass owner = declared.getContainingClass();
+        if (owner == null || IN_PROGRESS.get().contains(owner)) return Collections.emptyList();
+        BuilderSite site = BuilderSite.of(owner);
+        if (site == null || site.isExecutable()) return Collections.emptyList();
+
+        GeneratedMemberFactory.EditorBuilderConfig config =
+            GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
+        if (!config.mergeDeclaredBuilder()) return Collections.emptyList();
+        if (!name.equals(config.builderName())) return Collections.emptyList();
+
+        Set<String> spelled = new HashSet<>();
+        for (PsiMethod own : GeneratedMemberFactory.ownMethods(declared)) {
+            spelled.add(own.getName() + "/" + own.getParameterList().getParametersCount());
+        }
+        List<PsiMethod> out = new ArrayList<>();
+        for (PsiMethod generated : GeneratedMemberFactory.synthesizeBuilderMethods(site, config, declared)) {
+            if (generated.isConstructor()) continue;
+            if (spelled.contains(generated.getName() + "/"
+                + generated.getParameterList().getParametersCount())) {
+                continue;
+            }
+            out.add(generated);
+        }
+        return out;
+    }
+
     private static List<PsiMethod> cachedMethods(PsiClass target) {
         return CachedValuesManager.getCachedValue(target, () -> {
-            PsiAnnotation resolved = findClassBuilderAnnotation(target);
-            if (resolved == null) {
+            BuilderSite site = BuilderSite.of(target);
+            if (site == null) {
                 return CachedValueProvider.Result.create(Collections.<PsiMethod>emptyList(),
                     PsiModificationTracker.MODIFICATION_COUNT);
             }
-            SynthesizedMembers members = synthesizeOrReuse(target, resolved);
+            SynthesizedMembers members = synthesizeOrReuse(site);
             return CachedValueProvider.Result.create(
                 members.allMethods(),
                 PsiModificationTracker.MODIFICATION_COUNT);
@@ -144,8 +217,8 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
 
     private static List<PsiClass> cachedNestedClasses(PsiClass target) {
         return CachedValuesManager.getCachedValue(target, () -> {
-            PsiAnnotation resolved = findClassBuilderAnnotation(target);
-            if (resolved == null) {
+            BuilderSite site = BuilderSite.of(target);
+            if (site == null) {
                 return CachedValueProvider.Result.create(Collections.<PsiClass>emptyList(),
                     PsiModificationTracker.MODIFICATION_COUNT);
             }
@@ -157,7 +230,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             // file highlighting); getInnerClasses() is augment-aware and would
             // recurse back into this provider.
             GeneratedMemberFactory.EditorBuilderConfig config =
-                GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(resolved);
+                GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
             if (target instanceof com.intellij.psi.impl.source.PsiExtensibleClass extensible) {
                 for (PsiClass nested : extensible.getOwnInnerClasses()) {
                     if (config.builderName().equals(nested.getName())) {
@@ -166,7 +239,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
                     }
                 }
             }
-            SynthesizedMembers members = synthesizeOrReuse(target, resolved);
+            SynthesizedMembers members = synthesizeOrReuse(site);
             return CachedValueProvider.Result.create(
                 List.of(members.builderClass()),
                 PsiModificationTracker.MODIFICATION_COUNT);
@@ -182,9 +255,10 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      * subsequent calls (including the checker's rerun) retrieve the same
      * {@link PsiClass} / {@link PsiMethod} instances.
      */
-    private static SynthesizedMembers synthesizeOrReuse(PsiClass target, PsiAnnotation resolved) {
+    private static SynthesizedMembers synthesizeOrReuse(BuilderSite site) {
+        PsiClass target = site.owner();
         GeneratedMemberFactory.EditorBuilderConfig config =
-            GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(resolved);
+            GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
         SynthesizedMembers cached = target.getUserData(SYNTHESIZED);
         if (cached != null && Objects.equals(cached.config(), config)) {
             return cached;
@@ -192,20 +266,21 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         // Wrap synthesis in the recursion guard. Eagerly resolving the self-
         // reference type re-enters getAugments() for the same target via the
         // inner-class lookup; the guard ensures the inner call returns empty
-        // rather than looping until stack overflow.
-        IN_PROGRESS.get().add(target);
-        try {
-            PsiClass builderClass = GeneratedMemberFactory.synthesizeBuilderClass(target, config);
-            List<PsiMethod> bootstrap = GeneratedMemberFactory.bootstrapMethods(target, config, builderClass);
-            PsiMethod ctor = needsAllArgsConstructor(target, config)
+        // rather than looping until stack overflow. Through withInProgress
+        // rather than a hand-rolled add/remove, so a nested guard for this same
+        // target - BuilderSite.of takes one - cannot clear it on the way out.
+        return withInProgress(target, () -> {
+            PsiClass builderClass = GeneratedMemberFactory.synthesizeBuilderClass(site, config);
+            List<PsiMethod> bootstrap = GeneratedMemberFactory.bootstrapMethods(site, config, builderClass);
+            // The annotated member is what build() calls on the executable path,
+            // so there is no constructor to synthesise beside it.
+            PsiMethod ctor = !site.isExecutable() && needsAllArgsConstructor(target, config)
                 ? GeneratedMemberFactory.allArgsConstructor(target, config)
                 : null;
             SynthesizedMembers fresh = new SynthesizedMembers(config, bootstrap, builderClass, ctor);
             target.putUserData(SYNTHESIZED, fresh);
             return fresh;
-        } finally {
-            IN_PROGRESS.get().remove(target);
-        }
+        });
     }
 
     /**
@@ -231,6 +306,10 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             for (PsiMethod own : extensible.getOwnMethods()) {
                 if (own.isConstructor()) return false;
             }
+            // A merged declared builder is the one case where a nested builder
+            // does not suppress the constructor: build() still calls
+            // new Target(..), so the constructor it calls still has to exist.
+            if (config.mergeDeclaredBuilder()) return true;
             for (PsiClass nested : extensible.getOwnInnerClasses()) {
                 if (config.builderName().equals(nested.getName())) return false;
             }

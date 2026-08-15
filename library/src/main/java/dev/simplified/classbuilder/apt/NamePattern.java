@@ -37,6 +37,82 @@ public final class NamePattern {
         return pattern.substring(0, at) + value + pattern.substring(at + PLACEHOLDER.length());
     }
 
+    /**
+     * The subject a pattern expands against for a {@code boolean} field, which
+     * is the field's own name minus a leading {@code is} when keeping it would
+     * double the prefix the pattern is about to add.
+     *
+     * <p>A {@code boolean} field named {@code isPermaLink} under {@code is{}}
+     * would otherwise mint {@code isIsPermaLink()}. The condition is on the
+     * pattern rather than on the style, so it holds for a written
+     * {@code name = "is{}"} as readily as for a style's, and it is skipped
+     * exactly when the pattern opens with the placeholder - a fluent
+     * {@code "{}"} adds no prefix to double, and its accessor is the field's own
+     * name.
+     *
+     * <p>The trailing character test accepts anything that is not lower case, so
+     * {@code isPermaLink} strips while a field genuinely named {@code island}
+     * does not.
+     *
+     * @param pattern the pattern the subject will be expanded into
+     * @param field the field name
+     * @return the name to expand, stripped or unchanged
+     */
+    public static String booleanSubject(String pattern, String field) {
+        if (pattern == null || field == null) return field;
+        if (pattern.indexOf(PLACEHOLDER) == 0) return field;
+        if (!field.startsWith("is") || field.length() <= 2) return field;
+        return Character.isLowerCase(field.charAt(2)) ? field : field.substring(2);
+    }
+
+    /**
+     * The subject a {@code @Collector}'s single-element members are named from -
+     * the field's own name with its plural inflection removed, so a
+     * {@code List<String> tags} contributes {@code addTag}.
+     *
+     * <p>Three rules in order, and the middle one is the one that earns its
+     * keep: an {@code -es} plural gives up both letters only where the stem ends
+     * in a sibilant or an {@code o}, because that is the only place English put
+     * the {@code e} there. Everywhere else the {@code e} belongs to the word, so
+     * {@code frames} yields {@code frame} rather than {@code fram} and
+     * {@code sizes} yields {@code size}, while {@code boxes}, {@code classes},
+     * {@code matches} and {@code heroes} still give up theirs.
+     *
+     * <p>A name ending in {@code ss} or {@code us} is left whole: it is not a
+     * plural at all, and taking a letter off {@code address} or {@code status}
+     * would name a method after nothing.
+     *
+     * <p>No rule covers English, so {@code @Collector(singularMethodName)} is
+     * the answer for a word this misses - and the name it mints is what both the
+     * processor and the editor use, so a miss is at least the same miss in both.
+     *
+     * @param field the field name
+     * @return the singular to expand the add and put patterns against
+     */
+    public static String singularSubject(String field) {
+        if (field == null || field.length() < 2) return field;
+        // Two letters of stem before -ies, so `ties` falls through to the plain
+        // -s rule and comes out `tie` rather than `ty`.
+        if (field.endsWith("ies") && field.length() > 4) {
+            return field.substring(0, field.length() - 3) + "y";
+        }
+        // The sibilant has to be doubled to have taken the -es: `classes` is
+        // `class` and `buzzes` is `buzz`, while a single one before it is the
+        // word's own final letter - `houses`, `sizes`, `phases`.
+        if (endsWithAny(field, "sses", "zzes", "xes", "ches", "shes", "oes")) {
+            return field.substring(0, field.length() - 2);
+        }
+        if (field.endsWith("ss") || field.endsWith("us")) return field;
+        return field.endsWith("s") ? field.substring(0, field.length() - 1) : field;
+    }
+
+    private static boolean endsWithAny(String value, String... suffixes) {
+        for (String suffix : suffixes) {
+            if (value.endsWith(suffix)) return true;
+        }
+        return false;
+    }
+
     /** Whether a pattern asks for its member to be generated at all. */
     public static boolean emits(String pattern) {
         return !SetterNames.NONE.equals(pattern);

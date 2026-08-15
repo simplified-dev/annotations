@@ -15,6 +15,14 @@ import java.util.Set;
 /**
  * Shared FQNs and attribute-reading helpers for the {@code @ClassBuilder}
  * IDE support. Mirrors the layout of {@code ResourcePathConstants}.
+ *
+ * <p>Every reader here asks for the <b>declared</b> attribute value and supplies
+ * the annotation's own default itself, which is what the {@code fallback}
+ * argument on each of them is. That is not a shortcut: reading the value the
+ * platform fills in resolves the annotation type, and a resolve started from an
+ * annotation written inside a class body walks that class's nested types, which
+ * is augment-aware and re-enters the provider that asked. The defaults are
+ * stated once at each call site instead.
  */
 public final class ClassBuilderConstants {
 
@@ -24,8 +32,18 @@ public final class ClassBuilderConstants {
 
     public static final @NotNull String BUILDER_DEFAULT_FQN = "dev.simplified.annotations.BuilderDefault";
     public static final @NotNull String BUILDER_IGNORE_FQN = "dev.simplified.annotations.BuilderIgnore";
+    public static final @NotNull String BUILDER_SEED_FQN = "dev.simplified.annotations.BuilderSeed";
+    public static final @NotNull String SETTER_NAMES_FQN = "dev.simplified.annotations.SetterNames";
     public static final @NotNull String BUILD_FLAG_FQN = "dev.simplified.annotations.BuildFlag";
     public static final @NotNull String OBTAIN_VIA_FQN = "dev.simplified.annotations.ObtainVia";
+    public static final @NotNull String ASSIGN_VIA_FQN = "dev.simplified.annotations.AssignVia";
+
+    /**
+     * The container javac wraps a repeated {@code @AssignVia} in. Only ever seen
+     * on a slot read out of a class file - a source declaration presents each one
+     * separately - but read for the same reason the processor reads it.
+     */
+    public static final @NotNull String ASSIGN_VIA_LIST_FQN = ASSIGN_VIA_FQN + ".List";
     public static final @NotNull String COLLECTOR_FQN = "dev.simplified.annotations.Collector";
     public static final @NotNull String NEGATE_FQN = "dev.simplified.annotations.Negate";
     public static final @NotNull String FORMATTABLE_FQN = "dev.simplified.annotations.Formattable";
@@ -40,8 +58,11 @@ public final class ClassBuilderConstants {
         ANNOTATION_FQN,
         BUILDER_DEFAULT_FQN,
         BUILDER_IGNORE_FQN,
+        BUILDER_SEED_FQN,
+        SETTER_NAMES_FQN,
         BUILD_FLAG_FQN,
         OBTAIN_VIA_FQN,
+        ASSIGN_VIA_FQN,
         COLLECTOR_FQN,
         NEGATE_FQN,
         FORMATTABLE_FQN,
@@ -58,8 +79,11 @@ public final class ClassBuilderConstants {
         ANNOTATION_SHORT_NAME,
         "BuilderDefault",
         "BuilderIgnore",
+        "BuilderSeed",
+        "SetterNames",
         "BuildFlag",
         "ObtainVia",
+        "AssignVia",
         "Collector",
         "Negate",
         "Formattable",
@@ -72,10 +96,13 @@ public final class ClassBuilderConstants {
     public static final @NotNull String ATTR_EMIT_CONTRACTS = "emitContracts";
     public static final @NotNull String ATTR_ACCESS = "access";
     public static final @NotNull String ATTR_CONSTRUCTOR_ACCESS = "constructorAccess";
+    public static final @NotNull String ATTR_BUILDER_CONSTRUCTOR_ACCESS = "builderConstructorAccess";
     public static final @NotNull String ATTR_FACTORY_METHOD = "factoryMethod";
+    public static final @NotNull String ATTR_MERGE_DECLARED_BUILDER = "mergeDeclaredBuilder";
 
     /** Attribute names of {@code @SetterNames}, in declaration order. */
-    public static final @NotNull String[] SETTER_ROLES = {"set", "flag", "add", "put", "compute", "clear"};
+    public static final @NotNull String[] SETTER_ROLES =
+        {"set", "flag", "add", "put", "compute", "clear", "remove"};
 
     /** Attribute names of {@code @BuilderNames}, in declaration order. */
     public static final @NotNull String[] BUILDER_ROLES = {"type", "builder", "build", "from", "toBuilder"};
@@ -84,7 +111,7 @@ public final class ClassBuilderConstants {
 
     public static @NotNull String stringAttr(@Nullable PsiAnnotation annotation, @NotNull String attr, @NotNull String fallback) {
         if (annotation == null) return fallback;
-        PsiAnnotationMemberValue value = annotation.findAttributeValue(attr);
+        PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(attr);
         if (value instanceof PsiLiteralExpression literal && literal.getValue() instanceof String s && !s.isEmpty()) return s;
         return fallback;
     }
@@ -110,7 +137,7 @@ public final class ClassBuilderConstants {
     /** Reads the {@code style} attribute, defaulting to {@link NamingStyle#SIMPLIFIED}. */
     public static @NotNull NamingStyle namingStyle(@Nullable PsiAnnotation annotation) {
         if (annotation == null) return NamingStyle.SIMPLIFIED;
-        PsiAnnotationMemberValue value = annotation.findAttributeValue(ATTR_STYLE);
+        PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(ATTR_STYLE);
         if (value instanceof PsiReferenceExpression ref) {
             String name = ref.getReferenceName();
             if (name != null) {
@@ -143,7 +170,30 @@ public final class ClassBuilderConstants {
             writtenStringAttr(setters, "add"),
             writtenStringAttr(setters, "put"),
             writtenStringAttr(setters, "compute"),
-            writtenStringAttr(setters, "clear"));
+            writtenStringAttr(setters, "clear"),
+            writtenStringAttr(setters, "remove"));
+    }
+
+    /**
+     * Resolves one slot's patterns over the target's, from a
+     * {@code @SetterNames} written on the field, record component or parameter
+     * itself.
+     *
+     * @param written the annotation on the slot, or {@code null}
+     * @param base the target's resolved scheme
+     * @return the scheme that slot's members are named from
+     */
+    public static @NotNull SetterScheme setterOverride(@Nullable PsiAnnotation written,
+                                                       @NotNull SetterScheme base) {
+        if (written == null) return base;
+        return SetterScheme.override(base,
+            writtenStringAttr(written, "set"),
+            writtenStringAttr(written, "flag"),
+            writtenStringAttr(written, "add"),
+            writtenStringAttr(written, "put"),
+            writtenStringAttr(written, "compute"),
+            writtenStringAttr(written, "clear"),
+            writtenStringAttr(written, "remove"));
     }
 
     /**
@@ -184,7 +234,7 @@ public final class ClassBuilderConstants {
 
     public static boolean booleanAttr(@Nullable PsiAnnotation annotation, @NotNull String attr, boolean fallback) {
         if (annotation == null) return fallback;
-        PsiAnnotationMemberValue value = annotation.findAttributeValue(attr);
+        PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(attr);
         if (value instanceof PsiLiteralExpression literal && literal.getValue() instanceof Boolean b) return b;
         return fallback;
     }
@@ -211,7 +261,7 @@ public final class ClassBuilderConstants {
                                                 @NotNull String attr,
                                                 @NotNull String fallback) {
         if (annotation == null) return fallback;
-        PsiAnnotationMemberValue value = annotation.findAttributeValue(attr);
+        PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(attr);
         if (value instanceof PsiReferenceExpression ref) {
             String name = ref.getReferenceName();
             if (name != null) {

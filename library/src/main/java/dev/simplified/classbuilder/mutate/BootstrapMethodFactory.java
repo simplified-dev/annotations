@@ -39,11 +39,12 @@ import java.util.Collection;
  *       dangling this method.</li>
  * </ul>
  *
- * <p>Collision policy: if the target already declares a method with the
- * matching name and arity, skip the injection and emit a {@link
- * Diagnostic.Kind#NOTE} - the user's hand-written method wins. This mirrors
- * Lombok's behaviour and lets consumers migrate off the old
- * hand-rolled-bootstrap pattern without coordinated edits.
+ * <p>Collision policy: if the target already declares a method that would
+ * collide, skip the injection and emit a {@link Diagnostic.Kind#NOTE} - the
+ * user's hand-written method wins. This mirrors Lombok's behaviour and lets
+ * consumers migrate off the old hand-rolled-bootstrap pattern without
+ * coordinated edits. What counts as a collision is
+ * {@link BootstrapCollisions}, which the interface path shares.
  */
 final class BootstrapMethodFactory {
 
@@ -87,41 +88,49 @@ final class BootstrapMethodFactory {
         // An empty name is the single opt-out signal: BuilderScheme resolves a
         // @BuilderNames(x = NONE) to the empty string, so there is no second
         // generate-flag to consult.
+        int seeds = ctx.seeds().size();
         if (!builderMethod.isEmpty())
-            appendIfAbsent(target, builderMethod, 0, this::builderFactory);
+            appendUnless(target, builderMethod, "/" + seeds,
+                BootstrapCollisions.declaresArity(target, builderMethod, seeds), this::builderFactory);
+
+        // from(T) and mutate() read every slot back off a built instance, and on
+        // the executable path there is nothing to read them through: a slot is a
+        // parameter, and no mapping from one to an accessor exists to be guessed
+        // at. Both are suppressed rather than emitted against a guess.
+        if (ctx.isExecutableTarget()) return;
+
         if (!fromMethod.isEmpty())
-            appendIfAbsent(target, fromMethod, 1, this::fromFactory);
+            appendUnless(target, fromMethod, "(" + ctx.targetSimpleName() + ")",
+                BootstrapCollisions.declaresCopyFactory(ctx.targetElement(), fromMethod),
+                this::fromFactory);
         if (!mutateMethod.isEmpty())
-            appendIfAbsent(target, mutateMethod, 0, this::mutateMethod);
+            appendUnless(target, mutateMethod, "/0",
+                BootstrapCollisions.declaresNullary(target, mutateMethod), this::mutateMethod);
     }
 
     /**
      * Appends a method produced by {@code supplier} unless the target already
-     * declares a method with the same {@code name} and {@code arity}. Emits a
-     * {@link Diagnostic.Kind#NOTE} on skip so the note is discoverable but
-     * does not pollute warning-as-error builds.
+     * declares one that collides with it. Emits a {@link Diagnostic.Kind#NOTE}
+     * on skip so the note is discoverable but does not pollute
+     * warning-as-error builds.
+     *
+     * @param target the target's tree
+     * @param name the bootstrap name
+     * @param signature how the collided-with signature reads in the note
+     * @param collides whether the author already declares it, per
+     *                 {@link BootstrapCollisions}
+     * @param supplier builds the method to append
      */
-    private void appendIfAbsent(JCClassDecl target, String name, int arity,
-                                java.util.function.Supplier<JCMethodDecl> supplier) {
-        if (hasMethod(target, name, arity)) {
+    private void appendUnless(JCClassDecl target, String name, String signature, boolean collides,
+                              java.util.function.Supplier<JCMethodDecl> supplier) {
+        if (collides) {
             messager.printMessage(Diagnostic.Kind.NOTE,
                 "@ClassBuilder skipped bootstrap '" + name + "' - target already declares "
-                    + name + "/" + arity,
+                    + name + signature,
                 ctx.targetElement());
             return;
         }
         ctx.bridge().compat().appendDef(target, supplier.get());
-    }
-
-    private static boolean hasMethod(JCClassDecl target, String name, int arity) {
-        for (JCTree def : target.defs) {
-            if (def instanceof JCMethodDecl m
-                && m.name.toString().equals(name)
-                && m.params.size() == arity) {
-                return true;
-            }
-        }
-        return false;
     }
 
     // ------------------------------------------------------------------
@@ -129,7 +138,22 @@ final class BootstrapMethodFactory {
     // ------------------------------------------------------------------
 
     private JCMethodDecl builderFactory() {
-        JCExpression newBuilder = make.NewClass(null, List.nil(), ctx.builderType(), List.nil(), null);
+        // A seeded slot has no setter, so the value has to enter here and be
+        // forwarded to the builder's constructor, which is the only thing that
+        // can assign a final slot.
+        ListBuffer<JCVariableDecl> params = new ListBuffer<>();
+        ListBuffer<JCExpression> args = new ListBuffer<>();
+        for (FieldSpec seed : ctx.seeds()) {
+            params.append(make.VarDef(
+                make.Modifiers(Flags.PARAMETER),
+                names.fromString(seed.name),
+                ctx.types().parseType(seed.typeDisplay),
+                null
+            ));
+            args.append(make.Ident(names.fromString(seed.name)));
+        }
+        JCExpression newBuilder =
+            make.NewClass(null, List.nil(), ctx.builderType(), args.toList(), null);
         JCBlock body = make.Block(0, List.of(make.Return(newBuilder)));
 
         // builder() constructs a fresh Builder; "-> new" mirrors build().
@@ -137,17 +161,34 @@ final class BootstrapMethodFactory {
         // parameters - it is static, so the class's are not in scope, and the
         // caller infers them from the assignment context.
         JCMethodDecl method = make.MethodDef(
-            make.Modifiers(ctx.accessFlag() | Flags.STATIC, contracts.newReturnNullary()),
+            make.Modifiers(ctx.accessFlag() | Flags.STATIC, newReturnContract(params.size())),
             names.fromString(ctx.config().builderMethodName()),
             ctx.builderType(),
             ctx.typeParams(),
-            List.nil(),
+            params.toList(),
             List.nil(),
             body,
             null
         );
         AstMarkers.markGenerated(method, ctx.generated());
         return method;
+    }
+
+    /**
+     * The fresh-return {@code @XContract} for an entry point of this arity.
+     * A seeded {@code builder(...)} takes as many parameters as there are
+     * seeds, and the contract's left-hand side has to match; past the two
+     * shapes the vocabulary carries, no contract is emitted rather than one
+     * that does not parse.
+     */
+    private List<JCTree.JCAnnotation> newReturnContract(int arity) {
+        return switch (arity) {
+            case 0 -> contracts.newReturnNullary();
+            // The same shape from(T) carries: reads its argument, returns a
+            // fresh builder, touches nothing else.
+            case 1 -> contracts.newReturnPureUnary();
+            default -> List.nil();
+        };
     }
 
     // ------------------------------------------------------------------
@@ -394,9 +435,14 @@ final class BootstrapMethodFactory {
      * {@code set} role as every other field kind, so seeding needs no special
      * case; the zero-arg {@code flag} setter takes no argument and is never the
      * one called here.
+     *
+     * <p>Read off the field rather than off the config, and it has to be: a
+     * {@code @SetterNames} written on the field renames the setter this call is
+     * about to name, and asking the target would emit a call to a method the
+     * builder does not have.
      */
     private String setterName(FieldSpec f) {
-        return ctx.config().setters().setName(f.name);
+        return f.setters.setName(f.name, f.isBoolean);
     }
 
     private static String capitalise(String s) {

@@ -91,15 +91,14 @@ public final class EnumLookupMutator {
 
         String enumName = targetElement.getSimpleName().toString();
 
+        if (reportCacheCollisions(target, targetElement, keys)) return false;
+
         // Fields.
-        if (!hasFieldNamed(target, CACHED_VALUES)) {
-            JCVariableDecl values = cachedValuesField(enumName);
-            AstMarkers.markGenerated(values, generated);
-            bridge.compat().appendDef(target, values);
-        }
+        JCVariableDecl values = cachedValuesField(enumName);
+        AstMarkers.markGenerated(values, generated);
+        bridge.compat().appendDef(target, values);
         for (EnumKeySpec spec : keys) {
             String name = CACHED_KEYS_PREFIX + spec.fieldName();
-            if (hasFieldNamed(target, name)) continue;
             JCVariableDecl keysArr = cachedKeysField(spec, name);
             AstMarkers.markGenerated(keysArr, generated);
             bridge.compat().appendDef(target, keysArr);
@@ -443,18 +442,48 @@ public final class EnumLookupMutator {
     // Per-key methods
     // ------------------------------------------------------------------
 
+    /**
+     * The per-element test the {@code of<Key>} scan runs.
+     *
+     * <p>Three shapes rather than two. A primitive key compares with {@code ==}.
+     * A reference key compares with {@code Objects.equals}, which tolerates a
+     * null on either side. A {@code String} key asking to
+     * {@code @KeyField(ignoreCase)} compares with
+     * {@code equalsIgnoreCase}, guarded so it keeps exactly the null tolerance
+     * {@code Objects.equals} has - a null stored key matches a null argument and
+     * nothing else - because calling the method on a null element would throw
+     * inside generated code the author cannot see.
+     *
+     * @param spec the resolved key
+     * @param keysFieldName the parallel key array's name
+     * @return the comparison expression
+     */
+    private JCExpression keyComparison(EnumKeySpec spec, String keysFieldName) {
+        JCExpression element = make.Indexed(ident(keysFieldName), ident("i"));
+        if (spec.isPrimitive()) {
+            return make.Binary(Tag.EQ, element, ident("key"));
+        }
+        if (spec.ignoreCase() && spec.isString()) {
+            // element == null ? key == null : element.equalsIgnoreCase(key)
+            return make.Conditional(
+                make.Binary(Tag.EQ, make.Indexed(ident(keysFieldName), ident("i")), nullLit()),
+                make.Binary(Tag.EQ, ident("key"), nullLit()),
+                make.Apply(List.nil(),
+                    make.Select(element, names.fromString("equalsIgnoreCase")),
+                    List.of(ident("key")))
+            );
+        }
+        return make.Apply(List.nil(),
+            make.Select(types.qualIdent(FQN_OBJECTS), names.fromString("equals")),
+            List.of(element, ident("key")));
+    }
+
     private JCMethodDecl ofKeyMethod(String enumName, EnumKeySpec spec, String methodName) {
         // for (int i = 0; i < CACHED_KEYS_X.length; i++)
         //     if (<comparison>) return CACHED_VALUES[i];
         // return null;
         String keysFieldName = CACHED_KEYS_PREFIX + spec.fieldName();
-        JCExpression comparison = spec.isPrimitive()
-            ? make.Binary(Tag.EQ,
-                make.Indexed(ident(keysFieldName), ident("i")),
-                ident("key"))
-            : make.Apply(List.nil(),
-                make.Select(types.qualIdent(FQN_OBJECTS), names.fromString("equals")),
-                List.of(make.Indexed(ident(keysFieldName), ident("i")), ident("key")));
+        JCExpression comparison = keyComparison(spec, keysFieldName);
 
         JCStatement loop = make.ForLoop(
             List.of(make.VarDef(make.Modifiers(0),
@@ -591,5 +620,42 @@ public final class EnumLookupMutator {
             if (def instanceof JCVariableDecl v && v.name.toString().equals(name)) return true;
         }
         return false;
+    }
+
+    /**
+     * Reports every cache field the enum already declares under a name this
+     * mutator owns, and says so before anything is emitted.
+     *
+     * <p>Skipping the declaration and emitting the populate statements anyway is
+     * what this replaces, and it failed in the worst available way: the static
+     * block assigned a second value to the author's own {@code final} field, so
+     * javac reported a definite-assignment error on a line the author wrote,
+     * naming neither the annotation nor the collision. The hand-rolled cache
+     * these enums carry is exactly what {@code @EnumLookup} is adopted to
+     * delete, so a plain instruction to delete it is the whole fix.
+     *
+     * @param target the enum's source tree
+     * @param targetElement the enum, for the diagnostic's position
+     * @param keys the resolved {@code @KeyField} specs
+     * @return whether a collision was reported, in which case nothing is emitted
+     */
+    private boolean reportCacheCollisions(JCClassDecl target, TypeElement targetElement,
+                                          java.util.List<EnumKeySpec> keys) {
+        java.util.List<String> owned = new java.util.ArrayList<>();
+        owned.add(CACHED_VALUES);
+        for (EnumKeySpec spec : keys) owned.add(CACHED_KEYS_PREFIX + spec.fieldName());
+
+        boolean collided = false;
+        for (String name : owned) {
+            if (!hasFieldNamed(target, name)) continue;
+            collided = true;
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@EnumLookup generates a field named '" + name + "' and "
+                    + targetElement.getSimpleName() + " already declares one - delete the declaration "
+                    + "and read the generated field, which is private static final and carries the "
+                    + "same name",
+                targetElement);
+        }
+        return collided;
     }
 }

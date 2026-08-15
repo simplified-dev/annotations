@@ -44,6 +44,48 @@ import java.lang.annotation.Target;
  * {@code <Name>Impl} carries the annotation onto the field it synthesises, so
  * the validator finds it on the instance {@code build()} returns.
  *
+ * <h2>Constructor and factory targets</h2>
+ * On a constructor or a {@code static} factory method the slots are that
+ * member's parameters, and {@code build()} calls it. The builder still nests in
+ * the enclosing type and is still entered through it - {@code Range.builder()},
+ * not {@code new RangeBuilder()} - so a caller sees the same shape either way.
+ * An instance method is rejected, having no receiver at {@code builder()} time,
+ * as is a {@code void} one, having nothing for {@code build()} to return.
+ *
+ * <p>One type carries one builder, so the annotation belongs either on the type
+ * or on exactly one of its members; both, or two members, is a compile error
+ * rather than two colliding {@code Builder} classes.
+ *
+ * <p>What a slot is changes what applies to it:
+ * <ul>
+ *   <li>{@link Collector}, {@link Negate}, {@link Formattable} and
+ *       {@link AssignVia} shape a parameter's setters exactly as they shape a
+ *       field's.</li>
+ *   <li>{@link BuilderSeed} moves a parameter onto {@code builder(...)} and
+ *       drops its setter, which is how a required value is asked for at the
+ *       entry point.</li>
+ *   <li>{@link BuildFlag} stays on the built type's <em>fields</em>. The
+ *       validator resolves the flagged fields of the instance {@code build()}
+ *       produced, so a constraint written there is enforced whichever member
+ *       constructed it.</li>
+ *   <li>{@link BuilderDefault}, {@link BuilderIgnore} and {@link ObtainVia} do
+ *       not apply: a parameter carries no initializer to retain, the annotated
+ *       member requires every one of its parameters, and there is no instance to
+ *       read a slot back off.</li>
+ * </ul>
+ *
+ * <p>For that last reason the copy factory and {@code mutate()} are not
+ * generated either - both seed every slot by reading a built object, and no
+ * slot-to-accessor mapping exists when the slots are parameters. {@link #exclude}
+ * and {@link #factoryMethod} are rejected on this form: the first names fields,
+ * and the second redirects what {@code build()} calls, which the annotated
+ * member already decides. {@link #retainInit} and {@link #generateCopyConstructor}
+ * have nothing to act on and are ignored.
+ *
+ * <p>A constructor runs under its enclosing type's parameters and a
+ * {@code static} factory under its own, which is also what {@code build()}
+ * returns - the factory's declared return type rather than the enclosing type.
+ *
  * <h2>Generic targets</h2>
  * A target may declare type parameters, on any supported shape. The generated
  * builder re-declares them, since a nested {@code Builder} is {@code static}
@@ -70,11 +112,16 @@ import java.lang.annotation.Target;
  *       {@code build()}</li>
  *   <li>{@link ObtainVia} - override how {@code from}/{@code mutate} reads the
  *       field off an existing instance</li>
+ *   <li>{@link AssignVia} - route a setter's argument through a static method
+ *       on the way into the slot, either shaping the setter the field already
+ *       has or adding an overload taking what that method accepts</li>
  *   <li>{@link Collector} - emit varargs / {@code Iterable} bulk setters on
  *       collection and map fields, with opt-in single-element add/put,
  *       {@code clearX}, and lazy {@code putXIfAbsent} overloads</li>
  *   <li>{@link Negate} - emit an inverse boolean setter on a {@code boolean} field</li>
  *   <li>{@link Formattable} - emit a {@code @PrintFormat} string overload</li>
+ *   <li>{@link BuilderSeed} - on a constructor or factory parameter, move it
+ *       onto {@code builder(...)} and emit no setter for it</li>
  * </ul>
  *
  * <h2>Naming</h2>
@@ -108,10 +155,16 @@ import java.lang.annotation.Target;
  *     &#64;BuildFlag(nonNull = true) String name();
  * }
  *
- * // Builder on a static factory method
+ * // Builder on a static factory method - slots are min and max
  * public final class Range {
  *     &#64;ClassBuilder(builder = &#64;BuilderNames(type = "RangeBuilder"))
  *     public static Range of(int min, int max) { ... }
+ * }
+ *
+ * // Builder on a constructor, with a seeded entry point: Action.builder(String)
+ * public final class Action {
+ *     &#64;ClassBuilder
+ *     Action(&#64;BuilderSeed String key, boolean enabled) { ... }
  * }
  *
  * // Custom naming
@@ -135,11 +188,13 @@ import java.lang.annotation.Target;
  * @see BuilderNames
  * @see BuilderDefault
  * @see BuilderIgnore
+ * @see BuilderSeed
  * @see BuildFlag
  * @see Collector
  * @see Negate
  * @see Formattable
  * @see ObtainVia
+ * @see AssignVia
  */
 @Retention(RetentionPolicy.CLASS)
 @Target({ ElementType.TYPE, ElementType.CONSTRUCTOR, ElementType.METHOD })
@@ -196,6 +251,21 @@ public @interface ClassBuilder {
     @NotNull AccessLevel constructorAccess() default AccessLevel.PACKAGE;
 
     /**
+     * The access level of the generated builder's own no-arg constructor.
+     * Defaults to package-private for the reason {@link #constructorAccess}
+     * does one level down - it routes callers through the entry point rather
+     * than past it, so {@code builder()} is the one way to obtain a builder and
+     * Lombok's shape is matched.
+     *
+     * <p>Separate from {@link #access()}, which governs the builder class and
+     * would otherwise decide this too: a builder class has to be visible to be
+     * useful as a type, and that is a different question from whether
+     * {@code new Target.Builder()} is an entry point. Widen it only to publish
+     * that second way in deliberately.
+     */
+    @NotNull AccessLevel builderConstructorAccess() default AccessLevel.PACKAGE;
+
+    /**
      * Whether the generated builder seeds each field from its declared
      * initializer rather than the JVM default. On by default, since a field
      * written as {@code String name = "anonymous"} almost always means that
@@ -204,7 +274,8 @@ public @interface ClassBuilder {
      * <p>Applies to every field of the type. An individual field overrides it
      * with {@link BuilderDefault}, whose setting always wins; fields carrying no
      * {@code @BuilderDefault} inherit this one. Fields without an initializer
-     * are unaffected either way.
+     * are unaffected either way. A constructor or factory target ignores it,
+     * a parameter having no initializer to retain.
      *
      * @see BuilderDefault
      */
@@ -214,7 +285,8 @@ public @interface ClassBuilder {
      * Whether the annotation processor should inject a protected copy
      * constructor ({@code protected T(Builder<?, ?> b)}) used by the injected
      * self-typed builder hierarchy on abstract targets. Concrete targets
-     * outside a SuperBuilder chain ignore this attribute. Set to {@code false}
+     * outside a SuperBuilder chain ignore this attribute, as does a constructor
+     * or factory target, which is never in such a chain. Set to {@code false}
      * when hand-writing a copy constructor with custom coercion logic.
      */
     boolean generateCopyConstructor() default true;
@@ -262,10 +334,39 @@ public @interface ClassBuilder {
     boolean generateImpl() default true;
 
     /**
+     * Whether the generated members should be appended to a {@code Builder} the
+     * target already declares, rather than the declaration suppressing them.
+     *
+     * <p>Off by default, because a declared builder normally means the author
+     * wrote the whole thing and two builders of one name is not something to
+     * guess at. Turn it on when the reason for declaring one is a single member
+     * the generator cannot express - a setter that builds its own value, an
+     * extension point taking the builder itself, a view onto in-progress state -
+     * so the other setters still come from here.
+     *
+     * <p>The author wins member for member: a generated field is appended only
+     * when the declared builder spells no field of that name, and a generated
+     * method only when it spells no method of that name and parameter count.
+     * What is skipped is reported as a compiler note rather than left silent.
+     *
+     * <p>The declared builder's constructor is the author's throughout, javac's
+     * own default included, so {@link #builderConstructorAccess()} does not
+     * reach it - declare one to narrow it, as on any other written class.
+     *
+     * <p>Ignored on an interface target, whose builder is a sibling file with
+     * nothing to merge into, and on a SuperBuilder chain, which builds its
+     * hierarchy rather than one nested class.
+     */
+    boolean mergeDeclaredBuilder() default false;
+
+    /**
      * The name of a static factory method on the annotated type that
      * {@code build()} should invoke instead of the constructor directly.
      * Useful for types that need build-time caching or extra validation.
      * Empty string (the default) invokes the constructor.
+     *
+     * <p>A compile error on a constructor or factory target, where the annotated
+     * member is already what {@code build()} calls.
      */
     @NotNull String factoryMethod() default "";
 
@@ -273,6 +374,10 @@ public @interface ClassBuilder {
      * Field names to exclude from the builder, in addition to the fields
      * always excluded ({@code static}, {@code transient}, and fields marked
      * with {@link BuilderIgnore}).
+     *
+     * <p>A compile error on a constructor or factory target, whose slots are
+     * parameters the annotated member requires - there is nothing a builder
+     * could leave out.
      */
     @NotNull String[] exclude() default { };
 

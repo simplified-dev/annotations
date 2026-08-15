@@ -66,7 +66,7 @@ public class AllArgsConstructorTest {
     /** Drives builder.name(..).count(..).build() and returns the built instance. */
     private static Object buildSimple(Class<?> target, String name, int count) throws Exception {
         Class<?> builder = nested(target, "Builder");
-        Object b = builder.getDeclaredConstructor().newInstance();
+        Object b = builder.getEnclosingClass().getMethod("builder").invoke(null);
         builder.getMethod("name", String.class).invoke(b, name);
         builder.getMethod("count", int.class).invoke(b, count);
         return builder.getMethod("build").invoke(b);
@@ -311,7 +311,7 @@ public class AllArgsConstructorTest {
 
         Method getName = target.getMethod("getName");
         Class<?> builder = nested(target, "Builder");
-        Object b = builder.getDeclaredConstructor().newInstance();
+        Object b = builder.getEnclosingClass().getMethod("builder").invoke(null);
         builder.getMethod("name", String.class).invoke(b, "deferred");
         assertEquals("deferred", getName.invoke(builder.getMethod("build").invoke(b)));
     }
