@@ -65,6 +65,54 @@ public final class NamePattern {
         return Character.isLowerCase(field.charAt(2)) ? field : field.substring(2);
     }
 
+    /**
+     * The subject a {@code @Collector}'s single-element members are named from -
+     * the field's own name with its plural inflection removed, so a
+     * {@code List<String> tags} contributes {@code addTag}.
+     *
+     * <p>Three rules in order, and the middle one is the one that earns its
+     * keep: an {@code -es} plural gives up both letters only where the stem ends
+     * in a sibilant or an {@code o}, because that is the only place English put
+     * the {@code e} there. Everywhere else the {@code e} belongs to the word, so
+     * {@code frames} yields {@code frame} rather than {@code fram} and
+     * {@code sizes} yields {@code size}, while {@code boxes}, {@code classes},
+     * {@code matches} and {@code heroes} still give up theirs.
+     *
+     * <p>A name ending in {@code ss} or {@code us} is left whole: it is not a
+     * plural at all, and taking a letter off {@code address} or {@code status}
+     * would name a method after nothing.
+     *
+     * <p>No rule covers English, so {@code @Collector(singularMethodName)} is
+     * the answer for a word this misses - and the name it mints is what both the
+     * processor and the editor use, so a miss is at least the same miss in both.
+     *
+     * @param field the field name
+     * @return the singular to expand the add and put patterns against
+     */
+    public static String singularSubject(String field) {
+        if (field == null || field.length() < 2) return field;
+        // Two letters of stem before -ies, so `ties` falls through to the plain
+        // -s rule and comes out `tie` rather than `ty`.
+        if (field.endsWith("ies") && field.length() > 4) {
+            return field.substring(0, field.length() - 3) + "y";
+        }
+        // The sibilant has to be doubled to have taken the -es: `classes` is
+        // `class` and `buzzes` is `buzz`, while a single one before it is the
+        // word's own final letter - `houses`, `sizes`, `phases`.
+        if (endsWithAny(field, "sses", "zzes", "xes", "ches", "shes", "oes")) {
+            return field.substring(0, field.length() - 2);
+        }
+        if (field.endsWith("ss") || field.endsWith("us")) return field;
+        return field.endsWith("s") ? field.substring(0, field.length() - 1) : field;
+    }
+
+    private static boolean endsWithAny(String value, String... suffixes) {
+        for (String suffix : suffixes) {
+            if (value.endsWith(suffix)) return true;
+        }
+        return false;
+    }
+
     /** Whether a pattern asks for its member to be generated at all. */
     public static boolean emits(String pattern) {
         return !SetterNames.NONE.equals(pattern);

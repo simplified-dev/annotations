@@ -55,9 +55,11 @@ import java.util.function.Supplier;
  * }</pre>
  *
  * <p>Use {@link #singularMethodName} to override the inflected single-element
- * name (default: field name minus trailing plural inflection - {@code entries}
- * becomes {@code entry}, {@code boxes} becomes {@code box}, {@code tags}
- * becomes {@code tag}).
+ * name. By default it is the field name minus its plural inflection -
+ * {@code entries} becomes {@code entry}, {@code tags} becomes {@code tag}, and
+ * {@code frames} becomes {@code frame}, while {@code boxes}, {@code classes} and
+ * {@code matches} give up both letters. No rule covers English, so name it
+ * outright for a word the inflection misses.
  *
  * <h2>Interaction with the field's initializer</h2>
  * A declared initializer seeds the collection (see {@link BuilderDefault}), and

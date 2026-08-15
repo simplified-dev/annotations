@@ -24,6 +24,7 @@ import java.util.Optional;
 import static com.google.testing.compile.CompilationSubject.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -234,6 +235,45 @@ public class AdvancedSetterShapesTest {
         builder.getMethod("tags", String[].class).invoke(b4, (Object) new String[]{"to-be-cleared"});
         builder.getMethod("clearTags").invoke(b4);
         assertTrue(((List<?>) bag.getMethod("getTags").invoke(builder.getMethod("build").invoke(b4))).isEmpty());
+    }
+
+    /**
+     * The inflection over a field whose {@code e} belongs to the word rather
+     * than to the plural. {@code frames} has to contribute {@code addFrame}, and
+     * the reason this is a test of the emitted member rather than of the rule
+     * alone is that a wrong singular is a method name nobody asked for, on a
+     * builder that compiles.
+     */
+    @Test
+    public void collectorSingular_keepsAnEThatBelongsToTheWord() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Animation",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Collector;",
+            "import java.util.List;",
+            "@ClassBuilder(validate = false)",
+            "public class Animation {",
+            "    @Collector(singular = true) List<String> frames;",
+            "    @Collector(singular = true) List<String> boxes;",
+            "    public Animation(List<String> frames, List<String> boxes) {",
+            "        this.frames = frames; this.boxes = boxes;",
+            "    }",
+            "    public List<String> getFrames() { return frames; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> animation = Class.forName("demo.Animation", true, cl);
+        Class<?> builder = nested(animation, "Builder");
+
+        Object b = animation.getMethod("builder").invoke(null);
+        builder.getMethod("addFrame", String.class).invoke(b, "one");
+        assertEquals(List.of("one"), animation.getMethod("getFrames").invoke(
+            builder.getMethod("build").invoke(b)));
+
+        // A sibilant stem still gives up both letters.
+        assertNotNull("boxes contributes addBox", builder.getMethod("addBox", String.class));
     }
 
     @Test

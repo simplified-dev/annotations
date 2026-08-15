@@ -17,6 +17,7 @@ import com.intellij.psi.PsiSubstitutor;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypeParameter;
 import com.intellij.psi.util.TypeConversionUtil;
+import dev.simplified.classbuilder.apt.NamePattern;
 import dev.simplified.classbuilder.apt.SetterScheme;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.shared.psi.WrittenAnnotations;
@@ -193,7 +194,7 @@ final class PsiFieldShapeExtractor {
             b.append = booleanAttr(collector, "append", false);
             b.compute = booleanAttr(collector, "compute", false);
             String methodName = stringAttr(collector, "singularMethodName", "");
-            b.singularName = methodName.isEmpty() ? defaultSingular(name) : methodName;
+            b.singularName = methodName.isEmpty() ? NamePattern.singularSubject(name) : methodName;
         }
 
         // Parity with the APT mutator: a custom (non-java.util) container needs
@@ -340,21 +341,6 @@ final class PsiFieldShapeExtractor {
     /** Reads the {@code @ClassBuilder} annotation on {@code target}. */
     static PsiAnnotation classBuilderAnnotation(PsiClass target) {
         return WrittenAnnotations.find(target, ClassBuilderConstants.ANNOTATION_FQN);
-    }
-
-    /**
-     * Mirrors {@code FieldSpec.defaultSingular}: peels a trailing plural
-     * inflection so {@code entries} becomes {@code entry}, {@code boxes}
-     * becomes {@code box}, and {@code tags} becomes {@code tag}.
-     */
-    private static String defaultSingular(String fieldName) {
-        if (fieldName.endsWith("ies") && fieldName.length() > 3)
-            return fieldName.substring(0, fieldName.length() - 3) + "y";
-        if (fieldName.endsWith("es") && fieldName.length() > 2)
-            return fieldName.substring(0, fieldName.length() - 2);
-        if (fieldName.endsWith("s") && fieldName.length() > 1)
-            return fieldName.substring(0, fieldName.length() - 1);
-        return fieldName;
     }
 
 }

@@ -448,7 +448,7 @@ public final class FieldSpec {
         b.append = lookup.booleanAttr(owner, "dev.simplified.annotations.Collector", "append", false);
         String written = lookup.stringAttr(owner, "dev.simplified.annotations.Collector",
             "singularMethodName", "");
-        b.singularName = written.isEmpty() ? defaultSingular(b.name) : written;
+        b.singularName = written.isEmpty() ? NamePattern.singularSubject(b.name) : written;
     }
 
     private static void classifyType(Builder b, Types typeUtils) {
@@ -624,13 +624,6 @@ public final class FieldSpec {
         }
 
         return new FieldSpec(b);
-    }
-
-    private static String defaultSingular(String fieldName) {
-        if (fieldName.endsWith("ies") && fieldName.length() > 3) return fieldName.substring(0, fieldName.length() - 3) + "y";
-        if (fieldName.endsWith("es") && fieldName.length() > 2) return fieldName.substring(0, fieldName.length() - 2);
-        if (fieldName.endsWith("s") && fieldName.length() > 1) return fieldName.substring(0, fieldName.length() - 1);
-        return fieldName;
     }
 
     private static final class Builder {

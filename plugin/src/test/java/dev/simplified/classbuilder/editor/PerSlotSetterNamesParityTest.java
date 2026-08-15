@@ -199,6 +199,36 @@ public class PerSlotSetterNamesParityTest extends LightJavaCodeInsightFixtureTes
     }
 
     // ------------------------------------------------------------------
+    // The plural inflection the collector's singular members are named from
+    // ------------------------------------------------------------------
+
+    /**
+     * An {@code -es} ending is two letters of plural only after a sibilant, so
+     * {@code frames} contributes {@code addFrame} while {@code boxes}
+     * contributes {@code addBox}. Both halves read the same rule off
+     * {@code NamePattern}, which is what stops the editor offering one name and
+     * the build emitting another.
+     */
+    public void testCollectorSingular_keepsAnEThatBelongsToTheWord() {
+        List<String> names = builderMethodsOf("Animation",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Collector;
+            import java.util.List;
+            @ClassBuilder
+            public class Animation {
+                @Collector(singular = true) List<String> frames;
+                @Collector(singular = true) List<String> boxes;
+                @Collector(singular = true) List<String> entries;
+            }
+            """);
+        assertTrue("the e belongs to the word: " + names, names.contains("addFrame"));
+        assertFalse("and must not be eaten: " + names, names.contains("addFram"));
+        assertTrue("a sibilant stem gives up both: " + names, names.contains("addBox"));
+        assertTrue("a consonant-y plural comes back: " + names, names.contains("addEntry"));
+    }
+
+    // ------------------------------------------------------------------
     // The boolean prefix the pattern is about to add
     // ------------------------------------------------------------------
 
