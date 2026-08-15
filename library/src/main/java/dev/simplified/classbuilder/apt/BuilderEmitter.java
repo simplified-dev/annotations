@@ -504,7 +504,13 @@ final class BuilderEmitter {
         // Validator reads @BuildFlag annotations off the constructed target,
         // not the Builder (whose fields are synthesised without annotations),
         // so we capture the new instance first, validate, then return.
-        boolean emitValidation = config.validate();
+        //
+        // Only when there is something to read. The Impl this emits carries
+        // whatever @BuildFlag the interface's accessors declared and nothing
+        // else - it extends Object - so the accessors are the whole answer, and
+        // calling the validator without one puts the annotations jar on every
+        // consumer's runtime classpath to check nothing.
+        boolean emitValidation = config.validate() && declaresBuildFlag();
         String validator = emitValidation ? imports.use(VALIDATOR_FQN) : null;
         if (emitValidation) {
             body.append("        final ").append(targetRef).append(" $result = ").append(constructorTarget).append('(');
@@ -521,6 +527,22 @@ final class BuilderEmitter {
             body.append("        return $result;\n");
         }
         body.append("    }\n\n");
+    }
+
+    /**
+     * Whether any accessor carried a {@code @BuildFlag} onto the generated
+     * {@code Impl}, and therefore whether {@code build()} has anything to
+     * validate.
+     */
+    private boolean declaresBuildFlag() {
+        // A factory may return a subtype carrying constraints of its own, and
+        // the validator reads the runtime class, so that case keeps the call.
+        String factory = config.factoryMethod();
+        if (factory != null && !factory.isEmpty()) return true;
+        for (FieldSpec f : fields) {
+            if (f.buildFlag != null) return true;
+        }
+        return false;
     }
 
     // ------------------------------------------------------------------

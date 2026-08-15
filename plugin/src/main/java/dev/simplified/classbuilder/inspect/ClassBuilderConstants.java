@@ -72,6 +72,7 @@ public final class ClassBuilderConstants {
     public static final @NotNull String ATTR_EMIT_CONTRACTS = "emitContracts";
     public static final @NotNull String ATTR_ACCESS = "access";
     public static final @NotNull String ATTR_CONSTRUCTOR_ACCESS = "constructorAccess";
+    public static final @NotNull String ATTR_BUILDER_CONSTRUCTOR_ACCESS = "builderConstructorAccess";
     public static final @NotNull String ATTR_FACTORY_METHOD = "factoryMethod";
 
     /** Attribute names of {@code @SetterNames}, in declaration order. */

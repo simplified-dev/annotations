@@ -63,7 +63,7 @@ public class RetainInitPolicyTest {
     /** Builds with no setters called, so every value observed is a builder default. */
     private static Object buildUntouched(Class<?> target) throws Exception {
         Class<?> builder = nested(target, "Builder");
-        Object b = builder.getDeclaredConstructor().newInstance();
+        Object b = builder.getEnclosingClass().getMethod("builder").invoke(null);
         return builder.getMethod("build").invoke(b);
     }
 

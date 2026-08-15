@@ -553,7 +553,7 @@ public class LazyFieldMutatorTest {
         Class<?> builder = nested(outer, "Builder");
 
         // Value setter form: builder stores () -> "value"
-        Object b1 = builder.getDeclaredConstructor().newInstance();
+        Object b1 = builder.getEnclosingClass().getMethod("builder").invoke(null);
         builder.getMethod("label", String.class).invoke(b1, "eager");
         Object eager = builder.getMethod("build").invoke(b1);
         assertEquals("eager", outer.getMethod("getLabel").invoke(eager));
@@ -566,7 +566,7 @@ public class LazyFieldMutatorTest {
             calls.incrementAndGet();
             return "deferred";
         };
-        Object b2 = builder.getDeclaredConstructor().newInstance();
+        Object b2 = builder.getEnclosingClass().getMethod("builder").invoke(null);
         builder.getMethod("label", Supplier.class).invoke(b2, supplier);
         Object deferred = builder.getMethod("build").invoke(b2);
         assertEquals("supplier must not fire until first get()", 0, calls.get());

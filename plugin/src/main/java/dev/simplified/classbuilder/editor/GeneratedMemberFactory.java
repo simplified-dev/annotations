@@ -628,7 +628,26 @@ public final class GeneratedMemberFactory {
         methods.add(chainMethod(psiManager, target, builder, config.buildMethodName(), targetType,
             PsiModifier.PUBLIC, role.isSelfTyped()));
 
+        // The builder's own constructor, declared rather than left implicit for
+        // the reason the processor declares it: an implicit one takes the
+        // class's access, so a public builder class would offer
+        // `new Target.Builder()` as a second entry point the processor no longer
+        // publishes. Without this the editor resolves a cross-package call that
+        // javac then refuses.
+        methods.add(builderConstructor(psiManager, builder, config.builderConstructorAccess()));
+
         return methods;
+    }
+
+    /** The synth Builder's no-arg constructor, at the configured access. */
+    private static PsiMethod builderConstructor(PsiManager manager, PsiClass builder, String access) {
+        LightMethodBuilder ctor = new LightMethodBuilder(manager, JavaLanguage.INSTANCE, builder.getName());
+        ctor.setConstructor(true);
+        ctor.setContainingClass(builder);
+        ctor.setNavigationElement(builder);
+        if (!access.isEmpty()) ctor.addModifier(access);
+        GeneratedMemberMarker.mark(ctor);
+        return ctor;
     }
 
     /** A nullary method on the synth Builder, optionally abstract. */
@@ -1020,6 +1039,7 @@ public final class GeneratedMemberFactory {
      */
     record EditorBuilderConfig(BuilderScheme names, SetterScheme setters,
                                String access, String constructorAccess,
+                               String builderConstructorAccess,
                                String factoryMethod) {
         static EditorBuilderConfig fromAnnotation(PsiAnnotation annotation) {
             NamingStyle style = ClassBuilderConstants.namingStyle(annotation);
@@ -1027,12 +1047,15 @@ public final class GeneratedMemberFactory {
             // Package-private default, matching the ctor Lombok @Builder supplies.
             String constructorAccess = ClassBuilderConstants.accessKeyword(annotation,
                 ClassBuilderConstants.ATTR_CONSTRUCTOR_ACCESS, "");
+            // Same default one level down, so builder() is the one way in.
+            String builderConstructorAccess = ClassBuilderConstants.accessKeyword(annotation,
+                ClassBuilderConstants.ATTR_BUILDER_CONSTRUCTOR_ACCESS, "");
             String factoryMethod = ClassBuilderConstants.stringAttr(annotation,
                 ClassBuilderConstants.ATTR_FACTORY_METHOD, "");
             return new EditorBuilderConfig(
                 ClassBuilderConstants.builderScheme(annotation, style, targetSimpleName(annotation)),
                 ClassBuilderConstants.setterScheme(annotation, style),
-                access, constructorAccess, factoryMethod);
+                access, constructorAccess, builderConstructorAccess, factoryMethod);
         }
 
         /**

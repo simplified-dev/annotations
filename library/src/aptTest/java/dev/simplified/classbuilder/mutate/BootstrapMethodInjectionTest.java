@@ -19,6 +19,7 @@ import java.util.List;
 
 import static com.google.testing.compile.CompilationSubject.assertThat;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -167,6 +168,93 @@ public class BootstrapMethodInjectionTest {
         boolean sawSkip = notes.stream().anyMatch(d ->
             d.getMessage(null).contains("skipped bootstrap 'builder'"));
         assertTrue("expected a skip note for builder()", sawSkip);
+    }
+
+    @Test
+    public void noBuildFlag_buildDoesNotReachForTheValidator() throws Exception {
+        // validate() defaults to true, so build() called BuildFlagValidator
+        // whatever the target declared - which put the annotations jar on the
+        // runtime classpath of every consumer of every module holding a
+        // @ClassBuilder, to check nothing. compileJava cannot see that; the
+        // symptom is a NoClassDefFoundError at the first build().
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Plain",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder",
+            "public class Plain {",
+            "    String name;",
+            "    public Plain(String name) { this.name = name; }",
+            "    public String getName() { return name; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+        assertNoValidatorReference(c, "demo/Plain$Builder.class");
+    }
+
+    @Test
+    public void withBuildFlag_buildStillValidates() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Guarded",
+            "package demo;",
+            "import dev.simplified.annotations.BuildFlag;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder",
+            "public class Guarded {",
+            "    @BuildFlag(nonNull = true) String name;",
+            "    public Guarded(String name) { this.name = name; }",
+            "    public String getName() { return name; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+        assertTrue("a target with a constraint must keep the call",
+            classBytes(c, "demo/Guarded$Builder.class")
+                .contains("dev/simplified/classbuilder/validate/BuildFlagValidator"));
+    }
+
+    @Test
+    public void inheritedBuildFlag_buildStillValidates() throws Exception {
+        // BuildFlagValidator.scan climbs to Object, so asking only about
+        // declared fields would turn an inherited requirement into an
+        // unenforced one.
+        JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Base",
+            "package demo;",
+            "import dev.simplified.annotations.BuildFlag;",
+            "public class Base {",
+            "    @BuildFlag(nonNull = true) protected String required;",
+            "}");
+        JavaFileObject child = JavaFileObjects.forSourceLines("demo.Child",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder",
+            "public class Child extends Base {",
+            "    String extra;",
+            "    public Child(String extra) { this.extra = extra; }",
+            "    public String getExtra() { return extra; }",
+            "}");
+        Compilation c = compile(parent, child);
+        assertThat(c).succeeded();
+        assertTrue("the parent's constraint must keep the call",
+            classBytes(c, "demo/Child$Builder.class")
+                .contains("dev/simplified/classbuilder/validate/BuildFlagValidator"));
+    }
+
+    private static void assertNoValidatorReference(Compilation c, String classFile) throws Exception {
+        assertFalse("build() must not name the validator when nothing carries a @BuildFlag",
+            classBytes(c, classFile).contains("dev/simplified/classbuilder/validate/BuildFlagValidator"));
+    }
+
+    /** The constant pool as text, which is where a referenced class name shows up. */
+    private static String classBytes(Compilation c, String classFile) throws Exception {
+        for (JavaFileObject f : c.generatedFiles()) {
+            if (f.getKind() != JavaFileObject.Kind.CLASS) continue;
+            if (!f.toUri().toString().endsWith(classFile)) continue;
+            try (InputStream in = f.openInputStream()) {
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                in.transferTo(baos);
+                return new String(baos.toByteArray(), java.nio.charset.StandardCharsets.ISO_8859_1);
+            }
+        }
+        fail("no generated class file named " + classFile);
+        return "";
     }
 
     @Test

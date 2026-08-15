@@ -196,6 +196,21 @@ public @interface ClassBuilder {
     @NotNull AccessLevel constructorAccess() default AccessLevel.PACKAGE;
 
     /**
+     * The access level of the generated builder's own no-arg constructor.
+     * Defaults to package-private for the reason {@link #constructorAccess}
+     * does one level down - it routes callers through the entry point rather
+     * than past it, so {@code builder()} is the one way to obtain a builder and
+     * Lombok's shape is matched.
+     *
+     * <p>Separate from {@link #access()}, which governs the builder class and
+     * would otherwise decide this too: a builder class has to be visible to be
+     * useful as a type, and that is a different question from whether
+     * {@code new Target.Builder()} is an entry point. Widen it only to publish
+     * that second way in deliberately.
+     */
+    @NotNull AccessLevel builderConstructorAccess() default AccessLevel.PACKAGE;
+
+    /**
      * Whether the generated builder seeds each field from its declared
      * initializer rather than the JVM default. On by default, since a field
      * written as {@code String name = "anonymous"} almost always means that

@@ -19,6 +19,7 @@ public record BuilderConfig(
     SetterScheme setters,
     AccessLevel access,
     AccessLevel constructorAccess,
+    AccessLevel builderConstructorAccess,
     boolean retainInit,
     boolean generateCopyConstructor,
     boolean generateImpl,

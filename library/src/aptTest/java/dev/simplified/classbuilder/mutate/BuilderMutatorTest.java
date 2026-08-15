@@ -98,7 +98,7 @@ public class BuilderMutatorTest {
         Class<?> simple = Class.forName("demo.Simple", true, cl);
         Class<?> builder = nested(simple, "Builder");
 
-        Object b = builder.getDeclaredConstructor().newInstance();
+        Object b = builder.getEnclosingClass().getMethod("builder").invoke(null);
         Method nameSetter = builder.getMethod("name", String.class);
         Method countSetter = builder.getMethod("count", int.class);
         Method build = builder.getMethod("build");
@@ -140,13 +140,13 @@ public class BuilderMutatorTest {
         Class<?> builder = nested(flag, "Builder");
 
         // zero-arg `flag` role setter flips to true
-        Object b1 = builder.getDeclaredConstructor().newInstance();
+        Object b1 = builder.getEnclosingClass().getMethod("builder").invoke(null);
         builder.getMethod("isEnabled").invoke(b1);
         Object r1 = builder.getMethod("build").invoke(b1);
         assertEquals(Boolean.TRUE, flag.getMethod("isEnabled").invoke(r1));
 
         // typed setter is the ordinary `set` role, so it takes the bare name
-        Object b2 = builder.getDeclaredConstructor().newInstance();
+        Object b2 = builder.getEnclosingClass().getMethod("builder").invoke(null);
         builder.getMethod("enabled", boolean.class).invoke(b2, false);
         Object r2 = builder.getMethod("build").invoke(b2);
         assertEquals(Boolean.FALSE, flag.getMethod("isEnabled").invoke(r2));
@@ -176,7 +176,7 @@ public class BuilderMutatorTest {
         Class<?> builder = nested(opt, "Builder");
 
         // Raw nullable path
-        Object b = builder.getDeclaredConstructor().newInstance();
+        Object b = builder.getEnclosingClass().getMethod("builder").invoke(null);
         builder.getMethod("label", String.class).invoke(b, "seeded");
         Object result = builder.getMethod("build").invoke(b);
         Optional<?> label = (Optional<?>) opt.getMethod("getLabel").invoke(result);
@@ -184,7 +184,7 @@ public class BuilderMutatorTest {
         assertEquals("seeded", label.get());
 
         // Unset Optional field defaults to Optional.empty()
-        Object b2 = builder.getDeclaredConstructor().newInstance();
+        Object b2 = builder.getEnclosingClass().getMethod("builder").invoke(null);
         Object r2 = builder.getMethod("build").invoke(b2);
         Optional<?> defaulted = (Optional<?>) opt.getMethod("getLabel").invoke(r2);
         assertTrue("unset Optional field must default to Optional.empty()", defaulted.isEmpty());
@@ -208,7 +208,7 @@ public class BuilderMutatorTest {
         Class<?> point = Class.forName("demo.Point", true, cl);
         Class<?> builder = nested(point, "Builder");
 
-        Object b = builder.getDeclaredConstructor().newInstance();
+        Object b = builder.getEnclosingClass().getMethod("builder").invoke(null);
         builder.getMethod("x", int.class).invoke(b, 3);
         builder.getMethod("y", int.class).invoke(b, 4);
         Object result = builder.getMethod("build").invoke(b);
@@ -275,11 +275,11 @@ public class BuilderMutatorTest {
         Class<?> outerBuilder = nested(outer, "Builder");
         Class<?> innerBuilder = nested(inner, "Builder");
 
-        Object ob = outerBuilder.getDeclaredConstructor().newInstance();
+        Object ob = outerBuilder.getEnclosingClass().getMethod("builder").invoke(null);
         outerBuilder.getMethod("outerField", String.class).invoke(ob, "out");
         assertEquals("out", outer.getMethod("getOuterField").invoke(outerBuilder.getMethod("build").invoke(ob)));
 
-        Object ib = innerBuilder.getDeclaredConstructor().newInstance();
+        Object ib = innerBuilder.getEnclosingClass().getMethod("builder").invoke(null);
         innerBuilder.getMethod("innerField", int.class).invoke(ib, 7);
         assertEquals(7, inner.getMethod("getInnerField").invoke(innerBuilder.getMethod("build").invoke(ib)));
     }

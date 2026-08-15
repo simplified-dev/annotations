@@ -9,6 +9,7 @@ import com.sun.tools.javac.tree.TreeMaker;
 import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
 import dev.simplified.annotations.AccessLevel;
+import dev.simplified.annotations.BuildFlag;
 import dev.simplified.classbuilder.apt.BuilderConfig;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.shared.javac.ContractAnnotations;
@@ -22,6 +23,7 @@ import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.TypeParameterElement;
+import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeMirror;
 import java.util.HashSet;
 import java.util.List;
@@ -331,6 +333,55 @@ public final class MutationContext {
     public List<FieldSpec> fields() { return fields; }
     public String targetSimpleName() { return targetSimpleName; }
     public String builderName() { return builderName; }
+
+    /**
+     * Whether anything the runtime validator would find is actually there - a
+     * {@code @BuildFlag} on a field of this type or of any type it inherits.
+     *
+     * <p>Read by {@code build()} to decide whether to emit the validator call at
+     * all. {@code validate()} defaults to true, so without this every builder
+     * called it, and calling it put the annotations jar on the runtime classpath
+     * of every consumer of every module holding a {@code @ClassBuilder} -
+     * whether or not that module had a single constraint to check. The failure
+     * mode is a green {@code compileJava} and then a
+     * {@code NoClassDefFoundError}, which is not a failure a build can catch.
+     *
+     * <p>The superclass walk mirrors {@code BuildFlagValidator.scan}, which
+     * climbs to {@code Object}: asking only about declared fields would skip a
+     * parent's constraints and turn an inherited requirement into a silently
+     * unenforced one. Fields only, again matching the validator - a
+     * {@code @BuildFlag} on a method is never read at runtime on this path.
+     *
+     * <p>Any flag counts, even one carrying no enforceable constraint. That is
+     * deliberately looser than the validator's own test: erring towards emitting
+     * the call costs a no-op scan, while erring the other way drops a check.
+     *
+     * <p><b>A {@link BuilderConfig#factoryMethod()} answers true outright.</b>
+     * The validator reads {@code target.getClass()}, so it sees the flags of
+     * whatever the factory actually returned - which may be a subtype this type
+     * has never heard of, declaring constraints of its own. Nothing at compile
+     * time can enumerate those, so a target that hands construction to a factory
+     * keeps the call unconditionally.
+     *
+     * @return whether {@code build()} needs the validator
+     */
+    public boolean declaresBuildFlag() {
+        String factory = config.factoryMethod();
+        if (factory != null && !factory.isEmpty()) return true;
+        for (TypeElement type = targetElement; type != null; type = superclassOf(type)) {
+            for (Element enclosed : type.getEnclosedElements()) {
+                if (enclosed.getKind() != ElementKind.FIELD) continue;
+                if (enclosed.getAnnotation(BuildFlag.class) != null) return true;
+            }
+        }
+        return false;
+    }
+
+    private static TypeElement superclassOf(TypeElement type) {
+        if (!(type.getSuperclass() instanceof DeclaredType declared)) return null;
+        if (!(declared.asElement() instanceof TypeElement parent)) return null;
+        return "java.lang.Object".contentEquals(parent.getQualifiedName()) ? null : parent;
+    }
 
     /**
      * Translates the resolved {@link AccessLevel} into the javac modifier

@@ -59,6 +59,11 @@ final class NestedBuilderFactory {
         }
         // build()
         defs.append(buildMethod());
+        // The builder's own constructor, written out rather than left implicit:
+        // an implicit one takes the class's access, so a public builder class
+        // published `new Target.Builder()` as a second entry point beside
+        // builder(). Declaring it is the only way to narrow it.
+        defs.append(builderConstructor());
 
         // Builder class visibility follows @ClassBuilder.access; always STATIC
         // because nested builders must not capture an enclosing this. Being
@@ -75,6 +80,29 @@ final class NestedBuilderFactory {
         );
         AstMarkers.markGenerated(nested, ctx.generated());
         return nested;
+    }
+
+    /**
+     * Emits the builder's no-arg constructor at
+     * {@link BuilderConfig#builderConstructorAccess()}.
+     *
+     * <p>An empty body: every field carries its own initializer, including the
+     * retained defaults, so there is nothing for a constructor to do beyond
+     * existing at the right visibility.
+     */
+    private JCMethodDecl builderConstructor() {
+        JCMethodDecl ctor = make.MethodDef(
+            make.Modifiers(MutationContext.accessFlagFor(ctx.config().builderConstructorAccess())),
+            names.init,
+            null,
+            List.nil(),
+            List.nil(),
+            List.nil(),
+            make.Block(0, List.nil()),
+            null
+        );
+        AstMarkers.markGenerated(ctor, ctx.generated());
+        return ctor;
     }
 
     /**
@@ -121,7 +149,7 @@ final class NestedBuilderFactory {
             );
         }
 
-        if (ctx.config().validate()) {
+        if (ctx.config().validate() && ctx.declaresBuildFlag()) {
             // Target t = new Target(...); BuildFlagValidator.validate(t); return t;
             JCExpression targetType = ctx.targetType();
             JCVariableDecl targetVar = make.VarDef(

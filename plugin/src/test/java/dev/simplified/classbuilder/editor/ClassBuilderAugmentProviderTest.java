@@ -476,6 +476,10 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
         com.intellij.psi.PsiClass builder = target.getInnerClasses()[0];
 
         for (PsiMethod m : builder.getMethods()) {
+            // The constructor is the one member deliberately not public:
+            // builder() is the entry point, and testBuilderConstructor_* pins
+            // that. Everything a caller reaches through the builder is.
+            if (m.isConstructor()) continue;
             assertTrue(m.getName() + " must be PUBLIC",
                 m.hasModifierProperty(PsiModifier.PUBLIC));
             com.intellij.psi.PsiClass containing = m.getContainingClass();
@@ -559,6 +563,42 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
             .findFirst()
             .orElseThrow();
         assertEquals("Doc", copy.getParameterList().getParameters()[0].getType().getPresentableText());
+    }
+
+    public void testBuilderConstructor_isPackagePrivateByDefault() {
+        // builder() is the entry point. An implicit constructor would take the
+        // builder class's own access and publish `new Target.Builder()` beside
+        // it - and the processor no longer does, so the editor must not either.
+        PsiClass builder = builderFor("Widget",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Widget {
+                String label;
+            }
+            """);
+        PsiMethod[] ctors = builder.getConstructors();
+        assertEquals("the constructor is declared, not implicit", 1, ctors.length);
+        assertFalse(ctors[0].hasModifierProperty(PsiModifier.PUBLIC));
+        assertFalse(ctors[0].hasModifierProperty(PsiModifier.PROTECTED));
+        assertFalse(ctors[0].hasModifierProperty(PsiModifier.PRIVATE));
+        assertTrue("the builder class itself stays reachable as a type",
+            builder.hasModifierProperty(PsiModifier.PUBLIC));
+    }
+
+    public void testBuilderConstructor_widenedOnRequest() {
+        PsiClass builder = builderFor("Widget",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builderConstructorAccess = AccessLevel.PUBLIC)
+            public class Widget {
+                String label;
+            }
+            """);
+        PsiMethod[] ctors = builder.getConstructors();
+        assertEquals(1, ctors.length);
+        assertTrue(ctors[0].hasModifierProperty(PsiModifier.PUBLIC));
     }
 
     public void testHandWrittenBootstrap_isNotDuplicated() {

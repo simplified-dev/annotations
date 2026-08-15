@@ -718,6 +718,8 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         AccessLevel access = parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, "access", "PUBLIC"));
         AccessLevel constructorAccess =
             parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, "constructorAccess", "PACKAGE"));
+        AccessLevel builderConstructorAccess =
+            parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, "builderConstructorAccess", "PACKAGE"));
         boolean retainInit = lookup.booleanAttr(target, ANNOTATION_FQN, "retainInit", true);
         boolean generateCopyConstructor = lookup.booleanAttr(target, ANNOTATION_FQN, "generateCopyConstructor", true);
         boolean generateImpl = lookup.booleanAttr(target, ANNOTATION_FQN, "generateImpl", true);
@@ -728,7 +730,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         Set<String> excludeSet = new HashSet<>(Arrays.asList(lookup.stringArrayAttr(target, ANNOTATION_FQN, "exclude")));
         return new BuilderConfig(
             extractBuilderNames(target, style), extractSetterNames(target, style),
-            access, constructorAccess, retainInit,
+            access, constructorAccess, builderConstructorAccess, retainInit,
             generateCopyConstructor, generateImpl, validate, emitContracts, emitGenerated,
             factoryMethod, excludeSet
         );
