@@ -404,6 +404,41 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
     }
 
     /**
+     * Highlighting a target whose <b>field</b> carries an annotation, which is
+     * a different path from one whose fields are bare - the platform's folding
+     * pass resolves that annotation, and the resolve walks the class's nested
+     * types, which is augment-aware and enters this provider mid-resolve.
+     *
+     * <p>Coverage rather than a regression pin: this shape alone does not go
+     * deep enough to trip the platform's limit. What does is the same shape with
+     * a second provider in the chain, which
+     * {@code LazyFieldInspectionTest.testClassBuilderSuppliesTheValue} holds.
+     */
+    public void testHighlighting_targetWithAnAnnotatedFieldSynthesisesNormally() {
+        myFixture.configureByText("Doc.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Negate;
+            @ClassBuilder
+            public class Doc {
+                @Negate("hidden") boolean visible;
+                int rank;
+                public static Doc make() {
+                    return Doc.builder().isHidden().rank(7).build();
+                }
+            }
+            """);
+        java.util.List<com.intellij.codeInsight.daemon.impl.HighlightInfo> highlights =
+            myFixture.doHighlighting();
+        for (com.intellij.codeInsight.daemon.impl.HighlightInfo info : highlights) {
+            String desc = info.getDescription();
+            if (desc != null && (desc.contains("Cannot access") || desc.contains("Cannot resolve"))) {
+                fail("an annotated field must not cost the target its builder, got: " + desc);
+            }
+        }
+    }
+
+    /**
      * Cross-package variant - exercises {@link ClassBuilderElementFinder}'s
      * bridge from {@link JavaPsiFacade#findClass} to the
      * augmented inner class. Without that finder the highlighter calls
@@ -476,6 +511,10 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
         com.intellij.psi.PsiClass builder = target.getInnerClasses()[0];
 
         for (PsiMethod m : builder.getMethods()) {
+            // The constructor is the one member deliberately not public:
+            // builder() is the entry point, and testBuilderConstructor_* pins
+            // that. Everything a caller reaches through the builder is.
+            if (m.isConstructor()) continue;
             assertTrue(m.getName() + " must be PUBLIC",
                 m.hasModifierProperty(PsiModifier.PUBLIC));
             com.intellij.psi.PsiClass containing = m.getContainingClass();
@@ -529,6 +568,87 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
         assertEquals("hand-written Builder must win", 1, inner.length);
         assertFalse("hand-written Builder must not be marked synthesised",
             GeneratedMemberMarker.isGenerated(inner[0]));
+    }
+
+    public void testForeignTypedFrom_doesNotSuppressTheCopyFactory() {
+        // The editor has always shown from(Doc) here; javac used to skip it,
+        // because its collision check matched on arity alone and a from(String)
+        // parser is also arity one. This pins the side the processor moved to.
+        PsiFile file = myFixture.configureByText("Doc.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Doc {
+                String body;
+                public static Doc from(String raw) { return null; }
+            }
+            """);
+        PsiClass doc = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+
+        PsiMethod[] from = doc.findMethodsByName("from", false);
+        assertEquals("the author's parser and the copy factory coexist", 2, from.length);
+
+        long copyFactories = java.util.Arrays.stream(from)
+            .filter(GeneratedMemberMarker::isGenerated)
+            .count();
+        assertEquals("exactly one of them is synthesised", 1, copyFactories);
+
+        PsiMethod copy = java.util.Arrays.stream(from)
+            .filter(GeneratedMemberMarker::isGenerated)
+            .findFirst()
+            .orElseThrow();
+        assertEquals("Doc", copy.getParameterList().getParameters()[0].getType().getPresentableText());
+    }
+
+    public void testBuilderConstructor_isPackagePrivateByDefault() {
+        // builder() is the entry point. An implicit constructor would take the
+        // builder class's own access and publish `new Target.Builder()` beside
+        // it - and the processor no longer does, so the editor must not either.
+        PsiClass builder = builderFor("Widget",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Widget {
+                String label;
+            }
+            """);
+        PsiMethod[] ctors = builder.getConstructors();
+        assertEquals("the constructor is declared, not implicit", 1, ctors.length);
+        assertFalse(ctors[0].hasModifierProperty(PsiModifier.PUBLIC));
+        assertFalse(ctors[0].hasModifierProperty(PsiModifier.PROTECTED));
+        assertFalse(ctors[0].hasModifierProperty(PsiModifier.PRIVATE));
+        assertTrue("the builder class itself stays reachable as a type",
+            builder.hasModifierProperty(PsiModifier.PUBLIC));
+    }
+
+    public void testBuilderConstructor_widenedOnRequest() {
+        PsiClass builder = builderFor("Widget",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builderConstructorAccess = AccessLevel.PUBLIC)
+            public class Widget {
+                String label;
+            }
+            """);
+        PsiMethod[] ctors = builder.getConstructors();
+        assertEquals(1, ctors.length);
+        assertTrue(ctors[0].hasModifierProperty(PsiModifier.PUBLIC));
+    }
+
+    public void testHandWrittenBootstrap_isNotDuplicated() {
+        PsiFile file = myFixture.configureByText("Manual2.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Manual2 {
+                String x;
+                public static Manual2.Builder builder() { return null; }
+            }
+            """);
+        PsiClass manual = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+        assertEquals("javac skips its bootstrap here, so the editor must too",
+            1, manual.findMethodsByName("builder", false).length);
     }
 
     public void testCustomBootstrapNames_respected() {

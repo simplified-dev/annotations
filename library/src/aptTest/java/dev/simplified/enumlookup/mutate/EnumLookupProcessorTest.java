@@ -253,6 +253,140 @@ public class EnumLookupProcessorTest {
     }
 
     @Test
+    public void ignoreCaseKey_matchesRegardlessOfCase() throws Exception {
+        // The hand-rolled lookup being replaced is often case-insensitive - a
+        // BCP 47 tag against a directory name, a token against wire text. An
+        // exact comparison standing in for it compiles cleanly and then stops
+        // matching, which no test in the module would notice.
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Locale",
+            "package demo;",
+            "import dev.simplified.annotations.EnumLookup;",
+            "import dev.simplified.annotations.KeyField;",
+            "@EnumLookup",
+            "public enum Locale {",
+            "    US(\"en-US\"), TW(\"zh-TW\");",
+            "    @KeyField(ignoreCase = true) private final String tag;",
+            "    Locale(String tag) { this.tag = tag; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> locale = Class.forName("demo.Locale", true, cl);
+        Method ofTag = locale.getMethod("ofTag", String.class);
+
+        Object us = locale.getField("US").get(null);
+        assertSame(us, ofTag.invoke(null, "en-US"));
+        assertSame("the directory-name spelling still resolves", us, ofTag.invoke(null, "en-us"));
+        assertSame(us, ofTag.invoke(null, "EN-US"));
+        assertSame(locale.getField("TW").get(null), ofTag.invoke(null, "zh-tw"));
+
+        // Null tolerance is exactly Objects.equals: no throw, no match.
+        assertNull(ofTag.invoke(null, (Object) null));
+        assertNull(ofTag.invoke(null, "fr-FR"));
+
+        // findBy delegates, so it folds case too.
+        Method findByTag = locale.getMethod("findByTag", String.class);
+        assertEquals(Optional.of(us), findByTag.invoke(null, "en-us"));
+    }
+
+    @Test
+    public void ignoreCaseKey_foldsCaseThroughANullnessAnnotation() throws Exception {
+        // The type-use annotation is the whole point of this case. A field's
+        // declared type renders with it - "@org.jetbrains.annotations.NotNull
+        // java.lang.String" - so a String test comparing that spelling to
+        // "java.lang.String" answers no and the case folding is dropped. The
+        // annotation is accepted, the build is clean, and the lookup silently
+        // matches exactly, which is the failure ignoreCase exists to remove.
+        // The editor's own String test reads the canonical text, which carries
+        // no annotation, so it stays quiet and neither half reports anything.
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Tagged",
+            "package demo;",
+            "import dev.simplified.annotations.EnumLookup;",
+            "import dev.simplified.annotations.KeyField;",
+            "import org.jetbrains.annotations.NotNull;",
+            "@EnumLookup",
+            "public enum Tagged {",
+            "    US(\"en-US\"), TW(\"zh-TW\");",
+            "    @KeyField(ignoreCase = true) private final @NotNull String tag;",
+            "    Tagged(String tag) { this.tag = tag; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> tagged = Class.forName("demo.Tagged", true, cl);
+        Method ofTag = tagged.getMethod("ofTag", String.class);
+
+        Object us = tagged.getField("US").get(null);
+        assertSame(us, ofTag.invoke(null, "en-US"));
+        assertSame("a nullness annotation is not a different type", us, ofTag.invoke(null, "en-us"));
+        assertSame(tagged.getField("TW").get(null), ofTag.invoke(null, "zh-tw"));
+        assertNull(ofTag.invoke(null, (Object) null));
+    }
+
+    @Test
+    public void withoutIgnoreCase_theKeyStaysExact() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Exact",
+            "package demo;",
+            "import dev.simplified.annotations.EnumLookup;",
+            "import dev.simplified.annotations.KeyField;",
+            "@EnumLookup",
+            "public enum Exact {",
+            "    US(\"en-US\");",
+            "    @KeyField private final String tag;",
+            "    Exact(String tag) { this.tag = tag; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> exact = Class.forName("demo.Exact", true, cl);
+        Method ofTag = exact.getMethod("ofTag", String.class);
+        assertSame(exact.getField("US").get(null), ofTag.invoke(null, "en-US"));
+        assertNull("exact is still the default", ofTag.invoke(null, "en-us"));
+    }
+
+    @Test
+    public void handRolledCachedValues_namesTheCollision() {
+        // A hand-rolled values() cache is exactly what @EnumLookup is adopted to
+        // delete, and these enums all have one. Emitting the populate statements
+        // beside it assigned a second value to the author's own final field, so
+        // javac reported a definite-assignment error on a line the author wrote
+        // and named neither the annotation nor the field it clashed with.
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Clash",
+            "package demo;",
+            "import dev.simplified.annotations.EnumLookup;",
+            "@EnumLookup",
+            "public enum Clash {",
+            "    A, B;",
+            "    private static final Clash[] CACHED_VALUES = values();",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@EnumLookup generates a field named 'CACHED_VALUES'");
+        assertThat(c).hadErrorContaining("delete the declaration");
+    }
+
+    @Test
+    public void handRolledKeyCache_namesTheCollision() {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.KeyClash",
+            "package demo;",
+            "import dev.simplified.annotations.EnumLookup;",
+            "import dev.simplified.annotations.KeyField;",
+            "@EnumLookup",
+            "public enum KeyClash {",
+            "    A(1);",
+            "    @KeyField private final int code;",
+            "    private static final int[] CACHED_KEYS_code = new int[1];",
+            "    KeyClash(int code) { this.code = code; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@EnumLookup generates a field named 'CACHED_KEYS_code'");
+    }
+
+    @Test
     public void stringKey_renamedViaMethodName_avoidsCollision() throws Exception {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.Slug2",
             "package demo;",

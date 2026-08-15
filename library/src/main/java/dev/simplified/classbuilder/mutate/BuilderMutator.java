@@ -103,15 +103,18 @@ public final class BuilderMutator {
             // inherited fields too - private fields on the parent Builder are
             // not accessible from the subclass, so we route through the
             // inherited public setters using the full chain of fields.
-            List<FieldSpec> chainFields = isAbstract ? fields : collectChainFields(targetElement, fields);
+            List<FieldSpec> chainFields =
+                isAbstract ? fields : collectChainFields(ctx, targetElement, fields);
             new SuperBuilderMutator(ctx, messager, annotatedSuper, chainFields).mutate();
             return true;
         }
 
-        if (hasExistingNested(target, ctx.builderName())) {
+        JCClassDecl declared = DeclaredBuilderMerge.declaredBuilder(target, ctx.builderName());
+        if (declared != null && !config.mergeDeclaredBuilder()) {
             messager.printMessage(Diagnostic.Kind.NOTE,
                 "@ClassBuilder skipped injection: class " + ctx.targetSimpleName()
-                    + " already declares a nested '" + ctx.builderName() + "' type",
+                    + " already declares a nested '" + ctx.builderName() + "' type. Write "
+                    + "mergeDeclaredBuilder = true to have the generated members appended to it",
                 targetElement
             );
             return true;
@@ -122,8 +125,14 @@ public final class BuilderMutator {
         // Target.$default$<name>() references resolve at javac attribution.
         new RetainedInitFactory(ctx, messager).appendAll();
 
-        JCClassDecl nested = new NestedBuilderFactory(ctx).build();
-        bridge.compat().appendDef(target, nested);
+        if (declared != null) {
+            if (!new DeclaredBuilderMerge(ctx, messager).merge(target, targetElement, declared)) {
+                return true;
+            }
+        } else {
+            JCClassDecl nested = new NestedBuilderFactory(ctx).build();
+            bridge.compat().appendDef(target, nested);
+        }
 
         new BootstrapMethodFactory(ctx, messager).appendAll();
         return true;
@@ -162,6 +171,10 @@ public final class BuilderMutator {
      * suppresses injection wholesale, and when there are no fields to pass -
      * that last case would collide with javac's own default constructor.
      *
+     * <p>A <em>merged</em> declared builder is the one case where a nested
+     * builder does not suppress it: the generated {@code build()} still calls
+     * {@code new Target(..)}, so the constructor it calls still has to exist.
+     *
      * @param targetElement the annotated type
      * @param target the target's class declaration
      * @param ctx the per-target mutation context
@@ -179,7 +192,8 @@ public final class BuilderMutator {
         if (!ctx.config().factoryMethod().isEmpty()) return false;
         if (ctx.fields().isEmpty()) return false;
         if (AllArgsConstructorFactory.hasExplicitConstructor(target)) return false;
-        return !hasExistingNested(target, ctx.builderName());
+        if (ctx.config().mergeDeclaredBuilder()) return true;
+        return DeclaredBuilderMerge.declaredBuilder(target, ctx.builderName()) == null;
     }
 
     /**
@@ -202,13 +216,6 @@ public final class BuilderMutator {
         }
     }
 
-    private static boolean hasExistingNested(JCClassDecl target, String nestedName) {
-        for (var def : target.defs) {
-            if (def instanceof JCClassDecl c && c.name.toString().equals(nestedName)) return true;
-        }
-        return false;
-    }
-
     /**
      * Returns the simple name of the direct superclass when it also carries
      * {@code @ClassBuilder}; {@code null} otherwise. Matches Lombok's policy
@@ -224,7 +231,8 @@ public final class BuilderMutator {
      * {@code from(T)} populates parent slots before child slots, matching
      * the invocation order of inherited setters.
      */
-    private List<FieldSpec> collectChainFields(TypeElement start, List<FieldSpec> ownFields) {
+    private List<FieldSpec> collectChainFields(MutationContext ctx, TypeElement start,
+                                               List<FieldSpec> ownFields) {
         List<FieldSpec> ancestors = new ArrayList<>();
         TypeMirror superMirror = start.getSuperclass();
         AnnotationLookup lookup = new AnnotationLookup();
@@ -245,7 +253,14 @@ public final class BuilderMutator {
                 // Inherited fields use the plain classification (no Types walk):
                 // their initializers aren't accessible cross-class, so a custom
                 // container on a parent falls back to a plain setter here.
-                FieldSpec spec = FieldSpec.from((VariableElement) enc, lookup, null, null, superRetainInit);
+                //
+                // The base scheme is this subclass's, not the ancestor's, which
+                // is the assumption the chain already ran on - from(T) calls the
+                // inherited setters through it. An ancestor field carrying its
+                // own @SetterNames still wins, since that is read off the field
+                // and both builders read the same one.
+                FieldSpec spec = FieldSpec.from((VariableElement) enc, lookup, null, null,
+                    superRetainInit, ctx.config().setters());
                 if (spec.ignored) continue;
                 ancestors.add(spec);
             }

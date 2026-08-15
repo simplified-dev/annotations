@@ -9,7 +9,6 @@ import com.intellij.psi.PsiModifierListOwner;
 import com.intellij.psi.impl.light.LightMethodBuilder;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
-import dev.simplified.shared.psi.WrittenAnnotations;
 import org.jetbrains.annotations.Contract;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -79,6 +78,10 @@ public final class ClassBuilderInferredAnnotationProvider implements InferredAnn
     private static @Nullable ContractShape shapeOf(@NotNull PsiModifierListOwner owner) {
         if (!(owner instanceof PsiMethod method)) return null;
         if (!GeneratedMemberMarker.isGenerated(method)) return null;
+        // The builder's own constructor carries no contract on the javac side,
+        // so it must carry none here either - and it is not a setter, which is
+        // what the arity fallback below would otherwise make of it.
+        if (method.isConstructor()) return null;
 
         PsiClass containing = method.getContainingClass();
         if (containing == null) return null;
@@ -87,13 +90,15 @@ public final class ClassBuilderInferredAnnotationProvider implements InferredAnn
         PsiClass target = inBuilderClass ? containing.getContainingClass() : containing;
         if (target == null) return null;
 
-        PsiAnnotation classBuilder = findClassBuilderAnnotation(target);
-        if (classBuilder == null) return null;
-        if (!ClassBuilderConstants.booleanAttr(classBuilder, ClassBuilderConstants.ATTR_EMIT_CONTRACTS, true))
+        BuilderSite site = BuilderSite.of(target);
+        if (site == null) return null;
+        if (!ClassBuilderConstants.booleanAttr(site.annotation(),
+            ClassBuilderConstants.ATTR_EMIT_CONTRACTS, true)) {
             return null;
+        }
 
         GeneratedMemberFactory.EditorBuilderConfig config =
-            GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(classBuilder);
+            GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
 
         String name = method.getName();
         int params = method.getParameterList().getParametersCount();
@@ -103,7 +108,16 @@ public final class ClassBuilderInferredAnnotationProvider implements InferredAnn
 
         // Bootstraps - attached directly to the target.
         if (!inBuilderClass) {
-            if (name.equals(config.builderMethodName()) && params == 0) return ContractShape.NEW_NULLARY;
+            // A seeded entry point takes one parameter per seed, so the arity
+            // decides the shape here as it does in the emitter - and past one
+            // seed the vocabulary has nothing to say, so neither does this.
+            if (name.equals(config.builderMethodName())) {
+                return switch (params) {
+                    case 0 -> ContractShape.NEW_NULLARY;
+                    case 1 -> ContractShape.NEW_UNARY_PURE;
+                    default -> null;
+                };
+            }
             if (name.equals(config.toBuilderMethodName()) && params == 0) return ContractShape.NEW_NULLARY;
             if (name.equals(config.fromMethodName()) && params == 1) return ContractShape.NEW_UNARY_PURE;
             return null;
@@ -128,10 +142,6 @@ public final class ClassBuilderInferredAnnotationProvider implements InferredAnn
         } catch (Exception ignored) {
             return null;
         }
-    }
-
-    private static @Nullable PsiAnnotation findClassBuilderAnnotation(@NotNull PsiClass target) {
-        return WrittenAnnotations.find(target, ClassBuilderConstants.ANNOTATION_FQN);
     }
 
     /**

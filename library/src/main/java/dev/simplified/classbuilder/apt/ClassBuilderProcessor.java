@@ -9,6 +9,7 @@ import dev.simplified.annotations.Setter;
 import dev.simplified.annotations.SetterNames;
 import dev.simplified.args.mutate.ArgsConstructorMutator;
 import dev.simplified.classbuilder.mutate.BuilderMutator;
+import dev.simplified.classbuilder.mutate.ExecutableBuilderMutator;
 import dev.simplified.classbuilder.mutate.InterfaceBootstrapMutator;
 import dev.simplified.cleanup.mutate.CleanupBlockMutator;
 import dev.simplified.equality.apt.EqualityConfig;
@@ -18,6 +19,7 @@ import dev.simplified.shared.apt.AnnotationLookup;
 import dev.simplified.shared.apt.MemberSelector;
 import dev.simplified.shared.apt.MemberSpec;
 import dev.simplified.shared.apt.SourceIntrospector;
+import dev.simplified.shared.apt.TypeNames;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.LazyOwnership;
 import dev.simplified.shared.javac.compat.JavacAccessFactory;
@@ -30,15 +32,17 @@ import javax.annotation.processing.Messager;
 import javax.annotation.processing.ProcessingEnvironment;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
-import javax.annotation.processing.SupportedSourceVersion;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.TypeMirror;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 import java.io.IOException;
@@ -67,7 +71,6 @@ import java.util.Set;
     "dev.simplified.annotations.EqualsAndHashCode",
     "dev.simplified.annotations.ToString"
 })
-@SupportedSourceVersion(SourceVersion.RELEASE_17)
 public class ClassBuilderProcessor extends AbstractProcessor {
 
     static {
@@ -106,6 +109,19 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     private SourceIntrospector introspector;
     private Optional<JavacBridge> javacBridge = Optional.empty();
 
+    /**
+     * Reports the running compiler's latest source version. javac reads this to
+     * decide whether a processor will accept the source it is handed, which is a
+     * different question from the javac API baseline the mutators compile
+     * against - naming a specific release here makes every build above it print
+     * one warning per registered processor and changes nothing about which
+     * compat layer is chosen.
+     */
+    @Override
+    public SourceVersion getSupportedSourceVersion() {
+        return SourceVersion.latestSupported();
+    }
+
     @Override
     public synchronized void init(ProcessingEnvironment processingEnv) {
         super.init(processingEnv);
@@ -131,12 +147,19 @@ public class ClassBuilderProcessor extends AbstractProcessor {
 
         TypeElement annotationElement = lookupAnnotationElement();
         Set<TypeElement> classBuilderTargets = new java.util.LinkedHashSet<>();
+        List<ExecutableElement> executableTargets = new ArrayList<>();
         if (annotationElement != null) {
             for (Element element : roundEnv.getElementsAnnotatedWith(annotationElement)) {
                 ElementKind kind = element.getKind();
+                if (kind == ElementKind.CONSTRUCTOR || kind == ElementKind.METHOD) {
+                    executableTargets.add((ExecutableElement) element);
+                    continue;
+                }
                 if (kind != ElementKind.CLASS && kind != ElementKind.RECORD && kind != ElementKind.INTERFACE) {
-                    messager.printMessage(Diagnostic.Kind.WARNING,
-                        "@ClassBuilder on " + kind + " targets is not yet supported - skipping",
+                    messager.printMessage(Diagnostic.Kind.ERROR,
+                        "@ClassBuilder on a " + kind.toString().toLowerCase()
+                            + " has nothing to derive a builder from - write it on the type, on a "
+                            + "constructor, or on a static factory method",
                         element
                     );
                     continue;
@@ -156,6 +179,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
                     );
                 }
             }
+            processExecutables(executableTargets, classBuilderTargets, messager);
         }
 
         // Standalone @Lazy: classes with @Lazy fields but no @ClassBuilder.
@@ -499,10 +523,13 @@ public class ClassBuilderProcessor extends AbstractProcessor {
      * Reports a {@code name} pattern on {@code @Getter} or {@code @Setter} that
      * cannot expand into a distinct accessor.
      *
-     * <p>Checked on a type-level annotation as well as a field-level one, and
-     * the placeholder is mandatory in both. It matters more on the type, where a
-     * pattern without it gives every field on the class the same accessor name;
-     * on a field it only collides with whatever else claims that name.
+     * <p>Checked on a type-level annotation as well as a field-level one, but
+     * the placeholder is mandatory only on the type. There it fans out over
+     * every field, so a pattern without one gives them all the same accessor
+     * name - which is a defect with no legitimate reading. On a single field the
+     * pattern expands exactly once, so a placeholder-free literal is simply the
+     * accessor's name, and that is the only way to spell an accessor that does
+     * not contain its field's name at all.
      *
      * <p>The suppression sentinel is rejected rather than honoured. These
      * annotations suppress through {@link AccessLevel#NONE}, so nothing on this
@@ -529,7 +556,10 @@ public class ClassBuilderProcessor extends AbstractProcessor {
                     + "' - write AccessLevel.NONE to generate nothing", annotated);
             return;
         }
-        String error = NamePattern.patternError(written, true);
+        // Mandatory on a type, where the pattern fans out; optional on a field,
+        // where it expands once and a literal is just the accessor's name.
+        boolean fansOut = annotated instanceof TypeElement;
+        String error = NamePattern.patternError(written, fansOut);
         if (error != null) {
             messager.printMessage(Diagnostic.Kind.ERROR,
                 annotation + " naming pattern for 'name' " + error, annotated);
@@ -540,10 +570,196 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         return processingEnv.getElementUtils().getTypeElement(ANNOTATION_FQN);
     }
 
+    /**
+     * Runs {@link ExecutableBuilderMutator} over every annotated constructor and
+     * static factory in the round, after rejecting the shapes that cannot carry
+     * a builder.
+     *
+     * <p>Deferred to a pass of its own rather than handled inline with the type
+     * targets, because two of the rejections are about a <em>pair</em> of
+     * annotations: an enclosing type that is itself a target, and a second
+     * annotated member beside the first. Each would have the builder class and
+     * the entry point emitted twice onto one type, which javac reports as a
+     * duplicate on generated code the author cannot see.
+     *
+     * @param targets the annotated executables, in round order
+     * @param typeTargets the types annotated in this round
+     * @param messager sink for diagnostics
+     */
+    private void processExecutables(List<ExecutableElement> targets,
+                                    Set<TypeElement> typeTargets, Messager messager) {
+        Set<TypeElement> claimed = new java.util.LinkedHashSet<>();
+        for (ExecutableElement executable : targets) {
+            if (!(executable.getEnclosingElement() instanceof TypeElement enclosing)) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@ClassBuilder needs a type to nest the builder in, and this member is not "
+                        + "declared directly in one",
+                    executable);
+                continue;
+            }
+            if (!validExecutableTarget(executable, enclosing, typeTargets, claimed, messager)) continue;
+            claimed.add(enclosing);
+            try {
+                processExecutable(enclosing, executable, messager);
+            } catch (Exception e) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "Failed to generate builder for " + enclosing.getSimpleName() + "."
+                        + executable.getSimpleName() + ": " + e.getMessage(),
+                    executable
+                );
+            }
+        }
+    }
+
+    /**
+     * Reports every reason an annotated executable cannot produce a builder,
+     * each at the declaration that causes it.
+     *
+     * @param executable the annotated member
+     * @param enclosing the type it is declared in
+     * @param typeTargets the types annotated in this round
+     * @param claimed the types an earlier annotated member already took
+     * @param messager sink for diagnostics
+     * @return whether the member is usable
+     */
+    private boolean validExecutableTarget(ExecutableElement executable, TypeElement enclosing,
+                                          Set<TypeElement> typeTargets, Set<TypeElement> claimed,
+                                          Messager messager) {
+        boolean method = executable.getKind() == ElementKind.METHOD;
+        if (method && !executable.getModifiers().contains(Modifier.STATIC)) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@ClassBuilder on an instance method has no receiver to call it on - builder() is "
+                    + "static, so the factory it builds through must be static too",
+                executable);
+            return false;
+        }
+        if (method && executable.getReturnType().getKind() == javax.lang.model.type.TypeKind.VOID) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@ClassBuilder on a void method has nothing for build() to return",
+                executable);
+            return false;
+        }
+        if (typeTargets.contains(enclosing) || lookup.hasAnnotation(enclosing, ANNOTATION_FQN)) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@ClassBuilder is on " + enclosing.getSimpleName() + " as well as on this member - "
+                    + "one type carries one builder, so keep whichever set of slots is wanted and "
+                    + "drop the other annotation",
+                executable);
+            return false;
+        }
+        if (claimed.contains(enclosing)) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@ClassBuilder is already on another member of " + enclosing.getSimpleName()
+                    + " - one type carries one builder",
+                executable);
+            return false;
+        }
+        for (Element enclosed : enclosing.getEnclosedElements()) {
+            if (enclosed.getKind() != ElementKind.FIELD) continue;
+            if (!lookup.hasAnnotation(enclosed, LAZY_FQN)) continue;
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@ClassBuilder on a member of " + enclosing.getSimpleName() + ", whose field '"
+                    + enclosed.getSimpleName() + "' is @Lazy - that rewrites the field's storage "
+                    + "and every constructor parameter feeding it, so the slots this builder passes "
+                    + "would no longer match. Move @ClassBuilder onto the type",
+                executable);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Generates the builder for one annotated constructor or static factory.
+     *
+     * <p>The attributes that describe a field set have nothing to name here and
+     * are reported rather than silently ignored: {@code exclude} names fields,
+     * and every parameter is a slot the annotated member requires; and
+     * {@code factoryMethod} redirects what {@code build()} calls, which the
+     * annotated member already decides.
+     */
+    private void processExecutable(TypeElement enclosing, ExecutableElement executable,
+                                   Messager messager) {
+        BuilderConfig config = extractConfig(executable, enclosing.getSimpleName().toString());
+        validateNaming(executable, config, messager);
+        if (!config.excludeSet().isEmpty()) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@ClassBuilder(exclude) names fields, and this builder's slots are "
+                    + executable.getSimpleName() + "'s parameters - every one of which it requires",
+                executable);
+        }
+        if (!config.factoryMethod().isEmpty()) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@ClassBuilder(factoryMethod) redirects what build() calls, and the annotated "
+                    + "member is already what it calls",
+                executable);
+        }
+
+        List<FieldSpec> slots = new ArrayList<>();
+        for (VariableElement parameter : executable.getParameters()) {
+            FieldSpec slot = FieldSpec.fromParameter(parameter, lookup,
+                processingEnv.getTypeUtils(), config.setters());
+            if (slot.seed) rejectSeedCompanions(parameter, messager);
+            slots.add(slot);
+        }
+        validateSlotNaming(slots, config.setters(), executable, messager);
+        validateAssignVia(enclosing, slots, executable, messager);
+        validateCollectorKeys(slots, executable, messager);
+
+        if (javacBridge.isEmpty()) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@ClassBuilder requires javac for AST mutation - current environment is not a "
+                    + "JavacProcessingEnvironment. Run your build under OpenJDK javac (no ecj).",
+                executable);
+            return;
+        }
+        if (!new ExecutableBuilderMutator(javacBridge.get(), messager)
+            .mutate(enclosing, executable, config, slots)) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@ClassBuilder could not resolve a source tree for " + enclosing
+                    + "; mutation requires the annotated element to have a source declaration.",
+                executable);
+        }
+    }
+
+    /**
+     * Companion annotations a {@code @BuilderSeed} parameter cannot carry. Each
+     * shapes a setter, and a seed emits none - so the pairing does nothing at
+     * all, which is worth a diagnostic rather than a surprise at the call site.
+     */
+    private static final String[][] SEED_INCOMPATIBLE = {
+        {"dev.simplified.annotations.Collector", "Collector"},
+        {"dev.simplified.annotations.Negate", "Negate"},
+        {"dev.simplified.annotations.Formattable", "Formattable"},
+        {"dev.simplified.annotations.SetterNames", "SetterNames"},
+    };
+
+    /**
+     * Rejects {@code @BuilderSeed} combined with a companion that only shapes a
+     * setter.
+     *
+     * @param parameter the seeded parameter
+     * @param messager sink for the diagnostic
+     */
+    private void rejectSeedCompanions(VariableElement parameter, Messager messager) {
+        for (String[] companion : SEED_INCOMPATIBLE) {
+            if (!lookup.hasAnnotation(parameter, companion[0])) continue;
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@BuilderSeed cannot be combined with @" + companion[1]
+                    + " - a seeded slot is supplied to builder(...) and emits no setter for the "
+                    + "companion to shape",
+                parameter
+            );
+        }
+    }
+
     private void processClass(TypeElement target, Messager messager) {
         BuilderConfig config = extractConfig(target);
         validateNaming(target, config, messager);
         List<FieldSpec> fields = collectFields(target, config);
+        validateSlotNaming(fields, config.setters(), target, messager);
+        validateDefaultProviders(target, fields, messager);
+        validateAssignVia(target, fields, target, messager);
+        validateCollectorKeys(fields, target, messager);
 
         if (javacBridge.isEmpty()) {
             messager.printMessage(Diagnostic.Kind.ERROR,
@@ -564,6 +780,311 @@ public class ClassBuilderProcessor extends AbstractProcessor {
                     + "; mutation requires the annotated element to have a source declaration.",
                 target);
         }
+    }
+
+    /**
+     * Reports every way a {@code @BuilderDefault(provider)} cannot supply the
+     * slot it is written on, at the annotation rather than inside the generated
+     * body that would have called it.
+     *
+     * <p>Being checkable at the declaration is the whole argument for naming a
+     * method instead of carrying a source string: a missing, non-static or
+     * wrongly-typed provider is an error on a line the author wrote.
+     *
+     * @param target the annotated type
+     * @param fields the builder-visible fields
+     * @param messager sink for diagnostics
+     */
+    private void validateDefaultProviders(TypeElement target, List<FieldSpec> fields,
+                                          Messager messager) {
+        for (FieldSpec field : fields) {
+            if (field.defaultProvider == null) continue;
+            Element site = field.element != null ? field.element : target;
+            if (!field.builderDefault) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@BuilderDefault(value = false) asks for no default at all, and provider = '"
+                        + field.defaultProvider + "' supplies one - keep whichever was meant",
+                    site);
+                continue;
+            }
+            ExecutableElement provider = findNullaryMethod(target, field.defaultProvider);
+            if (provider == null) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@BuilderDefault(provider = '" + field.defaultProvider + "') names no "
+                        + "no-argument method on " + target.getSimpleName(),
+                    site);
+                continue;
+            }
+            if (!provider.getModifiers().contains(Modifier.STATIC)) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@BuilderDefault(provider = '" + field.defaultProvider + "') names an instance "
+                        + "method - the default is read when the builder is created, before any "
+                        + target.getSimpleName() + " exists to read it from",
+                    site);
+                continue;
+            }
+            if (!suppliesType(provider.getReturnType(), field.type)) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@BuilderDefault(provider = '" + field.defaultProvider + "') returns "
+                        + provider.getReturnType() + ", which does not supply '" + field.name
+                        + "' of type " + field.typeDisplay,
+                    site);
+            }
+        }
+    }
+
+    /**
+     * Reports a {@code @Collector(key)} that cannot supply the map it is written
+     * on, at the annotation rather than inside the generated put that would have
+     * called it.
+     *
+     * <p>{@code removable} needs no check of its own: it names nothing, and a
+     * collector already has to be a collection or a map for any of its roles to
+     * exist.
+     *
+     * @param slots the builder's slots
+     * @param fallbackSite where to report when a slot has no element of its own
+     * @param messager sink for diagnostics
+     */
+    private void validateCollectorKeys(List<FieldSpec> slots, Element fallbackSite, Messager messager) {
+        for (FieldSpec slot : slots) {
+            if (slot.keyMethod == null) continue;
+            Element site = slot.element != null ? slot.element : fallbackSite;
+            if (!slot.isMap) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@Collector(key) derives a map entry's key from its value, and '" + slot.name
+                        + "' is not a map",
+                    site);
+                continue;
+            }
+            if (!slot.singular) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@Collector(key = '" + slot.keyMethod + "') reshapes the single-entry put, "
+                        + "which this collector does not emit - add singular = true",
+                    site);
+                continue;
+            }
+            if (slot.compute) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@Collector(key) cannot be combined with compute - the put-if-absent takes a "
+                        + "key and a supplier precisely so the value is not created unless it is "
+                        + "needed, and a key read off a value that does not exist yet is nothing "
+                        + "to generate",
+                    site);
+                continue;
+            }
+            validateKeyMethod(slot, site, messager);
+        }
+    }
+
+    /**
+     * Checks that the named method exists on the map's value type, takes no
+     * arguments and returns something the map's key type accepts. Inherited
+     * members count, a value type routinely declaring its key accessor on a
+     * supertype.
+     */
+    private void validateKeyMethod(FieldSpec slot, Element site, Messager messager) {
+        List<? extends TypeMirror> arguments = slot.type instanceof DeclaredType declared
+            ? declared.getTypeArguments() : List.of();
+        if (arguments.size() < 2) return;
+        TypeMirror valueType = arguments.get(1);
+        if (!(valueType instanceof DeclaredType value)
+            || !(value.asElement() instanceof TypeElement valueElement)) {
+            return;
+        }
+        for (Element member : processingEnv.getElementUtils().getAllMembers(valueElement)) {
+            if (member.getKind() != ElementKind.METHOD) continue;
+            if (!member.getSimpleName().contentEquals(slot.keyMethod)) continue;
+            ExecutableElement method = (ExecutableElement) member;
+            if (!method.getParameters().isEmpty()) continue;
+            if (!suppliesType(method.getReturnType(), arguments.getFirst())) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@Collector(key = '" + slot.keyMethod + "') returns " + method.getReturnType()
+                        + ", which cannot key '" + slot.name + "' on " + arguments.getFirst(),
+                    site);
+            }
+            return;
+        }
+        messager.printMessage(Diagnostic.Kind.ERROR,
+            "@Collector(key = '" + slot.keyMethod + "') names no no-argument method on "
+                + valueElement.getSimpleName() + ", the value type of '" + slot.name + "'",
+            site);
+    }
+
+    /**
+     * Reports every way an {@code @AssignVia} cannot route a setter's argument
+     * into the slot it is written on, at the annotation rather than inside the
+     * generated setter that would have called it.
+     *
+     * @param declaring the type declaring both the slots and the named methods
+     * @param slots the builder's slots
+     * @param fallbackSite where to report when a slot has no element of its own
+     * @param messager sink for diagnostics
+     */
+    private void validateAssignVia(TypeElement declaring, List<FieldSpec> slots,
+                                   Element fallbackSite, Messager messager) {
+        var types = processingEnv.getTypeUtils();
+        for (FieldSpec slot : slots) {
+            if (slot.assignVia.isEmpty()) continue;
+            Element site = slot.element != null ? slot.element : fallbackSite;
+            // Read off the resolved list rather than asked of the parameter, so
+            // the container javac wraps a repeated annotation in is covered too.
+            if (slot.seed) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@BuilderSeed cannot be combined with @AssignVia - a seeded slot is supplied "
+                        + "to builder(...) and emits no setter for a transform to route",
+                    site);
+                continue;
+            }
+            if (slot.lazy) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@AssignVia cannot be combined with @Lazy - that slot holds a Supplier<"
+                        + slot.typeDisplay + "> rather than the value itself, so there is nothing "
+                        + "for a transform to take",
+                    site);
+                continue;
+            }
+            if (slot.collector) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@AssignVia cannot be combined with @Collector - those setters copy element "
+                        + "by element into the container rather than assigning it, so there is no "
+                        + "single value to route through a transform",
+                    site);
+                continue;
+            }
+            // Every parameter type an arity-one setter already takes for this
+            // slot. A transform landing on one of them is a duplicate method in
+            // generated code, which javac would report on a line nobody wrote.
+            java.util.List<TypeMirror> taken = new ArrayList<>();
+            if (slot.isOptional) taken.add(optionalInnerOf(slot));
+            for (FieldSpec.AssignTransform transform : slot.assignVia) {
+                TypeMirror param = validateTransform(declaring, slot, transform, site, messager);
+                if (param == null) continue;
+                if (transform.direct()) continue;
+                if (erasureAmong(types, param, taken)) {
+                    messager.printMessage(Diagnostic.Kind.ERROR,
+                        "@AssignVia(method = '" + transform.method() + "') takes " + param
+                            + ", which is already the argument of a setter '" + slot.name
+                            + "' emits - give it a parameter type of its own",
+                        site);
+                    continue;
+                }
+                taken.add(param);
+            }
+        }
+    }
+
+    /**
+     * Checks one transform and returns the parameter type its setter would take,
+     * or {@code null} when it was rejected.
+     */
+    private TypeMirror validateTransform(TypeElement declaring, FieldSpec slot,
+                                         FieldSpec.AssignTransform transform,
+                                         Element site, Messager messager) {
+        String name = transform.method();
+        java.util.List<ExecutableElement> candidates = unaryMethods(declaring, name);
+        if (candidates.isEmpty()) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@AssignVia(method = '" + name + "') names no single-argument method on "
+                    + declaring.getSimpleName(),
+                site);
+            return null;
+        }
+        if (candidates.size() > 1) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@AssignVia(method = '" + name + "') names " + candidates.size()
+                    + " single-argument methods on " + declaring.getSimpleName()
+                    + " - one transform is one method, so give the intended one its own name",
+                site);
+            return null;
+        }
+        ExecutableElement method = candidates.getFirst();
+        if (!method.getModifiers().contains(Modifier.STATIC)) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@AssignVia(method = '" + name + "') names an instance method - the setter runs "
+                    + "on the builder, before any " + declaring.getSimpleName() + " exists to "
+                    + "call it on",
+                site);
+            return null;
+        }
+        TypeMirror param = method.getParameters().getFirst().asType();
+        if (!suppliesType(method.getReturnType(), slot.type)) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@AssignVia(method = '" + name + "') returns " + method.getReturnType()
+                    + ", which does not supply '" + slot.name + "' of type " + slot.typeDisplay,
+                site);
+            return null;
+        }
+        if (transform.direct() && !suppliesType(slot.type, param)) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@AssignVia(method = '" + name + "') takes " + param + ", which cannot accept '"
+                    + slot.name + "' of type " + slot.typeDisplay + " - a transform over the "
+                    + "slot's own type is what the ordinary setter hands its argument to",
+                site);
+            return null;
+        }
+        return param;
+    }
+
+    /** Every single-argument method of that name the type declares. */
+    private static java.util.List<ExecutableElement> unaryMethods(TypeElement target, String name) {
+        java.util.List<ExecutableElement> out = new ArrayList<>();
+        for (Element enclosed : target.getEnclosedElements()) {
+            if (enclosed.getKind() != ElementKind.METHOD) continue;
+            if (!enclosed.getSimpleName().contentEquals(name)) continue;
+            ExecutableElement method = (ExecutableElement) enclosed;
+            if (method.getParameters().size() == 1) out.add(method);
+        }
+        return out;
+    }
+
+    /** Whether a type erases to the same as any already spoken for. */
+    private static boolean erasureAmong(javax.lang.model.util.Types types, TypeMirror candidate,
+                                        java.util.List<TypeMirror> taken) {
+        for (TypeMirror other : taken) {
+            if (other == null) continue;
+            if (types.isSameType(types.erasure(candidate), types.erasure(other))) return true;
+        }
+        return false;
+    }
+
+    /** The type argument of an {@code Optional} slot, which its raw setter takes. */
+    private static TypeMirror optionalInnerOf(FieldSpec slot) {
+        if (!(slot.type instanceof DeclaredType declared)) return null;
+        var args = declared.getTypeArguments();
+        return args.isEmpty() ? null : args.getFirst();
+    }
+
+    /** The target's own no-argument method of that name, or {@code null}. */
+    private static ExecutableElement findNullaryMethod(TypeElement target, String name) {
+        for (Element enclosed : target.getEnclosedElements()) {
+            if (enclosed.getKind() != ElementKind.METHOD) continue;
+            if (!enclosed.getSimpleName().contentEquals(name)) continue;
+            ExecutableElement method = (ExecutableElement) enclosed;
+            if (method.getParameters().isEmpty()) return method;
+        }
+        return null;
+    }
+
+    /**
+     * Whether a provider's return type can seed a slot of the given type.
+     *
+     * <p>Where either side mentions a type variable the comparison drops to
+     * erasures, and it has to. A generic target's provider declares its own
+     * parameters - a {@code static} method cannot name the class's - so
+     * {@code static <T> List<T> none()} seeding a {@code List<V>} component is
+     * two distinct variables that no assignability test relates, while the call
+     * javac ends up attributing infers one from the other and is perfectly
+     * legal. The erasure comparison still catches the mistake worth catching
+     * here, a provider of an unrelated kind, and javac catches the rest on the
+     * generated call.
+     */
+    private boolean suppliesType(TypeMirror provided, TypeMirror slot) {
+        var types = processingEnv.getTypeUtils();
+        if (TypeNames.mentionsTypeVariable(provided) || TypeNames.mentionsTypeVariable(slot)) {
+            return types.isAssignable(types.erasure(provided), types.erasure(slot));
+        }
+        return types.isAssignable(provided, slot);
     }
 
     /**
@@ -609,9 +1130,10 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         for (Element enclosed : target.getEnclosedElements()) {
             if (enclosed.getKind() != ElementKind.FIELD) continue;
             rejectUnsupportedLazyCompanions((VariableElement) enclosed, messager);
-            // Standalone @Lazy path - no @ClassBuilder, so no retainInit policy.
+            // Standalone @Lazy path - no @ClassBuilder, so no retainInit policy
+            // and no builder to name setters for either.
             out.add(FieldSpec.from((VariableElement) enclosed, lookup, introspector,
-                processingEnv.getTypeUtils(), false));
+                processingEnv.getTypeUtils(), false, SetterScheme.of(NamingStyle.SIMPLIFIED)));
         }
         return out;
     }
@@ -633,6 +1155,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         }
 
         List<FieldSpec> fields = collectFieldsFromInterface(target, config);
+        validateSlotNaming(fields, config.setters(), target, messager);
         String packageName = packageOf(target);
 
         String implName = target.getSimpleName().toString() + "Impl";
@@ -695,31 +1218,53 @@ public class ClassBuilderProcessor extends AbstractProcessor {
             if (method.getReturnType().getKind() == javax.lang.model.type.TypeKind.VOID) continue;
             String name = method.getSimpleName().toString();
             if (config.excludeSet().contains(name)) continue;
-            FieldSpec spec = FieldSpec.fromInterfaceAccessor(method, lookup, processingEnv.getTypeUtils());
+            FieldSpec spec = FieldSpec.fromInterfaceAccessor(method, lookup,
+                processingEnv.getTypeUtils(), config.setters());
             if (spec.ignored) continue;
             out.add(spec);
         }
         return out;
     }
 
+    /**
+     * Resolves the configuration written on a type target, whose own simple name
+     * is what the builder-class name expands against.
+     */
     private BuilderConfig extractConfig(TypeElement target) {
+        return extractConfig(target, target.getSimpleName().toString());
+    }
+
+    /**
+     * Resolves the configuration written on any target.
+     *
+     * @param target the annotated element - a type, a constructor, or a static
+     *        factory
+     * @param nameSubject the simple name a {@code @BuilderNames} pattern expands
+     *        its placeholder against, always the enclosing type's
+     * @return the resolved configuration
+     */
+    private BuilderConfig extractConfig(Element target, String nameSubject) {
         NamingStyle style = parseStyle(lookup.stringAttr(target, ANNOTATION_FQN, "style", "SIMPLIFIED"));
         AccessLevel access = parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, "access", "PUBLIC"));
         AccessLevel constructorAccess =
             parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, "constructorAccess", "PACKAGE"));
+        AccessLevel builderConstructorAccess =
+            parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, "builderConstructorAccess", "PACKAGE"));
         boolean retainInit = lookup.booleanAttr(target, ANNOTATION_FQN, "retainInit", true);
         boolean generateCopyConstructor = lookup.booleanAttr(target, ANNOTATION_FQN, "generateCopyConstructor", true);
         boolean generateImpl = lookup.booleanAttr(target, ANNOTATION_FQN, "generateImpl", true);
         boolean validate = lookup.booleanAttr(target, ANNOTATION_FQN, "validate", true);
         boolean emitContracts = lookup.booleanAttr(target, ANNOTATION_FQN, "emitContracts", true);
         boolean emitGenerated = lookup.booleanAttr(target, ANNOTATION_FQN, "emitGenerated", true);
+        boolean mergeDeclaredBuilder =
+            lookup.booleanAttr(target, ANNOTATION_FQN, "mergeDeclaredBuilder", false);
         String factoryMethod = lookup.stringAttr(target, ANNOTATION_FQN, "factoryMethod", "");
         Set<String> excludeSet = new HashSet<>(Arrays.asList(lookup.stringArrayAttr(target, ANNOTATION_FQN, "exclude")));
         return new BuilderConfig(
-            extractBuilderNames(target, style), extractSetterNames(target, style),
-            access, constructorAccess, retainInit,
+            extractBuilderNames(target, style, nameSubject), extractSetterNames(target, style),
+            access, constructorAccess, builderConstructorAccess, retainInit,
             generateCopyConstructor, generateImpl, validate, emitContracts, emitGenerated,
-            factoryMethod, excludeSet
+            mergeDeclaredBuilder, factoryMethod, excludeSet
         );
     }
 
@@ -773,7 +1318,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
             String name = enclosed.getSimpleName().toString();
             if (config.excludeSet().contains(name)) continue;
             FieldSpec spec = FieldSpec.from((VariableElement) enclosed, lookup, introspector,
-                processingEnv.getTypeUtils(), config.retainInit());
+                processingEnv.getTypeUtils(), config.retainInit(), config.setters());
             if (spec.ignored) continue;
             out.add(spec);
         }
@@ -807,7 +1352,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
      * every role inheriting from the style, which is exactly what a mirror with
      * no entries produces, so the absent and empty cases need no distinction.
      */
-    private SetterScheme extractSetterNames(TypeElement target, NamingStyle style) {
+    private SetterScheme extractSetterNames(Element target, NamingStyle style) {
         AnnotationMirror setters =
             lookup.nestedAnnotationValue(lookup.findMirror(target, ANNOTATION_FQN), "setters");
         if (setters == null) return SetterScheme.of(style);
@@ -817,12 +1362,12 @@ public class ClassBuilderProcessor extends AbstractProcessor {
             lookup.stringAttr(setters, "add", null),
             lookup.stringAttr(setters, "put", null),
             lookup.stringAttr(setters, "compute", null),
-            lookup.stringAttr(setters, "clear", null));
+            lookup.stringAttr(setters, "clear", null),
+            lookup.stringAttr(setters, "remove", null));
     }
 
     /** Reads the nested {@code builder} attribute, on the same inherit-when-unwritten terms. */
-    private BuilderScheme extractBuilderNames(TypeElement target, NamingStyle style) {
-        String simpleName = target.getSimpleName().toString();
+    private BuilderScheme extractBuilderNames(Element target, NamingStyle style, String simpleName) {
         AnnotationMirror names =
             lookup.nestedAnnotationValue(lookup.findMirror(target, ANNOTATION_FQN), "builder");
         if (names == null) return BuilderScheme.of(style, simpleName);
@@ -846,25 +1391,59 @@ public class ClassBuilderProcessor extends AbstractProcessor {
      * against a single-element add), so the overlap is legal and sometimes
      * intended. A genuine duplicate is javac's own error to raise.
      */
-    private void validateNaming(TypeElement target, BuilderConfig config, Messager messager) {
-        SetterScheme setters = config.setters();
+    private void validateNaming(Element target, BuilderConfig config, Messager messager) {
+        validateSetterScheme(config.setters(), target, true, messager);
+        validateBuilderNames(target, messager);
+    }
+
+    /**
+     * Checks each slot's resolved patterns, which a {@code @SetterNames} written
+     * on the slot may differ from the target's.
+     *
+     * <p>Reported at the slot rather than at the type, because that is where the
+     * override was written. A slot inheriting the target's scheme unchanged is
+     * skipped - the same defect would otherwise be reported once per field.
+     *
+     * <p>The placeholder is optional here, and mandatory on the target, for the
+     * reason it is on {@code @Getter} and {@code @Setter}: a target's pattern
+     * fans out over every slot, so a literal would give them all the same method
+     * name, while a slot's expands exactly once and a literal is simply that
+     * setter's name. Any role a slot inherited was already checked at the
+     * target, so nothing is let through by asking less of it here.
+     *
+     * @param slots the builder-visible slots
+     * @param base the target's own resolved scheme, already reported on
+     * @param target the annotated element, for a slot with no element of its own
+     * @param messager sink for diagnostics
+     */
+    private void validateSlotNaming(List<FieldSpec> slots, SetterScheme base, Element target,
+                                    Messager messager) {
+        for (FieldSpec slot : slots) {
+            if (slot.setters.equals(base)) continue;
+            validateSetterScheme(slot.setters, slot.element != null ? slot.element : target,
+                false, messager);
+        }
+    }
+
+    /** Reports every pattern in a resolved scheme that cannot mint a member. */
+    private void validateSetterScheme(SetterScheme setters, Element site, boolean fansOut,
+                                      Messager messager) {
         String[][] roles = {
             {"set", setters.set()}, {"flag", setters.flag()}, {"add", setters.add()},
             {"put", setters.put()}, {"compute", setters.compute()}, {"clear", setters.clear()}
         };
         for (String[] role : roles) {
-            String error = NamePattern.patternError(role[1], true);
+            String error = NamePattern.patternError(role[1], fansOut);
             if (error != null) {
                 messager.printMessage(Diagnostic.Kind.ERROR,
-                    "@SetterNames pattern for '" + role[0] + "' " + error, target);
+                    "@SetterNames pattern for '" + role[0] + "' " + error, site);
             }
         }
         if (!setters.emitsSet()) {
             messager.printMessage(Diagnostic.Kind.ERROR,
                 "@SetterNames cannot suppress the 'set' role - a field would then have no way to "
-                    + "be assigned on the builder", target);
+                    + "be assigned on the builder", site);
         }
-        validateBuilderNames(target, messager);
     }
 
     /**
@@ -872,7 +1451,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
      * default being a plain literal, so only malformed text and a suppressed
      * {@code type} or {@code build} are errors.
      */
-    private void validateBuilderNames(TypeElement target, Messager messager) {
+    private void validateBuilderNames(Element target, Messager messager) {
         AnnotationMirror names =
             lookup.nestedAnnotationValue(lookup.findMirror(target, ANNOTATION_FQN), "builder");
         if (names == null) return;

@@ -93,8 +93,9 @@ final class RetainedInitFactory {
     void appendAll() {
         JCClassDecl target = ctx.target();
         for (FieldSpec f : ctx.fields()) {
-            Object captured = f.sourceInitializerTree;
-            if (!(captured instanceof JCExpression original)) {
+            JCExpression original =
+                f.sourceInitializerTree instanceof JCExpression captured ? captured : null;
+            if (original == null && f.defaultProvider == null) {
                 // A field that asked for retention by name but has nothing to
                 // retain would otherwise be silently inert. Fields that merely
                 // inherited the class-wide retainInit policy stay quiet - most
@@ -102,12 +103,17 @@ final class RetainedInitFactory {
                 if (f.builderDefaultExplicit && f.element != null) {
                     messager.printMessage(Diagnostic.Kind.WARNING,
                         "@BuilderDefault has no effect on '" + f.name
-                            + "' - the field declares no initializer to retain",
+                            + "' - the field declares no initializer to retain, and names no "
+                            + "provider to supply one",
                         f.element
                     );
                 }
             } else if (!hasExistingProvider(target, providerName(f.name))) {
-                JCMethodDecl provider = buildProvider(f, original);
+                // A written provider is the more specific statement and wins
+                // over an initializer beside it.
+                JCMethodDecl provider = f.defaultProvider != null
+                    ? buildDelegatingProvider(f)
+                    : buildProvider(f, original);
                 if (provider != null) ctx.bridge().compat().appendDef(target, provider);
                 // A collected instance default also needs the merge helper that
                 // folds the builder's contributions onto the computed default.
@@ -192,6 +198,38 @@ final class RetainedInitFactory {
             names.fromString(providerName(field.name)),
             returnType,
             instance ? List.nil() : ctx.typeParams(),
+            List.nil(),
+            List.nil(),
+            body,
+            null
+        );
+        AstMarkers.markGenerated(method, ctx.generated());
+        return method;
+    }
+
+    /**
+     * Builds {@code private static T $default$<fieldName>() { return <provider>(); }}
+     * for a field naming a provider rather than retaining an initializer.
+     *
+     * <p>Routed through the same {@code $default$} name the captured-expression
+     * form uses, so nothing downstream has to know which it was: the builder
+     * slot, the merge helper, the empty-container factory and the collected
+     * defaults all call one method. The provider is checked at the annotation
+     * before this runs, so the call it emits resolves.
+     *
+     * <p>Nothing here is instance-computed. A provider is required to be
+     * {@code static}, which is what makes the value available when the builder
+     * is created rather than only once a target exists.
+     */
+    private JCMethodDecl buildDelegatingProvider(FieldSpec field) {
+        JCExpression call = make.Apply(
+            List.nil(), make.Ident(names.fromString(field.defaultProvider)), List.nil());
+        JCBlock body = make.Block(0, List.of(make.Return(call)));
+        JCMethodDecl method = make.MethodDef(
+            make.Modifiers(Flags.PRIVATE | Flags.STATIC),
+            names.fromString(providerName(field.name)),
+            types.parseType(field.typeDisplay),
+            ctx.typeParams(),
             List.nil(),
             List.nil(),
             body,

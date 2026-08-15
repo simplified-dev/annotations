@@ -6,6 +6,7 @@ import com.intellij.codeInspection.ProblemsHolder;
 import com.intellij.psi.JavaElementVisitor;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiElementVisitor;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiModifier;
@@ -16,7 +17,9 @@ import org.jetbrains.annotations.Nullable;
 
 import javax.lang.model.SourceVersion;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Flags misuse of {@code @EnumLookup} and {@code @KeyField} at edit time:
@@ -28,10 +31,16 @@ import java.util.Map;
  *       - WARNING (the annotation is a no-op).</li>
  *   <li>{@code @KeyField(strictNullKeys = true)} on a primitive-typed field
  *       - WARNING (attribute has no effect).</li>
+ *   <li>{@code @KeyField(ignoreCase = true)} on a field that is not a
+ *       {@code String} - WARNING (attribute has no effect).</li>
  *   <li>{@code @KeyField(methodName = "...")} that doesn't start with an
  *       uppercase letter or isn't a valid Java identifier - ERROR.</li>
  *   <li>Two {@code @KeyField}s on the same enum that produce a colliding
  *       generated method signature - ERROR.</li>
+ *   <li>A hand-rolled field named {@code CACHED_VALUES} or
+ *       {@code CACHED_KEYS_<field>} on an annotated enum - ERROR, matching the
+ *       processor, which refuses the enum outright rather than emitting a
+ *       second assignment to the author's own {@code final}.</li>
  * </ul>
  */
 public final class EnumLookupInspection extends LocalInspectionTool {
@@ -50,6 +59,7 @@ public final class EnumLookupInspection extends LocalInspectionTool {
                 }
                 if (enumLookup != null && clazz.isEnum()) {
                     checkMethodSignatureCollisions(clazz);
+                    checkCacheFieldCollisions(clazz);
                 }
             }
 
@@ -90,6 +100,48 @@ public final class EnumLookupInspection extends LocalInspectionTool {
                     holder.registerProblem(keyField,
                         "@KeyField(strictNullKeys = true) has no effect on a primitive-typed field",
                         ProblemHighlightType.WARNING);
+                }
+
+                boolean ignoreCase = EnumLookupConstants.booleanAttr(keyField,
+                    EnumLookupConstants.ATTR_IGNORE_CASE, false);
+                if (ignoreCase && !isString(field.getType())) {
+                    holder.registerProblem(keyField,
+                        "@KeyField(ignoreCase = true) has no effect on a field that is not a String",
+                        ProblemHighlightType.WARNING);
+                }
+            }
+
+            /**
+             * Flags a hand-rolled cache field the annotation would generate
+             * under the same name.
+             *
+             * <p>The processor refuses the whole enum for this, so saying it
+             * here is what keeps the editor from being quietly greener than the
+             * build. A hand-rolled {@code values()} cache is also the usual
+             * reason for adopting {@code @EnumLookup} in the first place, so the
+             * field is nearly always meant to go.
+             */
+            private void checkCacheFieldCollisions(PsiClass enumClass) {
+                Iterable<PsiField> fields = enumClass instanceof PsiExtensibleClass ext
+                    ? ext.getOwnFields()
+                    : java.util.List.of(enumClass.getFields());
+
+                Set<String> owned = new HashSet<>();
+                owned.add(EnumLookupConstants.CACHED_VALUES);
+                for (PsiField field : enumClass.getFields()) {
+                    if (field.hasModifierProperty(PsiModifier.STATIC)) continue;
+                    if (findAnnotation(field, EnumLookupConstants.KEY_FIELD_FQN) == null) continue;
+                    owned.add(EnumLookupConstants.CACHED_KEYS_PREFIX + field.getName());
+                }
+
+                for (PsiField field : fields) {
+                    if (!owned.contains(field.getName())) continue;
+                    PsiElement anchor = field.getNameIdentifier();
+                    holder.registerProblem(anchor != null ? anchor : field,
+                        "@EnumLookup generates a field named '" + field.getName()
+                            + "' - delete this declaration and read the generated field, which is "
+                            + "private static final and carries the same name",
+                        ProblemHighlightType.GENERIC_ERROR);
                 }
             }
 
@@ -150,6 +202,20 @@ public final class EnumLookupInspection extends LocalInspectionTool {
 
     private static boolean isPrimitive(PsiType type) {
         return type instanceof com.intellij.psi.PsiPrimitiveType;
+    }
+
+    /**
+     * Whether a key field's type is {@link String}.
+     *
+     * <p>Accepts the unqualified spelling as well as the canonical one. The
+     * canonical text of a reference the index has not resolved is the text as
+     * written, and this decides only whether to <b>warn</b> that an attribute is
+     * inert - so a type that might be {@code String} is left alone rather than
+     * flagged on a resolution accident.
+     */
+    private static boolean isString(PsiType type) {
+        String text = type.getCanonicalText();
+        return "java.lang.String".equals(text) || "String".equals(text);
     }
 
     private static String effectiveSuffix(PsiAnnotation keyField, String fieldName) {

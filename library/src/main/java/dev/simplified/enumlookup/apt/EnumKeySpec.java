@@ -17,6 +17,8 @@ import org.jetbrains.annotations.NotNull;
  *        ({@code "int"}, {@code "java.lang.String"}, ...) consumable by
  *        {@code JavacTypeFactory.parseType}
  * @param isPrimitive {@code true} when the field type is a primitive
+ * @param ignoreCase whether the generated comparison folds case, which only a
+ *        {@link String}-typed key can do
  * @param strictKeys IDE-only opt-in to the duplicate-keys inspection
  * @param strictNullKeys IDE-only opt-in to the null-keys inspection (no-op when
  *        {@link #isPrimitive} is {@code true})
@@ -26,7 +28,14 @@ public record EnumKeySpec(
     @NotNull String methodSuffix,
     @NotNull String declaredTypeDisplay,
     boolean isPrimitive,
+    boolean ignoreCase,
     boolean strictKeys,
     boolean strictNullKeys
 ) {
+
+    /** Whether the key is a {@link String}, the one type case folding applies to. */
+    public boolean isString() {
+        return "java.lang.String".equals(declaredTypeDisplay);
+    }
+
 }

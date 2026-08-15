@@ -20,6 +20,7 @@ import dev.simplified.annotations.NamingStyle;
  * @param put pattern for the single-entry map put
  * @param compute pattern for the map put-if-absent
  * @param clear pattern for the collection or map clear
+ * @param remove pattern for the collection or map single-element remove
  */
 public record SetterScheme(
     String set,
@@ -27,7 +28,8 @@ public record SetterScheme(
     String add,
     String put,
     String compute,
-    String clear
+    String clear,
+    String remove
 ) {
 
     /**
@@ -42,23 +44,57 @@ public record SetterScheme(
      * @param put the written {@code put} pattern, or {@code null}
      * @param compute the written {@code compute} pattern, or {@code null}
      * @param clear the written {@code clear} pattern, or {@code null}
+     * @param remove the written {@code remove} pattern, or {@code null}
      * @return the resolved scheme
      */
     public static SetterScheme resolve(NamingStyle style, String set, String flag, String add,
-                                       String put, String compute, String clear) {
+                                       String put, String compute, String clear, String remove) {
         return new SetterScheme(
             NamePattern.inherit(set, style.set()),
             NamePattern.inherit(flag, style.flag()),
             NamePattern.inherit(add, style.add()),
             NamePattern.inherit(put, style.put()),
             NamePattern.inherit(compute, style.compute()),
-            NamePattern.inherit(clear, style.clear())
+            NamePattern.inherit(clear, style.clear()),
+            NamePattern.inherit(remove, style.remove())
         );
     }
 
     /** Resolves a scheme carrying nothing but the style's own patterns. */
     public static SetterScheme of(NamingStyle style) {
-        return resolve(style, null, null, null, null, null, null);
+        return resolve(style, null, null, null, null, null, null, null);
+    }
+
+    /**
+     * Resolves one slot's scheme over the target's, for a {@code @SetterNames}
+     * written on a field, record component or parameter.
+     *
+     * <p>Unwritten roles inherit from {@code base} rather than from the style,
+     * which is the composition that makes the override readable: a target
+     * spelling every setter {@code with{}} and one field spelling itself
+     * {@code is{}} keeps {@code with{}} for that field's other five roles.
+     *
+     * @param base the target's resolved scheme
+     * @param set the written {@code set} pattern, or {@code null}
+     * @param flag the written {@code flag} pattern, or {@code null}
+     * @param add the written {@code add} pattern, or {@code null}
+     * @param put the written {@code put} pattern, or {@code null}
+     * @param compute the written {@code compute} pattern, or {@code null}
+     * @param clear the written {@code clear} pattern, or {@code null}
+     * @param remove the written {@code remove} pattern, or {@code null}
+     * @return the resolved scheme for that slot
+     */
+    public static SetterScheme override(SetterScheme base, String set, String flag, String add,
+                                        String put, String compute, String clear, String remove) {
+        return new SetterScheme(
+            NamePattern.inherit(set, base.set()),
+            NamePattern.inherit(flag, base.flag()),
+            NamePattern.inherit(add, base.add()),
+            NamePattern.inherit(put, base.put()),
+            NamePattern.inherit(compute, base.compute()),
+            NamePattern.inherit(clear, base.clear()),
+            NamePattern.inherit(remove, base.remove())
+        );
     }
 
     /**
@@ -95,24 +131,42 @@ public record SetterScheme(
         return NamePattern.emits(clear);
     }
 
+    /** Whether the collection or map single-element remove is generated. */
+    public boolean emitsRemove() {
+        return NamePattern.emits(remove);
+    }
+
     /**
      * Name of the value-taking setter for a field.
      *
-     * @param subject the field name
+     * <p>A {@code boolean} subject expands through
+     * {@link NamePattern#booleanSubject}, so a field already named {@code isX}
+     * under a pattern that prefixes {@code is} does not double it. That is why
+     * the flag is asked for rather than inferred: the same field name on a
+     * {@code String} means something else entirely, and stripping there would
+     * rename an unrelated accessor.
+     *
+     * @param subject the field name, or the {@code @Negate} stem for the inverse
+     * @param isBoolean whether the slot's declared type is {@code boolean}
      * @return the setter name
      */
-    public String setName(String subject) {
-        return NamePattern.expand(set, subject);
+    public String setName(String subject, boolean isBoolean) {
+        return NamePattern.expand(set, isBoolean ? NamePattern.booleanSubject(set, subject) : subject);
     }
 
     /**
      * Name of the zero-arg boolean setter for a field or its negate stem.
      *
+     * <p>Takes no flag: this role exists only on a {@code boolean}, so the
+     * subject is always one and always strips.
+     *
      * @param subject the field name, or the {@code @Negate} stem for the inverse
      * @return the setter name, or {@code null} when the role is suppressed
      */
     public String flagName(String subject) {
-        return emitsFlag() ? NamePattern.expand(flag, subject) : null;
+        return emitsFlag()
+            ? NamePattern.expand(flag, NamePattern.booleanSubject(flag, subject))
+            : null;
     }
 
     /**
@@ -153,6 +207,16 @@ public record SetterScheme(
      */
     public String clearName(String subject) {
         return emitsClear() ? NamePattern.expand(clear, subject) : null;
+    }
+
+    /**
+     * Name of the single-element remove for a collection or map field.
+     *
+     * @param subject the collector singular
+     * @return the method name, or {@code null} when the role is suppressed
+     */
+    public String removeName(String subject) {
+        return emitsRemove() ? NamePattern.expand(remove, subject) : null;
     }
 
 }

@@ -69,30 +69,46 @@ public class AnnotationSurfaceTest {
         assertTargets(BuildFlag.class, ElementType.FIELD, ElementType.METHOD);
     }
 
+    // The three setter-shaping companions reach a PARAMETER as well as a FIELD,
+    // because @ClassBuilder on a constructor or static factory derives its slots
+    // from that member's parameters and they are the slots those shapes apply to.
+
     @Test
     public void collector_metadata() {
         assertRetention(Collector.class, RetentionPolicy.CLASS);
-        assertTargets(Collector.class, ElementType.FIELD);
+        assertTargets(Collector.class, ElementType.FIELD, ElementType.PARAMETER);
     }
 
     @Test
     public void negate_metadata() {
         assertRetention(Negate.class, RetentionPolicy.CLASS);
-        assertTargets(Negate.class, ElementType.FIELD);
+        assertTargets(Negate.class, ElementType.FIELD, ElementType.PARAMETER);
     }
 
     @Test
     public void formattable_metadata() {
         assertRetention(Formattable.class, RetentionPolicy.CLASS);
-        assertTargets(Formattable.class, ElementType.FIELD);
+        assertTargets(Formattable.class, ElementType.FIELD, ElementType.PARAMETER);
+    }
+
+    @Test
+    public void builderSeed_metadata() {
+        // APT-time only, like the rest of the builder companions - the seed's
+        // whole effect is on which members are generated.
+        assertRetention(BuilderSeed.class, RetentionPolicy.CLASS);
+        // A parameter is the only place a seed can be written: it names a value
+        // supplied at the entry point, and only the executable path has one.
+        assertTargets(BuilderSeed.class, ElementType.PARAMETER);
     }
 
     @Test
     public void setterNames_metadata() {
-        // Only ever an attribute value on @ClassBuilder, so an empty @Target is
-        // what stops it being written anywhere else.
         assertRetention(SetterNames.class, RetentionPolicy.CLASS);
-        assertTargets(SetterNames.class);
+        // Written on a slot it overrides the target's patterns for that one
+        // field, component or parameter. Being usable as @ClassBuilder's
+        // attribute value costs nothing here - @Target restricts declaration
+        // sites, and an annotation used as another's element value is not one.
+        assertTargets(SetterNames.class, ElementType.FIELD, ElementType.PARAMETER);
     }
 
     @Test
@@ -131,6 +147,7 @@ public class AnnotationSurfaceTest {
             assertPattern(style, "put", style.put(), true);
             assertPattern(style, "compute", style.compute(), true);
             assertPattern(style, "clear", style.clear(), true);
+            assertPattern(style, "remove", style.remove(), true);
             assertPattern(style, "builderType", style.builderType(), false);
             assertPattern(style, "builderMethod", style.builderMethod(), false);
             assertPattern(style, "buildMethod", style.buildMethod(), false);
@@ -171,6 +188,33 @@ public class AnnotationSurfaceTest {
         // retention suffices.
         assertRetention(ObtainVia.class, RetentionPolicy.CLASS);
         assertTargets(ObtainVia.class, ElementType.FIELD);
+    }
+
+    @Test
+    public void assignVia_metadata() {
+        // The write-direction twin of @ObtainVia, and consumed at the same
+        // point - the processor emitting the setter - so CLASS retention too.
+        assertRetention(AssignVia.class, RetentionPolicy.CLASS);
+        // Reaches a PARAMETER as the three setter-shaping companions do,
+        // shaping a constructor or factory slot exactly as it shapes a field.
+        assertTargets(AssignVia.class, ElementType.FIELD, ElementType.PARAMETER);
+    }
+
+    @Test
+    public void assignVia_isRepeatable() {
+        Repeatable repeatable = AssignVia.class.getAnnotation(Repeatable.class);
+        assertNotNull("@AssignVia has to repeat - one slot can take several coercions",
+            repeatable);
+        assertEquals(AssignVia.List.class, repeatable.value());
+        assertRetention(AssignVia.List.class, RetentionPolicy.CLASS);
+        assertTargets(AssignVia.List.class, ElementType.FIELD, ElementType.PARAMETER);
+    }
+
+    @Test
+    public void assignVia_noDefault() throws Exception {
+        // The method is the whole annotation, so leaving it out is a compile
+        // error rather than an annotation that quietly does nothing.
+        assertEquals(null, AssignVia.class.getMethod("method").getDefaultValue());
     }
 
     @Test
@@ -230,6 +274,9 @@ public class AnnotationSurfaceTest {
         // Bare @BuilderDefault means "retain", so the opt-out has to be written
         // explicitly as @BuilderDefault(false).
         assertDefault(BuilderDefault.class, "value", true);
+        // Empty means "retain the initializer", which is what a field has and a
+        // record component does not - naming a provider is the opt-in.
+        assertDefault(BuilderDefault.class, "provider", "");
     }
 
     @Test
@@ -244,6 +291,10 @@ public class AnnotationSurfaceTest {
         assertDefault(BuildFlag.class, "notEmpty", false);
         assertDefault(BuildFlag.class, "pattern", "");
         assertDefault(BuildFlag.class, "limit", -1);
+        // An infinity is the disabled state, so every finite value a numeric
+        // field can hold is inside the range until one end is written.
+        assertDefault(BuildFlag.class, "min", Double.NEGATIVE_INFINITY);
+        assertDefault(BuildFlag.class, "max", Double.POSITIVE_INFINITY);
         assertArrayEquals(new String[0], (String[]) BuildFlag.class.getMethod("group").getDefaultValue());
     }
 
@@ -253,6 +304,12 @@ public class AnnotationSurfaceTest {
         assertDefault(Collector.class, "singular", false);
         assertDefault(Collector.class, "clearable", false);
         assertDefault(Collector.class, "compute", false);
+        // Replace is what a setter normally means, so accumulating is opt-in.
+        assertDefault(Collector.class, "append", false);
+        assertDefault(Collector.class, "removable", false);
+        // Empty leaves the put taking a key of its own, which is the shape a map
+        // has when nothing says the value already knows its key.
+        assertDefault(Collector.class, "key", "");
     }
 
     @Test

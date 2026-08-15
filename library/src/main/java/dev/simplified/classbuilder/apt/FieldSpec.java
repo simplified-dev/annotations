@@ -23,7 +23,7 @@ import java.util.Set;
 /**
  * Intermediate representation of a single field on a {@code @ClassBuilder}-annotated class.
  * All classification the emitter needs happens once in
- * {@link #from(VariableElement, AnnotationLookup, SourceIntrospector, Types, boolean)},
+ * {@link #from(VariableElement, AnnotationLookup, SourceIntrospector, Types, boolean, SetterScheme)},
  * so the emitter only reads already-resolved properties.
  */
 public final class FieldSpec {
@@ -45,6 +45,17 @@ public final class FieldSpec {
     public final VariableElement element;
     public final TypeMirror type;
     public final String typeDisplay;
+
+    /**
+     * The setter patterns this slot's members are named from - the target's,
+     * overridden by a {@code @SetterNames} written on the slot itself.
+     *
+     * <p>Resolved once here rather than read from the config at each emitter,
+     * because a per-slot override means "the config's scheme" is no longer the
+     * answer for every slot and an emitter reaching past this one would silently
+     * mint the target's name instead.
+     */
+    public final SetterScheme setters;
 
     public final boolean notNull;
     public final boolean nullable;
@@ -88,11 +99,32 @@ public final class FieldSpec {
     public final String singularName;               // derived from @Collector.singularMethodName or field-name inflection; null if no @Collector
     public final boolean clearable;                 // @Collector(clearable = true) - clear() method
     public final boolean compute;                   // @Collector(compute = true) - maps only, putIfAbsent(K, Supplier<V>)
+    public final boolean append;                    // @Collector(append = true) - bulk setters add rather than replace
+    public final boolean removable;                 // @Collector(removable = true) - single-element remove
+    /**
+     * The no-argument method named by {@code @Collector(key)}, called on the map's
+     * value type to supply each entry's key, or {@code null} when the put takes a
+     * key of its own.
+     */
+    public final String keyMethod;
     public final boolean ignored;                   // @BuilderIgnore or listed in @ClassBuilder.exclude
     public final boolean lazy;                       // @Lazy: storage rewritten to Lazy<T>, getter synthesised
+    /**
+     * {@code @BuilderSeed} on a constructor or factory parameter - the slot is
+     * supplied to {@code builder(...)} and emits no setter. Always false on the
+     * field and interface-accessor paths, where the annotation cannot be
+     * written.
+     */
+    public final boolean seed;
     public final boolean builderDefault;
     /** True only when the field itself carried {@code @BuilderDefault}, not when it inherited the class policy. */
     public final boolean builderDefaultExplicit;
+    /**
+     * The static method named by {@code @BuilderDefault(provider)}, or
+     * {@code null} when none is written. Supplies the slot's default where there
+     * is no initializer to retain, which is every record component.
+     */
+    public final String defaultProvider;
     public final String sourceInitializer;          // copied source text of the field's declared initializer
     public final Set<String> initializerImports;    // type FQNs referenced by sourceInitializer
     // The javac parse-time tree for the initializer (a JCExpression at
@@ -103,6 +135,11 @@ public final class FieldSpec {
     public final String obtainViaMethod;            // null if none
     public final String obtainViaField;
     public final boolean obtainViaStatic;
+    /**
+     * The {@code @AssignVia} transforms written on the slot, in source order.
+     * Empty when it carries none.
+     */
+    public final java.util.List<AssignTransform> assignVia;
     /**
      * The {@code @BuildFlag} mirror to copy onto a generated field, or
      * {@code null} when the accessor carries none. Populated only by
@@ -117,6 +154,7 @@ public final class FieldSpec {
         this.element = b.element;
         this.type = b.type;
         this.typeDisplay = b.typeDisplay;
+        this.setters = b.setters;
         this.notNull = b.notNull;
         this.nullable = b.nullable;
         this.isBoolean = b.isBoolean;
@@ -140,23 +178,78 @@ public final class FieldSpec {
         this.singular = b.singular;
         this.singularName = b.singularName;
         this.clearable = b.clearable;
+        this.append = b.append;
+        this.removable = b.removable;
+        this.keyMethod = b.keyMethod;
         this.compute = b.compute;
         this.ignored = b.ignored;
         this.lazy = b.lazy;
+        this.seed = b.seed;
         this.builderDefault = b.builderDefault;
         this.builderDefaultExplicit = b.builderDefaultExplicit;
+        this.defaultProvider = b.defaultProvider;
         this.sourceInitializer = b.sourceInitializer;
         this.initializerImports = b.initializerImports == null ? Set.of() : b.initializerImports;
         this.sourceInitializerTree = b.sourceInitializerTree;
         this.obtainViaMethod = b.obtainViaMethod;
         this.obtainViaField = b.obtainViaField;
         this.obtainViaStatic = b.obtainViaStatic;
+        this.assignVia = b.assignVia == null ? java.util.List.of() : b.assignVia;
         this.buildFlag = b.buildFlag;
+    }
+
+    /**
+     * One {@code @AssignVia} reaching a slot - the static method a setter's
+     * argument passes through on the way in.
+     *
+     * @param method the named method
+     * @param paramDisplay the parameter type it declares, rendered for
+     *     re-parsing, or {@code null} when the name resolves to no single
+     *     one-argument method
+     * @param direct whether that parameter type is the slot's own, which is what
+     *     tells shaping the ordinary setter from adding an overload beside it
+     */
+    public record AssignTransform(String method, String paramDisplay, boolean direct) {
+
+        /** Whether this transform names a method the emitters can call. */
+        public boolean resolved() {
+            return paramDisplay != null;
+        }
+
+    }
+
+    /**
+     * The transform shaping the slot's ordinary value-taking setter, or
+     * {@code null} when every declared one takes a type of its own and therefore
+     * adds an overload instead.
+     *
+     * @return the direct transform's method name, or {@code null}
+     */
+    public String directAssign() {
+        for (AssignTransform transform : assignVia) {
+            if (transform.direct() && transform.resolved()) return transform.method();
+        }
+        return null;
     }
 
     /** Whether this field uses {@code is*} setters (booleans) vs the configured prefix. */
     boolean usesBooleanPrefix() {
         return isBoolean;
+    }
+
+    /**
+     * Whether the slot has a default to seed from - a captured initializer, or a
+     * method named by {@code @BuilderDefault(provider)}.
+     *
+     * <p>One reading for both, because everything downstream of the seeding
+     * treats them identically: the value is fetched through the same
+     * {@code $default$} provider, copied before a {@code @Collector} container's
+     * setters can mutate it, and discarded by a wholesale replace.
+     *
+     * @return whether anything seeds this slot
+     */
+    public boolean hasDefault() {
+        return defaultProvider != null || (sourceInitializer != null && !sourceInitializer.isEmpty());
     }
 
     /**
@@ -175,31 +268,200 @@ public final class FieldSpec {
      * the generated {@code <Name>Impl} field, so preserving exactly what the
      * author wrote beats round-tripping it through five typed accessors.
      */
-    public static FieldSpec fromInterfaceAccessor(ExecutableElement method, AnnotationLookup lookup, Types typeUtils) {
+    public static FieldSpec fromInterfaceAccessor(ExecutableElement method, AnnotationLookup lookup,
+                                                  Types typeUtils, SetterScheme setters) {
         Builder b = new Builder();
         b.element = null;
         b.name = method.getSimpleName().toString();
         b.type = method.getReturnType();
         b.typeDisplay = b.type.toString();
+        b.setters = resolveSetters(method, lookup, setters);
 
         b.notNull = lookup.hasAnnotation(method, "org.jetbrains.annotations.NotNull");
         b.nullable = lookup.hasAnnotation(method, "org.jetbrains.annotations.Nullable");
         classifyType(b, typeUtils);
 
-        b.formattable = lookup.hasAnnotation(method, "dev.simplified.annotations.Formattable");
-        b.negateName = lookup.stringAttr(method, "dev.simplified.annotations.Negate", "value", null);
-        if (lookup.hasAnnotation(method, "dev.simplified.annotations.Collector")) {
-            b.collector = true;
-            b.singular = lookup.booleanAttr(method, "dev.simplified.annotations.Collector", "singular", false);
-            b.clearable = lookup.booleanAttr(method, "dev.simplified.annotations.Collector", "clearable", false);
-            b.compute = lookup.booleanAttr(method, "dev.simplified.annotations.Collector", "compute", false);
-            String v = lookup.stringAttr(method, "dev.simplified.annotations.Collector", "singularMethodName", "");
-            b.singularName = v.isEmpty() ? defaultSingular(b.name) : v;
-        }
+        readSetterCompanions(b, method, lookup);
         b.ignored = lookup.hasAnnotation(method, "dev.simplified.annotations.BuilderIgnore");
         b.buildFlag = lookup.findMirror(method, "dev.simplified.annotations.BuildFlag");
 
         return new FieldSpec(b);
+    }
+
+    /**
+     * Factory for a parameter of a {@code @ClassBuilder}-annotated constructor
+     * or static factory. The parameter name becomes the slot name and its
+     * declared type the slot type, so the setter matrix reads exactly as it
+     * would off a field of the same shape.
+     *
+     * <p>Only the companions that shape a setter apply - {@code @Collector},
+     * {@code @Negate}, {@code @Formattable} - plus {@code @BuilderSeed}, which
+     * withdraws the setter entirely. {@code @BuilderDefault},
+     * {@code @BuilderIgnore} and {@code @ObtainVia} have nothing to act on: a
+     * parameter carries no initializer to retain, every parameter has to be
+     * passed, and there is no instance to read a slot back off. No
+     * {@link SourceIntrospector} is threaded through for the same reason.
+     *
+     * <p>{@code @BuildFlag} is not read here either, and that is where the
+     * constraint lives rather than where it is missing: the validator resolves
+     * the flagged fields of the instance {@code build()} produced, so the
+     * annotation belongs on those fields and is found there whichever member
+     * constructed them.
+     *
+     * @param parameter the declared parameter
+     * @param lookup the annotation reader
+     * @param typeUtils type utilities, for the custom-container supertype walk
+     * @return the slot IR for this parameter
+     */
+    public static FieldSpec fromParameter(VariableElement parameter, AnnotationLookup lookup,
+                                          Types typeUtils, SetterScheme setters) {
+        Builder b = new Builder();
+        b.element = parameter;
+        b.name = parameter.getSimpleName().toString();
+        b.type = parameter.asType();
+        b.typeDisplay = b.type.toString();
+        b.isFinal = parameter.getModifiers().contains(Modifier.FINAL);
+        b.setters = resolveSetters(parameter, lookup, setters);
+
+        b.notNull = lookup.hasAnnotation(parameter, "org.jetbrains.annotations.NotNull");
+        b.nullable = lookup.hasAnnotation(parameter, "org.jetbrains.annotations.Nullable");
+        classifyType(b, typeUtils);
+
+        readSetterCompanions(b, parameter, lookup);
+        b.assignVia = readAssignVia(b, parameter, lookup, typeUtils);
+        b.seed = lookup.hasAnnotation(parameter, "dev.simplified.annotations.BuilderSeed");
+
+        return new FieldSpec(b);
+    }
+
+    /**
+     * Reads the three companions that shape a setter - {@code @Formattable},
+     * {@code @Negate} and {@code @Collector} - off whichever element declares
+     * the slot. One reading for all three factories, so a slot derived from a
+     * parameter cannot come out with a different setter matrix from a field of
+     * the same shape.
+     */
+    /**
+     * Resolves the slot's setter patterns: the target's, overridden by a
+     * {@code @SetterNames} written on the slot itself.
+     *
+     * @param owner the field, component or parameter declaring the slot
+     * @param lookup the annotation reader
+     * @param base the target's resolved scheme
+     * @return the scheme this slot's members are named from
+     */
+    private static SetterScheme resolveSetters(Element owner, AnnotationLookup lookup,
+                                               SetterScheme base) {
+        AnnotationMirror written =
+            lookup.findMirror(owner, "dev.simplified.annotations.SetterNames");
+        if (written == null) return base;
+        return SetterScheme.override(base,
+            lookup.stringAttr(written, "set", null),
+            lookup.stringAttr(written, "flag", null),
+            lookup.stringAttr(written, "add", null),
+            lookup.stringAttr(written, "put", null),
+            lookup.stringAttr(written, "compute", null),
+            lookup.stringAttr(written, "clear", null),
+            lookup.stringAttr(written, "remove", null));
+    }
+
+    /**
+     * Reads the slot's {@code @AssignVia} transforms and resolves each named
+     * method against the type declaring the slot.
+     *
+     * <p>A name that matches no single one-argument method is kept rather than
+     * dropped, carrying a null parameter type: the emitters skip it and the
+     * processor reports it at the annotation, which is where an author can see
+     * it. Dropping it here would leave a written annotation doing nothing.
+     *
+     * @param b the slot under construction, already carrying its type
+     * @param owner the field, component or parameter declaring the slot
+     * @param lookup the annotation reader
+     * @param typeUtils type utilities, for the erasure comparison
+     * @return the declared transforms, in source order
+     */
+    private static java.util.List<AssignTransform> readAssignVia(Builder b, Element owner,
+                                                                 AnnotationLookup lookup,
+                                                                 Types typeUtils) {
+        java.util.List<AnnotationMirror> written = lookup.repeatedMirrors(owner,
+            "dev.simplified.annotations.AssignVia", "dev.simplified.annotations.AssignVia.List");
+        if (written.isEmpty()) return java.util.List.of();
+
+        TypeElement declaring = enclosingType(owner);
+        java.util.List<AssignTransform> out = new java.util.ArrayList<>(written.size());
+        for (AnnotationMirror mirror : written) {
+            String method = lookup.stringAttr(mirror, "method", "");
+            ExecutableElement resolved = declaring == null ? null : soleUnaryMethod(declaring, method);
+            if (resolved == null) {
+                out.add(new AssignTransform(method, null, false));
+                continue;
+            }
+            TypeMirror param = resolved.getParameters().getFirst().asType();
+            out.add(new AssignTransform(method, param.toString(), sameErasure(typeUtils, param, b.type)));
+        }
+        return out;
+    }
+
+    /** The type declaring a field, record component or parameter. */
+    private static TypeElement enclosingType(Element owner) {
+        Element enclosing = owner.getEnclosingElement();
+        while (enclosing != null && !(enclosing instanceof TypeElement)) {
+            enclosing = enclosing.getEnclosingElement();
+        }
+        return (TypeElement) enclosing;
+    }
+
+    /**
+     * The type's one single-argument method of that name, or {@code null} when
+     * it declares none or several. Overload resolution is deliberately not
+     * attempted: a name that could mean two methods is reported rather than
+     * guessed at.
+     */
+    private static ExecutableElement soleUnaryMethod(TypeElement target, String name) {
+        ExecutableElement found = null;
+        for (Element enclosed : target.getEnclosedElements()) {
+            if (enclosed.getKind() != ElementKind.METHOD) continue;
+            if (!enclosed.getSimpleName().contentEquals(name)) continue;
+            ExecutableElement method = (ExecutableElement) enclosed;
+            if (method.getParameters().size() != 1) continue;
+            if (found != null) return null;
+            found = method;
+        }
+        return found;
+    }
+
+    /**
+     * Whether a transform's parameter type erases to the slot's own, which is
+     * what decides that it shapes the ordinary setter rather than adding an
+     * overload beside it.
+     *
+     * <p>Erasure is the comparison because a duplicate method signature is what
+     * the answer has to prevent, and Java signatures collide on erasures. It
+     * also settles the two shapes a declared type routinely takes that a
+     * sameness test does not relate to the slot's - a type-use nullness
+     * annotation, and a {@code static} method's own type variable standing where
+     * the type's would be.
+     */
+    private static boolean sameErasure(Types typeUtils, TypeMirror param, TypeMirror slot) {
+        if (typeUtils == null) return String.valueOf(param).equals(String.valueOf(slot));
+        return typeUtils.isSameType(typeUtils.erasure(param), typeUtils.erasure(slot));
+    }
+
+    private static void readSetterCompanions(Builder b, Element owner, AnnotationLookup lookup) {
+        b.formattable = lookup.hasAnnotation(owner, "dev.simplified.annotations.Formattable");
+        b.negateName = lookup.stringAttr(owner, "dev.simplified.annotations.Negate", "value", null);
+        if (!lookup.hasAnnotation(owner, "dev.simplified.annotations.Collector")) return;
+        b.collector = true;
+        b.singular = lookup.booleanAttr(owner, "dev.simplified.annotations.Collector", "singular", false);
+        b.clearable = lookup.booleanAttr(owner, "dev.simplified.annotations.Collector", "clearable", false);
+        b.compute = lookup.booleanAttr(owner, "dev.simplified.annotations.Collector", "compute", false);
+        b.append = lookup.booleanAttr(owner, "dev.simplified.annotations.Collector", "append", false);
+        b.removable = lookup.booleanAttr(owner, "dev.simplified.annotations.Collector", "removable", false);
+        String key = lookup.stringAttr(owner, "dev.simplified.annotations.Collector", "key", "");
+        b.keyMethod = key.isEmpty() ? null : key;
+        String written = lookup.stringAttr(owner, "dev.simplified.annotations.Collector",
+            "singularMethodName", "");
+        b.singularName = written.isEmpty() ? NamePattern.singularSubject(b.name) : written;
     }
 
     private static void classifyType(Builder b, Types typeUtils) {
@@ -311,13 +573,14 @@ public final class FieldSpec {
 
 
     public static FieldSpec from(VariableElement element, AnnotationLookup lookup, SourceIntrospector introspector,
-                                 Types typeUtils, boolean classRetainInit) {
+                                 Types typeUtils, boolean classRetainInit, SetterScheme setters) {
         Builder b = new Builder();
         b.element = element;
         b.name = element.getSimpleName().toString();
         b.type = element.asType();
         b.typeDisplay = element.asType().toString();
         b.isFinal = element.getModifiers().contains(Modifier.FINAL);
+        b.setters = resolveSetters(element, lookup, setters);
 
         // Nullability
         b.notNull = lookup.hasAnnotation(element, "org.jetbrains.annotations.NotNull");
@@ -326,17 +589,9 @@ public final class FieldSpec {
         classifyType(b, typeUtils);
 
         // Companion annotations
-        b.formattable = lookup.hasAnnotation(element, "dev.simplified.annotations.Formattable");
-        b.negateName = lookup.stringAttr(element, "dev.simplified.annotations.Negate", "value", null);
+        readSetterCompanions(b, element, lookup);
+        b.assignVia = readAssignVia(b, element, lookup, typeUtils);
         b.lazy = lookup.hasAnnotation(element, "dev.simplified.annotations.Lazy");
-        if (lookup.hasAnnotation(element, "dev.simplified.annotations.Collector")) {
-            b.collector = true;
-            b.singular = lookup.booleanAttr(element, "dev.simplified.annotations.Collector", "singular", false);
-            b.clearable = lookup.booleanAttr(element, "dev.simplified.annotations.Collector", "clearable", false);
-            b.compute = lookup.booleanAttr(element, "dev.simplified.annotations.Collector", "compute", false);
-            String v = lookup.stringAttr(element, "dev.simplified.annotations.Collector", "singularMethodName", "");
-            b.singularName = v.isEmpty() ? defaultSingular(b.name) : v;
-        }
         b.ignored = lookup.hasAnnotation(element, "dev.simplified.annotations.BuilderIgnore");
 
         // @BuilderDefault overrides the class-level retainInit policy. Presence
@@ -351,6 +606,8 @@ public final class FieldSpec {
         if (declaredDefault != null) {
             b.builderDefault = lookup.booleanAttr(declaredDefault, "value", true);
             b.builderDefaultExplicit = b.builderDefault;
+            String provider = lookup.stringAttr(declaredDefault, "provider", "");
+            b.defaultProvider = provider.isEmpty() ? null : provider;
         } else {
             b.builderDefault = classRetainInit;
         }
@@ -382,18 +639,12 @@ public final class FieldSpec {
         return new FieldSpec(b);
     }
 
-    private static String defaultSingular(String fieldName) {
-        if (fieldName.endsWith("ies") && fieldName.length() > 3) return fieldName.substring(0, fieldName.length() - 3) + "y";
-        if (fieldName.endsWith("es") && fieldName.length() > 2) return fieldName.substring(0, fieldName.length() - 2);
-        if (fieldName.endsWith("s") && fieldName.length() > 1) return fieldName.substring(0, fieldName.length() - 1);
-        return fieldName;
-    }
-
     private static final class Builder {
         String name;
         VariableElement element;
         TypeMirror type;
         String typeDisplay;
+        SetterScheme setters;
         boolean notNull, nullable;
         boolean isBoolean, isString, isPrimitive, isArray, isFinal;
         boolean isOptional;
@@ -403,14 +654,16 @@ public final class FieldSpec {
         String collectionElement, mapKey, mapValue;
         boolean formattable;
         String negateName;
-        boolean collector, singular, clearable, compute;
+        boolean collector, singular, clearable, compute, append, removable;
+        String keyMethod;
         String singularName;
-        boolean ignored, lazy, builderDefault, builderDefaultExplicit;
-        String sourceInitializer;
+        boolean ignored, lazy, seed, builderDefault, builderDefaultExplicit;
+        String sourceInitializer, defaultProvider;
         Set<String> initializerImports;
         com.sun.source.tree.Tree sourceInitializerTree;
         String obtainViaMethod, obtainViaField;
         boolean obtainViaStatic;
+        java.util.List<AssignTransform> assignVia;
         AnnotationMirror buildFlag;
     }
 

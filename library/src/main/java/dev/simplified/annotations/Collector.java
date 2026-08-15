@@ -8,6 +8,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 import java.util.Collection;
 import java.util.Map;
+import java.util.function.Supplier;
 
 /**
  * Expands the setter matrix on a {@link Collection} or
@@ -15,15 +16,20 @@ import java.util.Map;
  *
  * <p>Without this annotation, a {@code List<T>} / {@code Set<T>} /
  * {@code Map<K,V>} field gets a single whole-collection replace setter
- * ({@code withEntries(List<T>)}, etc). With this annotation, the builder
+ * ({@code entries(List<T>)}, etc). With this annotation, the builder
  * additionally emits bulk-style overloads and - opt-in via the attributes
  * below - single-element mutators.
+ *
+ * <p>Every name here is the one {@link NamingStyle#SIMPLIFIED} emits, where the
+ * replace and bulk role is the bare field name. No style prefixes it with
+ * {@code with}: a target wanting {@code withEntries(...)} writes
+ * {@code @ClassBuilder(setters = @SetterNames(set = "with{}"))}.
  *
  * <h2>Always generated when the annotation is present</h2>
  * <ul>
  *   <li><b>List / Set / Iterable</b>:
- *     {@code withEntries(T... entries)},
- *     {@code withEntries(Iterable<T> entries)}</li>
+ *     {@code entries(T... entries)},
+ *     {@code entries(Iterable<T> entries)}</li>
  *   <li><b>Map</b>: the whole-{@code Map} replace setter (same as without
  *     the annotation, no extra bulk overloads since maps have no varargs form)</li>
  * </ul>
@@ -36,12 +42,28 @@ import java.util.Map;
  *     underlying collection or map.</li>
  *   <li>{@link #compute} - (maps only) {@code putEntryIfAbsent(K, Supplier<V>)}
  *     that lazily computes a value when the key is missing.</li>
+ *   <li>{@link #removable} - {@code removeEntry(T)} for collections,
+ *     {@code removeEntry(K)} for maps, taking a single element or key back out.</li>
+ *   <li>{@link #append} - makes the bulk setters add to the container instead
+ *     of replacing it, so repeated calls accumulate.</li>
+ *   <li>{@link #key} - (maps only) derives each entry's key from the value, so
+ *     the single-entry put takes the value alone.</li>
  * </ul>
  *
+ * <p>The put-if-absent form takes a {@link Supplier} rather than a value, which is
+ * the whole point of it and the one signature a call site is likely to guess wrong:
+ *
+ * <pre>{@code
+ * builder.putMetaIfAbsent("region", () -> resolveRegion());   // supplier
+ * builder.putMetaIfAbsent("region", resolveRegion());         // does not compile
+ * }</pre>
+ *
  * <p>Use {@link #singularMethodName} to override the inflected single-element
- * name (default: field name minus trailing plural inflection - {@code entries}
- * becomes {@code entry}, {@code boxes} becomes {@code box}, {@code tags}
- * becomes {@code tag}).
+ * name. By default it is the field name minus its plural inflection -
+ * {@code entries} becomes {@code entry}, {@code tags} becomes {@code tag}, and
+ * {@code frames} becomes {@code frame}, while {@code boxes}, {@code classes} and
+ * {@code matches} give up both letters. No rule covers English, so name it
+ * outright for a word the inflection misses.
  *
  * <h2>Interaction with the field's initializer</h2>
  * A declared initializer seeds the collection (see {@link BuilderDefault}), and
@@ -56,6 +78,9 @@ import java.util.Map;
  * builder().clearItems().build()    // []      - so does clear
  * }</pre>
  *
+ * <p>Under {@link #append} the third line reads {@code [a, x]} instead, because
+ * nothing replaces the container the initializer seeded.
+ *
  * <p>The default is copied per builder before any of this, so an immutable one
  * such as {@code List.of(...)} is safe to add to and a default that returns
  * shared state cannot be mutated through the builder.
@@ -68,26 +93,44 @@ import java.util.Map;
  *
  * <h2>Examples</h2>
  * <pre><code>
- * // Bulk-only: withEntries(T...) + withEntries(Iterable&lt;T&gt;)
+ * // Bulk-only: entries(T...) + entries(Iterable&lt;T&gt;)
  * &#64;Collector List&lt;String&gt; entries;
  *
  * // Bulk + single-element add
  * &#64;Collector(singular = true) List&lt;String&gt; tags;
- * // withTags(String...), withTags(Iterable&lt;String&gt;), addTag(String)
+ * // tags(String...), tags(Iterable&lt;String&gt;), addTag(String)
  *
  * // Bulk + clear + custom singular name
  * &#64;Collector(clearable = true, singularMethodName = "flavor") List&lt;String&gt; flavors;
- * // withFlavors(String...), withFlavors(Iterable&lt;String&gt;), clearFlavors()
+ * // flavors(String...), flavors(Iterable&lt;String&gt;), clearFlavors()
  *
  * // Map: opt-in put + lazy compute
  * &#64;Collector(singular = true, compute = true) Map&lt;String, Integer&gt; counts;
- * // withCounts(Map), putCount(String, Integer), putCountIfAbsent(String, Supplier&lt;Integer&gt;)
+ * // counts(Map), putCount(String, Integer), putCountIfAbsent(String, Supplier&lt;Integer&gt;)
  * </code></pre>
+ *
+ * <h2>On a constructor or factory parameter</h2>
+ * A {@link ClassBuilder} written on a constructor or static factory derives its
+ * slots from that member's parameters, and this annotation reaches them the same
+ * way it reaches a field - the bulk overloads, the single-element add or put,
+ * the clear, and the lazy put-if-absent are all emitted against the parameter's
+ * own type.
+ *
+ * <p>A parameter carries no initializer, so the slot starts empty and there is
+ * no default for a wholesale replace to discard. {@link #append} still decides
+ * what a <em>second</em> bulk call does - {@code tags("a").tags("b")} yields
+ * {@code [a, b]} under it and {@code [b]} without.
+ *
+ * <p>One shape is out of reach there, and it is the initializer's absence that
+ * puts it there rather than a decision: a container recognised by implementing
+ * {@link Collection} or {@link Map} rather than by being a {@code java.util}
+ * type has no expression the builder could use to make a fresh instance of it,
+ * so such a parameter gets a plain replace setter and a compiler note.
  *
  * @see ClassBuilder
  */
 @Retention(RetentionPolicy.CLASS)
-@Target(ElementType.FIELD)
+@Target({ ElementType.FIELD, ElementType.PARAMETER })
 public @interface Collector {
 
     /**
@@ -116,5 +159,62 @@ public @interface Collector {
      * fields.
      */
     boolean compute() default false;
+
+    /**
+     * Makes the whole-collection setters add to the container rather than
+     * replace it, so repeated calls accumulate:
+     * {@code tags("a").tags("b")} yields {@code [a, b]} instead of
+     * {@code [b]}.
+     *
+     * <p>Covers every bulk shape - the varargs and {@link Iterable} forms on a
+     * collection, and the whole-{@link Map} form on a map, which then puts every
+     * entry instead of starting a new map. The single-element
+     * {@link #singular} add always appended and is unaffected, as is
+     * {@link #clearable}, which is how an accumulating builder empties the
+     * container deliberately.
+     *
+     * <p>A declared initializer therefore survives a bulk call rather than being
+     * discarded by it, since nothing replaces the container it seeded.
+     *
+     * <p>Off by default because replace is what a setter normally means and
+     * what the built object's own field would hold. Turn it on when converting a
+     * hand-written builder whose bulk setter was written as
+     * {@code entries.forEach(this.entries::add)} - the two shapes compile
+     * identically and differ only in what the second call does.
+     */
+    boolean append() default false;
+
+    /**
+     * Adds a single-element remove: {@code removeEntry(T)} on a collection and
+     * {@code removeEntry(K)} on a map, taking one element or one key back out
+     * again. Method name derives from {@link #singularMethodName} (or the
+     * defaulted singular form), as the add and put do.
+     *
+     * <p>The collection form removes by value on every element type, including a
+     * {@code List<Integer>} - where {@code remove(int)} would otherwise remove by
+     * index and quietly take out the wrong element.
+     *
+     * <p>Unlike {@link #clearable} this does not discard a declared initializer:
+     * a remove takes one thing out of what the builder has collected, and saying
+     * that the default is gone is what {@code clear} is for.
+     */
+    boolean removable() default false;
+
+    /**
+     * (Maps only) The name of a no-argument method on the map's <b>value</b> type
+     * supplying each entry's key, so the single-entry put takes the value alone -
+     * {@code function(MathFunction)} storing under {@code function.getName()}
+     * rather than {@code putFunction(String, MathFunction)}.
+     *
+     * <p>The method's return type has to supply the map's key type, and both are
+     * checked at the annotation. Requires {@link #singular}, which is the put
+     * this reshapes; empty (the default) leaves the put taking a key and a value.
+     *
+     * <p>Rejected beside {@link #compute}, whose put-if-absent takes a key and a
+     * {@link Supplier} precisely so the value is not created unless it is needed -
+     * and a key read off a value that does not exist yet is a contradiction
+     * rather than a shape to generate.
+     */
+    @NotNull String key() default "";
 
 }

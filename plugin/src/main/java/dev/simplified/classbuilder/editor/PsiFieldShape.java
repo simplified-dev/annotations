@@ -9,6 +9,7 @@ import com.intellij.psi.PsiTypes;
 import com.intellij.psi.util.InheritanceUtil;
 import com.intellij.psi.util.PsiUtil;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.classbuilder.apt.SetterScheme;
 import org.jetbrains.annotations.Nullable;
 
 /**
@@ -28,6 +29,16 @@ public final class PsiFieldShape {
 
     public final String name;
     public final PsiType type;
+
+    /**
+     * The setter patterns this slot's members are named from - the target's,
+     * overridden by a {@code @SetterNames} written on the slot itself. Mirrors
+     * {@link FieldSpec#setters}, and for the same reason: with a per-slot
+     * override the config's scheme is no longer the answer for every slot, so a
+     * synthesiser reaching past this one would put the target's name in
+     * completion where the build emits the slot's.
+     */
+    public final SetterScheme setters;
 
     public final boolean isBoolean;
     public final boolean isString;
@@ -80,6 +91,28 @@ public final class PsiFieldShape {
     public final boolean compute;
 
     /**
+     * True when the field carries {@code @Collector(append = true)}, so the bulk
+     * setters add to the container rather than replace it.
+     *
+     * <p>Changes no signature, only what the body does, so the editor's
+     * synthesised members are the same either way. Carried here because the
+     * inspections reason about whether a bulk call discards a declared
+     * initializer.
+     */
+    public final boolean append;
+
+    /** True when the field carries {@code @Collector(removable = true)}. */
+    public final boolean removable;
+
+    /**
+     * The no-argument method named by {@code @Collector(key)}, called on the
+     * map's value type to supply each entry's key, or {@code null} when the put
+     * takes a key of its own. Unlike the other collector opt-ins this one moves a
+     * signature - the put drops its key parameter - so the editor has to read it.
+     */
+    public final String keyMethod;
+
+    /**
      * True when the field carries {@code @BuildFlag(nonNull = true)}. Drives the
      * editor-side emission of {@code @NotNull} on the matching setter parameter
      * so IntelliJ's null-flow analysis flags {@code null} arguments immediately,
@@ -94,15 +127,44 @@ public final class PsiFieldShape {
     public final boolean lazy;
 
     /**
+     * True when the slot is a {@code @BuilderSeed} parameter - supplied to
+     * {@code builder(...)} and emitting no setter. Only ever set on a slot
+     * derived from a constructor or factory parameter, that being the one place
+     * the annotation can be written.
+     */
+    public final boolean seed;
+
+    /**
+     * The slot's {@code @AssignVia} transforms, in source order. Mirrors
+     * {@link FieldSpec#assignVia}.
+     *
+     * <p>A direct one changes only what a setter's body does, so it moves no
+     * signature and the synthesised surface is the same either way. Every other
+     * adds the overload it names, which is why the list is carried at all.
+     */
+    public final java.util.List<AssignTransform> assignVia;
+
+    /**
      * Source element whose Javadoc the generated setter should surface.
      * Typically the backing field or record component. Null when no Javadoc
      * owner is available (e.g. interface accessor extraction paths).
      */
     public final @Nullable PsiDocCommentOwner docSource;
 
+    /**
+     * One {@code @AssignVia} reaching a slot, as the editor needs it - the
+     * parameter type the transform declares, and whether that is the slot's own.
+     *
+     * @param paramType the transform's declared parameter type
+     * @param direct whether it is the slot's own type, in which case the
+     *     transform shapes the setter the slot already has
+     */
+    public record AssignTransform(PsiType paramType, boolean direct) { }
+
     PsiFieldShape(Builder b) {
         this.name = b.name;
         this.type = b.type;
+        this.setters = b.setters;
         this.isBoolean = b.isBoolean;
         this.isString = b.isString;
         this.isArray = b.isArray;
@@ -125,9 +187,14 @@ public final class PsiFieldShape {
         this.singular = b.singular;
         this.singularName = b.singularName;
         this.clearable = b.clearable;
+        this.append = b.append;
         this.compute = b.compute;
+        this.removable = b.removable;
+        this.keyMethod = b.keyMethod;
         this.nonNullByBuildFlag = b.nonNullByBuildFlag;
         this.lazy = b.lazy;
+        this.seed = b.seed;
+        this.assignVia = b.assignVia == null ? java.util.List.of() : b.assignVia;
         this.docSource = b.docSource;
     }
 
@@ -251,6 +318,7 @@ public final class PsiFieldShape {
     static final class Builder {
         String name;
         PsiType type;
+        SetterScheme setters;
         boolean isBoolean, isString, isArray;
         PsiType arrayComponent;
         boolean isOptional, isOptionalString;
@@ -259,10 +327,12 @@ public final class PsiFieldShape {
         PsiType collectionElement, mapKey, mapValue;
         boolean nullable, notNull, formattable;
         String negateName;
-        boolean collector, singular, clearable, compute;
-        String singularName;
+        boolean collector, singular, clearable, compute, append, removable;
+        String singularName, keyMethod;
         boolean nonNullByBuildFlag;
         boolean lazy;
+        boolean seed;
+        java.util.List<AssignTransform> assignVia;
         @Nullable PsiDocCommentOwner docSource;
 
         PsiFieldShape build() {

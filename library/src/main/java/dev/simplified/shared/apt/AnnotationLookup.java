@@ -22,6 +22,39 @@ public final class AnnotationLookup {
         return null;
     }
 
+    /**
+     * Every mirror of a repeatable annotation written on an element, in source
+     * order.
+     *
+     * <p>Both spellings have to be read, because which one appears is not the
+     * author's choice: javac presents a single declaration as the annotation
+     * itself and several as one container holding them, so asking for only the
+     * bare form finds nothing the moment a second is written.
+     *
+     * @param element the annotated element
+     * @param annotationFqn the repeatable annotation's name
+     * @param containerFqn the container annotation's name
+     * @return the declared mirrors, empty when the element carries none
+     */
+    public java.util.List<AnnotationMirror> repeatedMirrors(Element element, String annotationFqn,
+                                                            String containerFqn) {
+        java.util.List<AnnotationMirror> out = new java.util.ArrayList<>();
+        for (AnnotationMirror m : element.getAnnotationMirrors()) {
+            String name = m.getAnnotationType().toString();
+            if (name.equals(annotationFqn)) {
+                out.add(m);
+            } else if (name.equals(containerFqn)) {
+                Object raw = attrValue(m, "value");
+                if (!(raw instanceof java.util.List<?> held)) continue;
+                for (Object value : held) {
+                    Object inner = value instanceof AnnotationValue av ? av.getValue() : value;
+                    if (inner instanceof AnnotationMirror nested) out.add(nested);
+                }
+            }
+        }
+        return out;
+    }
+
     public String stringAttr(Element element, String annotationFqn, String attr, String fallback) {
         return stringAttr(findMirror(element, annotationFqn), attr, fallback);
     }

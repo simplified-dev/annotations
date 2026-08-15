@@ -17,7 +17,13 @@ import java.util.Optional;
  * {@code BuildFlagValidator.validate($result)} inside the builder's generated
  * {@code build()} method.
  *
- * <p>Each attribute is independent and may be combined. When {@link #group()} is
+ * <p>Each attribute is independent and may be combined. Every one of them states
+ * something about the value a single field holds; a rule spanning two fields
+ * belongs in the target's own constructor, which {@link ClassBuilder} takes as a
+ * target, or in the {@link ClassBuilder#factoryMethod()} that has to run before
+ * construction rather than after it.
+ *
+ * <p>When {@link #group()} is
  * empty, {@link #nonNull()} / {@link #notEmpty()} enforce the field
  * individually (fail-fast if the field is null/empty at {@code build()} time).
  * When {@link #group()} names one or more groups, the field joins each group
@@ -55,6 +61,13 @@ import java.util.Optional;
  * // Limit applied to a collection
  * &#64;BuildFlag(limit = 25)
  * private List&lt;Field&gt; fields;
+ *
+ * // Numeric range, either end on its own or both together
+ * &#64;BuildFlag(min = 0, max = 100)
+ * private int nearLossless;
+ *
+ * &#64;BuildFlag(min = -1)
+ * private int forceKeyframeEvery;
  *
  * // On an interface target, the accessor carries it
  * &#64;ClassBuilder
@@ -113,5 +126,29 @@ public @interface BuildFlag {
      * {@code -1} (the default) disables the check.
      */
     int limit() default -1;
+
+    /**
+     * Smallest value a numeric field may hold at {@code build()} time, inclusive.
+     * Applies to any primitive number, its boxed form, and an {@link Optional} of
+     * one - an empty {@code Optional} holding nothing to bound.
+     * {@link Double#NEGATIVE_INFINITY} (the default) disables the check.
+     *
+     * <p>Declared as a {@code double} so one attribute bounds every numeric width,
+     * and written as an ordinary literal either way - {@code min = 0} on an
+     * {@code int} field is the same widening every assignment does.
+     *
+     * <p>A bound rejects; it does not clamp. A field that should quietly take the
+     * nearest legal value wants {@link AssignVia} on the setter instead, which
+     * runs where the caller passed the value rather than after the object exists.
+     */
+    double min() default Double.NEGATIVE_INFINITY;
+
+    /**
+     * Largest value a numeric field may hold at {@code build()} time, inclusive.
+     * {@link Double#POSITIVE_INFINITY} (the default) disables the check.
+     *
+     * @see #min
+     */
+    double max() default Double.POSITIVE_INFINITY;
 
 }

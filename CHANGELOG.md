@@ -9,6 +9,480 @@ Versions 1.0.0 through 1.0.5 were published under the legacy plugin ID
 Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations` /
 `io.github.simplified-dev:annotations`. See the 2.0.0 entry for the rename details.
 
+## [2.6.0]
+
+The first release driven by adoption rather than by parity. Nineteen in-house modules moved off
+Lombok onto this set, and every capability below is one those modules asked for by leaving code
+hand-written - each was scoped against its real sites before it was designed, which changed four of
+them and killed two outright. Grouped by feature rather than by change type, since most features
+landed additions, fixes and breaking changes together; breaking changes are flagged inline.
+
+### `@ClassBuilder` on a constructor or static factory
+
+- **`@ClassBuilder` works on the targets it has always advertised.** `@Target` has permitted
+  `CONSTRUCTOR` and `METHOD` since the annotation shipped and the javadoc has described both with a
+  worked example, but the processor emitted `@ClassBuilder on <kind> targets is not yet supported -
+  skipping` at `WARNING` and moved on, so an author following the documentation got no builder and a
+  diagnostic easy to lose in a large build. Both forms are now processed. The slots are the annotated
+  member's **parameters** rather than the enclosing type's fields, which is what unblocks a builder
+  whose state is not the built type's shape: builder-only values, a `build()` that constructs a
+  different field set, and a target with no settable fields at all.
+- **It is a third emission path, and shares rather than copies.** `FieldSpec` is the slot IR either
+  way, the naming trio resolves the names, `FieldMutators` emits every setter shape, and
+  `NestedBuilderFactory` builds everything but the instantiation - so a slot derived from a parameter
+  cannot come out with a different setter matrix from a field of the same shape. Five things the
+  field path does are absent here because a parameter cannot carry them: all-args constructor
+  synthesis, the `@Lazy` storage rewrite, the SuperBuilder chain, `retainInit`, and `from(T)` /
+  `mutate()`. The last pair is suppressed rather than guessed at - both seed slots by reading the
+  built object, and there is no slot-to-accessor mapping when the slots are parameters.
+- **A constructor runs under the enclosing type's parameters and a `static` factory under its own.**
+  That is what `new Target<V>(..)` and a static member unable to name the class's parameters
+  respectively produce, and `builtType()` follows the factory's declared return type rather than the
+  enclosing type. Measured on emitted bytecode: `public static <T> Boxed$Builder<T> builder()` beside
+  `public Boxed<T> build()`, off a `static <T> Boxed<T> of(T)`.
+- **`@BuilderSeed` (new, `@Target(PARAMETER)`) moves a parameter onto `builder(...)` and emits no
+  setter for it.** A seeded parameter becomes a parameter of `builder(...)` and of the builder's own
+  constructor, and is held in a `final` slot - which is what makes it a capability rather than a
+  convention, since there is no setter to write over the value and the only thing that can assign a
+  final field is the constructor that takes it. With that constructor `PACKAGE` by default,
+  `builder(seed)` really is the one way in. Several seeds are allowed and reach `builder(...)` in
+  declaration order; `build()` passes every parameter in the order the annotated member declares.
+  `@Collector`, `@Negate` and `@Formattable` are rejected beside a seed rather than ignored, each
+  shaping a setter that a seed does not emit.
+- **`@Collector`, `@Negate` and `@Formattable` widen to `@Target({FIELD, PARAMETER})`** so a
+  parameter slot keeps the bulk setters, the negated flag and the format overload a field of the same
+  type would have. Widening a `@Target` is source-compatible. One shape does not reach a parameter: a
+  custom container recognised by implementing `Collection` or `Map` needs an expression that produces
+  its declared type, and a field's initializer is the only one there is, so such a parameter degrades
+  to a plain replace setter and the processor emits a `NOTE` naming the slot rather than leaving it
+  silent.
+- **`@BuildFlag` deliberately does not widen.** `BuildFlagValidator` resolves the flagged fields of
+  the instance `build()` produced, so a flag on a parameter would be inert whatever `@Target` said,
+  and one written on the built type's own fields is found regardless of which member constructed it.
+- Rejections are reported at the declaration that causes them rather than inside generated code: an
+  instance method, a `void` method, the annotation on both a type and a member, two annotated members
+  on one type, a `@Lazy` field on the enclosing type, a written `exclude`, and a written
+  `factoryMethod`.
+
+### Builder naming: a pattern per slot
+
+- **`@SetterNames` widens to `@Target({FIELD, PARAMETER})`, so one slot can spell its setters
+  differently from the rest of its target.** Its `@Target` was `{}` - only ever an attribute value -
+  which made the naming scheme a property of the whole type, so a builder could not pair
+  `isLossless(boolean)` with `withQuality(float)` and any type needing one exception stayed entirely
+  hand-written. The same six roles are now writable on a slot to override the target's for that slot
+  alone, with no new vocabulary. Being usable as `@ClassBuilder(setters = ...)` costs nothing:
+  `@Target` restricts *declaration* sites, and an annotation used as another's element value is not
+  one.
+- **Unwritten roles inherit from the target's resolved scheme rather than from the style.** That is
+  the composition the sites need - a type spelling everything `with{}` and one field spelling itself
+  `is{}` keeps `with{}` for that field's other five roles - where inheriting from the style would
+  silently undo the target's own override for every role the slot did not name.
+- **The `{}` placeholder is optional on a slot, and mandatory on a target.** They are two statements
+  of one rule: a pattern written where it fans out needs the placeholder or every field generates the
+  same method name, and a pattern written on a single member expands exactly once, so
+  `@SetterNames(set = "withLabel")` is simply that setter's name. It is also the only way to spell a
+  setter that does not contain its field's name at all. The same asymmetry now applies to
+  `@Getter(name)` and `@Setter(name)`, where a placeholder-free literal on a field-level annotation
+  is accepted and a type-level one is still rejected - so an accessor spelled differently from its
+  field (`gateway()` over a `gatewayClient`) no longer has to stay hand-written.
+- Every emitter reads the scheme **off the slot**: `FieldMutators`, `SelfTypedSetters`,
+  `BuilderEmitter`, `BootstrapMethodFactory` and the plugin's `GeneratedMemberFactory`. Reaching past
+  it to the target's config is what would mint the wrong name for an overridden slot, and `from(T)` /
+  `mutate()` are where that stops being cosmetic - they call the setters by name, so seeding through
+  the wrong one emits a call to a method the builder does not have.
+
+### `@AssignVia` - a setter that transforms its argument
+
+- **`@AssignVia(method = "...")` (new, repeatable, `@Target({FIELD, PARAMETER})`) names a static
+  method the generated setter routes its argument through.** The write-direction twin of
+  `@ObtainVia`, for the setters that clamp, mask, append a suffix or adapt a second functional
+  interface and were therefore left hand-written. **One rule decides the shape and no attribute
+  states it: the named method's parameter type is the setter's parameter type.** The slot's own type
+  means there is still one setter and it assigns the method's result; any other type means the
+  ordinary setter stays and this adds an overload beside it. Repeatable, so a ladder of coercions
+  reaches one slot.
+- **The direct form goes in at one choke point, and that is the argument for it.** Every shape that
+  hands a value to a slot assigns through the same path, so one written transform covers the ordinary
+  setter, the zero-argument boolean form, the `@Negate` inverse and the `@Formattable` overload
+  together - a clamp reaching only some of those would be a hole no call site can see. `from(T)`
+  seeds through the setter too, so the transform runs again on a round trip, which is why the javadoc
+  asks for one that gives the same answer applied twice.
+- **`@Collector` and `@Lazy` are rejected rather than ignored**, along with `@BuilderSeed`. A
+  collector's setters copy element by element into the container rather than assigning it, so there
+  is no single value to route; a `@Lazy` slot holds a `Supplier<T>` rather than a `T`; and a seed
+  emits no setter. Both mutators refuse to emit against a collector slot as well, so a rejected
+  pairing cannot leave a stray method behind.
+- Seven more rejections at the annotation: a name matching no single-argument method, a name matching
+  several, an instance method, a return type that cannot supply the slot, a direct transform whose
+  parameter cannot accept the slot's own type, two transforms of one parameter type, and a transform
+  colliding with a signature the slot's matrix already emits - an `Optional<T>` slot already having a
+  `T` setter. The last two matter most: each would be a duplicate method in generated code, which
+  javac reports on a line nobody wrote.
+- Measured on emitted bytecode: `@AssignVia(method = "clampQuality") float quality` yields **one**
+  `quality(float)` whose body is `invokestatic clampQuality:(F)F` before the `putfield`, and a
+  `String id` carrying two transforms yields `id(String)` beside `id(long)` and `id(char)`, each
+  calling its own.
+
+### `@BuilderDefault(provider)` - a default with no initializer to retain
+
+- **`@BuilderDefault(provider = "...")` names a static no-argument method whose return seeds the
+  slot, which is what gives a record component a builder default.** `retainInit` reads a field's
+  initializer, and a record component has none - so a component default was dropped and the built
+  object silently got the JVM zero value. The reference-typed cases were recoverable by
+  null-coalescing in a compact constructor; the primitive ones were not, an unset `boolean` being
+  indistinguishable from an explicit `false`. A record carrying a non-zero component default is now
+  convertible.
+- **It routes through the same `$default$<name>()` the retained-initializer path uses** - the
+  generated method calls the author's instead of carrying a cloned expression - so the builder slot,
+  the `@Collector` merge helper, the empty-container factory and the collected defaults all still
+  call one method and nothing downstream had to learn a second shape.
+- Chosen over an `expression = "true"` source string on two grounds. It is **type-checked where the
+  author can see it**: a missing, non-static or wrongly-typed provider is reported at the annotation,
+  naming the method, instead of failing inside a generated body on a line that does not exist in the
+  source. And it needs no expression parser - the initializer path never needed one because javac had
+  already parsed the field's own tree.
+- Four rejections at the annotation: a name matching no no-argument method, an instance method (the
+  default is read when the builder is created, before any target exists), a return type that cannot
+  supply the slot, and `value = false` beside a provider. The type check drops to erasures where
+  either side mentions a type variable, because a generic target's provider declares its own -
+  `static <T> List<T> none()` seeding a `List<V>` component is two distinct variables that no
+  assignability test relates and that javac infers between perfectly happily.
+- A written provider **wins over an initializer beside it**, being the more specific statement, and
+  it silences the warning a bare `@BuilderDefault` earns on an initializer-free field - only because
+  it supplies the default the annotation was asking for.
+
+### `@Collector` - append, remove, and a key derived from the value
+
+- **`@Collector(append = true)` makes the bulk setter add to the container instead of replacing it.**
+  `withOptions(a).withOptions(b)` yielded `[b]` rather than `[a, b]`, with no compile error, no
+  warning and no failing test - just a lost element - which is what a hand-rolled accumulating
+  builder silently becomes when it is converted. It covers every bulk shape: the varargs and
+  `Iterable` forms on a collection, and the whole-`Map` form, which then `putAll`s rather than
+  starting a new map. The single-element `singular` add already appended and is untouched;
+  `clearable` is how an accumulating builder empties the container deliberately. A declared
+  initializer now survives a bulk call, so the replaced-mark is not set either - that mark is what
+  tells `retainInit` the default was discarded, and under `append` it was not. **Off by default**,
+  and a test pins that: replace is what a setter normally means and it is what the built object's own
+  field would hold.
+- **`@Collector(removable = true)` adds a remove for one element**, symmetric with `clearable`.
+  `SetterNames` gains a seventh `remove` role and each `NamingStyle` a pattern for it; `LOMBOK`
+  suppresses it, Lombok having no remove, exactly as it suppresses `compute`. The name comes off the
+  collector singular like the add and the put, so `typeAdapters` yields `removeTypeAdapter`. **The
+  collection form casts to `Object`, and that is the whole reason it is safe** - a `List<Integer>`
+  would otherwise bind `List.remove(int)` and take out the element *at that index*, which compiles
+  and quietly removes the wrong one. Measured on emitted bytecode: `removeSize(20)` over
+  `[10, 20, 30]` calls `List.remove:(Ljava/lang/Object;)Z` and yields `[10, 30]`. A remove does not
+  discard a declared default, unlike `clear` - it takes one thing out of what the builder collected,
+  where saying the default is gone is what `clear` is for.
+- **`@Collector(key = "...")` derives a map entry's key from the value**, so the generated put drops
+  its key parameter and takes the value alone. It names a no-argument method on the map's value type.
+  Measured: `function(Named)` calls `Named.name()` and then `Map.put`. This is the one collector
+  opt-in that moves a signature, so the editor follows it rather than merely recording it. Four
+  rejections, mirrored in the IDE inspection because a bad `key` would otherwise leave the editor
+  offering a put no build emits: not a map, no `singular` to reshape, beside `compute` (a key read
+  off a value the put-if-absent has not created yet is nothing to generate), and a name matching no
+  no-argument method on the value type.
+
+### `@BuildFlag(min, max)`
+
+- **A build flag can state the range a number has to be in.** Both attributes are `double`, so one
+  pair bounds every numeric width - `min = 0` on an `int` field is the same widening any assignment
+  does - and both default to an infinity, which is the natural spelling of "no bound" and leaves
+  every finite value inside the range until one end is written. The bound reads a `Number` or what an
+  `Optional` holds, so an empty `Optional` and an unset reference are simply not bounded. A `char` is
+  deliberately out: it boxes to `Character`, which is not a `Number`.
+- **A bound rejects, it does not clamp**, and that is the seam with `@AssignVia`: a setter that
+  clamps into a range is a transform, and a value the build must refuse is a flag.
+- The one line that would have made this silently useless is in the validator's own scan, which
+  elides a flag whose every attribute is at its default - a bound that did not count as a constraint
+  would be dropped there and never enforced, leaving a field that looks checked and is not. It
+  counts, and a test pins it by validating a class whose only flag is a bound. Measured and then run:
+  a target whose only `@BuildFlag` is a range yields a builder holding **one** `BuildFlagValidator`
+  reference where a flag-free one holds **zero**, and `nearLossless(101).build()` throws
+  `Field 'nearLossless' in 'Bounded' is 101, above the maximum of 100`.
+- **A second validation entry point was considered and declined.** The cross-field cases that asked
+  for one all check builder state mapping one-for-one onto a constructed field, so they fit a
+  constructor body - a first-class `@ClassBuilder` target as of this release - and the one that must
+  act *before* construction fits the `factoryMethod` that already documents itself as being for
+  build-time caching or extra validation. New surface on a published annotation set, for cases the
+  constructor already reaches, earns nothing.
+
+### `@ClassBuilder(mergeDeclaredBuilder)` - keep one hand-written member, generate the rest
+
+- **`mergeDeclaredBuilder = true` appends the generated members to an author-declared nested
+  `Builder` instead of standing down.** A hand-written `Builder` and a generated one could not
+  coexist, so a builder needing one custom setter had to stay entirely hand-written. **Off by
+  default**, because a declared builder normally means the author wrote the whole thing and the
+  existing skip is the right answer for that; the note the skip prints now names the attribute, so
+  the way out is discoverable from the build that hits it.
+- **The author wins member for member** - a field by name, a method by name and parameter count. That
+  arity rule is deliberately looser than the bootstrap collision rule and for the opposite reason: an
+  unrelated `from(String)` on a *target* is a parser sharing a name, while a same-named same-arity
+  method on the author's *own builder* is the setter they wrote instead of the generated one, which
+  is the entire point. Both paths emit from one producer, so a merged builder cannot come out with a
+  different member for a slot than an unmerged one.
+- **The declared builder's constructor is the author's throughout**, and that is a limitation rather
+  than an oversight: javac enters a default constructor into the tree before the round begins, so
+  there is no second no-arg form to add, and retyping the one that exists does not take - its symbol
+  was entered with the class's own access and that is what every later reference reads. Measured,
+  then reverted. `builderConstructorAccess` therefore does not reach a merged builder, and the
+  javadoc says to declare one. The all-args constructor on the *target* does move: a declared builder
+  no longer suppresses it under merge, since the generated `build()` still calls `new Target(..)`.
+- Three rejections at the target: an inner (non-`static`) builder, which no static entry point can
+  create; a generic target whose declared builder does not re-declare its type parameters, which
+  every generated member names; and a declared slot field whose type is not the slot's, reported at
+  the declaration rather than left to fail on a generated setter the author never wrote.
+
+### `@Lazy` over a field its own initializer does not assign
+
+- **An initializer-free `@Lazy` field is legal when a constructor assigns it, and the whole assigned
+  expression becomes the supplier body.** `@Lazy` turned a field's own initializer into the supplier,
+  so a field assigned anywhere else had nothing to synthesise from and the annotation could not
+  express it at all. Now `this.headers = parse(this.raw)` compiles to
+  `this.headers = Lazy.of(() -> parse(this.raw))`, deferring the parse to the first read. That covers
+  a value taken from a constructor parameter, one computed from a **sibling field** - which has
+  neither an initializer to hold the expression nor a parameter to take it from - and the
+  supplier-passthrough case, where `this.body = this.decoder.get()` defers the `get()`, which is
+  `Lazy.of(decoder)` by another spelling and needs the annotation to know nothing about `Supplier`.
+- **Every assignment is rewritten, including one inside an `if` or a `try`.** A field assigned in
+  only one arm is still a field this has to rewrite, and missing an arm leaves a type error about
+  `Lazy<T>` on a constructor line the author wrote and did not change. Assigning twice, or a
+  constructor that does not assign it, is javac's ordinary blank-final error, the field being `final`
+  after the rewrite.
+- **A constructor this pipeline generated takes only the pass-through.** The all-args factory already
+  emits a complete `Lazy<T>` right-hand side for a `@Lazy` instance default, and wrapping that again
+  nests a `Lazy` inside a `Lazy`; the discriminator is the generated-member marker on the
+  constructor.
+- `dev.simplified.lazy.Lazy<T>` keeps its "not part of the public API" javadoc and gains no
+  commitments. Nothing about this makes a consumer name the type: the synthesised getter returns `T`,
+  so no signature leaks it. The class is still needed on the **runtime** classpath, since it is what
+  the field stores.
+
+### `@KeyField(ignoreCase)`
+
+- **`@KeyField(ignoreCase = true)` matches a `String` key without regard to case.** A hand-rolled
+  case-insensitive lookup replaced by an exact generated one compiles fine and stops matching, which
+  is why two real enums kept their hand-written scans rather than adopting `@EnumLookup`'s generated
+  members. It swaps `Objects.equals` for `String.equalsIgnoreCase`, keeping that method's null
+  tolerance exactly - a null stored key matches a null argument and nothing else, since calling the
+  method on a null element would throw inside generated code the author cannot see. `findBy<Key>`
+  delegates to `of<Key>`, so it folds case with it. Exact matching stays the default and a test pins
+  that; the attribute is inert on any other type, which the IDE inspection now warns about.
+
+### Generated surface that changes
+
+Four fixes below rename or narrow a member the previous release generated. Each is a source break
+for a caller compiled against 2.5.1, and each is done now rather than later because the emitted name
+was wrong and every additional adopter makes it more expensive to correct.
+
+- **BREAKING: `@Getter` on a `boolean` field already named `isX` mints `isX()`, not `isIsX()`.**
+  Lombok strips the leading `is` and emits `isX()`; every non-`FLUENT` `NamingStyle` here applied
+  `is{}` unconditionally, so a bare `lombok.Getter` -> `dev.simplified.annotations.Getter` import
+  swap **renamed a public accessor** with `compileJava` and the whole suite staying green - the only
+  thing that could see it was a consumer outside the module or a bytecode diff. The rule is on the
+  pattern rather than on the style: a leading `is` is stripped from the name a pattern expands
+  against, and skipped exactly when the pattern opens with the placeholder, so `is{}` and `set{}`
+  strip while a fluent `{}` does not. That is Lombok's own condition expressed without naming a
+  style. **The setter half was part of the same defect**: Lombok sets the base name once and both
+  accessors use it, so `boolean isPermaLink` is `isPermaLink()` and `setPermaLink(boolean)`, where
+  this was minting `setIsPermaLink` too. A `String` field named `isPermaLink` means something else
+  entirely and is left whole, as are `island` and a bare `is`.
+- **BREAKING: the builder's zero-argument boolean setter no longer doubles the same prefix.** The
+  same defect one surface over: the `flag` role is `is{}` under every style but `LOMBOK`, expanded
+  against a `boolean` field's name or a `@Negate` stem, so a field named `isPermaLink` got a builder
+  setter `isIsPermaLink()` and `@Negate("isDisabled")` got `isIsDisabled()`. The typed form had the
+  same shape one level down, so `NamingStyle.BEAN` minted `setIsPermaLink(boolean)`. Measured under
+  `BEAN`, where the worst of it was: `boolean isPermaLink` now emits `isPermaLink()` and
+  `setPermaLink(boolean)`. SuperBuilder chains mint the same names, and so does the editor.
+- **BREAKING: `@Collector(singular = true)` no longer eats the `e` off a field whose name ends in
+  `es`.** A `List<String> frames` generated `addFram`. The rule stripped two letters from **any**
+  `-es` ending, so `frames`, `names`, `types`, `values`, `phases` and `responses` all lost a letter
+  belonging to the word rather than to the plural - and the builder compiled, so the wrong name was
+  simply the name. An `-es` ending now gives up both letters only after a sibilant or an `o`
+  (`boxes`, `classes`, `addresses`, `matches`, `dishes`, `heroes`), which is where English put the
+  `e`; everywhere else the plain `-s` rule applies. A name ending `ss` or `us` is left whole, so
+  `address` and `status` are not mistaken for plurals, and `-ies` needs two letters of stem so `ties`
+  comes out `tie` rather than `ty`. The rule now exists once and both the processor and the editor
+  call it.
+- **BREAKING: the generated `Builder`'s own no-arg constructor defaults to `PACKAGE`, via a new
+  `builderConstructorAccess` attribute.** `access()` governs the builder class and the bootstrap
+  methods, and the constructor followed it, so the default `PUBLIC` published `new X.Builder()`
+  beside `X.builder()` - a second entry point the author did not write, on every converted type. The
+  neighbouring `constructorAccess` javadoc already argues the case one level up ("matching the
+  implicit constructor Lombok `@Builder` supplies, so callers are routed through `build()`"), and
+  Lombok's own builder constructor is package-private for exactly that reason. A separate attribute
+  rather than a widening of `constructorAccess`, because the two govern different constructors, and
+  separate from `access()` because a builder class has to be visible to be useful as a type - a
+  different question from whether `new Target.Builder()` is an entry point. The constructor is now
+  **declared** rather than left implicit, an implicit one taking the class's access with no other way
+  to narrow it. Measured: a bare `@ClassBuilder` emits `Probe$Builder();` where it used to emit
+  `public Probe$Builder();`.
+
+### The runtime dependency `@ClassBuilder` no longer forces
+
+- **The generated `build()` calls `BuildFlagValidator` only when something would answer it.**
+  `validate()` defaults to `true`, so the call was emitted unconditionally and a module whose only
+  library annotation was `@ClassBuilder` could not use `compileOnly` - the failure mode being a green
+  `compileJava` followed by `NoClassDefFoundError` at runtime, which no compile check and no test
+  over a module without builder coverage can see. Measured rather than theorised: three modules were
+  forced onto `implementation` for this, one of them for eight builders not one of which declared a
+  `@BuildFlag`. A bare `@ClassBuilder` now yields a builder whose constant pool holds **zero**
+  references to the validator.
+- **Two conditions the naive fix would have got wrong.** "Something" is decided by walking the
+  **superclass chain**, because the validator's own scan climbs to `Object` - asking only about
+  declared fields would turn an inherited requirement into a silently unenforced one. And a target
+  with a `factoryMethod` keeps the call **unconditionally**, since the validator reads
+  `target.getClass()` and so sees the flags of whatever the factory returned, which may be a subtype
+  declaring constraints this type has never heard of. A `static` factory target keeps it for the same
+  reason.
+- **The build-file consequence is now the opposite one.** A module whose surviving annotations are a
+  `@ClassBuilder` with no reachable `@BuildFlag` needs `compileOnly`, not `implementation`, and so do
+  its consumers - which takes this jar off their runtime classpath entirely. `@Lazy` and `@BuildFlag`
+  are still runtime triggers.
+
+### The editor half
+
+Every capability above moved in the same change as its processor half, because a green editor over
+source javac rejects - or a red one over source that builds - is the failure this plugin exists to
+prevent. Six defects were found by writing the parity test rather than by using the plugin.
+
+- **The editor synthesised a second bootstrap beside a hand-written one.** `builder()`, `from(T)` and
+  `mutate()` were added unconditionally with no collision check at all, so a class declaring its own
+  `public static Builder builder()` showed **two** in the PSI where javac emits one - a
+  duplicate-method error in the editor over source javac compiles cleanly, and reachable by following
+  the ordinary advice to leave a hand-rolled builder in place when it cannot be expressed. The
+  processor's own rule now decides both, over own methods rather than all methods, since the latter
+  includes augmented members and a provider asking it while running would see what it contributed
+  last.
+- **`from(T)` was suppressed by an unrelated `from(X)`.** The check declining to overwrite an
+  author's method matched on name and arity alone, so a `from(String)` parser silently cost the type
+  its copy factory. `from(T)` now additionally requires its parameter to denote the target, asked of
+  the element model rather than of the tree - a tree parameter's declared type is an unattributed
+  expression no type test applies to, while every author-written method is resolved before the round
+  begins. Comparing the parameter's element to the target element is exact and needs no name
+  matching, so a generic `Widget<T>` parameter answers the same as a raw `Widget`.
+- **`@EnumLookup` reported a cache-field collision in the build and skipped it silently in the
+  editor.** An enum already declaring `CACHED_VALUES` - or a `CACHED_KEYS_<field>` - got a
+  definite-assignment error rather than a diagnostic naming the collision, and the augment provider
+  passed over it without a word, so the IDE was *greener* than the build. The mutator now reports one
+  error per colliding name, naming the annotation, the field and the fix, and emits nothing rather
+  than assigning over the author's `final`; refusing the enum outright is right here rather than
+  degrading, since the hand-rolled cache is what the annotation is adopted to delete. Both halves
+  read the two names from one place so they cannot disagree about the spelling.
+- **`@Lazy` on a constructor-assigned field was flagged as an error in the editor.** The inspection
+  reported `@Lazy on a field without @ClassBuilder requires an initializer expression` at error
+  severity, so accepting the shape in the processor would have painted every such field red over
+  source that compiles. It now asks the same question the processor does. There was no test for this
+  inspection at all, which is how it would have gone unnoticed.
+- **The editor claimed an `@XContract` on the builder's own constructor that javac never emits.** The
+  inferred-annotation provider treated any other method inside the synthesised `Builder` as a setter
+  and shaped it by arity, and the constructor went through that arm - so the IDE reported
+  `@XContract("-> this", mutates = "this")` where the build attaches nothing at all. A constructor
+  does not return `this` and cannot be reasoned about as if it did, so the claim was wrong on its own
+  terms as well as absent from the build.
+- **The attribute readers resolved the annotation type, which re-enters the augment provider when the
+  annotation is on a member.** Reading an annotation's qualified name resolves its name reference,
+  and on one written **inside a class body** the name lookup consults the enclosing class's nested
+  types first - a lookup that is augment-aware, and so comes straight back into the provider that
+  asked. The platform kills the nesting and logs the provider as the culprit: a hard failure under
+  the test fixture, and in a live IDE a logged error plus a builder that intermittently does not
+  appear. Every such read now takes the *declared* value and states the annotation's default at the
+  call site, which each reader already did in its fallback argument, so nothing changed but the
+  resolve. Matching the annotation by name had the same problem, so that is now decided from the
+  reference's own shape and the file's import list.
+- **The re-entry guard is a set, so a nested guard for one target cleared the outer one.** It did a
+  bare add then a `finally` remove, correct only if it never nests - and reading a builder's
+  declaration site to answer where the annotation lives made it nest. The inner remove cleared it and
+  the next re-entry recursed for real. The guard is now released only by the call that took it, and
+  the one hand-rolled add/remove pair goes through the same helper.
+- **A synthesis pass resolved annotations from inside the augment chain, and the platform can enter
+  that chain mid-resolve.** The platform's own folding builder resolves a field-level annotation,
+  that resolve walks the class's nested types, and whatever the provider then resolves for itself
+  nests inside a resolve already in flight. Fixing it closed a second defect rather than forcing the
+  expected trade: the nullness read asked a manager that answers to every configured flavour, while
+  the processor reads exactly `org.jetbrains.annotations.NotNull` / `Nullable` - so a field carrying
+  `javax.annotation.Nonnull` got `@NotNull` on its setter in the editor and nothing in the class
+  file, a claim the build does not make. Narrowing to the two names is parity, not a concession.
+
+### Documentation
+
+- **`@Collector`'s javadoc named bulk setters the default style never emits.** Seven examples spelled
+  the whole-collection replace and its overloads `withEntries(...)` / `withTags(...)`, where the
+  `set` role under `NamingStyle.SIMPLIFIED` is `"{}"` and the emitted names are `entries(...)` /
+  `tags(...)`. The `add` / `put` / `clear` names in the same examples were correct, which is what made
+  the wrong ones believable - and it cost one real conversion plan, whose author concluded a
+  `with`-prefixed hand-rolled builder would come out byte-for-byte from a bare `@ClassBuilder`.
+  Anyone converting such a builder on the strength of that javadoc silently renamed every setter. The
+  seven now carry the emitted spelling, and one line says that a `with` prefix needs
+  `@SetterNames(set = "with{}")`.
+- **`@Getter(name)` documented a free rename it never permitted.** It said the attribute "overrides
+  the pattern outright for one field", where the processor rejected any value without the `{}`
+  placeholder. Both `name()` attributes now state that the placeholder is mandatory at type level and
+  optional on a single member, which is the rule as it now stands.
+- **`putXIfAbsent` takes a `Supplier<V>`, not a `V`.** Correct and deliberate - it is the lazy
+  put-if-absent - but it is the one generated signature that reads wrong at a call site, and it cost
+  a compile error in the first probe written against this library. A two-line worked call shape now
+  sits under the opt-in list, the compiling form beside the one that does not.
+- **The processors no longer warn on every module built at `-source 21`.** Each of the six declared
+  `RELEASE_17`, so a clean compile printed six copies of `warning: Supported source version
+  'RELEASE_17' from annotation processor ... less than -source '21'`, taking one module's warning
+  count from 1 to 7 and burying the real one. The v17 javac baseline is deliberate; advertising it as
+  the *maximum* supported source was not. Each processor now reports `latestSupported()`, which
+  changes nothing about which compat layer is chosen. It is an override rather than an annotation,
+  an annotation value having to be a constant expression.
+
+### Adopting the set: what the first consumers saw
+
+Nineteen modules moved off Lombok onto this set during this release cycle. Four surface changes came
+out of that and are recorded here rather than in those modules alone, because each is what a generated
+member does differently from the hand-written one it replaced, and none of them was visible to a
+compiler or to a passing test. All four were found by building each module at its pre-migration
+commit and diffing the emitted member list against the migrated one - which is the only check that
+finds them, and is worth running on any adoption of this set.
+
+- **A type-level `@Getter` stops at instance fields, and a class full of constants notices.** The
+  2.5.1 change removing the static fan-out (Lombok parity - Lombok's type-level `@Getter` only ever
+  covered instance fields) cost one consumer 22 public static accessors, none of which had a caller
+  anywhere: `DiscordCommand.getNO_EXAMPLES()`; `Parameter.getNOOP_HANDLER()`, `getNOOP_COMPLETE()`,
+  `getEMOJI_PATTERN()`, `getMENTIONABLE_PATTERN()`, `getMENTIONABLE_CHANNEL_PATTERN()`,
+  `getMENTIONABLE_ROLE_PATTERN()`, `getMENTIONABLE_USER_PATTERN()`; `Button.getNOOP_HANDLER()`;
+  `SelectMenu.Option.getMAX_ALLOWED()` and `getNOOP_HANDLER()`; `TextInput.getNOOP_HANDLER()`;
+  `PipelineBuilderSession.SAVE_LABEL()`, `SAVE_SHORT_ID()`, `SAVE_VISIBILITY()`, `SHORT_ID_RE()`;
+  `EmojiHandler.getEMOJI_NAME_LENGTH()`; `Emoji.getNOOP_HANDLER()`; `Embed.getFOOTER_TIME_FORMAT()`;
+  `Field.getMAX_ALLOWED()`; `FieldSet.getMAX_MODAL_COMPONENTS()`; `Page.getSINGLETON_KEY()`. A
+  `static final` constant is reachable by name and never needed an accessor, so the fan-out was the
+  drift rather than its removal. Writing the annotation on the field still mints one.
+- **A converted builder's setter is named from the field, not from the method it replaced.** A
+  hand-written `withLogger(Logger)` over a field named `log` comes back as `withLog(Logger)` under
+  `@SetterNames(set = "with{}")`, and every other setter on that type is unchanged - so the rename
+  reads as arbitrary until you notice it is the only one that was not already field-shaped. Renaming
+  the field to recover the old spelling would put the tail before the dog. Two shape changes rode
+  along in the same conversion and are the ones to expect generally: the builder is no longer `final`,
+  and a whole-container replace setter appears for any field that has one - here `withBag(Map)`, which
+  the hand-written builder did not expose.
+- **A converted builder does not carry the `toString()` Lombok emitted on its own builder.** Eight
+  builders on one consumer lost it. Nothing prints a builder, and `@ClassBuilder` emitting one would
+  be new surface rather than restored surface, so it is not being added. Every setter name on all
+  eight is identical either side, which is the part that matters for their call sites.
+- **`@Negate` generates the true inverse, which can silently repair a hand-written flag that was
+  wrong.** One consumer's `isSpringdocDisabled()` had the body `return this.isSpringdocEnabled(true)`,
+  so the disable form turned the flag **on**, while its two siblings were correct. Replacing it with
+  `@Negate` gives the inverse the name promises - verified against the built classes:
+  `builder().isSpringdocDisabled().build().isSpringdocEnabled()` is now `false`. A caller relying on
+  the broken form changes behaviour with no compile error, from a diff that reads as a pure annotation
+  swap. Worth diffing the *behaviour* of any hand-written negated flag before replacing it, not just
+  its name.
+
+### Fixed
+
+- **A Central upload bundle no longer carries the release before it.** The staging repository the
+  bundle is zipped from is an ordinary directory under `build/`, and nothing in an ordinary build
+  removes it, so publishing into one that still held the last release produced a bundle containing
+  both - and an upload that tried to publish a version Central already has. Nothing about it
+  surfaced in the build log; the bundle's size was the only tell. Clearing it is now wired into
+  the task graph ahead of the publish rather than left as a step to remember.
+
 ## [2.5.1]
 
 ### Added

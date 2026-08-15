@@ -415,4 +415,98 @@ public class BuildFlagValidatorTest {
         }
     }
 
+    // --- min / max -------------------------------------------------------
+
+    static class Ranged {
+        @BuildFlag(min = 0, max = 100) int nearLossless;
+        @BuildFlag(min = -1) int forceKeyframeEvery;
+        @BuildFlag(max = 1.0) double softCap;
+        @BuildFlag(min = 1) Optional<Integer> retries = Optional.empty();
+    }
+
+    @Test
+    public void bounds_insideTheRange_pass() {
+        Ranged obj = new Ranged();
+        obj.nearLossless = 100;
+        obj.forceKeyframeEvery = -1;
+        obj.softCap = 1.0;
+        obj.retries = Optional.of(1);
+        BuildFlagValidator.validate(obj);
+    }
+
+    @Test
+    public void bounds_belowTheMinimum_throws() {
+        Ranged obj = new Ranged();
+        obj.forceKeyframeEvery = -2;
+        BuilderValidationException e = assertThrows(
+            BuilderValidationException.class, () -> BuildFlagValidator.validate(obj));
+        assertEquals("Field 'forceKeyframeEvery' in 'Ranged' is -2, below the minimum of -1",
+            e.getMessage());
+    }
+
+    @Test
+    public void bounds_aboveTheMaximum_throws() {
+        Ranged obj = new Ranged();
+        obj.nearLossless = 101;
+        BuilderValidationException e = assertThrows(
+            BuilderValidationException.class, () -> BuildFlagValidator.validate(obj));
+        assertEquals("Field 'nearLossless' in 'Ranged' is 101, above the maximum of 100",
+            e.getMessage());
+    }
+
+    /** A fractional bound keeps its fraction; a whole one is reported as written. */
+    @Test
+    public void bounds_reportAFractionalBoundAsWritten() {
+        Ranged obj = new Ranged();
+        obj.softCap = 1.5;
+        BuilderValidationException e = assertThrows(
+            BuilderValidationException.class, () -> BuildFlagValidator.validate(obj));
+        assertEquals("Field 'softCap' in 'Ranged' is 1.5, above the maximum of 1", e.getMessage());
+    }
+
+    /** An empty {@code Optional} holds nothing to bound, so the range says nothing. */
+    @Test
+    public void bounds_emptyOptional_passes() {
+        Ranged obj = new Ranged();
+        obj.retries = Optional.empty();
+        BuildFlagValidator.validate(obj);
+    }
+
+    @Test
+    public void bounds_optionalHoldingAnOutOfRangeNumber_throws() {
+        Ranged obj = new Ranged();
+        obj.retries = Optional.of(0);
+        BuilderValidationException e = assertThrows(
+            BuilderValidationException.class, () -> BuildFlagValidator.validate(obj));
+        assertTrue(e.getMessage(), e.getMessage().contains("'retries'"));
+    }
+
+    static class BoundOnly {
+        @BuildFlag(min = 5) int size = 5;
+    }
+
+    /**
+     * A range is a constraint like the other five. The scan elides a flag whose
+     * every attribute is at its default, so a bound that did not count would be
+     * dropped there and never enforced - which is a silently unchecked field,
+     * not a missing feature.
+     */
+    @Test
+    public void bounds_areTheOnlyConstraintAFieldNeeds() {
+        BoundOnly obj = new BoundOnly();
+        BuildFlagValidator.validate(obj);
+        obj.size = 4;
+        assertThrows(BuilderValidationException.class, () -> BuildFlagValidator.validate(obj));
+    }
+
+    static class NotANumber {
+        @BuildFlag(min = 1) String name = "x";
+    }
+
+    /** A bound on a type it says nothing about is inert rather than fatal. */
+    @Test
+    public void bounds_onANonNumericField_areInert() {
+        BuildFlagValidator.validate(new NotANumber());
+    }
+
 }

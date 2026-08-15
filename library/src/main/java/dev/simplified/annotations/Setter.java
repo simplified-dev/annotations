@@ -48,6 +48,9 @@ public @interface Setter {
     /**
      * Name pattern overriding the style's, where {@code {}} expands to the
      * field name. Empty inherits from {@link #style()}.
+     *
+     * <p>The placeholder is mandatory and a value without one is rejected, for
+     * the reason {@link Getter#name()} gives.
      */
     @NotNull String name() default "";
 

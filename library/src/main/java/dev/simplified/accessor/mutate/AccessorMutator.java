@@ -241,7 +241,7 @@ public final class AccessorMutator {
         AccessorScheme scheme = AccessorScheme.resolve(resolved.style(), resolved.name());
         String methodName = kind == Kind.GET
             ? scheme.readName(fieldName, isBoolean)
-            : scheme.writeName(fieldName);
+            : scheme.writeName(fieldName, isBoolean);
 
         String typeDisplay = element.asType().toString();
         long flags = accessFlagFor(resolved.access()) | (isStatic ? Flags.STATIC : 0L);

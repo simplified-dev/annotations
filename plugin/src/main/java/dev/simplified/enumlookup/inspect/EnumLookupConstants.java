@@ -20,6 +20,20 @@ public final class EnumLookupConstants {
     public static final @NotNull String KEY_FIELD_SHORT_NAME = "KeyField";
 
     public static final @NotNull String ATTR_METHOD_NAME = "methodName";
+
+    /**
+     * Name of the generated array holding {@code values()} once.
+     *
+     * <p>Here rather than privately on each reader so the augment provider that
+     * synthesises it and the inspection that refuses a clash with it cannot
+     * disagree about its spelling. The processor holds its own copy across the
+     * module boundary.
+     */
+    public static final @NotNull String CACHED_VALUES = "CACHED_VALUES";
+
+    /** Prefix of the generated per-{@code @KeyField} parallel key array. */
+    public static final @NotNull String CACHED_KEYS_PREFIX = "CACHED_KEYS_";
+    public static final @NotNull String ATTR_IGNORE_CASE = "ignoreCase";
     public static final @NotNull String ATTR_STRICT_KEYS = "strictKeys";
     public static final @NotNull String ATTR_STRICT_NULL_KEYS = "strictNullKeys";
 
