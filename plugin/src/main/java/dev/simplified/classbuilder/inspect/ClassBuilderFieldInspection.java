@@ -38,6 +38,8 @@ import java.util.Map;
  *       non-{@link CharSequence} field</li>
  *   <li>{@code @BuildFlag(limit = N)} on a type where the
  *       limit is not meaningful</li>
+ *   <li>{@code @BuildFlag(min/max = N)} on a field a numeric range says
+ *       nothing about</li>
  *   <li>{@code @BuildFlag} on a method that is not an interface target's
  *       accessor, where nothing will read it</li>
  *   <li>a {@code @SetterNames} pattern that cannot expand to a Java
@@ -132,9 +134,9 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
     }
 
     /**
-     * Reports a {@code @BuildFlag} whose {@code pattern} or {@code limit} the
-     * annotated type cannot support. Shared by the field and accessor paths,
-     * which differ only in where the type comes from.
+     * Reports a {@code @BuildFlag} whose {@code pattern}, {@code limit} or
+     * numeric range the annotated type cannot support. Shared by the field and
+     * accessor paths, which differ only in where the type comes from.
      *
      * @param holder sink for the diagnostics
      * @param flag the annotation, or null when absent
@@ -155,6 +157,22 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
                     + "or Optional<String>/Optional<Number> fields",
                 ProblemHighlightType.WARNING);
         }
+        if (isBoundWritten(flag) && !isBoundable(type)) {
+            holder.registerProblem(flag,
+                "@BuildFlag(min/max = ...) only applies to a numeric field, its boxed form, "
+                    + "or Optional<Number>",
+                ProblemHighlightType.WARNING);
+        }
+    }
+
+    /**
+     * Whether either end of the numeric range is written at the annotation.
+     * Asked of the declared value rather than the resolved one: the resolved
+     * answer is always present, being the attribute's own infinite default.
+     */
+    private static boolean isBoundWritten(@NotNull PsiAnnotation flag) {
+        return flag.findDeclaredAttributeValue("min") != null
+            || flag.findDeclaredAttributeValue("max") != null;
     }
 
     /**
@@ -248,6 +266,27 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
             if (args.length == 0) return false;
             return args[0].equalsToText("java.lang.String")
                 || InheritanceUtil.isInheritor(args[0], "java.lang.Number");
+        }
+        return false;
+    }
+
+    /**
+     * Whether a numeric range says anything about the type. Mirrors what
+     * {@code BuildFlagValidator} can read a bound off - a {@code Number}, or an
+     * {@code Optional} of one. A {@code char} is out: it boxes to
+     * {@code Character}, which is not a {@code Number}, so the validator would
+     * never see a value to compare.
+     */
+    private static boolean isBoundable(@NotNull PsiType type) {
+        if (type instanceof PsiPrimitiveType primitive) {
+            return PsiTypes.byteType().equals(primitive) || PsiTypes.shortType().equals(primitive)
+                || PsiTypes.intType().equals(primitive) || PsiTypes.longType().equals(primitive)
+                || PsiTypes.floatType().equals(primitive) || PsiTypes.doubleType().equals(primitive);
+        }
+        if (InheritanceUtil.isInheritor(type, "java.lang.Number")) return true;
+        if (type instanceof PsiClassType ct && "java.util.Optional".equals(ct.rawType().getCanonicalText())) {
+            PsiType[] args = ct.getParameters();
+            return args.length > 0 && InheritanceUtil.isInheritor(args[0], "java.lang.Number");
         }
         return false;
     }

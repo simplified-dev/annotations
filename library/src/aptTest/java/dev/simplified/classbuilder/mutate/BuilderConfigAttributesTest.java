@@ -489,6 +489,42 @@ public class BuilderConfigAttributesTest {
     }
 
     /**
+     * A numeric range is a constraint on its own, so a target whose only
+     * {@code @BuildFlag} is a bound still gets the validator call in
+     * {@code build()} - the case a range added without the emission rule
+     * knowing about it would fail silently.
+     */
+    @Test
+    public void validate_numericRangeRejectsTheBuild() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Bounded",
+            "package demo;",
+            "import dev.simplified.annotations.BuildFlag;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder",
+            "public class Bounded {",
+            "    @BuildFlag(min = 0, max = 100) int nearLossless;",
+            "    public Bounded(int nearLossless) { this.nearLossless = nearLossless; }",
+            "    public int getNearLossless() { return nearLossless; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+        ClassLoader cl = loadClasses(c);
+        Class<?> bounded = Class.forName("demo.Bounded", true, cl);
+        Class<?> builder = nested(bounded, "Builder");
+
+        Object over = builder.getMethod("nearLossless", int.class)
+            .invoke(bounded.getMethod("builder").invoke(null), 101);
+        BuilderValidationException rejection = buildRejected(builder, over);
+        assertEquals("Field 'nearLossless' in 'Bounded' is 101, above the maximum of 100",
+            rejection.getMessage());
+
+        Object ok = builder.getMethod("build").invoke(
+            builder.getMethod("nearLossless", int.class)
+                .invoke(bounded.getMethod("builder").invoke(null), 100));
+        assertEquals(100, bounded.getMethod("getNearLossless").invoke(ok));
+    }
+
+    /**
      * The validator walks the superclass chain, so a flag on an unannotated
      * parent is enforced on the child being built.
      */

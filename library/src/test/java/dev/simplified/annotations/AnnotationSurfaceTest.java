@@ -190,6 +190,33 @@ public class AnnotationSurfaceTest {
     }
 
     @Test
+    public void assignVia_metadata() {
+        // The write-direction twin of @ObtainVia, and consumed at the same
+        // point - the processor emitting the setter - so CLASS retention too.
+        assertRetention(AssignVia.class, RetentionPolicy.CLASS);
+        // Reaches a PARAMETER as the three setter-shaping companions do,
+        // shaping a constructor or factory slot exactly as it shapes a field.
+        assertTargets(AssignVia.class, ElementType.FIELD, ElementType.PARAMETER);
+    }
+
+    @Test
+    public void assignVia_isRepeatable() {
+        Repeatable repeatable = AssignVia.class.getAnnotation(Repeatable.class);
+        assertNotNull("@AssignVia has to repeat - one slot can take several coercions",
+            repeatable);
+        assertEquals(AssignVia.List.class, repeatable.value());
+        assertRetention(AssignVia.List.class, RetentionPolicy.CLASS);
+        assertTargets(AssignVia.List.class, ElementType.FIELD, ElementType.PARAMETER);
+    }
+
+    @Test
+    public void assignVia_noDefault() throws Exception {
+        // The method is the whole annotation, so leaving it out is a compile
+        // error rather than an annotation that quietly does nothing.
+        assertEquals(null, AssignVia.class.getMethod("method").getDefaultValue());
+    }
+
+    @Test
     public void equalsAndHashCode_metadata() {
         // Read while the processor mutates the target's AST, so nothing needs
         // it after the compile.
@@ -263,6 +290,10 @@ public class AnnotationSurfaceTest {
         assertDefault(BuildFlag.class, "notEmpty", false);
         assertDefault(BuildFlag.class, "pattern", "");
         assertDefault(BuildFlag.class, "limit", -1);
+        // An infinity is the disabled state, so every finite value a numeric
+        // field can hold is inside the range until one end is written.
+        assertDefault(BuildFlag.class, "min", Double.NEGATIVE_INFINITY);
+        assertDefault(BuildFlag.class, "max", Double.POSITIVE_INFINITY);
         assertArrayEquals(new String[0], (String[]) BuildFlag.class.getMethod("group").getDefaultValue());
     }
 

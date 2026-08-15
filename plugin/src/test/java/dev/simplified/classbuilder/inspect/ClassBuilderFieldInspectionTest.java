@@ -3,11 +3,27 @@ package dev.simplified.classbuilder.inspect;
 import com.intellij.codeInsight.daemon.impl.HighlightInfo;
 import com.intellij.codeInspection.LocalInspectionTool;
 import com.intellij.lang.annotation.HighlightSeverity;
+import com.intellij.testFramework.LightProjectDescriptor;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
+import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
+import org.jetbrains.annotations.NotNull;
 
 import java.util.List;
 
 public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
+
+    /**
+     * A real JDK rather than the empty default, which resolves no
+     * {@code java.lang} type at all. Half of what this inspection asks is
+     * whether a field's type inherits something - {@code Number},
+     * {@code CharSequence}, {@code Collection} - and without an SDK every one of
+     * those answers no, so a test could only ever confirm the warnings and never
+     * their absence.
+     */
+    @Override
+    protected @NotNull LightProjectDescriptor getProjectDescriptor() {
+        return LightJavaCodeInsightFixtureTestCase.JAVA_17;
+    }
 
     @Override
     protected void setUp() throws Exception {
@@ -59,6 +75,8 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
                 boolean nonNull() default false;
                 String pattern() default "";
                 int limit() default -1;
+                double min() default Double.NEGATIVE_INFINITY;
+                double max() default Double.POSITIVE_INFINITY;
             }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/ObtainVia.java",
@@ -167,6 +185,86 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
             """);
         assertTrue(hasErrorContaining(
             "@BuildFlag(pattern = ...) only applies to CharSequence or Optional<String> fields"));
+    }
+
+    public void testBuildFlagRangeOnAStringField_warned() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.BuildFlag;
+            public class Foo {
+                @BuildFlag(min = 1) String name;
+            }
+            """);
+        assertTrue(hasErrorContaining("@BuildFlag(min/max = ...) only applies to a numeric field"));
+    }
+
+    /** A {@code char} boxes to {@code Character}, which the validator cannot bound. */
+    public void testBuildFlagRangeOnACharField_warned() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.BuildFlag;
+            public class Foo {
+                @BuildFlag(max = 9) char digit;
+            }
+            """);
+        assertTrue(hasErrorContaining("@BuildFlag(min/max = ...) only applies to a numeric field"));
+    }
+
+    public void testBuildFlagRangeOnAnIntField_clean() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.BuildFlag;
+            public class Foo {
+                @BuildFlag(min = 0, max = 100) int nearLossless;
+            }
+            """);
+        assertFalse(hasErrorContaining("@BuildFlag(min/max = ...)"));
+    }
+
+    public void testBuildFlagRangeOnADoubleField_clean() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.BuildFlag;
+            public class Foo {
+                @BuildFlag(max = 1.0) double softCap;
+            }
+            """);
+        assertFalse(hasErrorContaining("@BuildFlag(min/max = ...)"));
+    }
+
+    public void testBuildFlagRangeOnABoxedField_clean() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.BuildFlag;
+            public class Foo {
+                @BuildFlag(min = 1) Long size;
+            }
+            """);
+        assertFalse(hasErrorContaining("@BuildFlag(min/max = ...)"));
+    }
+
+    public void testBuildFlagRangeOnAnOptionalNumber_clean() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.BuildFlag;
+            import java.util.Optional;
+            public class Foo {
+                @BuildFlag(min = 1) Optional<Integer> retries;
+            }
+            """);
+        assertFalse(hasErrorContaining("@BuildFlag(min/max = ...)"));
+    }
+
+    /** An unwritten range is the annotation's own infinite default, not a bound. */
+    public void testBuildFlagWithNoRangeOnAStringField_clean() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.BuildFlag;
+            public class Foo {
+                @BuildFlag(nonNull = true) String name;
+            }
+            """);
+        assertFalse(hasErrorContaining("@BuildFlag(min/max = ...)"));
     }
 
     // ------------------------------------------------------------------
