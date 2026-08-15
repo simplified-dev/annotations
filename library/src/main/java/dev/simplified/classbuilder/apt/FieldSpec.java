@@ -129,6 +129,11 @@ public final class FieldSpec {
     public final String obtainViaField;
     public final boolean obtainViaStatic;
     /**
+     * The {@code @AssignVia} transforms written on the slot, in source order.
+     * Empty when it carries none.
+     */
+    public final java.util.List<AssignTransform> assignVia;
+    /**
      * The {@code @BuildFlag} mirror to copy onto a generated field, or
      * {@code null} when the accessor carries none. Populated only by
      * {@link #fromInterfaceAccessor}: on a class or record the annotation is
@@ -180,7 +185,42 @@ public final class FieldSpec {
         this.obtainViaMethod = b.obtainViaMethod;
         this.obtainViaField = b.obtainViaField;
         this.obtainViaStatic = b.obtainViaStatic;
+        this.assignVia = b.assignVia == null ? java.util.List.of() : b.assignVia;
         this.buildFlag = b.buildFlag;
+    }
+
+    /**
+     * One {@code @AssignVia} reaching a slot - the static method a setter's
+     * argument passes through on the way in.
+     *
+     * @param method the named method
+     * @param paramDisplay the parameter type it declares, rendered for
+     *     re-parsing, or {@code null} when the name resolves to no single
+     *     one-argument method
+     * @param direct whether that parameter type is the slot's own, which is what
+     *     tells shaping the ordinary setter from adding an overload beside it
+     */
+    public record AssignTransform(String method, String paramDisplay, boolean direct) {
+
+        /** Whether this transform names a method the emitters can call. */
+        public boolean resolved() {
+            return paramDisplay != null;
+        }
+
+    }
+
+    /**
+     * The transform shaping the slot's ordinary value-taking setter, or
+     * {@code null} when every declared one takes a type of its own and therefore
+     * adds an overload instead.
+     *
+     * @return the direct transform's method name, or {@code null}
+     */
+    public String directAssign() {
+        for (AssignTransform transform : assignVia) {
+            if (transform.direct() && transform.resolved()) return transform.method();
+        }
+        return null;
     }
 
     /** Whether this field uses {@code is*} setters (booleans) vs the configured prefix. */
@@ -279,6 +319,7 @@ public final class FieldSpec {
         classifyType(b, typeUtils);
 
         readSetterCompanions(b, parameter, lookup);
+        b.assignVia = readAssignVia(b, parameter, lookup, typeUtils);
         b.seed = lookup.hasAnnotation(parameter, "dev.simplified.annotations.BuilderSeed");
 
         return new FieldSpec(b);
@@ -312,6 +353,88 @@ public final class FieldSpec {
             lookup.stringAttr(written, "put", null),
             lookup.stringAttr(written, "compute", null),
             lookup.stringAttr(written, "clear", null));
+    }
+
+    /**
+     * Reads the slot's {@code @AssignVia} transforms and resolves each named
+     * method against the type declaring the slot.
+     *
+     * <p>A name that matches no single one-argument method is kept rather than
+     * dropped, carrying a null parameter type: the emitters skip it and the
+     * processor reports it at the annotation, which is where an author can see
+     * it. Dropping it here would leave a written annotation doing nothing.
+     *
+     * @param b the slot under construction, already carrying its type
+     * @param owner the field, component or parameter declaring the slot
+     * @param lookup the annotation reader
+     * @param typeUtils type utilities, for the erasure comparison
+     * @return the declared transforms, in source order
+     */
+    private static java.util.List<AssignTransform> readAssignVia(Builder b, Element owner,
+                                                                 AnnotationLookup lookup,
+                                                                 Types typeUtils) {
+        java.util.List<AnnotationMirror> written = lookup.repeatedMirrors(owner,
+            "dev.simplified.annotations.AssignVia", "dev.simplified.annotations.AssignVia.List");
+        if (written.isEmpty()) return java.util.List.of();
+
+        TypeElement declaring = enclosingType(owner);
+        java.util.List<AssignTransform> out = new java.util.ArrayList<>(written.size());
+        for (AnnotationMirror mirror : written) {
+            String method = lookup.stringAttr(mirror, "method", "");
+            ExecutableElement resolved = declaring == null ? null : soleUnaryMethod(declaring, method);
+            if (resolved == null) {
+                out.add(new AssignTransform(method, null, false));
+                continue;
+            }
+            TypeMirror param = resolved.getParameters().getFirst().asType();
+            out.add(new AssignTransform(method, param.toString(), sameErasure(typeUtils, param, b.type)));
+        }
+        return out;
+    }
+
+    /** The type declaring a field, record component or parameter. */
+    private static TypeElement enclosingType(Element owner) {
+        Element enclosing = owner.getEnclosingElement();
+        while (enclosing != null && !(enclosing instanceof TypeElement)) {
+            enclosing = enclosing.getEnclosingElement();
+        }
+        return (TypeElement) enclosing;
+    }
+
+    /**
+     * The type's one single-argument method of that name, or {@code null} when
+     * it declares none or several. Overload resolution is deliberately not
+     * attempted: a name that could mean two methods is reported rather than
+     * guessed at.
+     */
+    private static ExecutableElement soleUnaryMethod(TypeElement target, String name) {
+        ExecutableElement found = null;
+        for (Element enclosed : target.getEnclosedElements()) {
+            if (enclosed.getKind() != ElementKind.METHOD) continue;
+            if (!enclosed.getSimpleName().contentEquals(name)) continue;
+            ExecutableElement method = (ExecutableElement) enclosed;
+            if (method.getParameters().size() != 1) continue;
+            if (found != null) return null;
+            found = method;
+        }
+        return found;
+    }
+
+    /**
+     * Whether a transform's parameter type erases to the slot's own, which is
+     * what decides that it shapes the ordinary setter rather than adding an
+     * overload beside it.
+     *
+     * <p>Erasure is the comparison because a duplicate method signature is what
+     * the answer has to prevent, and Java signatures collide on erasures. It
+     * also settles the two shapes a declared type routinely takes that a
+     * sameness test does not relate to the slot's - a type-use nullness
+     * annotation, and a {@code static} method's own type variable standing where
+     * the type's would be.
+     */
+    private static boolean sameErasure(Types typeUtils, TypeMirror param, TypeMirror slot) {
+        if (typeUtils == null) return String.valueOf(param).equals(String.valueOf(slot));
+        return typeUtils.isSameType(typeUtils.erasure(param), typeUtils.erasure(slot));
     }
 
     private static void readSetterCompanions(Builder b, Element owner, AnnotationLookup lookup) {
@@ -454,6 +577,7 @@ public final class FieldSpec {
 
         // Companion annotations
         readSetterCompanions(b, element, lookup);
+        b.assignVia = readAssignVia(b, element, lookup, typeUtils);
         b.lazy = lookup.hasAnnotation(element, "dev.simplified.annotations.Lazy");
         b.ignored = lookup.hasAnnotation(element, "dev.simplified.annotations.BuilderIgnore");
 
@@ -532,6 +656,7 @@ public final class FieldSpec {
         com.sun.source.tree.Tree sourceInitializerTree;
         String obtainViaMethod, obtainViaField;
         boolean obtainViaStatic;
+        java.util.List<AssignTransform> assignVia;
         AnnotationMirror buildFlag;
     }
 

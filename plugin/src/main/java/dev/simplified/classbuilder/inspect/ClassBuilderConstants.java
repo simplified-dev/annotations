@@ -36,6 +36,14 @@ public final class ClassBuilderConstants {
     public static final @NotNull String SETTER_NAMES_FQN = "dev.simplified.annotations.SetterNames";
     public static final @NotNull String BUILD_FLAG_FQN = "dev.simplified.annotations.BuildFlag";
     public static final @NotNull String OBTAIN_VIA_FQN = "dev.simplified.annotations.ObtainVia";
+    public static final @NotNull String ASSIGN_VIA_FQN = "dev.simplified.annotations.AssignVia";
+
+    /**
+     * The container javac wraps a repeated {@code @AssignVia} in. Only ever seen
+     * on a slot read out of a class file - a source declaration presents each one
+     * separately - but read for the same reason the processor reads it.
+     */
+    public static final @NotNull String ASSIGN_VIA_LIST_FQN = ASSIGN_VIA_FQN + ".List";
     public static final @NotNull String COLLECTOR_FQN = "dev.simplified.annotations.Collector";
     public static final @NotNull String NEGATE_FQN = "dev.simplified.annotations.Negate";
     public static final @NotNull String FORMATTABLE_FQN = "dev.simplified.annotations.Formattable";
@@ -54,6 +62,7 @@ public final class ClassBuilderConstants {
         SETTER_NAMES_FQN,
         BUILD_FLAG_FQN,
         OBTAIN_VIA_FQN,
+        ASSIGN_VIA_FQN,
         COLLECTOR_FQN,
         NEGATE_FQN,
         FORMATTABLE_FQN,
@@ -74,6 +83,7 @@ public final class ClassBuilderConstants {
         "SetterNames",
         "BuildFlag",
         "ObtainVia",
+        "AssignVia",
         "Collector",
         "Negate",
         "Formattable",

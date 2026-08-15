@@ -124,11 +124,31 @@ public final class PsiFieldShape {
     public final boolean seed;
 
     /**
+     * The slot's {@code @AssignVia} transforms, in source order. Mirrors
+     * {@link FieldSpec#assignVia}.
+     *
+     * <p>A direct one changes only what a setter's body does, so it moves no
+     * signature and the synthesised surface is the same either way. Every other
+     * adds the overload it names, which is why the list is carried at all.
+     */
+    public final java.util.List<AssignTransform> assignVia;
+
+    /**
      * Source element whose Javadoc the generated setter should surface.
      * Typically the backing field or record component. Null when no Javadoc
      * owner is available (e.g. interface accessor extraction paths).
      */
     public final @Nullable PsiDocCommentOwner docSource;
+
+    /**
+     * One {@code @AssignVia} reaching a slot, as the editor needs it - the
+     * parameter type the transform declares, and whether that is the slot's own.
+     *
+     * @param paramType the transform's declared parameter type
+     * @param direct whether it is the slot's own type, in which case the
+     *     transform shapes the setter the slot already has
+     */
+    public record AssignTransform(PsiType paramType, boolean direct) { }
 
     PsiFieldShape(Builder b) {
         this.name = b.name;
@@ -161,6 +181,7 @@ public final class PsiFieldShape {
         this.nonNullByBuildFlag = b.nonNullByBuildFlag;
         this.lazy = b.lazy;
         this.seed = b.seed;
+        this.assignVia = b.assignVia == null ? java.util.List.of() : b.assignVia;
         this.docSource = b.docSource;
     }
 
@@ -298,6 +319,7 @@ public final class PsiFieldShape {
         boolean nonNullByBuildFlag;
         boolean lazy;
         boolean seed;
+        java.util.List<AssignTransform> assignVia;
         @Nullable PsiDocCommentOwner docSource;
 
         PsiFieldShape build() {

@@ -19,6 +19,7 @@ import dev.simplified.shared.apt.AnnotationLookup;
 import dev.simplified.shared.apt.MemberSelector;
 import dev.simplified.shared.apt.MemberSpec;
 import dev.simplified.shared.apt.SourceIntrospector;
+import dev.simplified.shared.apt.TypeNames;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.LazyOwnership;
 import dev.simplified.shared.javac.compat.JavacAccessFactory;
@@ -701,6 +702,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
             slots.add(slot);
         }
         validateSlotNaming(slots, config.setters(), executable, messager);
+        validateAssignVia(enclosing, slots, executable, messager);
 
         if (javacBridge.isEmpty()) {
             messager.printMessage(Diagnostic.Kind.ERROR,
@@ -755,6 +757,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         List<FieldSpec> fields = collectFields(target, config);
         validateSlotNaming(fields, config.setters(), target, messager);
         validateDefaultProviders(target, fields, messager);
+        validateAssignVia(target, fields, target, messager);
 
         if (javacBridge.isEmpty()) {
             messager.printMessage(Diagnostic.Kind.ERROR,
@@ -828,6 +831,150 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         }
     }
 
+    /**
+     * Reports every way an {@code @AssignVia} cannot route a setter's argument
+     * into the slot it is written on, at the annotation rather than inside the
+     * generated setter that would have called it.
+     *
+     * @param declaring the type declaring both the slots and the named methods
+     * @param slots the builder's slots
+     * @param fallbackSite where to report when a slot has no element of its own
+     * @param messager sink for diagnostics
+     */
+    private void validateAssignVia(TypeElement declaring, List<FieldSpec> slots,
+                                   Element fallbackSite, Messager messager) {
+        var types = processingEnv.getTypeUtils();
+        for (FieldSpec slot : slots) {
+            if (slot.assignVia.isEmpty()) continue;
+            Element site = slot.element != null ? slot.element : fallbackSite;
+            // Read off the resolved list rather than asked of the parameter, so
+            // the container javac wraps a repeated annotation in is covered too.
+            if (slot.seed) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@BuilderSeed cannot be combined with @AssignVia - a seeded slot is supplied "
+                        + "to builder(...) and emits no setter for a transform to route",
+                    site);
+                continue;
+            }
+            if (slot.lazy) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@AssignVia cannot be combined with @Lazy - that slot holds a Supplier<"
+                        + slot.typeDisplay + "> rather than the value itself, so there is nothing "
+                        + "for a transform to take",
+                    site);
+                continue;
+            }
+            if (slot.collector) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@AssignVia cannot be combined with @Collector - those setters copy element "
+                        + "by element into the container rather than assigning it, so there is no "
+                        + "single value to route through a transform",
+                    site);
+                continue;
+            }
+            // Every parameter type an arity-one setter already takes for this
+            // slot. A transform landing on one of them is a duplicate method in
+            // generated code, which javac would report on a line nobody wrote.
+            java.util.List<TypeMirror> taken = new ArrayList<>();
+            if (slot.isOptional) taken.add(optionalInnerOf(slot));
+            for (FieldSpec.AssignTransform transform : slot.assignVia) {
+                TypeMirror param = validateTransform(declaring, slot, transform, site, messager);
+                if (param == null) continue;
+                if (transform.direct()) continue;
+                if (erasureAmong(types, param, taken)) {
+                    messager.printMessage(Diagnostic.Kind.ERROR,
+                        "@AssignVia(method = '" + transform.method() + "') takes " + param
+                            + ", which is already the argument of a setter '" + slot.name
+                            + "' emits - give it a parameter type of its own",
+                        site);
+                    continue;
+                }
+                taken.add(param);
+            }
+        }
+    }
+
+    /**
+     * Checks one transform and returns the parameter type its setter would take,
+     * or {@code null} when it was rejected.
+     */
+    private TypeMirror validateTransform(TypeElement declaring, FieldSpec slot,
+                                         FieldSpec.AssignTransform transform,
+                                         Element site, Messager messager) {
+        String name = transform.method();
+        java.util.List<ExecutableElement> candidates = unaryMethods(declaring, name);
+        if (candidates.isEmpty()) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@AssignVia(method = '" + name + "') names no single-argument method on "
+                    + declaring.getSimpleName(),
+                site);
+            return null;
+        }
+        if (candidates.size() > 1) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@AssignVia(method = '" + name + "') names " + candidates.size()
+                    + " single-argument methods on " + declaring.getSimpleName()
+                    + " - one transform is one method, so give the intended one its own name",
+                site);
+            return null;
+        }
+        ExecutableElement method = candidates.getFirst();
+        if (!method.getModifiers().contains(Modifier.STATIC)) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@AssignVia(method = '" + name + "') names an instance method - the setter runs "
+                    + "on the builder, before any " + declaring.getSimpleName() + " exists to "
+                    + "call it on",
+                site);
+            return null;
+        }
+        TypeMirror param = method.getParameters().getFirst().asType();
+        if (!suppliesType(method.getReturnType(), slot.type)) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@AssignVia(method = '" + name + "') returns " + method.getReturnType()
+                    + ", which does not supply '" + slot.name + "' of type " + slot.typeDisplay,
+                site);
+            return null;
+        }
+        if (transform.direct() && !suppliesType(slot.type, param)) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@AssignVia(method = '" + name + "') takes " + param + ", which cannot accept '"
+                    + slot.name + "' of type " + slot.typeDisplay + " - a transform over the "
+                    + "slot's own type is what the ordinary setter hands its argument to",
+                site);
+            return null;
+        }
+        return param;
+    }
+
+    /** Every single-argument method of that name the type declares. */
+    private static java.util.List<ExecutableElement> unaryMethods(TypeElement target, String name) {
+        java.util.List<ExecutableElement> out = new ArrayList<>();
+        for (Element enclosed : target.getEnclosedElements()) {
+            if (enclosed.getKind() != ElementKind.METHOD) continue;
+            if (!enclosed.getSimpleName().contentEquals(name)) continue;
+            ExecutableElement method = (ExecutableElement) enclosed;
+            if (method.getParameters().size() == 1) out.add(method);
+        }
+        return out;
+    }
+
+    /** Whether a type erases to the same as any already spoken for. */
+    private static boolean erasureAmong(javax.lang.model.util.Types types, TypeMirror candidate,
+                                        java.util.List<TypeMirror> taken) {
+        for (TypeMirror other : taken) {
+            if (other == null) continue;
+            if (types.isSameType(types.erasure(candidate), types.erasure(other))) return true;
+        }
+        return false;
+    }
+
+    /** The type argument of an {@code Optional} slot, which its raw setter takes. */
+    private static TypeMirror optionalInnerOf(FieldSpec slot) {
+        if (!(slot.type instanceof DeclaredType declared)) return null;
+        var args = declared.getTypeArguments();
+        return args.isEmpty() ? null : args.getFirst();
+    }
+
     /** The target's own no-argument method of that name, or {@code null}. */
     private static ExecutableElement findNullaryMethod(TypeElement target, String name) {
         for (Element enclosed : target.getEnclosedElements()) {
@@ -854,31 +1001,10 @@ public class ClassBuilderProcessor extends AbstractProcessor {
      */
     private boolean suppliesType(TypeMirror provided, TypeMirror slot) {
         var types = processingEnv.getTypeUtils();
-        if (mentionsTypeVariable(provided) || mentionsTypeVariable(slot)) {
+        if (TypeNames.mentionsTypeVariable(provided) || TypeNames.mentionsTypeVariable(slot)) {
             return types.isAssignable(types.erasure(provided), types.erasure(slot));
         }
         return types.isAssignable(provided, slot);
-    }
-
-    /** Whether a type is, or is parameterised by, a type variable. */
-    private static boolean mentionsTypeVariable(TypeMirror type) {
-        return switch (type.getKind()) {
-            case TYPEVAR -> true;
-            case ARRAY -> mentionsTypeVariable(((javax.lang.model.type.ArrayType) type).getComponentType());
-            case WILDCARD -> {
-                var wildcard = (javax.lang.model.type.WildcardType) type;
-                TypeMirror bound = wildcard.getExtendsBound() != null
-                    ? wildcard.getExtendsBound() : wildcard.getSuperBound();
-                yield bound != null && mentionsTypeVariable(bound);
-            }
-            case DECLARED -> {
-                for (TypeMirror argument : ((DeclaredType) type).getTypeArguments()) {
-                    if (mentionsTypeVariable(argument)) yield true;
-                }
-                yield false;
-            }
-            default -> false;
-        };
     }
 
     /**

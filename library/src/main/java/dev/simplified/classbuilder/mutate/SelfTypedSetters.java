@@ -102,6 +102,7 @@ final class SelfTypedSetters {
         } else {
             out.append(plainSetter(field));
         }
+        appendAssignViaOverloads(field, out);
         return out.toList();
     }
 
@@ -504,12 +505,22 @@ final class SelfTypedSetters {
     }
 
     /**
-     * Assigns the builder slot, wrapping the value as {@code () -> value} when
-     * the field takes the constructor-computed path. Mirrors
-     * {@link FieldMutators#slotAssign}: the slot is {@code Supplier<T>} there,
-     * and every setter has to wrap so null keeps meaning "never set".
+     * Assigns the builder slot, routing the value through the slot's direct
+     * {@code @AssignVia} transform where one is written. Mirrors
+     * {@link FieldMutators#slotAssign}.
      */
     private JCStatement slotAssign(FieldSpec field, JCExpression value) {
+        return slotAssignRaw(field, coerce(field, value));
+    }
+
+    /**
+     * Assigns the builder slot verbatim, wrapping the value as
+     * {@code () -> value} when the field takes the constructor-computed path.
+     * Mirrors {@link FieldMutators#slotAssignRaw}: the slot is
+     * {@code Supplier<T>} there, and every setter has to wrap so null keeps
+     * meaning "never set".
+     */
+    private JCStatement slotAssignRaw(FieldSpec field, JCExpression value) {
         JCExpression rhs = ctx.isInstanceDefault(field.name)
             ? make.Lambda(List.nil(), value)
             : value;
@@ -517,6 +528,40 @@ final class SelfTypedSetters {
             make.Select(make.Ident(names._this), names.fromString(field.name)),
             rhs
         ));
+    }
+
+    /** Mirrors {@link FieldMutators#coerce}. */
+    private JCExpression coerce(FieldSpec field, JCExpression value) {
+        String transform = field.directAssign();
+        return transform == null ? value : staticCall(transform, value);
+    }
+
+    /** {@code Target.method(argument)}. */
+    private JCExpression staticCall(String method, JCExpression argument) {
+        return make.Apply(
+            List.nil(),
+            make.Select(make.Ident(names.fromString(ctx.targetSimpleName())),
+                names.fromString(method)),
+            List.of(argument)
+        );
+    }
+
+    /** Mirrors {@link FieldMutators#assignViaOverload}, returning {@code self()}. */
+    private JCMethodDecl assignViaOverload(FieldSpec field, FieldSpec.AssignTransform transform) {
+        String setterName = field.setters.setName(field.name, field.isBoolean);
+        JCVariableDecl p = param(field.name, types.parseType(transform.paramDisplay()));
+        JCStatement assign = slotAssignRaw(field,
+            staticCall(transform.method(), make.Ident(names.fromString(field.name))));
+        return method(setterName, List.of(p), List.of(assign, returnSelf()));
+    }
+
+    /** Mirrors {@link FieldMutators#appendAssignViaOverloads}. */
+    private void appendAssignViaOverloads(FieldSpec field, ListBuffer<JCMethodDecl> out) {
+        if (field.collector) return;
+        for (FieldSpec.AssignTransform transform : field.assignVia) {
+            if (transform.direct() || !transform.resolved()) continue;
+            out.append(assignViaOverload(field, transform));
+        }
     }
 
     /**

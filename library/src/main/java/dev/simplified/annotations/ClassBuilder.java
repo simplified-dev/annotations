@@ -58,8 +58,9 @@ import java.lang.annotation.Target;
  *
  * <p>What a slot is changes what applies to it:
  * <ul>
- *   <li>{@link Collector}, {@link Negate} and {@link Formattable} shape a
- *       parameter's setters exactly as they shape a field's.</li>
+ *   <li>{@link Collector}, {@link Negate}, {@link Formattable} and
+ *       {@link AssignVia} shape a parameter's setters exactly as they shape a
+ *       field's.</li>
  *   <li>{@link BuilderSeed} moves a parameter onto {@code builder(...)} and
  *       drops its setter, which is how a required value is asked for at the
  *       entry point.</li>
@@ -111,6 +112,9 @@ import java.lang.annotation.Target;
  *       {@code build()}</li>
  *   <li>{@link ObtainVia} - override how {@code from}/{@code mutate} reads the
  *       field off an existing instance</li>
+ *   <li>{@link AssignVia} - route a setter's argument through a static method
+ *       on the way into the slot, either shaping the setter the field already
+ *       has or adding an overload taking what that method accepts</li>
  *   <li>{@link Collector} - emit varargs / {@code Iterable} bulk setters on
  *       collection and map fields, with opt-in single-element add/put,
  *       {@code clearX}, and lazy {@code putXIfAbsent} overloads</li>
@@ -190,6 +194,7 @@ import java.lang.annotation.Target;
  * @see Negate
  * @see Formattable
  * @see ObtainVia
+ * @see AssignVia
  */
 @Retention(RetentionPolicy.CLASS)
 @Target({ ElementType.TYPE, ElementType.CONSTRUCTOR, ElementType.METHOD })

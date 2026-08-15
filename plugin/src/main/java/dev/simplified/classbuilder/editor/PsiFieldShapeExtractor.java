@@ -2,17 +2,21 @@ package dev.simplified.classbuilder.editor;
 
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationMemberValue;
+import com.intellij.psi.PsiArrayInitializerMemberValue;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiDocCommentOwner;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiLiteralExpression;
+import com.intellij.psi.PsiMember;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiModifierListOwner;
 import com.intellij.psi.PsiParameter;
 import com.intellij.psi.PsiRecordComponent;
 import com.intellij.psi.PsiSubstitutor;
+import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypeParameter;
+import com.intellij.psi.util.TypeConversionUtil;
 import dev.simplified.classbuilder.apt.SetterScheme;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.shared.psi.WrittenAnnotations;
@@ -40,6 +44,8 @@ final class PsiFieldShapeExtractor {
     private static final String LAZY_FQN = ClassBuilderConstants.LAZY_FQN;
     private static final String BUILDER_SEED_FQN = ClassBuilderConstants.BUILDER_SEED_FQN;
     private static final String SETTER_NAMES_FQN = ClassBuilderConstants.SETTER_NAMES_FQN;
+    private static final String ASSIGN_VIA_FQN = ClassBuilderConstants.ASSIGN_VIA_FQN;
+    private static final String ASSIGN_VIA_LIST_FQN = ClassBuilderConstants.ASSIGN_VIA_LIST_FQN;
     private static final String NOT_NULL_FQN = "org.jetbrains.annotations.NotNull";
     private static final String NULLABLE_FQN = "org.jetbrains.annotations.Nullable";
 
@@ -203,7 +209,101 @@ final class PsiFieldShapeExtractor {
         PsiAnnotation flag = findAnnotation(owner, BUILD_FLAG_FQN);
         if (flag != null) b.nonNullByBuildFlag = booleanAttr(flag, "nonNull", false);
 
+        b.assignVia = readAssignVia(owner, type);
+
         return b;
+    }
+
+    /**
+     * Reads the slot's {@code @AssignVia} transforms and resolves each named
+     * method against the type declaring the slot, mirroring
+     * {@code FieldSpec.readAssignVia}.
+     *
+     * <p>Only the transforms the processor would emit against are kept. A name
+     * matching no single one-argument method is dropped rather than guessed at:
+     * the processor reports it as an error, and synthesising a setter for it
+     * would put a method in completion that the build does not produce.
+     */
+    private static List<PsiFieldShape.AssignTransform> readAssignVia(PsiModifierListOwner owner,
+                                                                     PsiType slotType) {
+        List<PsiAnnotation> written = assignViaAnnotations(owner);
+        if (written.isEmpty()) return List.of();
+
+        PsiClass declaring = declaringClass(owner);
+        if (declaring == null) return List.of();
+
+        List<PsiFieldShape.AssignTransform> out = new ArrayList<>(written.size());
+        for (PsiAnnotation annotation : written) {
+            String name = stringAttr(annotation, "method", "");
+            if (name.isEmpty()) continue;
+            PsiType param = soleUnaryParameterType(declaring, name);
+            if (param == null) continue;
+            out.add(new PsiFieldShape.AssignTransform(param, sameErasure(param, slotType)));
+        }
+        return out;
+    }
+
+    /**
+     * Every {@code @AssignVia} on a slot, in source order - each declaration
+     * separately as source presents them, and the container's contents when the
+     * slot is read out of a class file.
+     */
+    private static List<PsiAnnotation> assignViaAnnotations(PsiModifierListOwner owner) {
+        List<PsiAnnotation> out = new ArrayList<>();
+        for (PsiAnnotation annotation : owner.getAnnotations()) {
+            if (WrittenAnnotations.spellsOnMember(annotation, ASSIGN_VIA_FQN)) {
+                out.add(annotation);
+                continue;
+            }
+            if (!WrittenAnnotations.spellsOnMember(annotation, ASSIGN_VIA_LIST_FQN)) continue;
+            if (!(annotation.findDeclaredAttributeValue("value")
+                instanceof PsiArrayInitializerMemberValue held)) continue;
+            for (PsiAnnotationMemberValue value : held.getInitializers()) {
+                if (value instanceof PsiAnnotation nested) out.add(nested);
+            }
+        }
+        return out;
+    }
+
+    /** The class declaring a field, record component or parameter. */
+    private static PsiClass declaringClass(PsiModifierListOwner owner) {
+        if (owner instanceof PsiMember member) return member.getContainingClass();
+        if (owner instanceof PsiParameter parameter
+            && parameter.getDeclarationScope() instanceof PsiMember scope) {
+            return scope.getContainingClass();
+        }
+        return null;
+    }
+
+    /**
+     * The parameter type of the class's one single-argument {@code static} method
+     * of that name, or {@code null} when it declares none or several.
+     *
+     * <p>Asked of {@code getOwnMethods()} rather than {@code getMethods()}: the
+     * latter includes augmented members, so a provider asking it while running
+     * would see what it contributed last.
+     */
+    private static PsiType soleUnaryParameterType(PsiClass declaring, String name) {
+        PsiType found = null;
+        for (PsiMethod method : GeneratedMemberFactory.ownMethods(declaring)) {
+            if (!name.equals(method.getName())) continue;
+            if (!method.hasModifierProperty(PsiModifier.STATIC)) continue;
+            PsiParameter[] parameters = method.getParameterList().getParameters();
+            if (parameters.length != 1) continue;
+            if (found != null) return null;
+            found = parameters[0].getType();
+        }
+        return found;
+    }
+
+    /**
+     * Whether a transform's parameter type erases to the slot's own, which is
+     * what decides between shaping the setter the slot already has and adding an
+     * overload. Erasure, for the reason the processor uses it - a duplicate
+     * signature is what the answer prevents, and signatures collide on erasures.
+     */
+    private static boolean sameErasure(PsiType param, PsiType slotType) {
+        return TypeConversionUtil.erasure(param).equals(TypeConversionUtil.erasure(slotType));
     }
 
     /** True when the owner is a field carrying a declared initializer. */

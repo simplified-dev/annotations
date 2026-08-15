@@ -187,7 +187,15 @@ public final class GeneratedMemberFactory {
         return false;
     }
 
-    private static List<PsiMethod> ownMethods(PsiClass target) {
+    /**
+     * The methods a class declares itself, excluding anything an augment
+     * provider contributed - which is what a provider asking while it runs would
+     * otherwise see, including whatever it added last.
+     *
+     * @param target the class to read
+     * @return its own methods
+     */
+    static List<PsiMethod> ownMethods(PsiClass target) {
         return target instanceof PsiExtensibleClass extensible
             ? extensible.getOwnMethods()
             : List.of(target.getMethods());
@@ -823,7 +831,27 @@ public final class GeneratedMemberFactory {
         } else {
             out.add(plainSetter(ctx, field));
         }
+        appendAssignViaOverloads(ctx, field, out);
         return out;
+    }
+
+    /**
+     * Appends one setter per {@code @AssignVia} taking a type of its own,
+     * mirroring {@code FieldMutators.appendAssignViaOverloads}. A direct
+     * transform contributes nothing here, changing only what the setter's body
+     * does; a {@code @Collector} slot contributes nothing either, the processor
+     * rejecting that pairing outright.
+     */
+    private static void appendAssignViaOverloads(SetterCtx ctx, PsiFieldShape field,
+                                                 List<PsiMethod> out) {
+        if (field.collector) return;
+        for (PsiFieldShape.AssignTransform transform : field.assignVia) {
+            if (transform.direct()) continue;
+            LightMethodBuilder m = newSetter(ctx, field,
+                field.setters.setName(field.name, field.isBoolean));
+            m.addParameter(buildParam(m, field.name, transform.paramType(), false));
+            out.add(m);
+        }
     }
 
     // ------------------------------------------------------------------

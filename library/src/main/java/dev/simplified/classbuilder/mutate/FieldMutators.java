@@ -116,6 +116,7 @@ final class FieldMutators {
         } else {
             out.append(plainSetter(field));
         }
+        appendAssignViaOverloads(field, out);
         return out.toList();
     }
 
@@ -311,17 +312,35 @@ final class FieldMutators {
     }
 
     /**
-     * Assigns the builder slot, wrapping the value as {@code () -> value} when
-     * the field takes the constructor-computed path. The slot is
-     * {@code Supplier<T>} there, and every setter has to wrap so that null keeps
-     * meaning "never set" - an explicit null becomes {@code () -> null} and
-     * survives as the caller's chosen value.
+     * Assigns the builder slot, routing the value through the slot's direct
+     * {@code @AssignVia} transform where one is written.
+     *
+     * <p>Every shape that hands a value to the slot goes through here, which is
+     * what makes one written transform cover all of them - the ordinary setter,
+     * the zero-argument boolean form, the {@code @Negate} inverse and the
+     * {@code @Formattable} overload. A clamp that applied to only some of them
+     * would be a hole the author cannot see.
      *
      * @param field the field being set
      * @param value the value expression, in the slot's declared type
      * @return the assignment statement
      */
     private JCStatement slotAssign(FieldSpec field, JCExpression value) {
+        return slotAssignRaw(field, coerce(field, value));
+    }
+
+    /**
+     * Assigns the builder slot verbatim, wrapping the value as
+     * {@code () -> value} when the field takes the constructor-computed path.
+     * The slot is {@code Supplier<T>} there, and every setter has to wrap so that
+     * null keeps meaning "never set" - an explicit null becomes {@code () -> null}
+     * and survives as the caller's chosen value.
+     *
+     * @param field the field being set
+     * @param value the value expression, already in the slot's declared type
+     * @return the assignment statement
+     */
+    private JCStatement slotAssignRaw(FieldSpec field, JCExpression value) {
         JCExpression rhs = ctx.isInstanceDefault(field.name)
             ? make.Lambda(List.nil(), value)
             : value;
@@ -329,6 +348,53 @@ final class FieldMutators {
             make.Select(make.Ident(names._this), names.fromString(field.name)),
             rhs
         ));
+    }
+
+    /**
+     * Wraps a value in the slot's direct {@code @AssignVia} transform, or returns
+     * it unchanged when the slot declares none.
+     */
+    private JCExpression coerce(FieldSpec field, JCExpression value) {
+        String transform = field.directAssign();
+        return transform == null ? value : staticCall(transform, value);
+    }
+
+    /** {@code Target.method(argument)}. */
+    private JCExpression staticCall(String method, JCExpression argument) {
+        return make.Apply(
+            List.nil(),
+            make.Select(make.Ident(names.fromString(ctx.targetSimpleName())),
+                names.fromString(method)),
+            List.of(argument)
+        );
+    }
+
+    /**
+     * {@code Builder withX(P value)} for an {@code @AssignVia} whose parameter
+     * type is not the slot's own, storing {@code Target.method(value)}. Sits
+     * beside the slot's ordinary setter rather than standing in for it, that
+     * setter still being the way to hand over a value already in the slot's type.
+     */
+    private JCMethodDecl assignViaOverload(FieldSpec field, FieldSpec.AssignTransform transform) {
+        String setterName = field.setters.setName(field.name, field.isBoolean);
+        JCVariableDecl p = param(field.name, types.parseType(transform.paramDisplay()));
+        JCStatement assign = slotAssignRaw(field,
+            staticCall(transform.method(), make.Ident(names.fromString(field.name))));
+        return methodDefRaw(setterName, List.of(p), List.of(assign, returnThis()));
+    }
+
+    /**
+     * Appends one setter per {@code @AssignVia} that takes a type of its own.
+     * A {@code @Collector} slot contributes none - its setters copy element by
+     * element into the container rather than assigning it, so the processor
+     * rejects the pairing outright and nothing here should emit against it.
+     */
+    private void appendAssignViaOverloads(FieldSpec field, ListBuffer<JCMethodDecl> out) {
+        if (field.collector) return;
+        for (FieldSpec.AssignTransform transform : field.assignVia) {
+            if (transform.direct() || !transform.resolved()) continue;
+            out.append(assignViaOverload(field, transform));
+        }
     }
 
     /** Slot assignment from a like-named parameter, then {@code return this;}. */
