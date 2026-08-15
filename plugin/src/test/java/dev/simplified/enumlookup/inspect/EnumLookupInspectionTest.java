@@ -69,6 +69,53 @@ public class EnumLookupInspectionTest extends BasePlatformTestCase {
             "@EnumLookup is only supported on enum types"));
     }
 
+    public void testHandRolledCachedValues_flagged() {
+        // The processor refuses the enum for this, so the editor has to say it
+        // too - otherwise the build fails on a line the editor called clean.
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.EnumLookup;
+            @EnumLookup
+            public enum Foo {
+                A, B;
+                private static final Foo[] CACHED_VALUES = values();
+            }
+            """);
+        assertTrue(hasHighlightContaining(HighlightSeverity.ERROR,
+            "@EnumLookup generates a field named 'CACHED_VALUES'"));
+    }
+
+    public void testHandRolledKeyCache_flagged() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.EnumLookup;
+            import dev.simplified.annotations.KeyField;
+            @EnumLookup
+            public enum Foo {
+                A(1);
+                @KeyField private final int code;
+                private static final int[] CACHED_KEYS_code = new int[1];
+                Foo(int code) { this.code = code; }
+            }
+            """);
+        assertTrue(hasHighlightContaining(HighlightSeverity.ERROR,
+            "@EnumLookup generates a field named 'CACHED_KEYS_code'"));
+    }
+
+    public void testUnrelatedStaticField_clean() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.EnumLookup;
+            @EnumLookup
+            public enum Foo {
+                A, B;
+                private static final String LABEL = "x";
+            }
+            """);
+        assertFalse(hasHighlightContaining(HighlightSeverity.ERROR,
+            "@EnumLookup generates a field named"));
+    }
+
     public void testKeyFieldOnStaticField_flagged() {
         myFixture.configureByText("Foo.java",
             """

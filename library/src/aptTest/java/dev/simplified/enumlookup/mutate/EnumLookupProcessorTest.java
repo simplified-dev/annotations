@@ -253,6 +253,45 @@ public class EnumLookupProcessorTest {
     }
 
     @Test
+    public void handRolledCachedValues_namesTheCollision() {
+        // A hand-rolled values() cache is exactly what @EnumLookup is adopted to
+        // delete, and these enums all have one. Emitting the populate statements
+        // beside it assigned a second value to the author's own final field, so
+        // javac reported a definite-assignment error on a line the author wrote
+        // and named neither the annotation nor the field it clashed with.
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Clash",
+            "package demo;",
+            "import dev.simplified.annotations.EnumLookup;",
+            "@EnumLookup",
+            "public enum Clash {",
+            "    A, B;",
+            "    private static final Clash[] CACHED_VALUES = values();",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@EnumLookup generates a field named 'CACHED_VALUES'");
+        assertThat(c).hadErrorContaining("delete the declaration");
+    }
+
+    @Test
+    public void handRolledKeyCache_namesTheCollision() {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.KeyClash",
+            "package demo;",
+            "import dev.simplified.annotations.EnumLookup;",
+            "import dev.simplified.annotations.KeyField;",
+            "@EnumLookup",
+            "public enum KeyClash {",
+            "    A(1);",
+            "    @KeyField private final int code;",
+            "    private static final int[] CACHED_KEYS_code = new int[1];",
+            "    KeyClash(int code) { this.code = code; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@EnumLookup generates a field named 'CACHED_KEYS_code'");
+    }
+
+    @Test
     public void stringKey_renamedViaMethodName_avoidsCollision() throws Exception {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.Slug2",
             "package demo;",

@@ -91,15 +91,14 @@ public final class EnumLookupMutator {
 
         String enumName = targetElement.getSimpleName().toString();
 
+        if (reportCacheCollisions(target, targetElement, keys)) return false;
+
         // Fields.
-        if (!hasFieldNamed(target, CACHED_VALUES)) {
-            JCVariableDecl values = cachedValuesField(enumName);
-            AstMarkers.markGenerated(values, generated);
-            bridge.compat().appendDef(target, values);
-        }
+        JCVariableDecl values = cachedValuesField(enumName);
+        AstMarkers.markGenerated(values, generated);
+        bridge.compat().appendDef(target, values);
         for (EnumKeySpec spec : keys) {
             String name = CACHED_KEYS_PREFIX + spec.fieldName();
-            if (hasFieldNamed(target, name)) continue;
             JCVariableDecl keysArr = cachedKeysField(spec, name);
             AstMarkers.markGenerated(keysArr, generated);
             bridge.compat().appendDef(target, keysArr);
@@ -591,5 +590,42 @@ public final class EnumLookupMutator {
             if (def instanceof JCVariableDecl v && v.name.toString().equals(name)) return true;
         }
         return false;
+    }
+
+    /**
+     * Reports every cache field the enum already declares under a name this
+     * mutator owns, and says so before anything is emitted.
+     *
+     * <p>Skipping the declaration and emitting the populate statements anyway is
+     * what this replaces, and it failed in the worst available way: the static
+     * block assigned a second value to the author's own {@code final} field, so
+     * javac reported a definite-assignment error on a line the author wrote,
+     * naming neither the annotation nor the collision. The hand-rolled cache
+     * these enums carry is exactly what {@code @EnumLookup} is adopted to
+     * delete, so a plain instruction to delete it is the whole fix.
+     *
+     * @param target the enum's source tree
+     * @param targetElement the enum, for the diagnostic's position
+     * @param keys the resolved {@code @KeyField} specs
+     * @return whether a collision was reported, in which case nothing is emitted
+     */
+    private boolean reportCacheCollisions(JCClassDecl target, TypeElement targetElement,
+                                          java.util.List<EnumKeySpec> keys) {
+        java.util.List<String> owned = new java.util.ArrayList<>();
+        owned.add(CACHED_VALUES);
+        for (EnumKeySpec spec : keys) owned.add(CACHED_KEYS_PREFIX + spec.fieldName());
+
+        boolean collided = false;
+        for (String name : owned) {
+            if (!hasFieldNamed(target, name)) continue;
+            collided = true;
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                "@EnumLookup generates a field named '" + name + "' and "
+                    + targetElement.getSimpleName() + " already declares one - delete the declaration "
+                    + "and read the generated field, which is private static final and carries the "
+                    + "same name",
+                targetElement);
+        }
+        return collided;
     }
 }
