@@ -291,6 +291,41 @@ public class EnumLookupProcessorTest {
     }
 
     @Test
+    public void ignoreCaseKey_foldsCaseThroughANullnessAnnotation() throws Exception {
+        // The type-use annotation is the whole point of this case. A field's
+        // declared type renders with it - "@org.jetbrains.annotations.NotNull
+        // java.lang.String" - so a String test comparing that spelling to
+        // "java.lang.String" answers no and the case folding is dropped. The
+        // annotation is accepted, the build is clean, and the lookup silently
+        // matches exactly, which is the failure ignoreCase exists to remove.
+        // The editor's own String test reads the canonical text, which carries
+        // no annotation, so it stays quiet and neither half reports anything.
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Tagged",
+            "package demo;",
+            "import dev.simplified.annotations.EnumLookup;",
+            "import dev.simplified.annotations.KeyField;",
+            "import org.jetbrains.annotations.NotNull;",
+            "@EnumLookup",
+            "public enum Tagged {",
+            "    US(\"en-US\"), TW(\"zh-TW\");",
+            "    @KeyField(ignoreCase = true) private final @NotNull String tag;",
+            "    Tagged(String tag) { this.tag = tag; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> tagged = Class.forName("demo.Tagged", true, cl);
+        Method ofTag = tagged.getMethod("ofTag", String.class);
+
+        Object us = tagged.getField("US").get(null);
+        assertSame(us, ofTag.invoke(null, "en-US"));
+        assertSame("a nullness annotation is not a different type", us, ofTag.invoke(null, "en-us"));
+        assertSame(tagged.getField("TW").get(null), ofTag.invoke(null, "zh-tw"));
+        assertNull(ofTag.invoke(null, (Object) null));
+    }
+
+    @Test
     public void withoutIgnoreCase_theKeyStaysExact() throws Exception {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.Exact",
             "package demo;",

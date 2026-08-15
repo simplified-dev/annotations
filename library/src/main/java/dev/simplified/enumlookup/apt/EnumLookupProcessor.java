@@ -16,6 +16,8 @@ import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.ArrayType;
+import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeMirror;
 import javax.tools.Diagnostic;
 import java.util.ArrayList;
@@ -141,7 +143,7 @@ public class EnumLookupProcessor extends AbstractProcessor {
             out.add(new EnumKeySpec(
                 fieldName,
                 methodSuffix,
-                type.toString(),
+                typeDisplay(type),
                 isPrimitive,
                 annotation.ignoreCase(),
                 annotation.strictKeys(),
@@ -149,6 +151,36 @@ public class EnumLookupProcessor extends AbstractProcessor {
             ));
         }
         return out;
+    }
+
+    /**
+     * Renders a field's declared type without the type-use annotations
+     * {@link TypeMirror#toString()} keeps.
+     *
+     * <p>A field written {@code @NotNull String} renders as
+     * {@code "@org.jetbrains.annotations.NotNull java.lang.String"}, which is a
+     * different string from {@code "java.lang.String"} and the same type. Two
+     * things read this display and neither is asking about nullness: the key
+     * array's element type, and whether the key is a {@code String} and can
+     * therefore fold case. The second is the one that bites - the comparison
+     * silently stays exact, so a lookup the author asked to be case-insensitive
+     * compiles clean and then does not match.
+     *
+     * @param type the field's declared type
+     * @return the type's own spelling, type-use annotations dropped
+     */
+    private static String typeDisplay(TypeMirror type) {
+        if (type instanceof ArrayType array) return typeDisplay(array.getComponentType()) + "[]";
+        if (!(type instanceof DeclaredType declared)) return type.toString();
+        String raw = ((TypeElement) declared.asElement()).getQualifiedName().toString();
+        List<? extends TypeMirror> arguments = declared.getTypeArguments();
+        if (arguments.isEmpty()) return raw;
+        StringBuilder out = new StringBuilder(raw).append('<');
+        for (int i = 0; i < arguments.size(); i++) {
+            if (i > 0) out.append(", ");
+            out.append(typeDisplay(arguments.get(i)));
+        }
+        return out.append('>').toString();
     }
 
     private static String resolveMethodSuffix(String methodNameAttr, String fieldName) {
