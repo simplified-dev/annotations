@@ -18,8 +18,10 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Surfaces the bootstrap methods ({@code builder()}, {@code from(T)},
@@ -87,7 +89,15 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         // walks the class's nested types straight back into this method.
         if (IN_PROGRESS.get().contains(target)) return Collections.emptyList();
         BuilderSite site = BuilderSite.of(target);
-        if (site == null) return Collections.emptyList();
+        if (site == null) {
+            // The class carries no annotation of its own, which is also what a
+            // declared Builder being merged into looks like. Its members come
+            // from the annotation on the class around it.
+            if (!PsiMethod.class.isAssignableFrom(type)) return Collections.emptyList();
+            @SuppressWarnings("unchecked")
+            List<Psi> merged = (List<Psi>) cachedMergedBuilderMethods(target);
+            return merged;
+        }
 
         if (PsiMethod.class.isAssignableFrom(type)) {
             // Bootstrap methods (builder/from/mutate) only on concrete targets;
@@ -134,6 +144,61 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             return CachedValueProvider.Result.create(methods,
                 PsiModificationTracker.MODIFICATION_COUNT);
         });
+    }
+
+    /**
+     * The generated members for a {@code Builder} the target declares itself and
+     * asked to have merged into.
+     *
+     * <p>Without this the editor would show only what the author wrote there
+     * while the build emits every setter beside it - completion missing the
+     * whole generated surface, which is the drift in its most literal form.
+     *
+     * <p>The collision rule is the processor's: a generated method is offered
+     * only when the declared class spells no method of that name and parameter
+     * count, and the builder's constructor is never offered, that class always
+     * having one by the time either half looks. Read through
+     * {@code getOwnMethods()} rather than {@code getMethods()}, the latter being
+     * augment-aware and answering with whatever this provider contributed last.
+     *
+     * @param declared the class that might be a merged builder
+     * @return the members to add, empty when it is not one
+     */
+    private static List<PsiMethod> cachedMergedBuilderMethods(PsiClass declared) {
+        return CachedValuesManager.getCachedValue(declared, () -> {
+            List<PsiMethod> members = mergedBuilderMethods(declared);
+            return CachedValueProvider.Result.create(members,
+                PsiModificationTracker.MODIFICATION_COUNT);
+        });
+    }
+
+    private static List<PsiMethod> mergedBuilderMethods(PsiClass declared) {
+        String name = declared.getName();
+        if (name == null) return Collections.emptyList();
+        PsiClass owner = declared.getContainingClass();
+        if (owner == null || IN_PROGRESS.get().contains(owner)) return Collections.emptyList();
+        BuilderSite site = BuilderSite.of(owner);
+        if (site == null || site.isExecutable()) return Collections.emptyList();
+
+        GeneratedMemberFactory.EditorBuilderConfig config =
+            GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
+        if (!config.mergeDeclaredBuilder()) return Collections.emptyList();
+        if (!name.equals(config.builderName())) return Collections.emptyList();
+
+        Set<String> spelled = new HashSet<>();
+        for (PsiMethod own : GeneratedMemberFactory.ownMethods(declared)) {
+            spelled.add(own.getName() + "/" + own.getParameterList().getParametersCount());
+        }
+        List<PsiMethod> out = new ArrayList<>();
+        for (PsiMethod generated : GeneratedMemberFactory.synthesizeBuilderMethods(site, config, declared)) {
+            if (generated.isConstructor()) continue;
+            if (spelled.contains(generated.getName() + "/"
+                + generated.getParameterList().getParametersCount())) {
+                continue;
+            }
+            out.add(generated);
+        }
+        return out;
     }
 
     private static List<PsiMethod> cachedMethods(PsiClass target) {
@@ -241,6 +306,10 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             for (PsiMethod own : extensible.getOwnMethods()) {
                 if (own.isConstructor()) return false;
             }
+            // A merged declared builder is the one case where a nested builder
+            // does not suppress the constructor: build() still calls
+            // new Target(..), so the constructor it calls still has to exist.
+            if (config.mergeDeclaredBuilder()) return true;
             for (PsiClass nested : extensible.getOwnInnerClasses()) {
                 if (config.builderName().equals(nested.getName())) return false;
             }

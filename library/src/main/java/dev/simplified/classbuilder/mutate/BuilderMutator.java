@@ -109,10 +109,12 @@ public final class BuilderMutator {
             return true;
         }
 
-        if (hasExistingNested(target, ctx.builderName())) {
+        JCClassDecl declared = DeclaredBuilderMerge.declaredBuilder(target, ctx.builderName());
+        if (declared != null && !config.mergeDeclaredBuilder()) {
             messager.printMessage(Diagnostic.Kind.NOTE,
                 "@ClassBuilder skipped injection: class " + ctx.targetSimpleName()
-                    + " already declares a nested '" + ctx.builderName() + "' type",
+                    + " already declares a nested '" + ctx.builderName() + "' type. Write "
+                    + "mergeDeclaredBuilder = true to have the generated members appended to it",
                 targetElement
             );
             return true;
@@ -123,8 +125,14 @@ public final class BuilderMutator {
         // Target.$default$<name>() references resolve at javac attribution.
         new RetainedInitFactory(ctx, messager).appendAll();
 
-        JCClassDecl nested = new NestedBuilderFactory(ctx).build();
-        bridge.compat().appendDef(target, nested);
+        if (declared != null) {
+            if (!new DeclaredBuilderMerge(ctx, messager).merge(target, targetElement, declared)) {
+                return true;
+            }
+        } else {
+            JCClassDecl nested = new NestedBuilderFactory(ctx).build();
+            bridge.compat().appendDef(target, nested);
+        }
 
         new BootstrapMethodFactory(ctx, messager).appendAll();
         return true;
@@ -163,6 +171,10 @@ public final class BuilderMutator {
      * suppresses injection wholesale, and when there are no fields to pass -
      * that last case would collide with javac's own default constructor.
      *
+     * <p>A <em>merged</em> declared builder is the one case where a nested
+     * builder does not suppress it: the generated {@code build()} still calls
+     * {@code new Target(..)}, so the constructor it calls still has to exist.
+     *
      * @param targetElement the annotated type
      * @param target the target's class declaration
      * @param ctx the per-target mutation context
@@ -180,7 +192,8 @@ public final class BuilderMutator {
         if (!ctx.config().factoryMethod().isEmpty()) return false;
         if (ctx.fields().isEmpty()) return false;
         if (AllArgsConstructorFactory.hasExplicitConstructor(target)) return false;
-        return !hasExistingNested(target, ctx.builderName());
+        if (ctx.config().mergeDeclaredBuilder()) return true;
+        return DeclaredBuilderMerge.declaredBuilder(target, ctx.builderName()) == null;
     }
 
     /**
@@ -201,13 +214,6 @@ public final class BuilderMutator {
                     target);
             }
         }
-    }
-
-    private static boolean hasExistingNested(JCClassDecl target, String nestedName) {
-        for (var def : target.defs) {
-            if (def instanceof JCClassDecl c && c.name.toString().equals(nestedName)) return true;
-        }
-        return false;
     }
 
     /**

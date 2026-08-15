@@ -1199,6 +1199,7 @@ public final class GeneratedMemberFactory {
     record EditorBuilderConfig(BuilderScheme names, SetterScheme setters,
                                String access, String constructorAccess,
                                String builderConstructorAccess,
+                               boolean mergeDeclaredBuilder,
                                String factoryMethod) {
         static EditorBuilderConfig fromAnnotation(PsiAnnotation annotation) {
             NamingStyle style = ClassBuilderConstants.namingStyle(annotation);
@@ -1209,12 +1210,15 @@ public final class GeneratedMemberFactory {
             // Same default one level down, so builder() is the one way in.
             String builderConstructorAccess = ClassBuilderConstants.accessKeyword(annotation,
                 ClassBuilderConstants.ATTR_BUILDER_CONSTRUCTOR_ACCESS, "");
+            boolean mergeDeclaredBuilder = ClassBuilderConstants.booleanAttr(annotation,
+                ClassBuilderConstants.ATTR_MERGE_DECLARED_BUILDER, false);
             String factoryMethod = ClassBuilderConstants.stringAttr(annotation,
                 ClassBuilderConstants.ATTR_FACTORY_METHOD, "");
             return new EditorBuilderConfig(
                 ClassBuilderConstants.builderScheme(annotation, style, targetSimpleName(annotation)),
                 ClassBuilderConstants.setterScheme(annotation, style),
-                access, constructorAccess, builderConstructorAccess, factoryMethod);
+                access, constructorAccess, builderConstructorAccess, mergeDeclaredBuilder,
+                factoryMethod);
         }
 
         /**

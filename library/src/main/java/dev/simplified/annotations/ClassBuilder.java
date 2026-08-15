@@ -334,6 +334,32 @@ public @interface ClassBuilder {
     boolean generateImpl() default true;
 
     /**
+     * Whether the generated members should be appended to a {@code Builder} the
+     * target already declares, rather than the declaration suppressing them.
+     *
+     * <p>Off by default, because a declared builder normally means the author
+     * wrote the whole thing and two builders of one name is not something to
+     * guess at. Turn it on when the reason for declaring one is a single member
+     * the generator cannot express - a setter that builds its own value, an
+     * extension point taking the builder itself, a view onto in-progress state -
+     * so the other setters still come from here.
+     *
+     * <p>The author wins member for member: a generated field is appended only
+     * when the declared builder spells no field of that name, and a generated
+     * method only when it spells no method of that name and parameter count.
+     * What is skipped is reported as a compiler note rather than left silent.
+     *
+     * <p>The declared builder's constructor is the author's throughout, javac's
+     * own default included, so {@link #builderConstructorAccess()} does not
+     * reach it - declare one to narrow it, as on any other written class.
+     *
+     * <p>Ignored on an interface target, whose builder is a sibling file with
+     * nothing to merge into, and on a SuperBuilder chain, which builds its
+     * hierarchy rather than one nested class.
+     */
+    boolean mergeDeclaredBuilder() default false;
+
+    /**
      * The name of a static factory method on the annotated type that
      * {@code build()} should invoke instead of the constructor directly.
      * Useful for types that need build-time caching or extra validation.

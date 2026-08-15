@@ -43,6 +43,36 @@ final class NestedBuilderFactory {
     }
 
     JCClassDecl build() {
+        // Builder class visibility follows @ClassBuilder.access; always STATIC
+        // because nested builders must not capture an enclosing this. Being
+        // static is also why a generic target's type parameters have to be
+        // re-declared here - the enclosing class's are out of scope.
+        JCModifiers mods = make.Modifiers(ctx.accessFlag() | Flags.STATIC);
+        JCClassDecl nested = make.ClassDef(
+            mods,
+            names.fromString(ctx.builderName()),
+            ctx.typeParams(),
+            null,
+            List.nil(),
+            members()
+        );
+        AstMarkers.markGenerated(nested, ctx.generated());
+        return nested;
+    }
+
+    /**
+     * Every member the builder is made of, in emission order - one slot field
+     * (plus its replaced marker where the merge path needs one), then every
+     * setter shape, then {@code build()}, then the builder's own constructor.
+     *
+     * <p>Separate from {@link #build()} so a declared builder can be merged into
+     * rather than replaced: the merge appends the subset of this list the author
+     * has not already written. One producer either way, so a merged builder
+     * cannot come out with a different member for the same slot.
+     *
+     * @return the generated members
+     */
+    List<JCTree> members() {
         ListBuffer<JCTree> defs = new ListBuffer<>();
         // Fields
         for (FieldSpec f : ctx.fields()) {
@@ -66,22 +96,7 @@ final class NestedBuilderFactory {
         // published `new Target.Builder()` as a second entry point beside
         // builder(). Declaring it is the only way to narrow it.
         defs.append(builderConstructor());
-
-        // Builder class visibility follows @ClassBuilder.access; always STATIC
-        // because nested builders must not capture an enclosing this. Being
-        // static is also why a generic target's type parameters have to be
-        // re-declared here - the enclosing class's are out of scope.
-        JCModifiers mods = make.Modifiers(ctx.accessFlag() | Flags.STATIC);
-        JCClassDecl nested = make.ClassDef(
-            mods,
-            names.fromString(ctx.builderName()),
-            ctx.typeParams(),
-            null,
-            List.nil(),
-            defs.toList()
-        );
-        AstMarkers.markGenerated(nested, ctx.generated());
-        return nested;
+        return defs.toList();
     }
 
     /**

@@ -26,6 +26,7 @@ public record BuilderConfig(
     boolean validate,
     boolean emitContracts,
     boolean emitGenerated,
+    boolean mergeDeclaredBuilder,
     String factoryMethod,
     Set<String> excludeSet
 ) {
