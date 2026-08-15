@@ -10,7 +10,6 @@ import javax.annotation.processing.Messager;
 import javax.annotation.processing.ProcessingEnvironment;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
-import javax.annotation.processing.SupportedSourceVersion;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
@@ -38,7 +37,6 @@ import java.util.Set;
     "dev.simplified.annotations.EnumLookup",
     "dev.simplified.annotations.KeyField"
 })
-@SupportedSourceVersion(SourceVersion.RELEASE_17)
 public class EnumLookupProcessor extends AbstractProcessor {
 
     static {
@@ -50,6 +48,19 @@ public class EnumLookupProcessor extends AbstractProcessor {
     private static final String ENUM_LOOKUP_FQN = "dev.simplified.annotations.EnumLookup";
 
     private Optional<JavacBridge> javacBridge = Optional.empty();
+
+    /**
+     * Reports the running compiler's latest source version. javac reads this to
+     * decide whether a processor will accept the source it is handed, which is a
+     * different question from the javac API baseline the mutators compile
+     * against - naming a specific release here makes every build above it print
+     * one warning per registered processor and changes nothing about which
+     * compat layer is chosen.
+     */
+    @Override
+    public SourceVersion getSupportedSourceVersion() {
+        return SourceVersion.latestSupported();
+    }
 
     @Override
     public synchronized void init(ProcessingEnvironment processingEnv) {
