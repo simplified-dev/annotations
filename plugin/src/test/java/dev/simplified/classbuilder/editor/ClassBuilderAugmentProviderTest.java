@@ -531,6 +531,51 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
             GeneratedMemberMarker.isGenerated(inner[0]));
     }
 
+    public void testForeignTypedFrom_doesNotSuppressTheCopyFactory() {
+        // The editor has always shown from(Doc) here; javac used to skip it,
+        // because its collision check matched on arity alone and a from(String)
+        // parser is also arity one. This pins the side the processor moved to.
+        PsiFile file = myFixture.configureByText("Doc.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Doc {
+                String body;
+                public static Doc from(String raw) { return null; }
+            }
+            """);
+        PsiClass doc = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+
+        PsiMethod[] from = doc.findMethodsByName("from", false);
+        assertEquals("the author's parser and the copy factory coexist", 2, from.length);
+
+        long copyFactories = java.util.Arrays.stream(from)
+            .filter(GeneratedMemberMarker::isGenerated)
+            .count();
+        assertEquals("exactly one of them is synthesised", 1, copyFactories);
+
+        PsiMethod copy = java.util.Arrays.stream(from)
+            .filter(GeneratedMemberMarker::isGenerated)
+            .findFirst()
+            .orElseThrow();
+        assertEquals("Doc", copy.getParameterList().getParameters()[0].getType().getPresentableText());
+    }
+
+    public void testHandWrittenBootstrap_isNotDuplicated() {
+        PsiFile file = myFixture.configureByText("Manual2.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Manual2 {
+                String x;
+                public static Manual2.Builder builder() { return null; }
+            }
+            """);
+        PsiClass manual = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+        assertEquals("javac skips its bootstrap here, so the editor must too",
+            1, manual.findMethodsByName("builder", false).length);
+    }
+
     public void testCustomBootstrapNames_respected() {
         PsiFile file = myFixture.configureByText("Named.java",
             """

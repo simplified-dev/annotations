@@ -39,11 +39,12 @@ import java.util.Collection;
  *       dangling this method.</li>
  * </ul>
  *
- * <p>Collision policy: if the target already declares a method with the
- * matching name and arity, skip the injection and emit a {@link
- * Diagnostic.Kind#NOTE} - the user's hand-written method wins. This mirrors
- * Lombok's behaviour and lets consumers migrate off the old
- * hand-rolled-bootstrap pattern without coordinated edits.
+ * <p>Collision policy: if the target already declares a method that would
+ * collide, skip the injection and emit a {@link Diagnostic.Kind#NOTE} - the
+ * user's hand-written method wins. This mirrors Lombok's behaviour and lets
+ * consumers migrate off the old hand-rolled-bootstrap pattern without
+ * coordinated edits. What counts as a collision is
+ * {@link BootstrapCollisions}, which the interface path shares.
  */
 final class BootstrapMethodFactory {
 
@@ -88,40 +89,40 @@ final class BootstrapMethodFactory {
         // @BuilderNames(x = NONE) to the empty string, so there is no second
         // generate-flag to consult.
         if (!builderMethod.isEmpty())
-            appendIfAbsent(target, builderMethod, 0, this::builderFactory);
+            appendUnless(target, builderMethod, "/0",
+                BootstrapCollisions.declaresNullary(target, builderMethod), this::builderFactory);
         if (!fromMethod.isEmpty())
-            appendIfAbsent(target, fromMethod, 1, this::fromFactory);
+            appendUnless(target, fromMethod, "(" + ctx.targetSimpleName() + ")",
+                BootstrapCollisions.declaresCopyFactory(ctx.targetElement(), fromMethod),
+                this::fromFactory);
         if (!mutateMethod.isEmpty())
-            appendIfAbsent(target, mutateMethod, 0, this::mutateMethod);
+            appendUnless(target, mutateMethod, "/0",
+                BootstrapCollisions.declaresNullary(target, mutateMethod), this::mutateMethod);
     }
 
     /**
      * Appends a method produced by {@code supplier} unless the target already
-     * declares a method with the same {@code name} and {@code arity}. Emits a
-     * {@link Diagnostic.Kind#NOTE} on skip so the note is discoverable but
-     * does not pollute warning-as-error builds.
+     * declares one that collides with it. Emits a {@link Diagnostic.Kind#NOTE}
+     * on skip so the note is discoverable but does not pollute
+     * warning-as-error builds.
+     *
+     * @param target the target's tree
+     * @param name the bootstrap name
+     * @param signature how the collided-with signature reads in the note
+     * @param collides whether the author already declares it, per
+     *                 {@link BootstrapCollisions}
+     * @param supplier builds the method to append
      */
-    private void appendIfAbsent(JCClassDecl target, String name, int arity,
-                                java.util.function.Supplier<JCMethodDecl> supplier) {
-        if (hasMethod(target, name, arity)) {
+    private void appendUnless(JCClassDecl target, String name, String signature, boolean collides,
+                              java.util.function.Supplier<JCMethodDecl> supplier) {
+        if (collides) {
             messager.printMessage(Diagnostic.Kind.NOTE,
                 "@ClassBuilder skipped bootstrap '" + name + "' - target already declares "
-                    + name + "/" + arity,
+                    + name + signature,
                 ctx.targetElement());
             return;
         }
         ctx.bridge().compat().appendDef(target, supplier.get());
-    }
-
-    private static boolean hasMethod(JCClassDecl target, String name, int arity) {
-        for (JCTree def : target.defs) {
-            if (def instanceof JCMethodDecl m
-                && m.name.toString().equals(name)
-                && m.params.size() == arity) {
-                return true;
-            }
-        }
-        return false;
     }
 
     // ------------------------------------------------------------------

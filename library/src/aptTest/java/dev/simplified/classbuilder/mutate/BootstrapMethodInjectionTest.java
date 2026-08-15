@@ -169,6 +169,62 @@ public class BootstrapMethodInjectionTest {
         assertTrue("expected a skip note for builder()", sawSkip);
     }
 
+    @Test
+    public void foreignTypedFrom_doesNotSuppressTheCopyFactory() throws Exception {
+        // from(T) is the one bootstrap whose arity is shared with methods that
+        // mean something else. Matching on arity alone let a from(String) parser
+        // take the copy factory's place, silently - the build stays green and
+        // the only trace is a NOTE.
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Doc",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Doc {",
+            "    String body;",
+            "    public Doc(String body) { this.body = body; }",
+            "    public String getBody() { return body; }",
+            "    public static Doc from(String raw) { return new Doc(raw); }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> doc = Class.forName("demo.Doc", true, cl);
+        Class<?> builder = nested(doc, "Builder");
+
+        // The author's own from(String) is untouched and still parses.
+        Object parsed = doc.getMethod("from", String.class).invoke(null, "hello");
+        assertEquals("hello", doc.getMethod("getBody").invoke(parsed));
+
+        // The copy factory is generated beside it rather than suppressed by it.
+        Object seeded = doc.getMethod("from", doc).invoke(null, parsed);
+        assertEquals(builder, seeded.getClass());
+        Object rebuilt = builder.getMethod("build").invoke(seeded);
+        assertEquals("hello", doc.getMethod("getBody").invoke(rebuilt));
+    }
+
+    @Test
+    public void ownTypedFrom_stillWinsOverTheCopyFactory() {
+        // The other side of the same rule: an author's own from(T) is the whole
+        // reason the collision check exists, and it still takes precedence.
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Owned",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Owned {",
+            "    String x;",
+            "    Owned(String x) { this.x = x; }",
+            "    public String getX() { return x; }",
+            "    public static Builder from(Owned other) { return new Builder().x(other.x); }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        boolean sawSkip = c.notes().stream().anyMatch(d ->
+            d.getMessage(null).contains("skipped bootstrap 'from'"));
+        assertTrue("expected a skip note for from(Owned)", sawSkip);
+    }
+
     // ------------------------------------------------------------------
     // Custom method names honored
     // ------------------------------------------------------------------

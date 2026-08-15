@@ -16,6 +16,7 @@ import com.intellij.psi.PsiManager;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiModifierList;
+import com.intellij.psi.PsiParameter;
 import com.intellij.psi.PsiSubstitutor;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypeParameter;
@@ -105,21 +106,79 @@ public final class GeneratedMemberFactory {
         // call with "Cannot access ...Builder". Threading the actual PsiClass
         // instance bypasses resolution entirely.
         List<PsiMethod> out = new ArrayList<>(3);
-        if (!config.builderMethodName().isEmpty()) {
+        if (!config.builderMethodName().isEmpty()
+            && !declaresNullary(target, config.builderMethodName())) {
             out.add(buildStaticNoArg(psiManager, elements, target, builderClass,
                 config.builderMethodName(), config.access()));
         }
-        if (!config.fromMethodName().isEmpty()) {
+        if (!config.fromMethodName().isEmpty()
+            && !declaresCopyFactory(target, config.fromMethodName())) {
             out.add(buildStaticOneArg(psiManager, elements, target, builderClass,
                 config.fromMethodName(), "instance", config.access()));
         }
-        if (!config.toBuilderMethodName().isEmpty()) {
+        if (!config.toBuilderMethodName().isEmpty()
+            && !declaresNullary(target, config.toBuilderMethodName())) {
             // An instance method, so the target's own parameters are in scope
             // and it needs none of its own.
             PsiClassType builderType = applied(elements, builderClass, target.getTypeParameters());
             out.add(buildInstanceNoArg(psiManager, target, config.toBuilderMethodName(), builderType, config.access()));
         }
         return out;
+    }
+
+    /**
+     * The PSI half of the processor's bootstrap collision policy, which
+     * {@code BootstrapCollisions} states on the javac side: an author's own
+     * method wins and nothing is synthesised beside it.
+     *
+     * <p>Own methods rather than {@link PsiClass#getMethods()}, and for two
+     * reasons. Augmented members are in the latter, so a provider asking it
+     * while it is running would see whatever it contributed last and never
+     * settle. And the question is about what the author wrote, which is exactly
+     * what {@link PsiExtensibleClass#getOwnMethods()} answers.
+     *
+     * @param target the annotated type
+     * @param name the bootstrap name being considered
+     * @return whether the author already declares a zero-parameter method of
+     *         that name
+     */
+    private static boolean declaresNullary(PsiClass target, String name) {
+        for (PsiMethod method : ownMethods(target)) {
+            if (name.equals(method.getName()) && method.getParameterList().isEmpty()) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Whether the author already declares a copy factory over the target's own
+     * type.
+     *
+     * <p>The parameter type is what separates a copy factory from an unrelated
+     * one-argument method that happens to share its name - a {@code from(String)}
+     * parser is not a collision, and treating it as one takes the copy factory
+     * away with nothing to say so.
+     *
+     * @param target the annotated type
+     * @param name the copy factory's name
+     * @return whether the author already declares it
+     */
+    private static boolean declaresCopyFactory(PsiClass target, String name) {
+        for (PsiMethod method : ownMethods(target)) {
+            if (!name.equals(method.getName())) continue;
+            PsiParameter[] parameters = method.getParameterList().getParameters();
+            if (parameters.length != 1) continue;
+            if (parameters[0].getType() instanceof PsiClassType declared
+                && target.getManager().areElementsEquivalent(declared.resolve(), target)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static List<PsiMethod> ownMethods(PsiClass target) {
+        return target instanceof PsiExtensibleClass extensible
+            ? extensible.getOwnMethods()
+            : List.of(target.getMethods());
     }
 
     /**

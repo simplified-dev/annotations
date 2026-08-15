@@ -45,7 +45,8 @@ import javax.tools.Diagnostic;
  * }</pre>
  *
  * <p>Collision policy matches {@code BootstrapMethodFactory}: a method the
- * author already declared with the same name and arity wins, and a
+ * author already declared that would collide wins - per
+ * {@link BootstrapCollisions}, shared with the AST path - and a
  * {@link Diagnostic.Kind#NOTE} records the skip.
  */
 public final class InterfaceBootstrapMutator {
@@ -82,13 +83,17 @@ public final class InterfaceBootstrapMutator {
         String fromMethod = config.fromMethodName();
         String mutateMethod = config.toBuilderMethodName();
 
-        if (!builderMethod.isEmpty() && absent(builderMethod, 0)) {
+        if (!builderMethod.isEmpty()
+            && absent(builderMethod, "/0", BootstrapCollisions.declaresNullary(targetTree, builderMethod))) {
             append(builderFactory(builderMethod));
         }
-        if (!fromMethod.isEmpty() && absent(fromMethod, 1)) {
+        if (!fromMethod.isEmpty()
+            && absent(fromMethod, "(" + target.getSimpleName() + ")",
+                      BootstrapCollisions.declaresCopyFactory(target, fromMethod))) {
             append(fromFactory(fromMethod));
         }
-        if (!mutateMethod.isEmpty() && absent(mutateMethod, 0)) {
+        if (!mutateMethod.isEmpty()
+            && absent(mutateMethod, "/0", BootstrapCollisions.declaresNullary(targetTree, mutateMethod))) {
             append(mutateMethod(mutateMethod));
         }
     }
@@ -213,19 +218,13 @@ public final class InterfaceBootstrapMutator {
         bridge.compat().appendDef(targetTree, method);
     }
 
-    private boolean absent(String name, int arity) {
-        for (JCTree def : targetTree.defs) {
-            if (def instanceof JCMethodDecl m
-                && m.name.toString().equals(name)
-                && m.params.size() == arity) {
-                messager.printMessage(Diagnostic.Kind.NOTE,
-                    "@ClassBuilder skipped bootstrap '" + name + "' - target already declares "
-                        + name + "/" + arity,
-                    target);
-                return false;
-            }
-        }
-        return true;
+    private boolean absent(String name, String signature, boolean collides) {
+        if (!collides) return true;
+        messager.printMessage(Diagnostic.Kind.NOTE,
+            "@ClassBuilder skipped bootstrap '" + name + "' - target already declares "
+                + name + signature,
+            target);
+        return false;
     }
 
 }
