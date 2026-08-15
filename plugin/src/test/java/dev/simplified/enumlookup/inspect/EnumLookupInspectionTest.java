@@ -69,6 +69,38 @@ public class EnumLookupInspectionTest extends BasePlatformTestCase {
             "@EnumLookup is only supported on enum types"));
     }
 
+    public void testIgnoreCaseOnNonString_warned() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.EnumLookup;
+            import dev.simplified.annotations.KeyField;
+            @EnumLookup
+            public enum Foo {
+                A(1);
+                @KeyField(ignoreCase = true) private final int code;
+                Foo(int code) { this.code = code; }
+            }
+            """);
+        assertTrue(hasHighlightContaining(HighlightSeverity.WARNING,
+            "@KeyField(ignoreCase = true) has no effect on a field that is not a String"));
+    }
+
+    public void testIgnoreCaseOnString_clean() {
+        myFixture.configureByText("Foo.java",
+            """
+            import dev.simplified.annotations.EnumLookup;
+            import dev.simplified.annotations.KeyField;
+            @EnumLookup
+            public enum Foo {
+                A("en-US");
+                @KeyField(ignoreCase = true) private final String tag;
+                Foo(String tag) { this.tag = tag; }
+            }
+            """);
+        assertFalse(hasHighlightContaining(HighlightSeverity.WARNING,
+            "@KeyField(ignoreCase = true) has no effect"));
+    }
+
     public void testHandRolledCachedValues_flagged() {
         // The processor refuses the enum for this, so the editor has to say it
         // too - otherwise the build fails on a line the editor called clean.

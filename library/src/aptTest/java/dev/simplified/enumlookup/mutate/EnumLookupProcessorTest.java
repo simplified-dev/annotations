@@ -253,6 +253,66 @@ public class EnumLookupProcessorTest {
     }
 
     @Test
+    public void ignoreCaseKey_matchesRegardlessOfCase() throws Exception {
+        // The hand-rolled lookup being replaced is often case-insensitive - a
+        // BCP 47 tag against a directory name, a token against wire text. An
+        // exact comparison standing in for it compiles cleanly and then stops
+        // matching, which no test in the module would notice.
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Locale",
+            "package demo;",
+            "import dev.simplified.annotations.EnumLookup;",
+            "import dev.simplified.annotations.KeyField;",
+            "@EnumLookup",
+            "public enum Locale {",
+            "    US(\"en-US\"), TW(\"zh-TW\");",
+            "    @KeyField(ignoreCase = true) private final String tag;",
+            "    Locale(String tag) { this.tag = tag; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> locale = Class.forName("demo.Locale", true, cl);
+        Method ofTag = locale.getMethod("ofTag", String.class);
+
+        Object us = locale.getField("US").get(null);
+        assertSame(us, ofTag.invoke(null, "en-US"));
+        assertSame("the directory-name spelling still resolves", us, ofTag.invoke(null, "en-us"));
+        assertSame(us, ofTag.invoke(null, "EN-US"));
+        assertSame(locale.getField("TW").get(null), ofTag.invoke(null, "zh-tw"));
+
+        // Null tolerance is exactly Objects.equals: no throw, no match.
+        assertNull(ofTag.invoke(null, (Object) null));
+        assertNull(ofTag.invoke(null, "fr-FR"));
+
+        // findBy delegates, so it folds case too.
+        Method findByTag = locale.getMethod("findByTag", String.class);
+        assertEquals(Optional.of(us), findByTag.invoke(null, "en-us"));
+    }
+
+    @Test
+    public void withoutIgnoreCase_theKeyStaysExact() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Exact",
+            "package demo;",
+            "import dev.simplified.annotations.EnumLookup;",
+            "import dev.simplified.annotations.KeyField;",
+            "@EnumLookup",
+            "public enum Exact {",
+            "    US(\"en-US\");",
+            "    @KeyField private final String tag;",
+            "    Exact(String tag) { this.tag = tag; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> exact = Class.forName("demo.Exact", true, cl);
+        Method ofTag = exact.getMethod("ofTag", String.class);
+        assertSame(exact.getField("US").get(null), ofTag.invoke(null, "en-US"));
+        assertNull("exact is still the default", ofTag.invoke(null, "en-us"));
+    }
+
+    @Test
     public void handRolledCachedValues_namesTheCollision() {
         // A hand-rolled values() cache is exactly what @EnumLookup is adopted to
         // delete, and these enums all have one. Emitting the populate statements

@@ -143,6 +143,7 @@ public class EnumLookupProcessor extends AbstractProcessor {
                 methodSuffix,
                 type.toString(),
                 isPrimitive,
+                annotation.ignoreCase(),
                 annotation.strictKeys(),
                 annotation.strictNullKeys()
             ));

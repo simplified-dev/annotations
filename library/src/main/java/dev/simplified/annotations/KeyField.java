@@ -54,10 +54,35 @@ public @interface KeyField {
     @NotNull String methodName() default "";
 
     /**
+     * Matches this key without regard to case, for a {@link String}-typed field
+     * only.
+     *
+     * <p>The comparison becomes {@link String#equalsIgnoreCase} in place of
+     * {@link java.util.Objects#equals}, keeping the same null tolerance: a null
+     * stored key matches a null argument and nothing else. No effect on a field
+     * of any other type, which the inspection flags.
+     *
+     * <p>Exists because the hand-rolled lookup being replaced is often
+     * case-insensitive - a BCP 47 tag matched against a directory name, an
+     * enum-shaped token matched against wire text - and the exact comparison
+     * that replaces it compiles cleanly and then stops matching. That failure is
+     * invisible to the build, so the attribute is the difference between a
+     * lookup that still works and one that silently returns nothing.
+     *
+     * <p>Independent of {@code ofName} / {@code findByName}, which
+     * {@link EnumLookup} always generates and which are already
+     * case-insensitive over the constant's own name.
+     */
+    boolean ignoreCase() default false;
+
+    /**
      * Opts into the IDE inspection that highlights any two enum constants
      * sharing a value for this key. Default {@code false}. Edit-time only -
      * the generated runtime never throws. Severity is configurable in the
      * inspection settings (default {@code ERROR}).
+     *
+     * <p>Reads case-insensitively when {@link #ignoreCase} is set, so two
+     * constants differing only in case are duplicates.
      */
     boolean strictKeys() default false;
 

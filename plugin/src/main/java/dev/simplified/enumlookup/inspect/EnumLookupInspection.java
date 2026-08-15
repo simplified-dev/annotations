@@ -31,6 +31,8 @@ import java.util.Set;
  *       - WARNING (the annotation is a no-op).</li>
  *   <li>{@code @KeyField(strictNullKeys = true)} on a primitive-typed field
  *       - WARNING (attribute has no effect).</li>
+ *   <li>{@code @KeyField(ignoreCase = true)} on a field that is not a
+ *       {@code String} - WARNING (attribute has no effect).</li>
  *   <li>{@code @KeyField(methodName = "...")} that doesn't start with an
  *       uppercase letter or isn't a valid Java identifier - ERROR.</li>
  *   <li>Two {@code @KeyField}s on the same enum that produce a colliding
@@ -97,6 +99,14 @@ public final class EnumLookupInspection extends LocalInspectionTool {
                 if (strictNullKeys && isPrimitive(field.getType())) {
                     holder.registerProblem(keyField,
                         "@KeyField(strictNullKeys = true) has no effect on a primitive-typed field",
+                        ProblemHighlightType.WARNING);
+                }
+
+                boolean ignoreCase = EnumLookupConstants.booleanAttr(keyField,
+                    EnumLookupConstants.ATTR_IGNORE_CASE, false);
+                if (ignoreCase && !isString(field.getType())) {
+                    holder.registerProblem(keyField,
+                        "@KeyField(ignoreCase = true) has no effect on a field that is not a String",
                         ProblemHighlightType.WARNING);
                 }
             }
@@ -192,6 +202,20 @@ public final class EnumLookupInspection extends LocalInspectionTool {
 
     private static boolean isPrimitive(PsiType type) {
         return type instanceof com.intellij.psi.PsiPrimitiveType;
+    }
+
+    /**
+     * Whether a key field's type is {@link String}.
+     *
+     * <p>Accepts the unqualified spelling as well as the canonical one. The
+     * canonical text of a reference the index has not resolved is the text as
+     * written, and this decides only whether to <b>warn</b> that an attribute is
+     * inert - so a type that might be {@code String} is left alone rather than
+     * flagged on a resolution accident.
+     */
+    private static boolean isString(PsiType type) {
+        String text = type.getCanonicalText();
+        return "java.lang.String".equals(text) || "String".equals(text);
     }
 
     private static String effectiveSuffix(PsiAnnotation keyField, String fieldName) {

@@ -442,18 +442,48 @@ public final class EnumLookupMutator {
     // Per-key methods
     // ------------------------------------------------------------------
 
+    /**
+     * The per-element test the {@code of<Key>} scan runs.
+     *
+     * <p>Three shapes rather than two. A primitive key compares with {@code ==}.
+     * A reference key compares with {@code Objects.equals}, which tolerates a
+     * null on either side. A {@code String} key asking to
+     * {@code @KeyField(ignoreCase)} compares with
+     * {@code equalsIgnoreCase}, guarded so it keeps exactly the null tolerance
+     * {@code Objects.equals} has - a null stored key matches a null argument and
+     * nothing else - because calling the method on a null element would throw
+     * inside generated code the author cannot see.
+     *
+     * @param spec the resolved key
+     * @param keysFieldName the parallel key array's name
+     * @return the comparison expression
+     */
+    private JCExpression keyComparison(EnumKeySpec spec, String keysFieldName) {
+        JCExpression element = make.Indexed(ident(keysFieldName), ident("i"));
+        if (spec.isPrimitive()) {
+            return make.Binary(Tag.EQ, element, ident("key"));
+        }
+        if (spec.ignoreCase() && spec.isString()) {
+            // element == null ? key == null : element.equalsIgnoreCase(key)
+            return make.Conditional(
+                make.Binary(Tag.EQ, make.Indexed(ident(keysFieldName), ident("i")), nullLit()),
+                make.Binary(Tag.EQ, ident("key"), nullLit()),
+                make.Apply(List.nil(),
+                    make.Select(element, names.fromString("equalsIgnoreCase")),
+                    List.of(ident("key")))
+            );
+        }
+        return make.Apply(List.nil(),
+            make.Select(types.qualIdent(FQN_OBJECTS), names.fromString("equals")),
+            List.of(element, ident("key")));
+    }
+
     private JCMethodDecl ofKeyMethod(String enumName, EnumKeySpec spec, String methodName) {
         // for (int i = 0; i < CACHED_KEYS_X.length; i++)
         //     if (<comparison>) return CACHED_VALUES[i];
         // return null;
         String keysFieldName = CACHED_KEYS_PREFIX + spec.fieldName();
-        JCExpression comparison = spec.isPrimitive()
-            ? make.Binary(Tag.EQ,
-                make.Indexed(ident(keysFieldName), ident("i")),
-                ident("key"))
-            : make.Apply(List.nil(),
-                make.Select(types.qualIdent(FQN_OBJECTS), names.fromString("equals")),
-                List.of(make.Indexed(ident(keysFieldName), ident("i")), ident("key")));
+        JCExpression comparison = keyComparison(spec, keysFieldName);
 
         JCStatement loop = make.ForLoop(
             List.of(make.VarDef(make.Modifiers(0),

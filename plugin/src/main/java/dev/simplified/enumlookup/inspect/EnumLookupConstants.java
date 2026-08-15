@@ -33,6 +33,7 @@ public final class EnumLookupConstants {
 
     /** Prefix of the generated per-{@code @KeyField} parallel key array. */
     public static final @NotNull String CACHED_KEYS_PREFIX = "CACHED_KEYS_";
+    public static final @NotNull String ATTR_IGNORE_CASE = "ignoreCase";
     public static final @NotNull String ATTR_STRICT_KEYS = "strictKeys";
     public static final @NotNull String ATTR_STRICT_NULL_KEYS = "strictNullKeys";
 
