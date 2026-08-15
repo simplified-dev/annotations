@@ -25,8 +25,9 @@ import java.lang.annotation.Target;
  * setter for the same field are minted by one mechanism rather than two that
  * have to agree. A bare {@code @Getter} produces {@code getLabel()} and
  * {@code isAnimated()}; {@link NamingStyle#FLUENT} produces {@code label()} and
- * {@code animated()}; {@link #name()} overrides the pattern outright for one
- * field.
+ * {@code animated()}; {@link #name()} substitutes a different pattern for one
+ * field. It is a pattern and not a literal, so the field's name is always part
+ * of the accessor's.
  *
  * <h2>Example</h2>
  * <pre><code>
@@ -64,6 +65,12 @@ public @interface Getter {
      * field name. Empty inherits from {@link #style()}.
      *
      * <p>Overrides the boolean and non-boolean patterns together.
+     *
+     * <p>The placeholder is mandatory and a value without one is rejected: the
+     * pattern is applied once per field, so a literal would give every field
+     * under a type-level annotation the same method name. An accessor spelled
+     * differently from its field is therefore not expressible here and stays
+     * hand-written.
      */
     @NotNull String name() default "";
 
