@@ -1,19 +1,19 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!--
-  @ClassBuilder gutter icon - Material Symbols wand_stars, recoloured.
+  Icon for synthesised members - Material Symbols wand_stars, recoloured.
   Origin: Google Material Symbols (Apache 2.0). Path geometry was
   separated into four named subpaths in Inkscape; here cleaned up to
   drop the inkscape/sodipodi metadata and apply project colours:
-    - shaft:        dark gray (#2C2C2C)
+    - shaft:        neutral gray (#6C707E)
     - star:         project amber (#F5A623), covers both star shapes
     - left/right
       sparkle:      purple (#8B5CF6)
-  For dark-theme IDE compatibility, ship a companion *_dark.svg
-  swapping #2C2C2C for a lighter gray.
+  generated_dark.svg holds the dark-theme shaft. IconLoader selects it
+  from the filename, so no call site names it.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="144 -864 720 720">
   <!-- shaft -->
-  <path fill="#2C2C2C"
+  <path fill="#6C707E"
         d="M 504.23571,-453.97048 222.16819,-171.90296 172.90297,-221.16818 454.97049,-503.2357"/>
   <!-- star (covers the big star at the wand tip + the small floating star) -->
   <path fill="#F5A623"

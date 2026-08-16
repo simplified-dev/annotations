@@ -9,6 +9,25 @@ Versions 1.0.0 through 1.0.5 were published under the legacy plugin ID
 Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations` /
 `io.github.simplified-dev:annotations`. See the 2.0.0 entry for the rename details.
 
+## [Unreleased]
+
+### Fixed
+
+- **The synthesised-member icon's wand shaft carries on dark themes.** The shaft was a near-black
+  `#2C2C2C` against the New UI's dark gutter, about 1.2:1, so the one element tying the star and the
+  two sparkles together into a wand vanished and the icon read as three unrelated floating shapes.
+  A `generated_dark.svg` companion now lifts it to `#9DA0A8`, and the light base settles at
+  `#6C707E` rather than near-black. Both sit below the amber star in luminance, so the wand tip
+  stays the focal point instead of the shaft outshining it.
+
+### Changed
+
+- **The icon resource is `icons/generated.svg`.** Three features render it - the `@ClassBuilder`
+  gutter marker, the `@EqualsAndHashCode` / `@ToString` marker, and the element icon every
+  augment-synthesised member wears in the Structure window, completion popup and breadcrumbs - so a
+  name carrying only the first was describing one caller rather than the thing itself. Call sites
+  name the light file alone; IntelliJ resolves the dark companion from the filename.
+
 ## [2.6.0]
 
 The first release driven by adoption rather than by parity. Nineteen in-house modules moved off

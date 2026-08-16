@@ -17,7 +17,7 @@ import javax.swing.Icon;
  */
 public class ClassBuilderIconProviderTest extends BasePlatformTestCase {
 
-    private static final String ICON_PATH = "/icons/classbuilder_generated.svg";
+    private static final String ICON_PATH = "/icons/generated.svg";
 
     @Override
     protected void setUp() throws Exception {

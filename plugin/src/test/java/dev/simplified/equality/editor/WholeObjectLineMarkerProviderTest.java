@@ -29,7 +29,7 @@ public class WholeObjectLineMarkerProviderTest extends LightJavaCodeInsightFixtu
      * The resource the provider names, duplicated deliberately: the test fails
      * loudly when the production constant moves rather than following it.
      */
-    private static final String ICON_PATH = "/icons/classbuilder_generated.svg";
+    private static final String ICON_PATH = "/icons/generated.svg";
 
     private static final String EQUALITY = "@EqualsAndHashCode";
     private static final String TO_STRING = "@ToString";

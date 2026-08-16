@@ -17,8 +17,7 @@ import javax.swing.Icon;
  * a marker on the element is the sole eligibility check, so wherever
  * IntelliJ renders an element icon (Structure tool window, completion
  * popup, breadcrumbs, navigation targets), the generated members wear
- * the same {@code /icons/classbuilder_generated.svg} they get in the
- * gutter.
+ * the same {@code /icons/generated.svg} they get in the gutter.
  *
  * <p>Returns {@code null} for any element not produced by this plugin so
  * IntelliJ falls through to the other registered {@link IconProvider}s.
@@ -26,7 +25,7 @@ import javax.swing.Icon;
 public final class ClassBuilderIconProvider extends IconProvider {
 
     private static final Icon ICON = IconLoader.getIcon(
-        "/icons/classbuilder_generated.svg",
+        "/icons/generated.svg",
         ClassBuilderIconProvider.class
     );
 
