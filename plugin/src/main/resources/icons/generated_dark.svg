@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!--
+  Dark-theme companion to generated.svg, selected by IconLoader from the
+  filename alone. Same geometry; the shaft lifts to a lighter gray so it
+  carries against the dark editor gutter while staying below the amber
+  star in luminance, which keeps the wand tip the focal point:
+    - shaft:        light gray (#9DA0A8)
+    - star:         project amber (#F5A623), covers both star shapes
+    - left/right
+      sparkle:      purple (#8B5CF6)
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="144 -864 720 720">
+  <!-- shaft -->
+  <path fill="#9DA0A8"
+        d="M 504.23571,-453.97048 222.16819,-171.90296 172.90297,-221.16818 454.97049,-503.2357"/>
+  <!-- star (covers the big star at the wand tip + the small floating star) -->
+  <path fill="#F5A623"
+        d="m 264,-528 186,-116 -16,-219 168,141 202,-82 -82,203 142,167 L 645.03,-450 529,-263 476.875,-475.875 M 557,-447 l 49,-78 92,7 -59.31,-70.2 34.6,-85.8 -85.02,35 -70.27,-59 7,92 -79,48.39 89.35,21.73 z"/>
+  <!-- right_sparkle -->
+  <path fill="#8B5CF6"
+        d="m 695.9999,-144 -72,-72 72,-72 72,72 z"/>
+  <!-- left_sparkle -->
+  <path fill="#8B5CF6"
+        d="m 215.99998,-623.9999 -72,-72 72,-72 72,72 z"/>
+</svg>

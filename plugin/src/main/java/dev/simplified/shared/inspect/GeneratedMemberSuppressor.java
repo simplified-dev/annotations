@@ -10,8 +10,9 @@ import org.jetbrains.annotations.Nullable;
 import java.util.Set;
 
 /**
- * Silences the inspections that read a field as uninitialized, unread, or
- * needlessly a field, on the fields a generated member initializes and reads.
+ * Silences the inspections that read a field as uninitialized, unread,
+ * needlessly a field, or holding a container nothing fills, on the fields a
+ * generated member initializes and reads.
  *
  * <p>The inspection-level half of what
  * {@link GeneratedMemberHighlightFilter} does for compiler errors. Same cause -
@@ -57,8 +58,23 @@ public final class GeneratedMemberSuppressor implements InspectionSuppressor {
     );
 
     /**
-     * Tools that report a field as unread or over-scoped, and so are answered by
-     * the accessor a generated member supplies.
+     * Tools that report a field as unread, over-scoped, or holding a container
+     * nothing fills or empties, and so are answered by the accessor and the
+     * constructor a generated member supplies.
+     *
+     * <p>The three container tools ask who reads or writes a field's
+     * <i>contents</i> rather than the field itself, which makes them the same
+     * reference-search question the two above them ask and puts them under
+     * {@link GeneratedFieldAccess#generatedMemberTouches}. A generated
+     * constructor is not the only answer to them: a class carrying nothing but
+     * {@code @Getter} still reports a list it fills, because the only reader is
+     * an accessor holding no reference into the source tree.
+     *
+     * <p>They are spelled by suppression id rather than by short name, which is
+     * what the platform hands an {@link InspectionSuppressor} - a tool declaring
+     * one is known by it in preference to its short name, and the two differ for
+     * exactly this family. The tools above declare none, so their short name is
+     * their id.
      *
      * <p>{@code FieldMayBeFinal} is deliberately absent. It is a suggestion
      * rather than a wrong claim, and a field a generated setter writes is one
@@ -67,7 +83,10 @@ public final class GeneratedMemberSuppressor implements InspectionSuppressor {
     private static final Set<String> USAGE_TOOL_IDS = Set.of(
         "FieldCanBeLocal",
         "unused",
-        "UnusedDeclaration"
+        "UnusedDeclaration",
+        "MismatchedQueryAndUpdateOfCollection",
+        "MismatchedReadAndWriteOfArray",
+        "MismatchedQueryAndUpdateOfStringBuilder"
     );
 
     @Override

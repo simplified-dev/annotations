@@ -44,14 +44,13 @@ import java.util.List;
  * wrong, so a rule that drifts from the processor's produces a confidently
  * wrong description that no other check and no compiler contradicts.
  *
- * <p>The icon lives at {@code /icons/classbuilder_generated.svg}, shared with
- * the builder's marker so one glance says "this member is synthesised" wherever
- * it appears.
+ * <p>The icon lives at {@code /icons/generated.svg}, shared with the builder's
+ * marker so one glance says "this member is synthesised" wherever it appears.
  */
 public final class WholeObjectLineMarkerProvider extends RelatedItemLineMarkerProvider {
 
     private static final Icon ICON = IconLoader.getIcon(
-        "/icons/classbuilder_generated.svg",
+        "/icons/generated.svg",
         WholeObjectLineMarkerProvider.class
     );
 

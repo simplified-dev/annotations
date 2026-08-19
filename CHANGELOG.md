@@ -9,6 +9,74 @@ Versions 1.0.0 through 1.0.5 were published under the legacy plugin ID
 Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations` /
 `io.github.simplified-dev:annotations`. See the 2.0.0 entry for the rename details.
 
+## [2.6.1]
+
+### Added
+
+- **A javadoc run can now see the members the processor generates.** The javadoc tool runs no
+  annotation processors and cannot be made to, so every member the mutation passes inject is absent
+  from the model the doclet resolves against: `{@link #getName()}` over a `@Getter` field is
+  `reference not found`, and a generated constructor leaves the doclet reporting the implicit one it
+  can see instead. Setting `-Adev.simplified.expandTo=<dir>` writes each compilation unit out again
+  with its generated members spliced in, for a javadoc task to read in place of the source tree;
+  `gradle/expand-javadoc.init.gradle.kts` wires both halves. The option is the only switch, so an
+  ordinary build neither reads nor writes anything. Each generated accessor carries the
+  documentation of the field it reads, which is what makes the accessor link worth resolving rather
+  than worth rewriting - it renders as a real hyperlink, where a link to the backing field renders
+  as code text whenever that field is private. Measured over one consumer's 275 sources at private
+  visibility: 124 `reference not found` errors to none, and 128 `use of default constructor`
+  warnings to sixteen on classes carrying no annotation of this set, with every other warning
+  category byte-identical - so the expansion introduces none of its own and needs no `-Xdoclint`
+  relaxation.
+
+### Fixed
+
+- **The processor no longer calls JDK methods its oldest supported compiler does not have.** Five
+  `java.util.List.getFirst()` calls sat in live processor paths, resolving a `@Collector` key, an
+  `@AssignVia` transform, an `Optional` slot's type argument and a copy factory's parameter. It is
+  a `SequencedCollection` method added in 21 and this module targets 17, so a consumer building on
+  17 got `NoSuchMethodError` naming a JDK class, which reads like their bug rather than this one.
+  Nothing about building the module could have caught it: `sourceCompatibility` settles the
+  language level and not the API surface, and `options.release`, which settles both, cannot be used
+  here because `--release` hides the `com.sun.tools.javac.*` packages every mutator is built on.
+  The processor suite now runs on the floor as part of `check`, because running it there is the
+  only thing that catches an API ceiling the compiler cannot be asked to enforce.
+- **The editor no longer reports a container a generated member fills as one nothing fills.**
+  IntelliJ's contents-of-container inspections ask who reads or writes what a field holds, and
+  reference search cannot see a member an augment provider contributes, so a class whose
+  collections, arrays and string builders are filled by a generated constructor or handed out
+  through a generated accessor drew one warning per field. `MismatchedQueryAndUpdateOfCollection`,
+  `MismatchedReadAndWriteOfArray` and `MismatchedQueryAndUpdateOfStringBuilder` now join the unread
+  and over-scoped families `GeneratedMemberSuppressor` already answers, and are answered by the
+  same per-field question rather than blanket per class, so an unannotated field on an annotated
+  class keeps every report. Each is spelled by its suppression id, which is what the platform hands
+  a suppressor and is not the short name for any of the three. A generated constructor is not the
+  only answer to them either: a class carrying nothing but `@Getter` reports a list it fills,
+  because the only reader is an accessor holding no reference into the source tree.
+- **`@ClassBuilder`'s editor synthesis no longer throws away the resolve that reached it.** Asking a
+  `@ClassBuilder` class for its nested classes built the all-args constructor beside them, and
+  building that constructor classifies every field, which resolves the type each one declares. A
+  reference to a type name is one of the things that asks a class for its nested classes, so the
+  platform could already be resolving the very reference the classification went on to ask about.
+  It answers a cycle like that by refusing to cache the outer resolve, which costs every later pass
+  the same walk and leaves the classification reading a type that resolved to nothing. The
+  constructor is built on the first read of it now, and a type name resolves through the nested
+  classes alone.
+- **The synthesised-member icon's wand shaft carries on dark themes.** The shaft was a near-black
+  `#2C2C2C` against the New UI's dark gutter, about 1.2:1, so the one element tying the star and the
+  two sparkles together into a wand vanished and the icon read as three unrelated floating shapes.
+  A `generated_dark.svg` companion now lifts it to `#9DA0A8`, and the light base settles at
+  `#6C707E` rather than near-black. Both sit below the amber star in luminance, so the wand tip
+  stays the focal point instead of the shaft outshining it.
+
+### Changed
+
+- **The icon resource is `icons/generated.svg`.** Three features render it - the `@ClassBuilder`
+  gutter marker, the `@EqualsAndHashCode` / `@ToString` marker, and the element icon every
+  augment-synthesised member wears in the Structure window, completion popup and breadcrumbs - so a
+  name carrying only the first was describing one caller rather than the thing itself. Call sites
+  name the light file alone; IntelliJ resolves the dark companion from the filename.
+
 ## [2.6.0]
 
 The first release driven by adoption rather than by parity. Nineteen in-house modules moved off

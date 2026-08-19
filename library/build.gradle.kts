@@ -137,7 +137,32 @@ val aptTest by tasks.registering(Test::class) {
     }
 }
 
-tasks.named("check") { dependsOn(aptTest) }
+// The processor runs inside the consumer's javac, so the JDK it has to survive
+// is the consumer's, and the floor is 17.
+//
+// Nothing about compiling this module enforces that floor. sourceCompatibility
+// fixes the language level, not the API surface, and `options.release` - which
+// would fix both - cannot be used here because it hides the
+// com.sun.tools.javac.* packages the mutators are built on. So a call to a
+// method added after 17 compiles clean, ships, and fails in the consumer's build
+// with a NoSuchMethodError naming a JDK class, which reads like their problem
+// rather than ours. java.util.List.getFirst() is the one that got through.
+//
+// Running the processor suite on the floor is the only thing that catches it,
+// so it is wired into check rather than left to a flag someone remembers.
+val aptTest17 by tasks.registering(Test::class) {
+    description = "Runs the annotation-processor tests on the oldest supported JDK."
+    group = "verification"
+    testClassesDirs = sourceSets["aptTest"].output.classesDirs
+    classpath = sourceSets["aptTest"].runtimeClasspath
+    useJUnit()
+    jvmArgs(javacRuntimeExports)
+    javaLauncher.set(javaToolchains.launcherFor {
+        languageVersion.set(JavaLanguageVersion.of(17))
+    })
+}
+
+tasks.named("check") { dependsOn(aptTest, aptTest17) }
 
 // Tell IntelliJ that src/aptTest is a test-scoped source root. Without this
 // the IDE imports the directory as "production" sources, which paints test

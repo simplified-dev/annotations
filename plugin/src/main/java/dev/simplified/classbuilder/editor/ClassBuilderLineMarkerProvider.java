@@ -26,13 +26,14 @@ import java.util.List;
  * scope narrow for v1 - future iterations can extend markers to individual
  * field-level companions (e.g. {@code @Collector}).
  *
- * <p>The icon lives at {@code /icons/classbuilder_generated.svg}; replacing
- * that file is the only step needed to swap the art.
+ * <p>The icon lives at {@code /icons/generated.svg}, with
+ * {@code generated_dark.svg} as its dark-theme companion; replacing those
+ * two files is the only step needed to swap the art.
  */
 public final class ClassBuilderLineMarkerProvider extends RelatedItemLineMarkerProvider {
 
     private static final Icon ICON = IconLoader.getIcon(
-        "/icons/classbuilder_generated.svg",
+        "/icons/generated.svg",
         ClassBuilderLineMarkerProvider.class
     );
 

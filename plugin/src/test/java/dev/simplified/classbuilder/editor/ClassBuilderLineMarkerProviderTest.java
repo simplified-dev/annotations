@@ -24,7 +24,7 @@ public class ClassBuilderLineMarkerProviderTest extends BasePlatformTestCase {
      * change. Update both sites together when intentionally swapping the
      * icon.
      */
-    private static final String EXPECTED_ICON_PATH = "/icons/classbuilder_generated.svg";
+    private static final String EXPECTED_ICON_PATH = "/icons/generated.svg";
 
     private AccessToken jsvgSuppressor;
 
