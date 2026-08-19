@@ -4,3 +4,4 @@ dev.simplified.utility.apt.UtilityClassProcessor
 dev.simplified.cleanup.apt.CleanupProcessor
 dev.simplified.silentthrows.apt.SilentThrowsProcessor
 dev.simplified.log.apt.LogProcessor
+dev.simplified.expand.apt.SourceExpanderProcessor

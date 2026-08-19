@@ -313,6 +313,9 @@ public final class AccessorMutator {
         // member through its accessor may match on: only this pass mints a
         // return type from the very field the body returns.
         AstMarkers.markPass(method, PASS);
+        // The accessor's documentation is the field's documentation, and this is
+        // the only point where both nodes are in hand.
+        AstMarkers.markDocSource(method, decl);
         return method;
     }
 

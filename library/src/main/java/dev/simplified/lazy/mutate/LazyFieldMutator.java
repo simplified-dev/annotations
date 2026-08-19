@@ -148,6 +148,9 @@ public final class LazyFieldMutator {
 
         Set<String> processed = new HashSet<>();
         Set<String> existingGetters = collectExistingGetterNames(target);
+        // Kept so the getter can be pointed back at the declaration it reads,
+        // which is where its documentation is written.
+        Map<String, JCVariableDecl> declsByName = new LinkedHashMap<>();
 
         for (var def : target.defs) {
             if (!(def instanceof JCVariableDecl decl)) continue;
@@ -155,6 +158,7 @@ public final class LazyFieldMutator {
             if (lazy == null) continue;
             if (!validateField(lazy, decl)) continue;
             rewriteFieldDecl(lazy, decl);
+            declsByName.put(lazy.name, decl);
             processed.add(lazy.name);
         }
 
@@ -165,6 +169,9 @@ public final class LazyFieldMutator {
             String getterName = "get" + capitalise(name);
             if (existingGetters.contains(getterName)) continue;
             JCMethodDecl getter = buildGetter(lazy, getterName);
+            // The getter's documentation is the field's documentation, and this
+            // is the only point where both nodes are in hand.
+            AstMarkers.markDocSource(getter, declsByName.get(name));
             bridge.compat().appendDef(target, getter);
         }
         return processed;

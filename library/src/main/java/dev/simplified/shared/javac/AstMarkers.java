@@ -37,6 +37,10 @@ public final class AstMarkers {
     private static final java.util.Map<String, java.util.Set<JCTree>> PASSES =
         new java.util.HashMap<>();
 
+    /** Generated node to the authored declaration its documentation describes. */
+    private static final java.util.Map<JCTree, JCTree> DOC_SOURCES =
+        java.util.Collections.synchronizedMap(new WeakHashMap<>());
+
     private AstMarkers() {
     }
 
@@ -124,6 +128,34 @@ public final class AstMarkers {
             return PASSES.computeIfAbsent(pass,
                 key -> Collections.newSetFromMap(new WeakHashMap<>()));
         }
+    }
+
+    /**
+     * Records the authored declaration whose documentation describes a generated
+     * node.
+     *
+     * <p>A generated accessor's prose is the field's prose, and only the pass
+     * that mints the accessor holds both nodes at once. Recording the pairing
+     * here is what lets a later reader carry the field's javadoc onto the member
+     * without matching names back to fields - a match that would be a second,
+     * drifting copy of the naming rules the pass already applied.
+     *
+     * @param node the freshly built node
+     * @param source the authored declaration the node derives from
+     */
+    public static void markDocSource(JCTree node, JCTree source) {
+        if (node != null && source != null) DOC_SOURCES.put(node, source);
+    }
+
+    /**
+     * The authored declaration whose documentation describes the given node.
+     *
+     * @param node the generated node
+     * @return the declaration it derives from, or {@code null} when the node
+     *         derives from no single one
+     */
+    public static JCTree docSourceOf(JCTree node) {
+        return node == null ? null : DOC_SOURCES.get(node);
     }
 
 }
