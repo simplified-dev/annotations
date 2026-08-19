@@ -11,8 +11,36 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
 
 ## [Unreleased]
 
+### Added
+
+- **A javadoc run can now see the members the processor generates.** The javadoc tool runs no
+  annotation processors and cannot be made to, so every member the mutation passes inject is absent
+  from the model the doclet resolves against: `{@link #getName()}` over a `@Getter` field is
+  `reference not found`, and a generated constructor leaves the doclet reporting the implicit one it
+  can see instead. Setting `-Adev.simplified.expandTo=<dir>` writes each compilation unit out again
+  with its generated members spliced in, for a javadoc task to read in place of the source tree;
+  `gradle/expand-javadoc.init.gradle.kts` wires both halves. The option is the only switch, so an
+  ordinary build neither reads nor writes anything. Each generated accessor carries the
+  documentation of the field it reads, which is what makes the accessor link worth resolving rather
+  than worth rewriting - it renders as a real hyperlink, where a link to the backing field renders
+  as code text whenever that field is private. Measured over one consumer's 275 sources at private
+  visibility: 124 `reference not found` errors to none, and 128 `use of default constructor`
+  warnings to sixteen on classes carrying no annotation of this set, with every other warning
+  category byte-identical - so the expansion introduces none of its own and needs no `-Xdoclint`
+  relaxation.
+
 ### Fixed
 
+- **The processor no longer calls JDK methods its oldest supported compiler does not have.** Five
+  `java.util.List.getFirst()` calls sat in live processor paths, resolving a `@Collector` key, an
+  `@AssignVia` transform, an `Optional` slot's type argument and a copy factory's parameter. It is
+  a `SequencedCollection` method added in 21 and this module targets 17, so a consumer building on
+  17 got `NoSuchMethodError` naming a JDK class, which reads like their bug rather than this one.
+  Nothing about building the module could have caught it: `sourceCompatibility` settles the
+  language level and not the API surface, and `options.release`, which settles both, cannot be used
+  here because `--release` hides the `com.sun.tools.javac.*` packages every mutator is built on.
+  The processor suite now runs on the floor as part of `check`, because running it there is the
+  only thing that catches an API ceiling the compiler cannot be asked to enforce.
 - **The editor no longer reports a container a generated member fills as one nothing fills.**
   IntelliJ's contents-of-container inspections ask who reads or writes what a field holds, and
   reference search cannot see a member an augment provider contributes, so a class whose
