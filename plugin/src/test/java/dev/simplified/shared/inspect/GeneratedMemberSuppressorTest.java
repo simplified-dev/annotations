@@ -19,13 +19,17 @@ import com.intellij.psi.PsiLocalVariable;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.testFramework.LightProjectDescriptor;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
+import com.siyeh.ig.bugs.MismatchedArrayReadWriteInspection;
+import com.siyeh.ig.bugs.MismatchedCollectionQueryUpdateInspection;
+import com.siyeh.ig.bugs.MismatchedStringBuilderQueryUpdateInspection;
 import dev.simplified.testutil.JSvgErrorSuppressor;
 import org.jetbrains.annotations.NotNull;
 
 /**
  * Behaviour of {@link GeneratedMemberSuppressor}: the inspections that read a
- * field as uninitialized, unread or needlessly a field stop firing on the fields
- * a generated member initializes and reads, and keep firing everywhere else.
+ * field as uninitialized, unread, needlessly a field or holding a container
+ * nothing fills stop firing on the fields a generated member initializes and
+ * reads, and keep firing everywhere else.
  *
  * <p>The warnings are provoked by the platform's own tools over a real
  * highlighting pass, because which element of a declaration a tool reports on is
@@ -60,6 +64,18 @@ public class GeneratedMemberSuppressorTest extends LightJavaCodeInsightFixtureTe
     /** The wording of the report {@code FieldCanBeLocal} draws. */
     private static final String CAN_BE_LOCAL = "converted to a local variable";
 
+    /** The wording of the collection report drawn on a container only read from. */
+    private static final String NEVER_POPULATED = "never populated";
+
+    /** The wording of the collection report drawn on a container only written to. */
+    private static final String NEVER_QUERIED = "never queried";
+
+    /** The wording of the report {@code MismatchedArrayReadWrite} draws. */
+    private static final String NEVER_WRITTEN = "never written to";
+
+    /** The wording of the report {@code MismatchedStringBuilderQueryUpdate} draws. */
+    private static final String NEVER_UPDATED = "never updated";
+
     private final GeneratedMemberSuppressor suppressor = new GeneratedMemberSuppressor();
 
     private AccessToken jsvgSuppressor;
@@ -76,7 +92,10 @@ public class GeneratedMemberSuppressorTest extends LightJavaCodeInsightFixtureTe
         myFixture.enableInspections(
             new NullableStuffInspection(),
             new NotNullFieldNotInitializedInspection(),
-            new FieldCanBeLocalInspection());
+            new FieldCanBeLocalInspection(),
+            new MismatchedCollectionQueryUpdateInspection(),
+            new MismatchedArrayReadWriteInspection(),
+            new MismatchedStringBuilderQueryUpdateInspection());
         GeneratedMemberTestSources.install(myFixture);
     }
 
@@ -228,6 +247,186 @@ public class GeneratedMemberSuppressorTest extends LightJavaCodeInsightFixtureTe
             }
             """);
         assertTrue(reports(CAN_BE_LOCAL));
+    }
+
+    // ------------------------------------------------------------------
+    // Contents of a container nothing in source fills or empties
+    // ------------------------------------------------------------------
+
+    public void testUnannotatedCollectionFieldIsReportedNeverPopulated() {
+        configure(
+            """
+            import java.util.ArrayList;
+            import java.util.List;
+            public class Target {
+                private final List<String> lines = new ArrayList<>();
+                String first() {
+                    return lines.get(0);
+                }
+            }
+            """);
+        assertTrue(reports(NEVER_POPULATED));
+    }
+
+    /**
+     * The pair the whole family turns on: one annotation is the only difference
+     * from the case above, and the accessor that fills nothing is what hands the
+     * list to a caller who can.
+     */
+    public void testGetterSilencesTheNeverPopulatedReport() {
+        configure(
+            """
+            import dev.simplified.annotations.Getter;
+            import java.util.ArrayList;
+            import java.util.List;
+            @Getter
+            public class Target {
+                private final List<String> lines = new ArrayList<>();
+                String first() {
+                    return lines.get(0);
+                }
+            }
+            """);
+        assertFalse(reports(NEVER_POPULATED));
+    }
+
+    /**
+     * The builder fills it, and asking the tool about the field's type is what
+     * makes the platform resolve a reference this provider is reached through -
+     * so a green result here is also a report the provider serviced without
+     * re-entering that resolve.
+     */
+    public void testClassBuilderSilencesTheNeverPopulatedReport() {
+        configure(
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import java.util.ArrayList;
+            import java.util.List;
+            @ClassBuilder
+            public class Target {
+                private final List<String> lines = new ArrayList<>();
+                String first() {
+                    return lines.get(0);
+                }
+            }
+            """);
+        assertFalse(reports(NEVER_POPULATED));
+    }
+
+    /** A blank final the generated constructor takes a value for is filled too. */
+    public void testRequiredArgsConstructorSilencesTheNeverPopulatedReport() {
+        configure(
+            """
+            import dev.simplified.annotations.RequiredArgsConstructor;
+            import java.util.List;
+            @RequiredArgsConstructor
+            public class Target {
+                private final List<String> lines;
+                String first() {
+                    return lines.get(0);
+                }
+            }
+            """);
+        assertFalse(reports(NEVER_POPULATED));
+    }
+
+    public void testUnannotatedCollectionFieldIsReportedNeverQueried() {
+        configure(
+            """
+            import java.util.ArrayList;
+            import java.util.List;
+            public class Target {
+                private final List<String> lines = new ArrayList<>();
+                void add(String value) {
+                    lines.add(value);
+                }
+            }
+            """);
+        assertTrue(reports(NEVER_QUERIED));
+    }
+
+    /**
+     * The other direction of the same tool, and the case no constructor answers:
+     * the accessor is the reader, and reference search cannot see it.
+     */
+    public void testGetterSilencesTheNeverQueriedReport() {
+        configure(
+            """
+            import dev.simplified.annotations.Getter;
+            import java.util.ArrayList;
+            import java.util.List;
+            @Getter
+            public class Target {
+                private final List<String> lines = new ArrayList<>();
+                void add(String value) {
+                    lines.add(value);
+                }
+            }
+            """);
+        assertFalse(reports(NEVER_QUERIED));
+    }
+
+    public void testUnannotatedArrayFieldIsReportedNeverWritten() {
+        configure(
+            """
+            public class Target {
+                private final String[] rows = new String[4];
+                String at(int index) {
+                    return rows[index];
+                }
+            }
+            """);
+        assertTrue(reports(NEVER_WRITTEN));
+    }
+
+    public void testRequiredArgsConstructorSilencesTheArrayReport() {
+        configure(
+            """
+            import dev.simplified.annotations.RequiredArgsConstructor;
+            @RequiredArgsConstructor
+            public class Target {
+                private final String[] rows;
+                String at(int index) {
+                    return rows[index];
+                }
+            }
+            """);
+        assertFalse(reports(NEVER_WRITTEN));
+    }
+
+    public void testUnannotatedStringBuilderFieldIsReportedNeverUpdated() {
+        configure(
+            """
+            public class Target {
+                private final StringBuilder text = new StringBuilder();
+                String rendered() {
+                    return text.toString();
+                }
+            }
+            """);
+        assertTrue(reports(NEVER_UPDATED));
+    }
+
+    /**
+     * The one in the family a constructor parameter cannot reach: the tool needs
+     * an initializer to know the builder is the class's own, so a slot filled
+     * from a parameter is a shape it never reports on. The accessor is what
+     * makes the report wrong here, since it hands the builder to a caller that
+     * can append to it.
+     */
+    public void testGetterSilencesTheStringBuilderReport() {
+        configure(
+            """
+            import dev.simplified.annotations.Getter;
+            @Getter
+            public class Target {
+                private final StringBuilder text = new StringBuilder();
+                String rendered() {
+                    return text.toString();
+                }
+            }
+            """);
+        assertFalse(reports(NEVER_UPDATED));
     }
 
     // ------------------------------------------------------------------

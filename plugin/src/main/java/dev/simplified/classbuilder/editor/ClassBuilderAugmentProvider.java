@@ -21,7 +21,9 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Surfaces the bootstrap methods ({@code builder()}, {@code from(T)},
@@ -55,15 +57,73 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
     private record SynthesizedMembers(GeneratedMemberFactory.EditorBuilderConfig config,
                                       List<PsiMethod> bootstrapMethods,
                                       PsiClass builderClass,
-                                      @Nullable PsiMethod allArgsConstructor) {
+                                      DeferredConstructor allArgsConstructor) {
 
         /** Bootstrap methods plus the all-args constructor when one was synthesised. */
         List<PsiMethod> allMethods() {
-            if (allArgsConstructor == null) return bootstrapMethods;
+            PsiMethod constructor = allArgsConstructor.get();
+            if (constructor == null) return bootstrapMethods;
             List<PsiMethod> out = new ArrayList<>(bootstrapMethods.size() + 1);
             out.addAll(bootstrapMethods);
-            out.add(allArgsConstructor);
+            out.add(constructor);
             return out;
+        }
+    }
+
+    /**
+     * The all-args constructor, synthesised on the first read rather than beside
+     * the rest of the members.
+     *
+     * <p>Reading it is what classifies every field, and classifying a field
+     * resolves the type the author wrote on it. A type resolve started from
+     * inside {@code getAugments} walks the target's own scope and arrives back
+     * here, so the platform can already be resolving the very reference the
+     * classification is about to ask about. It answers that by refusing to cache
+     * the outer resolve, which costs every later pass the same walk and leaves
+     * the classification reading a type that resolved to nothing.
+     *
+     * <p>Deferring is what separates the two. A reference to a type name asks a
+     * class only for its nested classes, and the nested class is the one member
+     * here that needs no field read at all - so the request that can be mid-
+     * resolve is the request that no longer triggers one. The method request
+     * still builds it, and nothing resolving a type name makes that request.
+     *
+     * <p>Memoised, and the value that wins the race is the value every caller
+     * gets: {@link IdempotenceChecker} re-runs the producers around this one and
+     * compares what they return, so a second call handing back an equal-but-new
+     * {@link PsiMethod} fails the check. Held through an {@link Optional} so a
+     * target that needs no constructor is a computed answer rather than an
+     * unread one.
+     */
+    private static final class DeferredConstructor {
+
+        private final BuilderSite site;
+        private final GeneratedMemberFactory.EditorBuilderConfig config;
+        private final AtomicReference<Optional<PsiMethod>> computed = new AtomicReference<>();
+
+        DeferredConstructor(BuilderSite site, GeneratedMemberFactory.EditorBuilderConfig config) {
+            this.site = site;
+            this.config = config;
+        }
+
+        /**
+         * The constructor this target needs, or {@code null} when it needs none.
+         *
+         * @return the synthesised constructor, computed once
+         */
+        private @Nullable PsiMethod get() {
+            Optional<PsiMethod> known = computed.get();
+            if (known != null) return known.orElse(null);
+
+            PsiClass target = site.owner();
+            // The annotated member is what build() calls on the executable path,
+            // so there is no constructor to synthesise beside it.
+            PsiMethod fresh = !site.isExecutable() && needsAllArgsConstructor(target, config)
+                ? withInProgress(target, () -> GeneratedMemberFactory.allArgsConstructor(target, config))
+                : null;
+            return computed.compareAndSet(null, Optional.ofNullable(fresh))
+                ? fresh
+                : computed.get().orElse(null);
         }
     }
 
@@ -272,12 +332,8 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         return withInProgress(target, () -> {
             PsiClass builderClass = GeneratedMemberFactory.synthesizeBuilderClass(site, config);
             List<PsiMethod> bootstrap = GeneratedMemberFactory.bootstrapMethods(site, config, builderClass);
-            // The annotated member is what build() calls on the executable path,
-            // so there is no constructor to synthesise beside it.
-            PsiMethod ctor = !site.isExecutable() && needsAllArgsConstructor(target, config)
-                ? GeneratedMemberFactory.allArgsConstructor(target, config)
-                : null;
-            SynthesizedMembers fresh = new SynthesizedMembers(config, bootstrap, builderClass, ctor);
+            SynthesizedMembers fresh = new SynthesizedMembers(config, bootstrap, builderClass,
+                new DeferredConstructor(site, config));
             target.putUserData(SYNTHESIZED, fresh);
             return fresh;
         });

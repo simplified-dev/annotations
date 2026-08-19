@@ -13,6 +13,27 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
 
 ### Fixed
 
+- **The editor no longer reports a container a generated member fills as one nothing fills.**
+  IntelliJ's contents-of-container inspections ask who reads or writes what a field holds, and
+  reference search cannot see a member an augment provider contributes, so a class whose
+  collections, arrays and string builders are filled by a generated constructor or handed out
+  through a generated accessor drew one warning per field. `MismatchedQueryAndUpdateOfCollection`,
+  `MismatchedReadAndWriteOfArray` and `MismatchedQueryAndUpdateOfStringBuilder` now join the unread
+  and over-scoped families `GeneratedMemberSuppressor` already answers, and are answered by the
+  same per-field question rather than blanket per class, so an unannotated field on an annotated
+  class keeps every report. Each is spelled by its suppression id, which is what the platform hands
+  a suppressor and is not the short name for any of the three. A generated constructor is not the
+  only answer to them either: a class carrying nothing but `@Getter` reports a list it fills,
+  because the only reader is an accessor holding no reference into the source tree.
+- **`@ClassBuilder`'s editor synthesis no longer throws away the resolve that reached it.** Asking a
+  `@ClassBuilder` class for its nested classes built the all-args constructor beside them, and
+  building that constructor classifies every field, which resolves the type each one declares. A
+  reference to a type name is one of the things that asks a class for its nested classes, so the
+  platform could already be resolving the very reference the classification went on to ask about.
+  It answers a cycle like that by refusing to cache the outer resolve, which costs every later pass
+  the same walk and leaves the classification reading a type that resolved to nothing. The
+  constructor is built on the first read of it now, and a type name resolves through the nested
+  classes alone.
 - **The synthesised-member icon's wand shaft carries on dark themes.** The shaft was a near-black
   `#2C2C2C` against the New UI's dark gutter, about 1.2:1, so the one element tying the star and the
   two sparkles together into a wand vanished and the icon read as three unrelated floating shapes.
