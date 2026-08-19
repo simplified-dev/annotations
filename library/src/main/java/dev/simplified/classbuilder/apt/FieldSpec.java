@@ -396,7 +396,7 @@ public final class FieldSpec {
                 out.add(new AssignTransform(method, null, false));
                 continue;
             }
-            TypeMirror param = resolved.getParameters().getFirst().asType();
+            TypeMirror param = resolved.getParameters().get(0).asType();
             out.add(new AssignTransform(method, param.toString(), sameErasure(typeUtils, param, b.type)));
         }
         return out;

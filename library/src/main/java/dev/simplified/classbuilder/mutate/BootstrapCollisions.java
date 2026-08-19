@@ -92,7 +92,7 @@ final class BootstrapCollisions {
             if (!enclosed.getSimpleName().contentEquals(name)) continue;
             ExecutableElement method = (ExecutableElement) enclosed;
             if (method.getParameters().size() != 1) continue;
-            TypeMirror parameter = method.getParameters().getFirst().asType();
+            TypeMirror parameter = method.getParameters().get(0).asType();
             if (parameter instanceof DeclaredType declared && declared.asElement().equals(target)) {
                 return true;
             }

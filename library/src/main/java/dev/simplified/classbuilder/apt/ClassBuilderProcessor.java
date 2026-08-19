@@ -897,10 +897,10 @@ public class ClassBuilderProcessor extends AbstractProcessor {
             if (!member.getSimpleName().contentEquals(slot.keyMethod)) continue;
             ExecutableElement method = (ExecutableElement) member;
             if (!method.getParameters().isEmpty()) continue;
-            if (!suppliesType(method.getReturnType(), arguments.getFirst())) {
+            if (!suppliesType(method.getReturnType(), arguments.get(0))) {
                 messager.printMessage(Diagnostic.Kind.ERROR,
                     "@Collector(key = '" + slot.keyMethod + "') returns " + method.getReturnType()
-                        + ", which cannot key '" + slot.name + "' on " + arguments.getFirst(),
+                        + ", which cannot key '" + slot.name + "' on " + arguments.get(0),
                     site);
             }
             return;
@@ -998,7 +998,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
                 site);
             return null;
         }
-        ExecutableElement method = candidates.getFirst();
+        ExecutableElement method = candidates.get(0);
         if (!method.getModifiers().contains(Modifier.STATIC)) {
             messager.printMessage(Diagnostic.Kind.ERROR,
                 "@AssignVia(method = '" + name + "') names an instance method - the setter runs "
@@ -1007,7 +1007,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
                 site);
             return null;
         }
-        TypeMirror param = method.getParameters().getFirst().asType();
+        TypeMirror param = method.getParameters().get(0).asType();
         if (!suppliesType(method.getReturnType(), slot.type)) {
             messager.printMessage(Diagnostic.Kind.ERROR,
                 "@AssignVia(method = '" + name + "') returns " + method.getReturnType()
@@ -1052,7 +1052,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     private static TypeMirror optionalInnerOf(FieldSpec slot) {
         if (!(slot.type instanceof DeclaredType declared)) return null;
         var args = declared.getTypeArguments();
-        return args.isEmpty() ? null : args.getFirst();
+        return args.isEmpty() ? null : args.get(0);
     }
 
     /** The target's own no-argument method of that name, or {@code null}. */
