@@ -9,7 +9,7 @@ Versions 1.0.0 through 1.0.5 were published under the legacy plugin ID
 Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations` /
 `io.github.simplified-dev:annotations`. See the 2.0.0 entry for the rename details.
 
-## [Unreleased]
+## [2.6.1]
 
 ### Added
 
