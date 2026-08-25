@@ -27,11 +27,11 @@ import org.jetbrains.annotations.NotNull;
  *
  * <ul>
  *   <li>{@code @Lazy} on a static field - the AST mutator cannot install a
- *       per-instance {@code Lazy<T>} on a static slot.</li>
+ *       per-instance deferred holder on a static slot.</li>
  *   <li>{@code @Lazy} on a record component - records bind the canonical
  *       constructor and accessor, so the storage type can't be rewritten.</li>
- *   <li>{@code @Lazy} on a primitive field - {@code Lazy<T>} can't be
- *       parameterised with a primitive; suggest the boxed equivalent.</li>
+ *   <li>{@code @Lazy} on an array field - the storage rewrite has no shape for
+ *       one.</li>
  *   <li>{@code @Lazy} on a field with neither an initializer nor a constructor
  *       assignment, on a class with no {@code @ClassBuilder} - no source of
  *       supplier value exists.</li>
@@ -79,12 +79,6 @@ public class LazyFieldInspection extends LocalInspectionTool {
                 }
 
                 PsiType type = field.getType();
-                if (type instanceof PsiPrimitiveType) {
-                    holder.registerProblem(lazy,
-                        "@Lazy is not supported on primitive fields - use the boxed equivalent",
-                        ProblemHighlightType.GENERIC_ERROR);
-                    return;
-                }
                 if (type.getArrayDimensions() > 0) {
                     holder.registerProblem(lazy,
                         "@Lazy is not supported on array fields",

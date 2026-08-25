@@ -16,6 +16,7 @@ import com.sun.tools.javac.util.Names;
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.args.mutate.ArgsConstructorFactory;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.lazy.mutate.LazyHolders;
 import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.NullnessAnnotations;
 
@@ -134,7 +135,7 @@ final class AllArgsConstructorFactory {
      *
      * <pre>{@code
      * // plain:  name != null ? name.get() : $default$name()
-     * // @Lazy:  v != null ? Lazy.of(v, owner, "v") : Lazy.of(() -> $default$v())
+     * // @Lazy:  new AtomicReference<>(v != null ? v : () -> $default$v())
      * }</pre>
      */
     private JCExpression defaultingRhs(FieldSpec f) {
@@ -155,24 +156,15 @@ final class AllArgsConstructorFactory {
             return make.Conditional(isSet, get, providerCall);
         }
         // A @Lazy field keeps its deferral on both branches: the supplied
-        // supplier is wrapped verbatim, and the default becomes a lambda over
-        // the provider so it is still not run until the first getter call.
-        JCExpression lazyType = ctx.types().qualIdent("dev.simplified.lazy.Lazy");
-        JCExpression supplied = make.Apply(
-            List.nil(),
-            make.Select(lazyType, names.fromString("of")),
-            List.of(
+        // supplier is passed through verbatim, and the default becomes a lambda
+        // over the provider so it is still not run until the first getter call.
+        // One holder wraps the choice rather than each branch minting its own -
+        // the null test above has already proved the supplied slot non-null, so
+        // there is nothing left for a per-branch check to catch.
+        return LazyHolders.newHolder(make, ctx.types(), f.typeDisplay,
+            make.Conditional(isSet,
                 make.Ident(names.fromString(f.name)),
-                make.Literal(ctx.targetElement().getQualifiedName().toString()),
-                make.Literal(f.name)
-            )
-        );
-        JCExpression deferred = make.Apply(
-            List.nil(),
-            make.Select(ctx.types().qualIdent("dev.simplified.lazy.Lazy"), names.fromString("of")),
-            List.of(make.Lambda(List.nil(), providerCall))
-        );
-        return make.Conditional(isSet, supplied, deferred);
+                make.Lambda(List.nil(), providerCall)));
     }
 
     /** {@code $merge$<name>(contributed, replaced)} on the target. */

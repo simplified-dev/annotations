@@ -325,18 +325,7 @@ final class InterfaceImplEmitter {
      * @return the quoted literal
      */
     private static String quote(String s) {
-        StringBuilder sb = new StringBuilder(s.length() + 2).append('"');
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c == '\\') sb.append("\\\\");
-            else if (c == '"') sb.append("\\\"");
-            else if (c == '\n') sb.append("\\n");
-            else if (c == '\r') sb.append("\\r");
-            else if (c == '\t') sb.append("\\t");
-            else if (c >= 0x20 && c < 0x7f) sb.append(c);
-            else sb.append(String.format("\\u%04x", (int) c));
-        }
-        return sb.append('"').toString();
+        return SourceLiterals.quote(s);
     }
 
     /**

@@ -269,7 +269,7 @@ public final class ToStringInspection extends LocalInspectionTool {
         if (include != null && WholeObjectConstants.has(member, WholeObjectConstants.LAZY_FQN)) {
             holder.registerProblem(include,
                 "'" + name + "' is @Lazy, so " + LABEL + " cannot read it directly - the field's "
-                    + "storage is the wrapper, and forcing the value from inside a dump is a side "
+                    + "storage holds the supplier, and forcing the value from inside a dump is a side "
                     + "effect a debugger should not cause. Declare a zero-arg method carrying the "
                     + "include marker if the memoized value belongs here",
                 ProblemHighlightType.GENERIC_ERROR);

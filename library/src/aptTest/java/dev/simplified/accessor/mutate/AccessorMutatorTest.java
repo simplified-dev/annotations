@@ -530,8 +530,9 @@ public class AccessorMutatorTest {
 
     @Test
     public void getterSkipsLazyFieldsRatherThanDuplicating() throws Exception {
-        // @Lazy already synthesises getHeavy(); a second one returning Lazy<T>
-        // is a duplicate method javac reports with no source line.
+        // @Lazy already synthesises getHeavy(); a second one returning the
+        // field's storage is a duplicate method javac reports with no source
+        // line. The private resolver beside it is @Lazy's own memoizing read.
         Class<?> t = compileAndLoad("demo.Widget",
             "package demo;",
             "import dev.simplified.annotations.Getter;",
@@ -542,7 +543,7 @@ public class AccessorMutatorTest {
             "    private String label;",
             "    private static String compute() { return \"x\"; }",
             "}");
-        assertEquals("compute,getHeavy,getLabel", methodNames(t));
+        assertEquals("$resolve$heavy,compute,getHeavy,getLabel", methodNames(t));
         assertEquals("@Lazy's getter unwraps the storage",
             String.class, t.getDeclaredMethod("getHeavy").getReturnType());
     }

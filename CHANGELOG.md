@@ -9,6 +9,47 @@ Versions 1.0.0 through 1.0.5 were published under the legacy plugin ID
 Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations` /
 `io.github.simplified-dev:annotations`. See the 2.0.0 entry for the rename details.
 
+## [2.6.2]
+
+### Changed
+
+- **The library is a compile-time dependency again.** Three features generated code that reached
+  back into the jar at runtime - `@Lazy` stored its value in a library holder, `@BuildFlag`
+  validation called a reflective validator, and a `@Formattable` setter on a nullable or
+  `Optional<String>` field routed through a string helper. A consumer using any of them had to put
+  the artifact on their runtime classpath, and the failure mode for getting that wrong is a green
+  `compileJava` followed by a `NoClassDefFoundError`, which is not a failure a build can catch. All
+  three now emit the equivalent code inline, so `compileOnly` plus `annotationProcessor` is correct
+  whatever a consumer uses.
+- **`@Lazy` stores its supplier in an `AtomicReference` and memoizes into a sibling field.** The
+  reference doubles as the state token and as the monitor the getter locks on, so a memoized `null`
+  needs no sentinel and the supplier - with everything its lambda captured - becomes collectable
+  once the value exists. The initializer still runs at most once, still retries if it throws, and
+  still runs exactly once under contention. A private `$resolve$<name>()` carries the memoizing
+  read, which is what an author who writes their own getter should call.
+- **`@BuildFlag` constraints are resolved where the builder is generated and checked by code emitted
+  into it.** Regexes compile once into a constant instead of on every `build()`, the annotation no
+  longer needs to survive to runtime, and the requirement that a consumer's module `opens` its
+  package for reflection is gone. Rejections now throw `IllegalStateException`; the messages are
+  unchanged.
+
+### Added
+
+- **`@Lazy` accepts primitive fields.** The restriction existed because the old holder could not be
+  parameterised with one. The value slot stays primitive and only the supplier's type argument is
+  boxed, so the single boxing happens when the value is computed and never on a read.
+- **The editor reports a `@Lazy` field as the storage javac rewrites it to.** Previously it showed
+  the written type, so reading the field directly was green in the editor and rejected by the build.
+- **A target that hands construction to a factory is warned when `validate` is on.** Constraints are
+  resolved against the declared type, so a `@BuildFlag` on a subtype the factory returns is not
+  enforced - which had to stop being something that happened in silence.
+
+### Removed
+
+- `dev.simplified.lazy.Lazy`, `dev.simplified.classbuilder.validate.BuildFlagValidator`,
+  `BuilderValidationException` and `Strings`. All four existed only to be called from generated
+  code, and nothing generates a call to them any more.
+
 ## [2.6.1]
 
 ### Added

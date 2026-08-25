@@ -22,8 +22,6 @@ final class BuilderEmitter {
     private static final String NULLABLE_FQN = "org.jetbrains.annotations.Nullable";
     private static final String PRINT_FORMAT_FQN = "org.intellij.lang.annotations.PrintFormat";
     private static final String X_CONTRACT_FQN = "dev.simplified.annotations.XContract";
-    private static final String STRINGS_FQN = "dev.simplified.classbuilder.validate.Strings";
-    private static final String VALIDATOR_FQN = "dev.simplified.classbuilder.validate.BuildFlagValidator";
 
     private final TypeElement target;
     private final String targetSimpleName;
@@ -270,8 +268,8 @@ final class BuilderEmitter {
             .append('(').append(printFormat()).append(nullable ? nullable() : notNull()).append(string()).append(' ').append(f.name)
             .append(", ").append(nullable()).append(object()).append("... args) {\n");
         if (nullable) {
-            body.append("        this.").append(f.name).append(" = ").append(imports.use(STRINGS_FQN))
-                .append(".formatNullable(").append(f.name).append(", args).orElse(null);\n");
+            body.append("        this.").append(f.name).append(" = ").append(f.name)
+                .append(" == null ? null : ").append(string()).append(".format(").append(f.name).append(", args);\n");
         } else {
             body.append("        this.").append(f.name).append(" = ").append(string()).append(".format(").append(f.name).append(", args);\n");
         }
@@ -333,8 +331,9 @@ final class BuilderEmitter {
             body.append("    ").append(accessKeyword()).append(notNull()).append(builderRef).append(' ').append(setterName)
                 .append('(').append(printFormat()).append(nullable()).append(string()).append(' ').append(f.name)
                 .append(", ").append(nullable()).append(object()).append("... args) {\n");
-            body.append("        this.").append(f.name).append(" = ").append(imports.use(STRINGS_FQN))
-                .append(".formatNullable(").append(f.name).append(", args);\n");
+            body.append("        this.").append(f.name).append(" = ").append(optional)
+                .append(".ofNullable(").append(f.name).append(" == null ? null : ")
+                .append(string()).append(".format(").append(f.name).append(", args));\n");
             body.append("        return this;\n    }\n\n");
         }
     }
@@ -527,17 +526,14 @@ final class BuilderEmitter {
         } else {
             constructorTarget = "new " + targetSimpleName + diamond();
         }
-        // Validator reads @BuildFlag annotations off the constructed target,
-        // not the Builder (whose fields are synthesised without annotations),
-        // so we capture the new instance first, validate, then return.
-        //
-        // Only when there is something to read. The Impl this emits carries
-        // whatever @BuildFlag the interface's accessors declared and nothing
-        // else - it extends Object - so the accessors are the whole answer, and
-        // calling the validator without one puts the annotations jar on every
-        // consumer's runtime classpath to check nothing.
-        boolean emitValidation = config.validate() && declaresBuildFlag();
-        String validator = emitValidation ? imports.use(VALIDATOR_FQN) : null;
+        // Constraints are checked against the constructed object, not the
+        // Builder, because the Builder's slots are synthesised without them -
+        // so the new instance is captured first, checked, and then returned.
+        java.util.List<FlaggedMember> flagged = config.validate()
+            ? BuildFlags.of(target)
+            : java.util.List.of();
+        if (config.validate() && useFactory) warnFactoryValidation();
+        boolean emitValidation = !flagged.isEmpty();
         if (emitValidation) {
             body.append("        final ").append(targetRef).append(" $result = ").append(constructorTarget).append('(');
         } else {
@@ -549,26 +545,189 @@ final class BuilderEmitter {
         }
         body.append(");\n");
         if (emitValidation) {
-            body.append("        ").append(validator).append(".validate($result);\n");
+            body.append("        $validate$($result);\n");
             body.append("        return $result;\n");
         }
         body.append("    }\n\n");
+        if (emitValidation) emitValidationMembers(flagged);
     }
 
     /**
-     * Whether any accessor carried a {@code @BuildFlag} onto the generated
-     * {@code Impl}, and therefore whether {@code build()} has anything to
-     * validate.
+     * Emits {@code $validate$} and the value helpers it calls.
+     *
+     * <p>The mirror of the AST path's emission, and deliberately the same
+     * shape: {@code Object}-taking helpers rather than checks specialised per
+     * declared type, so a constraint is enforced the same way whichever path
+     * generated the builder.
      */
-    private boolean declaresBuildFlag() {
-        // A factory may return a subtype carrying constraints of its own, and
-        // the validator reads the runtime class, so that case keeps the call.
-        String factory = config.factoryMethod();
-        if (factory != null && !factory.isEmpty()) return true;
-        for (FieldSpec f : fields) {
-            if (f.buildFlag != null) return true;
+    private void emitValidationMembers(java.util.List<FlaggedMember> flagged) {
+        String optional = imports.use("java.util.Optional");
+        String collection = imports.use("java.util.Collection");
+        String map = imports.use("java.util.Map");
+        String regex = imports.use("java.util.regex.Pattern");
+        String owner = validatedTypeName();
+
+        body.append("    private static void $validate$(").append(targetRef).append(" $result) {\n");
+        java.util.Map<String, java.util.List<FlaggedMember>> groups = new java.util.LinkedHashMap<>();
+        for (FlaggedMember m : flagged) {
+            String read = "$result." + m.name() + (m.accessor() ? "()" : "");
+            if (m.flag().nonNull() || m.flag().notEmpty()) {
+                if (m.flag().group().length == 0) {
+                    String invalid = requiredInvalid(m, read);
+                    if (invalid != null) {
+                        body.append("        if (").append(invalid).append(") throw new IllegalStateException(\"")
+                            .append("Field '").append(m.name()).append("' in '").append(owner)
+                            .append("' is required and is null/empty\");\n");
+                    }
+                } else {
+                    for (String group : m.flag().group()) {
+                        groups.computeIfAbsent(group, g -> new java.util.ArrayList<>()).add(m);
+                    }
+                }
+            }
+            if (!m.flag().pattern().isEmpty()) {
+                body.append("        String $t$").append(m.name()).append(" = $flagText$(").append(read).append(");\n");
+                body.append("        if ($t$").append(m.name()).append(" != null && !").append(regex)
+                    .append(".matches(").append(SourceLiterals.quote(m.flag().pattern())).append(", $t$").append(m.name())
+                    .append(")) throw new IllegalStateException(\"Field '").append(m.name()).append("' in '")
+                    .append(owner).append("' does not match pattern '").append(SourceLiterals.escape(m.flag().pattern()))
+                    .append("' (value: '\" + ").append(read).append(" + \"')\");\n");
+            }
+            if (m.flag().limit() >= 0) {
+                body.append("        int $n$").append(m.name()).append(" = $flagSize$(").append(read).append(");\n");
+                body.append("        if ($n$").append(m.name()).append(" > ").append(m.flag().limit())
+                    .append(") throw new IllegalStateException(\"Field '").append(m.name()).append("' in '")
+                    .append(owner).append("' has length \" + $n$").append(m.name())
+                    .append(" + \", exceeds limit of ").append(m.flag().limit()).append("\");\n");
+            }
+            boolean hasMin = m.flag().min() != Double.NEGATIVE_INFINITY;
+            boolean hasMax = m.flag().max() != Double.POSITIVE_INFINITY;
+            if (hasMin || hasMax) {
+                body.append("        Number $b$").append(m.name()).append(" = $flagNumber$(").append(read).append(");\n");
+                if (hasMin) emitBound(m, owner, "<", m.flag().min(), "below the minimum of ");
+                if (hasMax) emitBound(m, owner, ">", m.flag().max(), "above the maximum of ");
+            }
         }
-        return false;
+        for (java.util.Map.Entry<String, java.util.List<FlaggedMember>> entry : groups.entrySet()) {
+            StringBuilder condition = new StringBuilder();
+            StringBuilder missing = new StringBuilder();
+            boolean satisfiable = true;
+            for (FlaggedMember m : entry.getValue()) {
+                String invalid = requiredInvalid(m, "$result." + m.name() + (m.accessor() ? "()" : ""));
+                if (invalid == null) { satisfiable = false; break; }
+                if (condition.length() > 0) condition.append(" && ");
+                condition.append(invalid);
+                if (missing.length() > 0) missing.append(',');
+                missing.append(m.name());
+            }
+            if (!satisfiable || condition.length() == 0) continue;
+            body.append("        if (").append(condition).append(") throw new IllegalStateException(\"Field group '")
+                .append(entry.getKey()).append("' in '").append(owner).append("' is required and [")
+                .append(missing).append("] is null/empty\");\n");
+        }
+        body.append("    }\n\n");
+
+        body.append("""
+                private static boolean $flagEmpty$(Object $v) {
+                    if ($v == null) return true;
+                    if ($v instanceof CharSequence) return ((CharSequence) $v).length() == 0;
+                    if ($v instanceof OPTIONAL<?>) return ((OPTIONAL<?>) $v).isEmpty();
+                    if ($v instanceof COLLECTION<?>) return ((COLLECTION<?>) $v).isEmpty();
+                    if ($v instanceof MAP<?, ?>) return ((MAP<?, ?>) $v).isEmpty();
+                    if ($v instanceof Object[]) return ((Object[]) $v).length == 0;
+                    return false;
+                }
+
+                private static int $flagSize$(Object $v) {
+                    if ($v == null) return -1;
+                    if ($v instanceof CharSequence) return ((CharSequence) $v).length();
+                    if ($v instanceof COLLECTION<?>) return ((COLLECTION<?>) $v).size();
+                    if ($v instanceof MAP<?, ?>) return ((MAP<?, ?>) $v).size();
+                    if ($v instanceof Object[]) return ((Object[]) $v).length;
+                    if ($v instanceof OPTIONAL<?>) {
+                        Object $o = ((OPTIONAL<?>) $v).orElse(null);
+                        if ($o == null) return 0;
+                        if ($o instanceof CharSequence) return ((CharSequence) $o).length();
+                        if ($o instanceof Number) return ((Number) $o).intValue();
+                        return String.valueOf($o).length();
+                    }
+                    return -1;
+                }
+
+                private static String $flagText$(Object $v) {
+                    if ($v instanceof CharSequence) return $v.toString();
+                    if ($v instanceof OPTIONAL<?>) {
+                        Object $o = ((OPTIONAL<?>) $v).orElse(null);
+                        return $o == null ? null : String.valueOf($o);
+                    }
+                    return null;
+                }
+
+                private static Number $flagNumber$(Object $v) {
+                    if ($v instanceof Number) return (Number) $v;
+                    if ($v instanceof OPTIONAL<?>) {
+                        Object $o = ((OPTIONAL<?>) $v).orElse(null);
+                        if ($o instanceof Number) return (Number) $o;
+                    }
+                    return null;
+                }
+
+            """
+            .replace("OPTIONAL", optional)
+            .replace("COLLECTION", collection)
+            .replace("MAP", map));
+    }
+
+    /** One half of a numeric range, as an emitted rejection. */
+    private void emitBound(FlaggedMember m, String owner, String comparison, double limit, String phrase) {
+        body.append("        if ($b$").append(m.name()).append(" != null && $b$").append(m.name())
+            .append(".doubleValue() ").append(comparison).append(' ').append(limit)
+            .append(") throw new IllegalStateException(\"Field '").append(m.name()).append("' in '")
+            .append(owner).append("' is \" + $b$").append(m.name()).append(" + \", ").append(phrase)
+            .append(renderBound(limit)).append("\");\n");
+    }
+
+    /**
+     * The condition under which a {@code nonNull} or {@code notEmpty} member is
+     * unsatisfied, or {@code null} when it cannot be. {@code notEmpty} subsumes
+     * {@code nonNull}, because emptiness counts an absent value as empty.
+     */
+    private static String requiredInvalid(FlaggedMember m, String read) {
+        if (m.primitive()) return null;
+        return m.flag().notEmpty() ? "$flagEmpty$(" + read + ")" : read + " == null";
+    }
+
+    /**
+     * Renders a bound the way it was written rather than as the {@code double}
+     * it is stored in, so {@code min = 0} on an {@code int} accessor reads as
+     * {@code 0} and not {@code 0.0}.
+     */
+    private static String renderBound(double value) {
+        if (value == Math.rint(value) && !Double.isInfinite(value)) return String.valueOf((long) value);
+        return String.valueOf(value);
+    }
+
+    /** Simple name of the type a rejection names - the {@code Impl} when one is emitted. */
+    private String validatedTypeName() {
+        if (targetKind != TargetKind.INTERFACE) return targetSimpleName;
+        if (!config.factoryMethod().isEmpty()) return targetSimpleName;
+        return interfaceImplName == null ? targetSimpleName + "Impl" : interfaceImplName;
+    }
+
+    /**
+     * Warns that a target handing construction to a factory has its constraints
+     * checked only as far as the declared type describes them.
+     *
+     * <p>Constraints are resolved where the builder is generated, so a subtype
+     * the factory happens to return carries constraints nothing at that point
+     * can enumerate. Saying so is the whole obligation: enforcing a subset in
+     * silence is the failure {@code @BuildFlag} exists to prevent.
+     */
+    private void warnFactoryValidation() {
+        messager.printMessage(Diagnostic.Kind.WARNING,
+            "@ClassBuilder(validate = true) with a factory checks only the constraints declared on '"
+                + targetSimpleName + "' - a @BuildFlag on a subtype the factory returns is not enforced",
+            target);
     }
 
     // ------------------------------------------------------------------

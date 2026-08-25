@@ -171,12 +171,7 @@ public class BootstrapMethodInjectionTest {
     }
 
     @Test
-    public void noBuildFlag_buildDoesNotReachForTheValidator() throws Exception {
-        // validate() defaults to true, so build() called BuildFlagValidator
-        // whatever the target declared - which put the annotations jar on the
-        // runtime classpath of every consumer of every module holding a
-        // @ClassBuilder, to check nothing. compileJava cannot see that; the
-        // symptom is a NoClassDefFoundError at the first build().
+    public void noBuildFlag_buildDoesNotReachForAValidator() throws Exception {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.Plain",
             "package demo;",
             "import dev.simplified.annotations.ClassBuilder;",
@@ -188,7 +183,9 @@ public class BootstrapMethodInjectionTest {
             "}");
         Compilation c = compile(src);
         assertThat(c).succeeded();
-        assertNoValidatorReference(c, "demo/Plain$Builder.class");
+        assertFalse("nothing carries a constraint, so build() must not validate",
+            classBytes(c, "demo/Plain$Builder.class").contains("$validate$"));
+        assertNoRuntimeDependency(c, "demo/Plain$Builder.class");
     }
 
     @Test
@@ -205,16 +202,15 @@ public class BootstrapMethodInjectionTest {
             "}");
         Compilation c = compile(src);
         assertThat(c).succeeded();
-        assertTrue("a target with a constraint must keep the call",
-            classBytes(c, "demo/Guarded$Builder.class")
-                .contains("dev/simplified/classbuilder/validate/BuildFlagValidator"));
+        assertTrue("a target with a constraint must keep validating",
+            classBytes(c, "demo/Guarded$Builder.class").contains("$validate$"));
+        assertNoRuntimeDependency(c, "demo/Guarded$Builder.class");
     }
 
     @Test
     public void inheritedBuildFlag_buildStillValidates() throws Exception {
-        // BuildFlagValidator.scan climbs to Object, so asking only about
-        // declared fields would turn an inherited requirement into an
-        // unenforced one.
+        // The flag walk climbs to Object, so asking only about declared fields
+        // would turn an inherited requirement into an unenforced one.
         JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Base",
             "package demo;",
             "import dev.simplified.annotations.BuildFlag;",
@@ -232,14 +228,60 @@ public class BootstrapMethodInjectionTest {
             "}");
         Compilation c = compile(parent, child);
         assertThat(c).succeeded();
-        assertTrue("the parent's constraint must keep the call",
-            classBytes(c, "demo/Child$Builder.class")
-                .contains("dev/simplified/classbuilder/validate/BuildFlagValidator"));
+        assertTrue("the parent's constraint must keep validating",
+            classBytes(c, "demo/Child$Builder.class").contains("$validate$"));
+        assertNoRuntimeDependency(c, "demo/Child$Builder.class");
     }
 
-    private static void assertNoValidatorReference(Compilation c, String classFile) throws Exception {
-        assertFalse("build() must not name the validator when nothing carries a @BuildFlag",
-            classBytes(c, classFile).contains("dev/simplified/classbuilder/validate/BuildFlagValidator"));
+    /**
+     * Every feature that generates code, generating at once, with the assertion
+     * that binds the whole of it: nothing emitted names a class from this
+     * library.
+     */
+    @Test
+    public void generatedCodeNamesNoLibraryClass() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Whole",
+            "package demo;",
+            "import dev.simplified.annotations.BuildFlag;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Formattable;",
+            "import dev.simplified.annotations.Lazy;",
+            "import org.jetbrains.annotations.Nullable;",
+            "@ClassBuilder",
+            "public class Whole {",
+            "    @BuildFlag(nonNull = true, limit = 5) String name;",
+            "    @Formattable @Nullable String note;",
+            "    @Lazy String expensive = compute();",
+            "    private static String compute() { return \"v\"; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+        assertNoRuntimeDependency(c, "demo/Whole.class");
+        assertNoRuntimeDependency(c, "demo/Whole$Builder.class");
+    }
+
+    /**
+     * Asserts a generated class names no {@code dev/simplified/} type other
+     * than an annotation.
+     *
+     * <p>The annotations are {@code CLASS}-retention markers, so they are inert
+     * at runtime and a consumer never needs them on the classpath. Anything
+     * else would be a real reference, and the failure mode it produces is a
+     * green {@code compileJava} followed by a {@code NoClassDefFoundError} -
+     * which is not a failure a build can catch, and so has to be caught here.
+     */
+    private static void assertNoRuntimeDependency(Compilation c, String classFile) throws Exception {
+        String pool = classBytes(c, classFile);
+        java.util.regex.Matcher m =
+            java.util.regex.Pattern.compile("dev/simplified/[A-Za-z0-9/$]+").matcher(pool);
+        java.util.List<String> offenders = new java.util.ArrayList<>();
+        while (m.find()) {
+            String named = m.group();
+            if (named.startsWith("dev/simplified/annotations/")) continue;
+            offenders.add(named);
+        }
+        assertTrue(classFile + " must not reference a library class at runtime, found: " + offenders,
+            offenders.isEmpty());
     }
 
     /** The constant pool as text, which is where a referenced class name shows up. */

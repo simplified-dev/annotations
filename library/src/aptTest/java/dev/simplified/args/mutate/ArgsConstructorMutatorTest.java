@@ -776,7 +776,7 @@ public class ArgsConstructorMutatorTest {
     /**
      * {@code force} fills the {@code final} fields a zero-argument constructor
      * would leave unassigned, and a {@code @Lazy} field is not one of them - its
-     * storage is a {@code Lazy<T>} wrapper, so there is no zero value to write.
+     * storage holds a deferred supplier, so there is no zero value to write.
      */
     @Test
     public void lazyFieldWithABuilderRejectsNoArgsForce() {

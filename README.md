@@ -47,8 +47,8 @@ Every annotation that generates has an IDE half, and that pairing is the point: 
   - `@Formattable` `@PrintFormat` string overload
   - Field initializers (`UUID.randomUUID()`, `List.of(...)`, etc.) carried into the builder as defaults evaluated fresh per `build()`, with no annotation required
   - An all-args constructor synthesised when the class declares none, so a plain class needs nothing but the annotation
-  - `@BuildFlag` runtime validator enforcing `nonNull` / `notEmpty` / `group` / `pattern` / `limit` in the generated `build()`
-- **`@Lazy`** - field-level annotation that defers a field's value computation until first access and caches it thereafter. The processor rewrites the storage from `T` to `Lazy<T>`, wraps the initializer as `Lazy.of(() -> <init>)`, and synthesises a memoizing getter. With `@ClassBuilder` the builder gets a dual `field(T)` / `field(Supplier<T>)` setter pair so deferred computations can flow through the builder unchanged.
+  - `@BuildFlag` checks enforcing `nonNull` / `notEmpty` / `group` / `pattern` / `limit`, emitted into the generated `build()`
+- **`@Lazy`** - field-level annotation that defers a field's value computation until first access and caches it thereafter. The processor rewrites the storage from `T` to `AtomicReference<Supplier<T>>`, moves the initializer into the supplier, adds a `$value$<name>` sibling for the memoized result, and synthesises a memoizing getter. Primitive fields are supported. With `@ClassBuilder` the builder gets a dual `field(T)` / `field(Supplier<T>)` setter pair so deferred computations can flow through the builder unchanged.
 - **`@Getter` / `@Setter`** - read and write accessors on classes and enums. Both default to bean-shaped names, so a bare `@Getter` keeps producing `getX()` / `isX()` and renames no existing call site; `style = NamingStyle.FLUENT` mints `x()` instead, which is what replaces Lombok's `@Accessors(fluent = true)`. A field-level annotation beats the enclosing type's, and `AccessLevel.NONE` on a field opts it out of a type-level fan-out.
 - **`@AllArgsConstructor` / `@RequiredArgsConstructor` / `@NoArgsConstructor` / `@BuilderArgsConstructor`** - one field-selection policy with four settings. "Required" means `final` without an initializer, since an initialized `final` is already definitely assigned. These **add** a constructor rather than backing off when one exists, so a constant-carrying enum still works, and a duplicate erasure between two of them is reported here rather than reaching javac on a line you cannot open.
 - **`@EqualsAndHashCode` / `@ToString`** - the whole-object members, over one shared member selector. **Records are the shape they exist for and the shape Lombok refuses**, so a record whose implicit `equals` compares an array component by reference can finally stop hand-writing the pair. `hashCode` accumulates rather than calling `Objects.hash`, because `Objects.hash` takes `Object...` and would hash an array member by identity - inconsistently with the `equals` beside it. `identity` selects between `EXACT_CLASS`, `INSTANCE_OF` and `INSTANCE_OF_CANEQUAL`; `cacheHashCode` adds a `transient` memo.
@@ -541,7 +541,7 @@ public interface Shape {
     int sides();
 }
 
-Shape.builder().sides(3).build();   // BuilderValidationException: Field 'name' in 'ShapeImpl' is required and is null/empty
+Shape.builder().sides(3).build();   // IllegalStateException: Field 'name' in 'ShapeImpl' is required and is null/empty
 ```
 
 `@BuildFlag` is the only companion whose target is wider than where it takes effect - written on any
@@ -562,7 +562,7 @@ other method it is silently inert, which the IDE inspection warns about.
 | `@Collector` | `Collection`, `List`, `Set`, `Map` | Emits varargs + `Iterable` bulk setters; opt-in `singular`, `clearable`, `compute` (maps: `putIfAbsent(K, Supplier<V>)`) |
 | `@Negate("inverse")` | `boolean` | Emits an inverse setter pair (`inverse(boolean)` plus the zero-arg `isInverse()`) alongside the direct pair |
 | `@Formattable` | `String`, `Optional<String>` | Emits a `@PrintFormat` overload (`withField(String fmt, Object... args)`) with null-safe `String.format` |
-| `@Lazy` | any reference-typed field | Rewrites storage to `Lazy<T>`, wraps the initializer as a supplier, and synthesises a memoizing getter; with `@ClassBuilder` adds a dual `field(T)` / `field(Supplier<T>)` setter pair |
+| `@Lazy` | any non-array instance field | Rewrites storage to `AtomicReference<Supplier<T>>`, moves the initializer into the supplier, and synthesises a memoizing getter; with `@ClassBuilder` adds a dual `field(T)` / `field(Supplier<T>)` setter pair |
 
 ### `Optional<T>` fields
 

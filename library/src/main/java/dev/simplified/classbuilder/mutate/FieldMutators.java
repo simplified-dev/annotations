@@ -65,8 +65,8 @@ final class FieldMutators {
         if (field.lazy) {
             // @Lazy fields take a dual shape: foo(T value) wraps as a constant
             // Supplier; foo(Supplier<T>) stores the supplier verbatim. The
-            // builder slot is Supplier<T>, the target field is Lazy<T>, and
-            // the build() copy wraps the Supplier as Lazy.of(supplier) at
+            // builder slot is Supplier<T>, the target field holds the supplier, and
+            // the build() copy wraps the Supplier in a fresh holder at
             // construction time (via the constructor-param rewrite in
             // LazyFieldMutator).
             out.append(lazyValueSetter(field));
@@ -466,10 +466,10 @@ final class FieldMutators {
     /**
      * {@code Builder withFoo(T value)} - eager value form. Stores
      * {@code () -> value} in the {@code Supplier<T>} slot so the eventual
-     * {@code Lazy.of(supplier)} on the target side returns the value
+     * the holder on the target side returns the value
      * immediately on first {@code get()}. Slot is {@code Supplier<T>} so
      * the synthesized constructor receives a Supplier and wraps as
-     * {@code Lazy.of(supplier)}.
+     * a fresh holder.
      */
     private JCMethodDecl lazyValueSetter(FieldSpec field) {
         String setterName = field.setters.setName(field.name, field.isBoolean);
@@ -569,8 +569,8 @@ final class FieldMutators {
     /**
      * {@code Builder withName(@PrintFormat String name, Object... args)} that
      * stores {@code String.format(name, args)}. When the field is
-     * {@code @Nullable}, routes through {@code Strings.formatNullable} so a
-     * null format string survives.
+     * {@code @Nullable}, a null format string is stored as-is rather than
+     * handed to {@link String#format}.
      */
     private JCMethodDecl stringFormattable(FieldSpec field) {
         String setterName = field.setters.setName(field.name, field.isBoolean);
@@ -589,27 +589,9 @@ final class FieldMutators {
             null
         );
 
-        JCExpression rhs;
-        if (nullable) {
-            rhs = make.Apply(
-                List.nil(),
-                make.Select(make.Apply(
-                    List.nil(),
-                    make.Select(types.qualIdent("dev.simplified.classbuilder.validate.Strings"),
-                        names.fromString("formatNullable")),
-                    List.of(make.Ident(names.fromString(field.name)),
-                        make.Ident(names.fromString("args")))
-                ), names.fromString("orElse")),
-                List.of(make.Literal(com.sun.tools.javac.code.TypeTag.BOT, null))
-            );
-        } else {
-            rhs = make.Apply(
-                List.nil(),
-                make.Select(types.qualIdent("java.lang.String"), names.fromString("format")),
-                List.of(make.Ident(names.fromString(field.name)),
-                    make.Ident(names.fromString("args")))
-            );
-        }
+        JCExpression rhs = nullable
+            ? formattedOrNull(field.name)
+            : formatted(field.name);
         JCStatement assign = slotAssign(field, rhs);
         return methodDefRaw(setterName, List.of(formatParam, argsParam),
             List.of(assign, returnThis()));
@@ -617,9 +599,9 @@ final class FieldMutators {
 
     /**
      * {@code Builder withDescription(@PrintFormat @Nullable String description, Object... args)}
-     * for an {@code Optional<String>} field; assigns
-     * {@code Strings.formatNullable(description, args)} directly so the
-     * Optional wrapper is preserved.
+     * for an {@code Optional<String>} field; wraps the formatted value directly
+     * so the Optional wrapper is preserved and a null format string becomes
+     * {@link java.util.Optional#empty()}.
      */
     private JCMethodDecl optionalFormattable(FieldSpec field) {
         String setterName = field.setters.setName(field.name, field.isBoolean);
@@ -638,14 +620,38 @@ final class FieldMutators {
         );
         JCExpression rhs = make.Apply(
             List.nil(),
-            make.Select(types.qualIdent("dev.simplified.classbuilder.validate.Strings"),
-                names.fromString("formatNullable")),
-            List.of(make.Ident(names.fromString(field.name)),
-                make.Ident(names.fromString("args")))
+            make.Select(types.qualIdent("java.util.Optional"), names.fromString("ofNullable")),
+            List.of(formattedOrNull(field.name))
         );
         JCStatement assign = slotAssign(field, rhs);
         return methodDefRaw(setterName, List.of(formatParam, argsParam),
             List.of(assign, returnThis()));
+    }
+
+    /** {@code String.format(<param>, args)}. */
+    private JCExpression formatted(String param) {
+        return make.Apply(
+            List.nil(),
+            make.Select(types.qualIdent("java.lang.String"), names.fromString("format")),
+            List.of(make.Ident(names.fromString(param)),
+                make.Ident(names.fromString("args")))
+        );
+    }
+
+    /**
+     * {@code <param> == null ? null : String.format(<param>, args)}.
+     *
+     * <p>A {@code @Formattable} slot that accepts a null format string cannot
+     * hand it to {@link String#format}, which would throw. Storing the null
+     * instead is what lets the setter's parameter be {@code @Nullable}.
+     */
+    private JCExpression formattedOrNull(String param) {
+        JCExpression isNull = make.Binary(JCTree.Tag.EQ,
+            make.Ident(names.fromString(param)),
+            make.Literal(com.sun.tools.javac.code.TypeTag.BOT, null));
+        return make.Conditional(isNull,
+            make.Literal(com.sun.tools.javac.code.TypeTag.BOT, null),
+            formatted(param));
     }
 
     // ------------------------------------------------------------------

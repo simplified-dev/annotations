@@ -205,7 +205,7 @@ public final class AccessorMutator {
         if (lazyFields.contains(fieldName)) {
             if (kind == Kind.GET) {
                 // @Lazy already synthesised a getter that unwraps the storage.
-                // A second one returning Lazy<T> is a duplicate method javac
+                // A second one returning the storage is a duplicate method javac
                 // reports with no source line.
                 if (!fromType) {
                     messager.printMessage(Diagnostic.Kind.NOTE,

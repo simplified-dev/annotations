@@ -13,6 +13,7 @@ import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.lazy.mutate.LazyHolders;
 import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.JavacTypeFactory;
@@ -91,19 +92,19 @@ final class CopyConstructorFactory {
 
     private JCStatement assignFromBuilder(FieldSpec f) {
         JCExpression lhs = make.Select(make.Ident(names._this), names.fromString(f.name));
-        // Builder slot is Supplier<T> for a @Lazy field while the target field
-        // is Lazy<T>. Wrap the supplier as Lazy.of(...) at copy time so the
-        // target stores a Lazy and the supplier's call is deferred to the first
-        // getter invocation. The field-attributed overload names the field if
-        // the slot was never filled, rather than letting a null supplier reach
-        // the first get().
+        // Builder slot and target field are both Supplier-shaped for a @Lazy
+        // field, so the slot is wrapped in a fresh holder at copy time and the
+        // supplier's call stays deferred to the first getter invocation. The
+        // checked form names the field if the slot was never filled, rather
+        // than letting a null supplier reach the first read.
         // A collected instance default reads both the contributed container and
         // its replaced marker off the builder, and folds them against the
         // instance-computed default.
         JCExpression rhs = ctx.isCollectedInstanceDefault(f)
             ? AllArgsConstructorFactory.mergeCall(ctx, f, slotRead(f), markerRead(f))
             : ctx.isInstanceDefault(f.name) ? defaultingRhs(f)
-            : f.lazy ? lazyOf(slotRead(f), f)
+            : f.lazy ? LazyHolders.newCheckedHolder(make, names, ctx.types(), f.typeDisplay,
+                slotRead(f), ctx.targetElement().getQualifiedName().toString(), f.name)
             : slotRead(f);
         return make.Exec(make.Assign(lhs, rhs));
     }
@@ -118,7 +119,7 @@ final class CopyConstructorFactory {
      *
      * <pre>{@code
      * // plain:  b.name != null ? b.name.get() : $default$name()
-     * // @Lazy:  b.v != null ? Lazy.of(b.v, owner, "v") : Lazy.of(() -> $default$v())
+     * // @Lazy:  new AtomicReference<>(b.v != null ? b.v : () -> $default$v())
      * }</pre>
      */
     private JCExpression defaultingRhs(FieldSpec f) {
@@ -137,14 +138,13 @@ final class CopyConstructorFactory {
             return make.Conditional(isSet, get, providerCall);
         }
         // A @Lazy field keeps its deferral on both branches: the supplied
-        // supplier is wrapped verbatim, and the default becomes a lambda over
-        // the provider so it is still not run until the first getter call.
-        JCExpression deferred = make.Apply(
-            List.nil(),
-            make.Select(ctx.types().qualIdent("dev.simplified.lazy.Lazy"), names.fromString("of")),
-            List.of(make.Lambda(List.nil(), providerCall))
-        );
-        return make.Conditional(isSet, lazyOf(slotRead(f), f), deferred);
+        // supplier is passed through verbatim, and the default becomes a lambda
+        // over the provider so it is still not run until the first getter call.
+        // One holder wraps the choice rather than each branch minting its own -
+        // the null test above has already proved the supplied slot non-null, so
+        // there is nothing left for a per-branch check to catch.
+        return LazyHolders.newHolder(make, ctx.types(), f.typeDisplay,
+            make.Conditional(isSet, slotRead(f), make.Lambda(List.nil(), providerCall)));
     }
 
     /** {@code b.<fieldName>} - a fresh read of the builder slot. */
@@ -156,19 +156,6 @@ final class CopyConstructorFactory {
     private JCExpression markerRead(FieldSpec f) {
         return make.Select(make.Ident(names.fromString("b")),
             names.fromString(MutationContext.replacedMarker(f.name)));
-    }
-
-    /** {@code Lazy.of(<supplier>, "<owner>", "<fieldName>")}. */
-    private JCExpression lazyOf(JCExpression supplier, FieldSpec f) {
-        return make.Apply(
-            List.nil(),
-            make.Select(ctx.types().qualIdent("dev.simplified.lazy.Lazy"), names.fromString("of")),
-            List.of(
-                supplier,
-                make.Literal(ctx.targetElement().getQualifiedName().toString()),
-                make.Literal(f.name)
-            )
-        );
     }
 
     private JCMethodDecl buildCtor(List<JCVariableDecl> params, List<JCStatement> body, long modifiers) {

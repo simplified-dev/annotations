@@ -46,11 +46,12 @@
           <code>from(T)</code> to a non-standard accessor - an instance method,
           a static helper, or a different field - when the target type doesn't
           expose a matching getter.</li>
-      <li><b>@BuildFlag runtime validator</b> enforces
+      <li><b>@BuildFlag validation</b> enforces
           <code>nonNull</code> / <code>notEmpty</code> / <code>group</code>
           mutual-requirement / regex <code>pattern</code> / length
-          <code>limit</code> in the generated <code>build()</code>. Zero
-          external dependencies.</li>
+          <code>limit</code> in the generated <code>build()</code>. The checks
+          are emitted into the builder, so a constraint costs nothing on the
+          runtime classpath.</li>
       <li><b>@XContract</b> annotations are emitted on every generated method
           so IntelliJ data-flow analysis understands fresh-object and
           this-return shapes.</li>

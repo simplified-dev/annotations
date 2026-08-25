@@ -170,7 +170,7 @@ public class LazyFieldMutatorTest {
     /**
      * {@code @BuilderIgnore} says the builder should not expose the field; it
      * says nothing about how the field is stored. So it composes with
-     * {@code @Lazy}: the field still gets {@code Lazy<T>} storage and a
+     * {@code @Lazy}: the field still gets deferred storage and a
      * memoizing getter, it simply has no setter and no constructor parameter,
      * and keeps its own initializer as the value source.
      *
@@ -200,8 +200,8 @@ public class LazyFieldMutatorTest {
         Class<?> target = Class.forName("demo.Ignored", true, loadClasses(c));
 
         Field hidden = target.getDeclaredField("hidden");
-        assertEquals("storage must still be rewritten to Lazy<T>",
-            "dev.simplified.lazy.Lazy", hidden.getType().getName());
+        assertEquals("storage must still be rewritten to the deferred holder",
+            "java.util.concurrent.atomic.AtomicReference", hidden.getType().getName());
         assertTrue("@Lazy must still synthesise the getter", hasMethod(target, "getHidden"));
 
         Class<?> builderCls = nested(target, "Builder");
@@ -271,7 +271,7 @@ public class LazyFieldMutatorTest {
         Class<?> counterCls = Class.forName("demo.Counter", true, cl);
 
         Field valueField = standalone.getDeclaredField("value");
-        assertEquals("dev.simplified.lazy.Lazy",
+        assertEquals("java.util.concurrent.atomic.AtomicReference",
             valueField.getType().getName());
         assertTrue("@Lazy field must be final after rewrite",
             Modifier.isFinal(valueField.getModifiers()));
@@ -296,7 +296,7 @@ public class LazyFieldMutatorTest {
 
     /**
      * Standalone {@code @Lazy} wraps the initializer in place, as
-     * {@code Lazy.of(() -> <init>)} still sitting in the field initializer -
+     * the holder still sitting in the field initializer -
      * an instance context. So unlike a retained builder default, which is
      * hoisted into a static provider, a lazy initializer may reach the
      * enclosing instance freely.
@@ -533,7 +533,7 @@ public class LazyFieldMutatorTest {
     public void classBuilderLazy_dualSetterFlowsValueAndSupplier() throws Exception {
         // The user writes the natural `WithBuilder(String label)` constructor;
         // LazyFieldMutator rewrites the parameter to Supplier<String> and the
-        // body assignment to Lazy.of(label). The synthesised getLabel()
+        // body assignment into a holder. The synthesised getLabel()
         // returns the unwrapped value.
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.WithBuilder",
             "package demo;",
@@ -559,7 +559,7 @@ public class LazyFieldMutatorTest {
         assertEquals("eager", outer.getMethod("getLabel").invoke(eager));
 
         // Supplier setter form: builder stores the supplier verbatim, target
-        // wraps as Lazy.of(supplier) at construction; the supplier doesn't
+        // wraps the supplier in a holder at construction; the supplier doesn't
         // fire until getLabel() runs.
         AtomicInteger calls = new AtomicInteger();
         Supplier<String> supplier = () -> {
@@ -660,16 +660,36 @@ public class LazyFieldMutatorTest {
         assertThat(c).hadErrorContaining("@Lazy is not supported on static fields");
     }
 
+    /**
+     * A primitive defers like anything else. The value slot stays primitive and
+     * only the supplier's type argument is boxed, so the one boxing happens
+     * when the value is computed rather than on every read.
+     */
     @Test
-    public void negative_primitive_isRejected() {
-        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Bad",
+    public void primitiveField_defersAndMemoizes() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Counted",
             "package demo;",
             "import dev.simplified.annotations.Lazy;",
-            "public class Bad {",
-            "    @Lazy private int foo = 42;",
+            "public class Counted {",
+            "    public static int CALLS = 0;",
+            "    @Lazy private int foo = compute();",
+            "    private static int compute() { CALLS++; return 42; }",
             "}");
         Compilation c = compile(src);
-        assertThat(c).hadErrorContaining("primitive");
+        assertThat(c).succeeded();
+
+        Class<?> cls = Class.forName("demo.Counted", true, loadClasses(c));
+        Object instance = cls.getDeclaredConstructor().newInstance();
+        assertEquals("the initializer must not run at construction", 0, cls.getField("CALLS").get(null));
+        assertEquals("the getter keeps the primitive return type",
+            int.class, cls.getMethod("getFoo").getReturnType());
+        assertEquals(42, cls.getMethod("getFoo").invoke(instance));
+        assertEquals("evaluated once, on first read", 1, cls.getField("CALLS").get(null));
+        cls.getMethod("getFoo").invoke(instance);
+        assertEquals("and memoized thereafter", 1, cls.getField("CALLS").get(null));
+
+        assertEquals("the memoized value keeps its primitive slot",
+            int.class, cls.getDeclaredField("$value$foo").getType());
     }
 
     /**
@@ -753,7 +773,7 @@ public class LazyFieldMutatorTest {
     }
 
     // Sanity: when the user already wrote getFoo() (and references the
-    // rewritten Lazy<T> field via .get()), the mutator skips synthesis and
+    // rewritten field via its resolver), the mutator skips synthesis and
     // the user's version stays - no duplicate-method compile error.
     @Test
     public void existingGetter_skipsSynthesis() throws Exception {
@@ -762,7 +782,7 @@ public class LazyFieldMutatorTest {
             "import dev.simplified.annotations.Lazy;",
             "public class WithGetter {",
             "    @Lazy private String name = \"hi\";",
-            "    public String getName() { return name.get() + \"!\"; }",
+            "    public String getName() { return $resolve$name() + \"!\"; }",
             "}");
         Compilation c = compile(src);
         assertThat(c).succeeded();

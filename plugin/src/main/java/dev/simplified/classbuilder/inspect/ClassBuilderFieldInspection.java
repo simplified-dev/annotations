@@ -330,7 +330,7 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
 
     /**
      * Whether a numeric range says anything about the type. Mirrors what
-     * {@code BuildFlagValidator} can read a bound off - a {@code Number}, or an
+     * the generated check can read a bound off - a {@code Number}, or an
      * {@code Optional} of one. A {@code char} is out: it boxes to
      * {@code Character}, which is not a {@code Number}, so the validator would
      * never see a value to compare.

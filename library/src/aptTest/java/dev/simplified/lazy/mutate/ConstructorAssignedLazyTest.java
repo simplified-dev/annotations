@@ -152,7 +152,7 @@ public class ConstructorAssignedLazyTest {
     /**
      * A field assigned in only one arm of a branch is still a field this pass
      * has to rewrite. Missing an arm leaves the author a type error about
-     * {@code Lazy<T>} on a constructor line they wrote and did not change.
+     * the storage type on a constructor line they wrote and did not change.
      */
     @Test
     public void assignedInsideABranch_isRewrittenInEveryArm() throws Exception {

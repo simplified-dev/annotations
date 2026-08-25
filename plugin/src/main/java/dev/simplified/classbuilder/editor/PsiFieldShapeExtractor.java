@@ -83,7 +83,11 @@ final class PsiFieldShapeExtractor {
             if (field.hasModifierProperty(PsiModifier.TRANSIENT)) continue;
             if (excluded.contains(field.getName())) continue;
             if (isIgnored(field)) continue;
-            out.add(buildShape(field, field.getName(), substitutor.substitute(field.getType()), setters));
+            // The written type: a @Lazy field's storage holds its supplier, and
+            // the builder's slot is shaped around the value the caller passes.
+            PsiType written = dev.simplified.shared.psi.WrittenTypes.of(field);
+            if (written == null) continue;
+            out.add(buildShape(field, field.getName(), substitutor.substitute(written), setters));
         }
         return out;
     }

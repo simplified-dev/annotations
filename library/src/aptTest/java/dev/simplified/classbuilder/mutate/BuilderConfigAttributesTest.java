@@ -4,7 +4,6 @@ import com.google.testing.compile.Compilation;
 import com.google.testing.compile.Compiler;
 import com.google.testing.compile.JavaFileObjects;
 import dev.simplified.classbuilder.apt.ClassBuilderProcessor;
-import dev.simplified.classbuilder.validate.BuilderValidationException;
 import org.junit.Test;
 
 import javax.tools.JavaFileObject;
@@ -413,21 +412,26 @@ public class BuilderConfigAttributesTest {
     // validate - the constraints the generated build() actually enforces
     // ------------------------------------------------------------------
 
-    private static final String VALIDATOR = "dev/simplified/classbuilder/validate/BuildFlagValidator";
+    /**
+     * The generated validator's name. Constraints are enforced by code emitted
+     * into the builder, so whether a builder validates at all is answered by
+     * whether this member is there - there is no library class to look for.
+     */
+    private static final String VALIDATOR = "$validate$";
 
     /**
-     * Builds and returns the {@link BuilderValidationException} the generated
+     * Builds and returns the {@link IllegalStateException} the generated
      * {@code build()} threw, failing the test when it built successfully.
      *
      * @param builder the generated builder class
      * @param instance a builder instance ready to build
      * @return the rejection
      */
-    private static BuilderValidationException buildRejected(Class<?> builder, Object instance) throws Exception {
+    private static IllegalStateException buildRejected(Class<?> builder, Object instance) throws Exception {
         try {
             builder.getMethod("build").invoke(instance);
         } catch (InvocationTargetException e) {
-            if (e.getCause() instanceof BuilderValidationException rejection) return rejection;
+            if (e.getCause() instanceof IllegalStateException rejection) return rejection;
             throw new AssertionError("build() failed for something other than validation", e.getCause());
         }
         fail("expected build() to reject the instance");
@@ -478,7 +482,7 @@ public class BuilderConfigAttributesTest {
         Class<?> strict = Class.forName("demo.Strict", true, cl);
         Class<?> builder = nested(strict, "Builder");
 
-        BuilderValidationException rejection =
+        IllegalStateException rejection =
             buildRejected(builder, strict.getMethod("builder").invoke(null));
         assertTrue("the message must name the offending field, got: " + rejection.getMessage(),
             rejection.getMessage().contains("'name'"));
@@ -514,7 +518,7 @@ public class BuilderConfigAttributesTest {
 
         Object over = builder.getMethod("nearLossless", int.class)
             .invoke(bounded.getMethod("builder").invoke(null), 101);
-        BuilderValidationException rejection = buildRejected(builder, over);
+        IllegalStateException rejection = buildRejected(builder, over);
         assertEquals("Field 'nearLossless' in 'Bounded' is 101, above the maximum of 100",
             rejection.getMessage());
 
@@ -551,7 +555,7 @@ public class BuilderConfigAttributesTest {
         Class<?> childClass = Class.forName("demo.Child", true, cl);
         Class<?> builder = nested(childClass, "Builder");
 
-        BuilderValidationException rejection =
+        IllegalStateException rejection =
             buildRejected(builder, childClass.getMethod("builder").invoke(null));
         assertTrue("the inherited constraint must be the one that fired, got: " + rejection.getMessage(),
             rejection.getMessage().contains("'id'"));
@@ -583,25 +587,27 @@ public class BuilderConfigAttributesTest {
 
         assertFalse("the ignored field must stay off the builder",
             hasMethod(builder, "secret", String.class));
-        BuilderValidationException rejection =
+        IllegalStateException rejection =
             buildRejected(builder, hidden.getMethod("builder").invoke(null));
         assertTrue("a builder-invisible field is still validated, got: " + rejection.getMessage(),
             rejection.getMessage().contains("'secret'"));
     }
 
     /**
-     * The payoff for deciding at runtime: a factory may hand back a subtype
-     * carrying constraints of its own, which no annotation-processing-time
-     * analysis of the declared type could have seen.
+     * Constraints are resolved against the declared type, so a factory that
+     * hands back a subtype carrying constraints of its own has them go
+     * unenforced. That is a real narrowing, and the one thing it must not do is
+     * happen quietly - so the target is warned about at compile time.
      */
     @Test
-    public void validate_factorySubtypeFlagRejectsTheBuild() throws Exception {
+    public void validate_factoryWarnsThatSubtypeConstraintsAreNotEnforced() throws Exception {
         JavaFileObject target = JavaFileObjects.forSourceLines("demo.Made",
             "package demo;",
+            "import dev.simplified.annotations.BuildFlag;",
             "import dev.simplified.annotations.ClassBuilder;",
             "@ClassBuilder(factoryMethod = \"of\")",
             "public class Made {",
-            "    String name;",
+            "    @BuildFlag(nonNull = true) String name;",
             "    protected Made(String name) { this.name = name; }",
             "    public static Made of(String name) { return new Special(name); }",
             "    public String getName() { return name; }",
@@ -615,16 +621,17 @@ public class BuilderConfigAttributesTest {
             "}");
         Compilation c = compile(target, subtype);
         assertThat(c).succeeded();
+        assertThat(c).hadWarningContaining("a @BuildFlag on a subtype the factory returns is not enforced");
+
         ClassLoader cl = loadClasses(c);
         Class<?> made = Class.forName("demo.Made", true, cl);
         Class<?> builder = nested(made, "Builder");
 
-        BuilderValidationException rejection =
+        // What the declared type does say is still enforced.
+        IllegalStateException rejection =
             buildRejected(builder, made.getMethod("builder").invoke(null));
-        assertTrue("the subtype's own constraint must fire, got: " + rejection.getMessage(),
-            rejection.getMessage().contains("'extra'"));
-        assertTrue("and it must be reported against the runtime class, got: " + rejection.getMessage(),
-            rejection.getMessage().contains("'Special'"));
+        assertTrue("the declared type's own constraint must still fire, got: " + rejection.getMessage(),
+            rejection.getMessage().contains("'name'"));
     }
 
     /**
