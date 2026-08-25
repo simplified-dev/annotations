@@ -13,7 +13,6 @@ import dev.simplified.annotations.Negate;
 import dev.simplified.annotations.ObtainVia;
 import dev.simplified.annotations.SetterNames;
 import dev.simplified.annotations.ToString;
-import dev.simplified.classbuilder.validate.BuilderValidationException;
 import lombok.Getter;
 
 import java.lang.reflect.Method;
@@ -671,7 +670,7 @@ public final class ClassBuilderShowcase {
 
         report.expect("buildFlag.nonNull.null")
             .runExpectingThrow(() -> NullRequired.builder().build())
-            .asFailure(BuilderValidationException.class)
+            .asFailure(IllegalStateException.class)
             .messageEquals("Field 'name' in 'NullRequired' is required and is null/empty");
 
         report.expect("buildFlag.nonNull.value")
@@ -680,7 +679,7 @@ public final class ClassBuilderShowcase {
 
         report.expect("buildFlag.notEmpty.string.empty")
             .runExpectingThrow(() -> EmptyStringRequired.builder().s("").build())
-            .asFailure(BuilderValidationException.class)
+            .asFailure(IllegalStateException.class)
             .messageEquals("Field 's' in 'EmptyStringRequired' is required and is null/empty");
 
         report.expect("buildFlag.notEmpty.string.value")
@@ -689,22 +688,22 @@ public final class ClassBuilderShowcase {
 
         report.expect("buildFlag.notEmpty.optional.empty")
             .runExpectingThrow(() -> EmptyOptionalRequired.builder().opt(Optional.empty()).build())
-            .asFailure(BuilderValidationException.class)
+            .asFailure(IllegalStateException.class)
             .messageContains("'opt'");
 
         report.expect("buildFlag.notEmpty.collection.empty")
             .runExpectingThrow(() -> EmptyCollectionRequired.builder().build())
-            .asFailure(BuilderValidationException.class)
+            .asFailure(IllegalStateException.class)
             .messageContains("'items'");
 
         report.expect("buildFlag.notEmpty.map.empty")
             .runExpectingThrow(() -> EmptyMapRequired.builder().build())
-            .asFailure(BuilderValidationException.class)
+            .asFailure(IllegalStateException.class)
             .messageContains("'entries'");
 
         report.expect("buildFlag.notEmpty.array.empty")
             .runExpectingThrow(() -> EmptyArrayRequired.builder().build())
-            .asFailure(BuilderValidationException.class)
+            .asFailure(IllegalStateException.class)
             .messageContains("'arr'");
 
         report.expect("buildFlag.pattern.match")
@@ -713,7 +712,7 @@ public final class ClassBuilderShowcase {
 
         report.expect("buildFlag.pattern.mismatch")
             .runExpectingThrow(() -> PatternConstrained.builder().ident("Has Spaces").build())
-            .asFailure(BuilderValidationException.class)
+            .asFailure(IllegalStateException.class)
             .messageEquals("Field 'ident' in 'PatternConstrained' does not match pattern '[a-z]+' (value: 'Has Spaces')");
 
         report.expect("buildFlag.pattern.nullSkipped")
@@ -726,22 +725,22 @@ public final class ClassBuilderShowcase {
 
         report.expect("buildFlag.limit.string.over")
             .runExpectingThrow(() -> LimitedString.builder().text("toolong").build())
-            .asFailure(BuilderValidationException.class)
+            .asFailure(IllegalStateException.class)
             .messageEquals("Field 'text' in 'LimitedString' has length 7, exceeds limit of 5");
 
         report.expect("buildFlag.limit.collection.over")
             .runExpectingThrow(() -> LimitedCollection.builder().tags(List.of("a", "b", "c")).build())
-            .asFailure(BuilderValidationException.class)
+            .asFailure(IllegalStateException.class)
             .messageContains("exceeds limit of 2");
 
         report.expect("buildFlag.limit.optionalNumber.over")
             .runExpectingThrow(() -> LimitedOptionalNumber.builder().amount(Optional.of(500)).build())
-            .asFailure(BuilderValidationException.class)
+            .asFailure(IllegalStateException.class)
             .messageContains("exceeds limit of 100");
 
         report.expect("buildFlag.group.allMissing")
             .runExpectingThrow(() -> FaceGroup.builder().build())
-            .asFailure(BuilderValidationException.class)
+            .asFailure(IllegalStateException.class)
             .messageContains("Field group 'face'");
 
         report.expect("buildFlag.group.onePresent")

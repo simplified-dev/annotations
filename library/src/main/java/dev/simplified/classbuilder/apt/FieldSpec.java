@@ -108,7 +108,7 @@ public final class FieldSpec {
      */
     public final String keyMethod;
     public final boolean ignored;                   // @BuilderIgnore or listed in @ClassBuilder.exclude
-    public final boolean lazy;                       // @Lazy: storage rewritten to Lazy<T>, getter synthesised
+    public final boolean lazy;                       // @Lazy: storage rewritten to a deferred holder, getter synthesised
     /**
      * {@code @BuilderSeed} on a constructor or factory parameter - the slot is
      * supplied to {@code builder(...)} and emits no setter. Always false on the

@@ -120,7 +120,7 @@ public final class MemberSelector {
 
         boolean lazy = lookup.hasAnnotation(field, LAZY_FQN);
         if (lazy && include != null) {
-            // By the time this pass runs the field's storage is a Lazy<T>
+            // By the time this pass runs the field's storage is a holder
             // wrapper, so neither the slot nor a forced read means what the
             // marker asks for. The method form says the same thing and says it
             // where the forcing is visible.

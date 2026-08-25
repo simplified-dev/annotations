@@ -180,7 +180,7 @@ public class PassOrderingTest {
     /**
      * The ordering pin. {@code @Lazy} retypes the constructor's parameter to
      * {@code Supplier<T>} and rewrites {@code this.value = value} into
-     * {@code Lazy.of(value)}, walking the body's statement list flat. The
+     * a holder over the value, walking the body's statement list flat. The
      * {@code @Cleanup} declaration ahead of that assignment relocates it into
      * the synthesised try, so running the block split first leaves the
      * assignment as written and javac rejects a {@code Supplier<String>} against
@@ -218,8 +218,8 @@ public class PassOrderingTest {
         assertThat(c).succeeded();
 
         Class<?> type = Class.forName("demo.Holder", true, loadClasses(c));
-        assertEquals("the @Lazy field must still be rewritten to Lazy<T> storage",
-            "dev.simplified.lazy.Lazy", type.getDeclaredField("value").getType().getName());
+        assertEquals("the @Lazy field must still be rewritten to deferred holder storage",
+            "java.util.concurrent.atomic.AtomicReference", type.getDeclaredField("value").getType().getName());
 
         Object events = type.getField("EVENTS").get(null);
         Object builder = type.getMethod("builder").invoke(null);
@@ -259,8 +259,8 @@ public class PassOrderingTest {
         assertThat(c).succeeded();
 
         Class<?> type = Class.forName("demo.Wrapped", true, loadClasses(c));
-        assertEquals("the @Lazy field must still be rewritten to Lazy<T> storage",
-            "dev.simplified.lazy.Lazy", type.getDeclaredField("value").getType().getName());
+        assertEquals("the @Lazy field must still be rewritten to deferred holder storage",
+            "java.util.concurrent.atomic.AtomicReference", type.getDeclaredField("value").getType().getName());
 
         Object builder = type.getMethod("builder").invoke(null);
         builder.getClass().getMethod("value", String.class).invoke(builder, "v");

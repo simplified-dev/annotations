@@ -290,7 +290,7 @@ final class BootstrapMethodFactory {
         // present - there is nothing to probe for.
         if (isRecord) return call(receiver, f.name);
 
-        // @Lazy rewrites storage to Lazy<T>, so the synthesised getter is the
+        // @Lazy rewrites storage to a deferred holder, so the synthesised getter is the
         // only read that yields the field's declared type. Pinned rather than
         // probed because LazyFieldMutator appends that getter after this
         // context snapshotted the target's methods.

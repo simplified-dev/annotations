@@ -1033,7 +1033,7 @@ public class EqualsAndHashCodeTest {
     }
 
     /**
-     * A {@code @Lazy} field's storage is a {@code Lazy<T>} wrapper that declares
+     * A {@code @Lazy} field's storage holds a deferred supplier that declares
      * no equality of its own, so two instances agreeing here is the proof it was
      * never selected.
      */
@@ -1052,8 +1052,8 @@ public class EqualsAndHashCodeTest {
         assertThat(c).succeeded();
 
         Class<?> type = Class.forName("demo.Deferred", true, loadClasses(c));
-        assertEquals("the field is rewritten to Lazy<T> storage",
-            "dev.simplified.lazy.Lazy", type.getDeclaredField("value").getType().getName());
+        assertEquals("the field is rewritten to deferred holder storage",
+            "java.util.concurrent.atomic.AtomicReference", type.getDeclaredField("value").getType().getName());
         Constructor<?> ctor = soleConstructor(type);
         assertEquals(ctor.newInstance(1), ctor.newInstance(1));
     }

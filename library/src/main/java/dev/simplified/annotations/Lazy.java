@@ -12,7 +12,8 @@ import java.lang.annotation.Target;
  * and caches it thereafter.
  *
  * <p>The annotation processor rewrites the annotated field's storage type from
- * {@code T} to {@link dev.simplified.lazy.Lazy Lazy&lt;T&gt;} and
+ * {@code T} to an {@code AtomicReference&lt;Supplier&lt;T&gt;&gt;} holding the
+ * deferred computation, adds a sibling field for the memoized value, and
  * synthesises a public memoizing getter ({@code getFoo()} for object types,
  * {@code isFoo()} for {@code boolean}). The original initializer expression, when
  * present, becomes the supplier body so source-level reads of
@@ -26,8 +27,10 @@ import java.lang.annotation.Target;
  * </code></pre>
  * Compiled to:
  * <pre><code>
- * private final Lazy&lt;Result&gt; computed = Lazy.of(() -&gt; expensiveOperation());
- * public Result getComputed() { return computed.get(); }
+ * private final AtomicReference&lt;Supplier&lt;Result&gt;&gt; computed =
+ *         new AtomicReference&lt;&gt;(() -&gt; expensiveOperation());
+ * private Result $value$computed;
+ * public Result getComputed() { return $resolve$computed(); }
  * </code></pre>
  *
  * <h2>Assigned by a constructor</h2>
@@ -42,11 +45,11 @@ import java.lang.annotation.Target;
  *     this.headers = parse(context.rawHeaders());
  * }
  * </code></pre>
- * Compiled to {@code this.headers = Lazy.of(() -> parse(context.rawHeaders()))},
+ * Compiled so the holder wraps {@code () -> parse(context.rawHeaders())},
  * so the parse runs on the first {@code getHeaders()} rather than during
  * construction. This is the shape for a value derived from constructor
  * arguments or from sibling fields, which has no initializer to hold the
- * expression - the alternative being to declare the field {@code Lazy<T>} by
+ * expression - the alternative being to declare the deferred storage by
  * hand and write the wrap inline, which is what the annotation exists to
  * replace.
  *
@@ -61,8 +64,8 @@ import java.lang.annotation.Target;
  * the supplier verbatim, preserving full laziness through the builder. The
  * target's matching constructor parameter (by name) is rewritten from
  * {@code T} to {@code Supplier<T>} so the value flows from the builder to the
- * target as a deferred computation, wrapped at assignment time as
- * {@code Lazy.of(supplier)}.
+ * target as a deferred computation, wrapped in the holder at assignment
+ * time.
  *
  * <h2>Lombok interop</h2>
  * {@code @Lazy} emits its own getter through AST mutation. When a Lombok
@@ -72,8 +75,10 @@ import java.lang.annotation.Target;
  *
  * <h2>Restrictions</h2>
  * <ul>
- *   <li>Only reference types are supported. Primitives must be boxed
- *       ({@code Boolean} instead of {@code boolean}).</li>
+ *   <li>Not supported on array fields. Primitives are: the memoized value
+ *       keeps a primitive slot and only the supplier's type argument is
+ *       boxed, so the one boxing happens when the value is computed rather
+ *       than on every read.</li>
  *   <li>Not supported on static fields, record components, or in combination
  *       with the field-only companion annotations
  *       ({@link Collector}, {@link Negate}, {@link Formattable},
@@ -101,7 +106,6 @@ import java.lang.annotation.Target;
  *       as a {@link NullPointerException} inside the getter.</li>
  * </ul>
  *
- * @see dev.simplified.lazy.Lazy
  * @see ClassBuilder
  */
 @Retention(RetentionPolicy.CLASS)

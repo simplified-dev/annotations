@@ -21,12 +21,12 @@ has no in-source mutation surface to inject into, so that one path emits `<Name>
 `<Name>Builder.java` as source text - which is why the interface path keeps turning out to be a
 second implementation of whatever the AST path already does.
 
-- `@ClassBuilder` - synthesises a nested `Builder` plus `builder()` / `from(T)` / `mutate()`. Classes, records and interfaces. Setter shapes cover Optional dual setters, boolean zero-arg + typed pairs with optional negation, String `@PrintFormat` overloads, `@Collector` varargs/iterable bulk overloads with opt-in single-element add/put, clear, and lazy put-if-absent for maps, and configurable method naming. Field initializers are retained as builder defaults by default (`@ClassBuilder(retainInit)`, overridable per field with `@BuilderDefault`). The `@BuildFlag` runtime validator enforces nonNull/notEmpty/group/pattern/limit in the generated `build()`. Every generated method carries a matching `@XContract` so IDE data-flow sees fresh-object and this-return shapes.
+- `@ClassBuilder` - synthesises a nested `Builder` plus `builder()` / `from(T)` / `mutate()`. Classes, records and interfaces. Setter shapes cover Optional dual setters, boolean zero-arg + typed pairs with optional negation, String `@PrintFormat` overloads, `@Collector` varargs/iterable bulk overloads with opt-in single-element add/put, clear, and lazy put-if-absent for maps, and configurable method naming. Field initializers are retained as builder defaults by default (`@ClassBuilder(retainInit)`, overridable per field with `@BuilderDefault`). `@BuildFlag` constraints are resolved at processing time and enforced by nonNull/notEmpty/group/pattern/limit checks emitted into the generated `build()`. Every generated method carries a matching `@XContract` so IDE data-flow sees fresh-object and this-return shapes.
 - `@Getter` / `@Setter` - read and write accessors, defaulting to bean-shaped names because a bare `@Getter` has to keep producing `getX()` or every existing call site is renamed.
 - `@AllArgsConstructor` / `@RequiredArgsConstructor` / `@NoArgsConstructor` / `@BuilderArgsConstructor` - one field-selection policy with four settings, over one mutator.
 - `@EqualsAndHashCode` / `@ToString` - the whole-object members, over one shared member selector and one term emitter. Records are the shape they exist for and the shape Lombok refuses.
 - `@UtilityClass` - `final` plus a throwing constructor, with the implicit-`static`-on-members half deliberately opt-in behind `members = MAKE_STATIC`.
-- `@Lazy` - retypes a field's storage from `T` to `Lazy<T>` and synthesises a memoizing getter, turning an initializer into the supplier body.
+- `@Lazy` - retypes a field's storage from `T` to `AtomicReference<Supplier<T>>`, adds a `$value$<name>` sibling for the memoized result, and synthesises a memoizing getter, turning an initializer into the supplier body. Primitives are supported: the value slot stays primitive and only the supplier's type argument is boxed.
 - `@EnumLookup` - a cached values array plus a uniform set of static lookup helpers on an enum, with `@KeyField` adding a parallel key array and `of<Name>` / `findBy<Name>` per field.
 - `@Log` - one `private static final org.apache.logging.log4j.Logger` field, named through `NamePattern` and initialised from the target's raw class literal or a written `topic`. **Single-backend and always static**, which is what lets it own a processor: with no instance form there is no field the builder's collector can mistake for a property, so it has no ordering relationship with `@Lazy` or `@ClassBuilder` and needs no dispatch from `ClassBuilderProcessor`.
 - `@SilentThrows` / `@Cleanup` - the two body rewrites, and the only passes here that change control flow rather than appending a member. They must run last, and after `@Lazy`.
@@ -55,10 +55,10 @@ and a feature missing one of its four is usually a gap rather than a decision.
   (`MemberSelector`, `MemberPolicy`, `MemberSpec`, `MemberShape`, `SuperResolver`),
   `shared.javac` (`AstMarkers`, `MemberTerms`, `AnnotationSpelling`, `ContractAnnotations`)
   and `shared.javac.compat` (the `JavacCompat` interface, its factory, and the `v17` baseline
-  every supported JDK still uses). **Two packages exist at runtime rather than at compile
-  time** and that is the whole distinction: `classbuilder.validate` (`BuildFlagValidator`,
-  reflected from inside the generated `build()`) and `dev.simplified.lazy` (`Lazy<T>`, which
-  has to exist at runtime because it *holds* the memoized value). Plus
+  every supported JDK still uses). **Nothing here is needed at runtime** - every feature
+  emits the code it needs into the target, so a consumer scopes the artifact `compileOnly`
+  plus `annotationProcessor` whatever they use. `BootstrapMethodInjectionTest` pins that by
+  asserting generated classes name no `dev/simplified/` type but the annotations. Plus
   `META-INF/services/javax.annotation.processing.Processor`. Source sets: `main`, `test`
   (plain JUnit), `aptTest` (compile-testing, its own task because the IntelliJ test
   framework's module layer hides `jdk.compiler`), and `showcase` - the one place the library
@@ -121,7 +121,7 @@ Mutation passes run in one fixed order, and getting it wrong fails on a line the
 2. `processAccessors` (`@Getter` / `@Setter`) - `useAccessors` downstream has to see every accessor the pass minted.
 3. `@EqualsAndHashCode` / `@ToString` - after the accessor pass, above the body rewrites.
 4. `LazyFieldMutator`.
-5. `@SilentThrows` and `@Cleanup` **last**, after `@Lazy`. Both relocate statements one level down, so running either earlier skips the `Lazy.of(...)` wrap and javac reports `Supplier<T>` against `Lazy<T>`. Order *between* the two is free. Pinned by `PassOrderingTest`.
+5. `@SilentThrows` and `@Cleanup` **last**, after `@Lazy`. Both relocate statements one level down, so running either earlier skips the holder wrap and javac reports `Supplier<T>` against the field's storage type. Order *between* the two is free. Pinned by `PassOrderingTest`.
 
 `@Getter`/`@Setter`, the constructor family, and the whole-object pair are dispatched from `ClassBuilderProcessor` rather than owning processors **precisely so this ordering is a guarantee** - processor order within a round is unspecified. `@UtilityClass` and `@Log` own their processors because they have no ordering relationship with anything.
 

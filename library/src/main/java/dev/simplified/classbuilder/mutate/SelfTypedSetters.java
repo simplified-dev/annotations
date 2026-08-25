@@ -15,7 +15,6 @@ import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.classbuilder.apt.SetterScheme;
-import dev.simplified.classbuilder.validate.Strings;
 import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.ContractAnnotations;
 import dev.simplified.shared.javac.JavacBridge;
@@ -211,9 +210,9 @@ final class SelfTypedSetters {
 
     /**
      * {@code B withName(@PrintFormat String format, Object... args)} that
-     * stores {@code String.format(format, args)}. Falls back to
-     * {@link Strings#formatNullable} when the
-     * field carries {@code @Nullable}.
+     * stores {@code String.format(format, args)}. When the field carries
+     * {@code @Nullable}, a null format string is stored as-is rather than
+     * handed to {@link String#format}.
      */
     private JCMethodDecl stringFormattable(FieldSpec field) {
         String setterName = field.setters.setName(field.name, field.isBoolean);
@@ -231,27 +230,9 @@ final class SelfTypedSetters {
             null
         );
 
-        JCExpression rhs;
-        if (nullable) {
-            rhs = make.Apply(
-                List.nil(),
-                make.Select(make.Apply(
-                    List.nil(),
-                    make.Select(types.qualIdent("dev.simplified.classbuilder.validate.Strings"),
-                        names.fromString("formatNullable")),
-                    List.of(make.Ident(names.fromString(field.name)),
-                        make.Ident(names.fromString("args")))
-                ), names.fromString("orElse")),
-                List.of(make.Literal(TypeTag.BOT, null))
-            );
-        } else {
-            rhs = make.Apply(
-                List.nil(),
-                make.Select(types.qualIdent("java.lang.String"), names.fromString("format")),
-                List.of(make.Ident(names.fromString(field.name)),
-                    make.Ident(names.fromString("args")))
-            );
-        }
+        JCExpression rhs = nullable
+            ? formattedOrNull(field.name)
+            : formatted(field.name);
         JCStatement assign = slotAssign(field, rhs);
         return method(setterName, List.of(formatParam, argsParam),
             List.of(assign, returnSelf()));
@@ -259,9 +240,9 @@ final class SelfTypedSetters {
 
     /**
      * {@code B withDescription(@PrintFormat @Nullable String format, Object... args)}
-     * for an {@code Optional<String>} field; assigns
-     * {@code Strings.formatNullable(format, args)} so the Optional wrapper
-     * is preserved.
+     * for an {@code Optional<String>} field; wraps the formatted value so the
+     * Optional wrapper is preserved and a null format string becomes
+     * {@link java.util.Optional#empty()}.
      */
     private JCMethodDecl optionalFormattable(FieldSpec field) {
         String setterName = field.setters.setName(field.name, field.isBoolean);
@@ -279,14 +260,36 @@ final class SelfTypedSetters {
         );
         JCExpression rhs = make.Apply(
             List.nil(),
-            make.Select(types.qualIdent("dev.simplified.classbuilder.validate.Strings"),
-                names.fromString("formatNullable")),
-            List.of(make.Ident(names.fromString(field.name)),
-                make.Ident(names.fromString("args")))
+            make.Select(types.qualIdent("java.util.Optional"), names.fromString("ofNullable")),
+            List.of(formattedOrNull(field.name))
         );
         JCStatement assign = slotAssign(field, rhs);
         return method(setterName, List.of(formatParam, argsParam),
             List.of(assign, returnSelf()));
+    }
+
+    /** {@code String.format(<param>, args)}. */
+    private JCExpression formatted(String param) {
+        return make.Apply(
+            List.nil(),
+            make.Select(types.qualIdent("java.lang.String"), names.fromString("format")),
+            List.of(make.Ident(names.fromString(param)),
+                make.Ident(names.fromString("args")))
+        );
+    }
+
+    /**
+     * {@code <param> == null ? null : String.format(<param>, args)}.
+     *
+     * <p>A {@code @Formattable} slot that accepts a null format string cannot
+     * hand it to {@link String#format}, which would throw. Storing the null
+     * instead is what lets the setter's parameter be {@code @Nullable}.
+     */
+    private JCExpression formattedOrNull(String param) {
+        JCExpression isNull = make.Binary(JCTree.Tag.EQ,
+            make.Ident(names.fromString(param)),
+            make.Literal(TypeTag.BOT, null));
+        return make.Conditional(isNull, make.Literal(TypeTag.BOT, null), formatted(param));
     }
 
     // ------------------------------------------------------------------

@@ -33,6 +33,7 @@ final class NestedBuilderFactory {
     private final Names names;
     private final FieldMutators fieldMutators;
     private final ContractAnnotations contracts;
+    private final BuildFlagChecks checks;
 
     NestedBuilderFactory(MutationContext ctx) {
         this.ctx = ctx;
@@ -40,6 +41,10 @@ final class NestedBuilderFactory {
         this.names = ctx.names();
         this.fieldMutators = new FieldMutators(ctx);
         this.contracts = ctx.contracts();
+        this.checks = new BuildFlagChecks(ctx,
+            ctx.config().validate()
+                ? dev.simplified.classbuilder.apt.BuildFlags.of(ctx.targetElement())
+                : java.util.List.of());
     }
 
     JCClassDecl build() {
@@ -89,8 +94,9 @@ final class NestedBuilderFactory {
         for (FieldSpec f : ctx.fields()) {
             for (JCMethodDecl setter : fieldMutators.setters(f)) defs.append(setter);
         }
-        // build()
+        // build(), and the @BuildFlag enforcement it runs on what it built
         defs.append(buildMethod());
+        for (JCTree member : checks.members()) defs.append(member);
         // The builder's own constructor, written out rather than left implicit:
         // an implicit one takes the class's access, so a public builder class
         // published `new Target.Builder()` as a second entry point beside
@@ -143,7 +149,7 @@ final class NestedBuilderFactory {
 
     /**
      * Emits {@code public Target build() { Target t = new Target(f1, f2, ...);
-     * (validate?) BuildFlagValidator.validate(t); return t; }}.
+     * (validate?) $validate$(t); return t; }}.
      * Honours {@link BuilderConfig#validate()} and
      * {@link BuilderConfig#factoryMethod()}.
      *
@@ -195,8 +201,8 @@ final class NestedBuilderFactory {
             );
         }
 
-        if (ctx.config().validate() && ctx.declaresBuildFlag()) {
-            // Target t = new Target(...); BuildFlagValidator.validate(t); return t;
+        if (checks.enabled()) {
+            // Target $result = new Target(...); $validate$($result); return $result;
             JCExpression targetType = ctx.builtType();
             JCVariableDecl targetVar = make.VarDef(
                 make.Modifiers(Flags.FINAL),
@@ -205,14 +211,7 @@ final class NestedBuilderFactory {
                 instantiation
             );
             body.append(targetVar);
-            body.append(make.Exec(make.Apply(
-                List.nil(),
-                make.Select(
-                    ctx.types().qualIdent("dev.simplified.classbuilder.validate.BuildFlagValidator"),
-                    names.fromString("validate")
-                ),
-                List.of(make.Ident(names.fromString("$result")))
-            )));
+            body.append(checks.call());
             body.append(make.Return(make.Ident(names.fromString("$result"))));
         } else {
             body.append(make.Return(instantiation));

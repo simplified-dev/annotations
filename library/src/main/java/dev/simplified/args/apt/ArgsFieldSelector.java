@@ -87,7 +87,7 @@ public final class ArgsFieldSelector {
                                          Set<String> builderExclude) {
         List<ArgsField> out = new ArrayList<>();
         for (ArgsField f : candidates) {
-            // A @Lazy field's storage is a Lazy<T> the field itself owns, and
+            // A @Lazy field's storage is a holder the field itself owns, and
             // the rewrite that installs it also makes the field final. Only the
             // builder's constructor knows how to hand it a supplier instead, so
             // a plain parameter here would assign a final twice.

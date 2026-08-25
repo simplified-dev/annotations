@@ -951,7 +951,7 @@ public final class GeneratedMemberFactory {
         PsiType stringType = ctx.elements.createTypeFromText("java.lang.String", ctx.target);
         PsiType objectType = ctx.elements.createTypeFromText("java.lang.Object", ctx.target);
         // Mirrors library FieldMutators.optionalFormattable: format is always
-        // @Nullable because the runtime routes through Strings.formatNullable.
+        // @Nullable because the generated setter stores a null format as-is.
         LightMethodBuilder m = newSetter(ctx, field, field.setters.setName(field.name, field.isBoolean));
         m.addParameter(buildParam(m, field.name, stringType, false, PRINT_FORMAT_FQN, NULLABLE_FQN));
         m.addParameter(buildParam(m, "args", objectType, true, NULLABLE_FQN));
@@ -1093,8 +1093,8 @@ public final class GeneratedMemberFactory {
      * Returns the nullability FQN the primary setter parameter should carry.
      * Precedence:
      * <ol>
-     *   <li>{@code @BuildFlag(nonNull=true)} - runtime-enforced, overrides any
-     *       source-level annotation.</li>
+     *   <li>{@code @BuildFlag(nonNull=true)} - enforced at {@code build()},
+     *       overrides any source-level annotation.</li>
      *   <li>Field-level {@code @NotNull} (any recognised variant) - propagates
      *       unchanged to the setter parameter.</li>
      *   <li>Field-level {@code @Nullable} (any recognised variant) - same.</li>

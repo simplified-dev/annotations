@@ -3,6 +3,7 @@ import com.intellij.lang.java.JavaLanguage;
 import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationMemberValue;
+import com.intellij.psi.PsiArrayType;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiElementFactory;
@@ -13,6 +14,7 @@ import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiPrimitiveType;
 import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiType;
+import com.intellij.psi.PsiTypeElement;
 import com.intellij.psi.TypeAnnotationProvider;
 import com.intellij.psi.impl.light.LightMethodBuilder;
 import com.intellij.psi.impl.light.LightModifierList;
@@ -20,6 +22,7 @@ import com.intellij.psi.impl.source.PsiExtensibleClass;
 import com.intellij.psi.util.CachedValueProvider;
 import com.intellij.psi.util.CachedValuesManager;
 import com.intellij.psi.util.PsiModificationTracker;
+import com.intellij.util.IncorrectOperationException;
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.lazy.mutate.LazyFieldMutator;
@@ -27,6 +30,7 @@ import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
 import dev.simplified.shared.psi.AnnotatedLightModifierList;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
 import dev.simplified.shared.psi.WrittenAnnotations;
+import dev.simplified.shared.psi.WrittenTypes;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -48,6 +52,12 @@ import java.util.Set;
  * annotations on the return type for the JetBrains nullness pair - so hover
  * shows {@code @NotNull String getFoo()} when the source carries
  * {@code @NotNull String foo}.
+ *
+ * <p>The field's own type is reported as the storage it is rewritten to, which
+ * is the whole reason {@link #inferType} is here. javac retypes a {@code @Lazy}
+ * field to hold its deferred supplier, so an editor still showing the written
+ * type marks a direct read of it green over source javac rejects - the drift
+ * this project exists to prevent, pointing the wrong way.
  */
 public final class LazyAugmentProvider extends AbstractRecursionSafeAugmentProvider {
 
@@ -92,6 +102,48 @@ public final class LazyAugmentProvider extends AbstractRecursionSafeAugmentProvi
         return methods;
     }
 
+    /**
+     * Reports a {@code @Lazy} field as the storage javac rewrites it to.
+     *
+     * <p>Only the declared type is replaced; the initializer keeps whatever
+     * type it was written with, because the processor moves that expression
+     * into the supplier rather than assigning it to the field. Returning the
+     * storage type for an initializer would mark the author's own initializer
+     * red.
+     *
+     * @param variable the declaration being typed
+     * @return the storage type, or {@code null} to leave the written type alone
+     */
+    @Override
+    protected @Nullable PsiType inferType(@NotNull PsiTypeElement variable) {
+        PsiElement parent = variable.getParent();
+        if (!(parent instanceof PsiField field)) return null;
+        if (field.hasModifierProperty(PsiModifier.STATIC)) return null;
+        if (!WrittenAnnotations.has(field, LAZY_FQN)) return null;
+
+        // Read from the declaration's text rather than resolved: resolving this
+        // element is what called us, so asking it for a type again is a cycle.
+        PsiType written = WrittenTypes.of(field);
+        if (written == null || written instanceof PsiArrayType) return null;
+
+        PsiType boxed = written instanceof PsiPrimitiveType primitive
+            ? primitive.getBoxedType(field)
+            : written;
+        if (boxed == null) return null;
+        PsiElementFactory elements = JavaPsiFacade.getElementFactory(field.getProject());
+        try {
+            return elements.createTypeFromText(
+                "java.util.concurrent.atomic.AtomicReference<java.util.function.Supplier<"
+                    + boxed.getCanonicalText() + ">>",
+                field);
+        } catch (IncorrectOperationException e) {
+            // An unresolvable written type cannot be spelled back into a
+            // storage type, and leaving the field as written is the honest
+            // answer while the author is still typing it.
+            return null;
+        }
+    }
+
     private static List<PsiMethod> cachedGetters(PsiClass target) {
         return CachedValuesManager.getCachedValue(target, () -> {
             List<PsiMethod> methods = synthesizeLazyGetters(target);
@@ -114,8 +166,10 @@ public final class LazyAugmentProvider extends AbstractRecursionSafeAugmentProvi
         PsiElementFactory elements = JavaPsiFacade.getElementFactory(target.getProject());
         List<PsiMethod> out = new ArrayList<>(lazyFields.size());
         for (PsiField field : lazyFields) {
-            PsiType fieldType = field.getType();
-            if (fieldType instanceof PsiPrimitiveType) continue;
+            // The written type, not the storage it is rewritten to - the getter
+            // is what hands the caller the value.
+            PsiType fieldType = WrittenTypes.of(field);
+            if (fieldType == null) continue;
             String getterName = "get" + capitalise(field.getName());
             if (existingZeroArg.contains(getterName)) continue;
             out.add(buildGetter(manager, elements, target, field, getterName, fieldType));

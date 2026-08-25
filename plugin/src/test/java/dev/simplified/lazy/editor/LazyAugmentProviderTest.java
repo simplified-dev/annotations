@@ -62,6 +62,68 @@ public class LazyAugmentProviderTest extends LightJavaCodeInsightFixtureTestCase
             GeneratedMemberMarker.isGenerated(getter));
     }
 
+    /**
+     * The editor must report the storage javac rewrites the field to. Showing
+     * the written type instead marks a direct read of the field green over
+     * source the build rejects.
+     */
+    public void testLazyFieldReportsItsStorageType() {
+        PsiFile file = myFixture.configureByText("Holder.java",
+            """
+            import dev.simplified.annotations.Lazy;
+            public class Holder {
+                @Lazy
+                private String label = "x";
+                private String plain = "y";
+            }
+            """);
+        PsiClass holder = ((PsiJavaFile) file).getClasses()[0];
+
+        String lazyType = holder.findFieldByName("label", false).getType().getCanonicalText();
+        assertTrue("a @Lazy field reads as its deferred holder, got: " + lazyType,
+            lazyType.contains("AtomicReference") && lazyType.contains("Supplier"));
+        assertTrue("and the holder is parameterised on the written type, got: " + lazyType,
+            lazyType.contains("String"));
+
+        // equalsToText against both spellings, as elsewhere in this class - the
+        // fixture's mock JDK does not always wire String through to its FQN.
+        PsiType plain = holder.findFieldByName("plain", false).getType();
+        assertTrue("an unannotated field is untouched, got: " + plain.getCanonicalText(),
+            plain.equalsToText("java.lang.String") || plain.equalsToText("String"));
+        PsiType returned = holder.findMethodsByName("getLabel", false)[0].getReturnType();
+        assertTrue("the getter still hands back the written type",
+            returned != null
+                && (returned.equalsToText("java.lang.String") || returned.equalsToText("String")));
+    }
+
+    /**
+     * A primitive defers like anything else, so the editor has to synthesise
+     * its getter too - skipping it would leave every call to a getter javac
+     * does emit reading red.
+     */
+    public void testPrimitiveLazyFieldGetsItsGetter() {
+        PsiFile file = myFixture.configureByText("Counter.java",
+            """
+            import dev.simplified.annotations.Lazy;
+            public class Counter {
+                @Lazy
+                private int count = 1;
+            }
+            """);
+        PsiClass counter = ((PsiJavaFile) file).getClasses()[0];
+
+        PsiMethod[] getters = counter.findMethodsByName("getCount", false);
+        assertEquals("getCount() must be synthesised for a primitive", 1, getters.length);
+        assertTrue("and it returns the primitive, not a box",
+            getters[0].getReturnType() != null && getters[0].getReturnType().equalsToText("int"));
+        assertTrue("getCount() carries the generated marker",
+            GeneratedMemberMarker.isGenerated(getters[0]));
+        // The storage type is not asserted here: boxing a primitive needs
+        // java.lang.Integer resolvable, which this fixture's mock JDK does not
+        // provide, so the field reads as written. The boxing itself is pinned
+        // by the processor's own suite.
+    }
+
     public void testNonLazyClass_noAugment() {
         PsiFile file = myFixture.configureByText("Plain.java",
             """

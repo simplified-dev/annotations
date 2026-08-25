@@ -38,6 +38,26 @@ public final class BuilderMutator {
     }
 
     /**
+     * Warns that a target handing construction to a factory has its
+     * {@code @BuildFlag} constraints checked only as far as the declared type
+     * describes them.
+     *
+     * <p>Constraints are resolved where the builder is generated, so a subtype
+     * the factory happens to return carries constraints nothing at that point
+     * can enumerate. Saying so is the whole obligation: enforcing a subset in
+     * silence is the failure {@code @BuildFlag} exists to prevent.
+     */
+    private void warnFactoryValidation(TypeElement targetElement, MutationContext ctx) {
+        if (!ctx.config().validate() || !ctx.constructsViaFactory()) return;
+        if (dev.simplified.classbuilder.apt.BuildFlags.of(targetElement).isEmpty()) return;
+        messager.printMessage(Diagnostic.Kind.WARNING,
+            "@ClassBuilder(validate = true) with a factory checks only the constraints declared on '"
+                + targetElement.getSimpleName()
+                + "' - a @BuildFlag on a subtype the factory returns is not enforced",
+            targetElement);
+    }
+
+    /**
      * Runs the mutation pipeline for a single annotated type.
      *
      * @param targetElement the annotated type
@@ -59,6 +79,7 @@ public final class BuilderMutator {
         bridge.treeMaker().at(target.pos);
 
         warnUnbuildableCustomCollectors(targetElement, fields);
+        warnFactoryValidation(targetElement, ctx);
 
         boolean isAbstract = targetElement.getModifiers().contains(Modifier.ABSTRACT);
         AnnotatedSuper annotatedSuper = findAnnotatedDirectSuper(targetElement);
@@ -85,7 +106,7 @@ public final class BuilderMutator {
             }
         }
 
-        // @Lazy fields: rewrite storage type to Lazy<T>, wrap initialisers,
+        // @Lazy fields: rewrite storage to a deferred holder, wrap initialisers,
         // adjust matching constructor params + assignments, synthesise
         // memoizing getters. Runs before any other phase (SuperBuilder or
         // regular) so RetainedInitFactory + FieldMutators see the rewritten

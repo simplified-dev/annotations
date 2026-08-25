@@ -1271,7 +1271,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     /**
      * Companion annotations {@code @Lazy} documents as unsupported. Each assumes
      * direct {@code T} storage, which {@code @Lazy} replaces with
-     * {@code Lazy<T>}, so the pairing is not merely redundant - it misbehaves
+     * the deferred storage, so the pairing is not merely redundant - it misbehaves
      * silently. {@code @BuildFlag}, for instance, degrades to a no-op because
      * the validator sees the non-null wrapper rather than the value.
      *
@@ -1301,7 +1301,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
             if (!lookup.hasAnnotation(field, companion[0])) continue;
             messager.printMessage(Diagnostic.Kind.ERROR,
                 "@Lazy cannot be combined with @" + companion[1]
-                    + " - the companion assumes direct field storage, which @Lazy replaces with Lazy<T>",
+                    + " - the companion assumes direct field storage, which @Lazy replaces with a deferred holder",
                 field
             );
         }

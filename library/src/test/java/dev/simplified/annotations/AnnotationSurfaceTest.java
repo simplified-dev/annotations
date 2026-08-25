@@ -61,11 +61,12 @@ public class AnnotationSurfaceTest {
 
     @Test
     public void buildFlag_metadata() {
-        // The one annotation of the four that must survive to runtime:
-        // BuildFlagValidator reads it reflectively inside the generated build().
-        assertRetention(BuildFlag.class, RetentionPolicy.RUNTIME);
+        // Read where the builder is generated and enforced by code emitted into
+        // it, so nothing reads this annotation at runtime and it need not
+        // survive to one.
+        assertRetention(BuildFlag.class, RetentionPolicy.CLASS);
         // METHOD is for interface targets, which declare no fields to carry a
-        // constraint - the processor copies it onto the generated Impl field.
+        // constraint - the accessors are where it goes instead.
         assertTargets(BuildFlag.class, ElementType.FIELD, ElementType.METHOD);
     }
 
@@ -532,31 +533,26 @@ public class AnnotationSurfaceTest {
     @ToString
     record FixtureOnEqualityRecord(String name, byte[] swatches) { }
 
+    /**
+     * The constraint is resolved where the builder is generated and enforced by
+     * code emitted into it, so nothing reads the annotation at runtime - which
+     * is what lets a consumer satisfy a constraint without this library on
+     * their runtime classpath at all.
+     */
     @Test
-    public void buildFlag_visibleAtRuntime_onAccessor() throws Exception {
-        BuildFlag flag = FixtureOnAccessors.class.getDeclaredMethod("name").getAnnotation(BuildFlag.class);
-        assertNotNull("BuildFlag on an accessor should be readable", flag);
-        assertTrue(flag.nonNull());
-        assertTrue(flag.notEmpty());
-    }
-
-    @Test
-    public void buildFlag_visibleAtRuntime_onField() throws Exception {
-        Field a = FixtureOnFields.class.getDeclaredField("a");
-        BuildFlag flag = a.getAnnotation(BuildFlag.class);
-        assertNotNull("BuildFlag is RUNTIME-retained and should be readable", flag);
-        assertTrue(flag.nonNull());
-        assertTrue(flag.notEmpty());
-        assertEquals(10, flag.limit());
-        assertEquals("[a-z]+", flag.pattern());
-        assertArrayEquals(new String[] {"g"}, flag.group());
+    public void buildFlag_invisibleAtRuntime_onFieldAndAccessor() throws Exception {
+        assertEquals("BuildFlag should be invisible at runtime on an accessor", 0,
+            annotationsByName(
+                FixtureOnAccessors.class.getDeclaredMethod("name").getAnnotations(), "BuildFlag"));
+        assertEquals("BuildFlag should be invisible at runtime on a field", 0,
+            annotationsByName(
+                FixtureOnFields.class.getDeclaredField("a").getAnnotations(), "BuildFlag"));
     }
 
     /**
-     * Guards the reason the four field annotations were split apart: only
-     * {@code @BuildFlag} needs to reach runtime, and the other three must not be
-     * dragged into consumer class files with it. Before the split they shared a
-     * single RUNTIME-retained parent and all four were reflectively visible.
+     * Guards the reason the field annotations were split apart: none of them is
+     * dragged into a consumer's runtime. Before the split they shared a single
+     * RUNTIME-retained parent and were all reflectively visible.
      */
     @Test
     public void classRetentionAnnotations_invisibleAtRuntime_asDesigned() {

@@ -17,12 +17,12 @@ Flags misuse of the per-field companion annotations that travel with
       <code>putXIfAbsent</code> (maps only).</li>
   <li><code>@BuildFlag(pattern = ...)</code> is only
       meaningful on <code>CharSequence</code> or
-      <code>Optional&lt;String&gt;</code> fields - the validator cannot
+      <code>Optional&lt;String&gt;</code> fields - the generated check cannot
       check a regex against other types.</li>
   <li><code>@BuildFlag(limit = N)</code> is only
       meaningful on <code>CharSequence</code>, <code>Collection</code>,
       <code>Map</code>, object arrays, or <code>Optional</code> of
-      <code>String</code> / <code>Number</code> - the validator has no
+      <code>String</code> / <code>Number</code> - the generated check has no
       notion of size on other types.</li>
   <li>A <code>@SetterNames</code> pattern must carry the <code>{}</code>
       placeholder exactly once and expand to a legal Java identifier.

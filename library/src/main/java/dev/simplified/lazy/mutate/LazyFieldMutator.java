@@ -1,5 +1,6 @@
 package dev.simplified.lazy.mutate;
 import com.sun.tools.javac.code.Flags;
+import com.sun.tools.javac.code.TypeTag;
 import com.sun.tools.javac.tree.JCTree.JCAnnotation;
 import com.sun.tools.javac.tree.JCTree.JCAssign;
 import com.sun.tools.javac.tree.JCTree.JCBlock;
@@ -42,15 +43,26 @@ import java.util.Set;
 
 /**
  * Rewrites {@code @Lazy} fields in place: storage type becomes
- * {@link dev.simplified.lazy.Lazy Lazy&lt;T&gt;}, the field gains
- * the {@code final} modifier, the original initializer (when present) is
- * wrapped as {@code Lazy.of(() -> <init>)}, and a memoizing public getter is
- * synthesised on the target.
+ * {@code AtomicReference&lt;Supplier&lt;T&gt;&gt;} holding the deferred
+ * computation, the field gains the {@code final} modifier, the original
+ * initializer (when present) becomes the supplier body, a sibling
+ * {@code $value$<name>} field is synthesised to hold the memoized result, and a
+ * memoizing getter is synthesised on the target.
+ *
+ * <p>The supplier reference doubles as the state token and as the monitor the
+ * getter locks on. Clearing it is what marks the value computed, so a memoized
+ * {@code null} needs no sentinel to tell it from an unread slot, and the
+ * supplier - with everything its lambda captured - becomes collectable as soon
+ * as the value exists.
+ *
+ * <p>A primitive field keeps a primitive value slot and boxes only the
+ * supplier's type argument, so the single boxing happens when the value is
+ * computed and never on a read.
  *
  * <p>For {@code @Lazy} fields whose name matches a constructor parameter, that
  * parameter's declared type is rewritten from {@code T} to
  * {@code Supplier<T>} and the matching {@code this.foo = foo} body assignment
- * becomes {@code this.foo = Lazy.of(foo)}. This lets values flow from
+ * wraps it in a fresh holder. This lets values flow from
  * {@code @ClassBuilder} setters through to the target as deferred
  * computations rather than eager values.
  *
@@ -63,13 +75,29 @@ import java.util.Set;
  * AST contains the rewritten type, which is what javac compiles.
  *
  * @see dev.simplified.annotations.Lazy
- * @see dev.simplified.lazy.Lazy
  */
 public final class LazyFieldMutator {
 
-    public static final String LAZY_FQN = "dev.simplified.lazy.Lazy";
+    public static final String ATOMIC_REFERENCE_FQN = "java.util.concurrent.atomic.AtomicReference";
     public static final String SUPPLIER_FQN = "java.util.function.Supplier";
     private static final String NOT_NULL_FQN = "org.jetbrains.annotations.NotNull";
+    private static final String OBJECTS_FQN = "java.util.Objects";
+    /** Local holding the supplier read inside the synthesised getter's lock. */
+    private static final String SUPPLIER_LOCAL = "$s";
+
+    /**
+     * Name of the field holding a {@code @Lazy} field's memoized value.
+     *
+     * <p>Spelled with the {@code $prefix$} shape the rest of the pipeline uses
+     * so the plugin's synthetic-member filters, which test for a leading
+     * {@code $}, keep recognising it.
+     *
+     * @param name the annotated field's name
+     * @return the value field's name
+     */
+    public static String valueField(String name) {
+        return "$value$" + name;
+    }
 
     /**
      * Annotation FQNs (and their bare simple names) that must NOT propagate
@@ -162,6 +190,16 @@ public final class LazyFieldMutator {
             processed.add(lazy.name);
         }
 
+        // Appended after the walk rather than inside it - these are new members
+        // on the very class whose defs the loop above is reading. Driven from
+        // declsByName because it preserves declaration order, so the emitted
+        // members land in the same sequence on every compile.
+        for (String name : declsByName.keySet()) {
+            FieldSpec lazy = lazyByName.get(name);
+            bridge.compat().appendDef(target, valueFieldDecl(lazy));
+            bridge.compat().appendDef(target, buildResolver(lazy));
+        }
+
         rewriteConstructorParams(processed, lazyByName);
 
         for (String name : processed) {
@@ -194,12 +232,6 @@ public final class LazyFieldMutator {
                 lazy.element);
             return false;
         }
-        if (lazy.type.getKind().isPrimitive()) {
-            messager.printMessage(Diagnostic.Kind.ERROR,
-                "@Lazy is not supported on primitive fields - use the boxed equivalent (e.g. Boolean, Integer)",
-                lazy.element);
-            return false;
-        }
         if (lazy.type.getKind() == TypeKind.ARRAY) {
             messager.printMessage(Diagnostic.Kind.ERROR,
                 "@Lazy is not supported on array fields",
@@ -223,7 +255,7 @@ public final class LazyFieldMutator {
      * initializer is the obvious one and was the only one; a field computed from
      * constructor arguments or from sibling fields has no initializer to hold
      * that expression and had to be written as a hand-rolled
-     * {@code Lazy.of(() -> ...)}, which is what left the type in ten field
+     * a hand-written holder, which is what left the type in ten field
      * declarations that no annotation expressed.
      *
      * @param name the field's name
@@ -245,7 +277,7 @@ public final class LazyFieldMutator {
      * assignment inside - a block, either arm of an {@code if}, a {@code try} -
      * because a field assigned in only one of them is still a field this pass
      * has to rewrite. Missing one leaves the author with a type error on
-     * {@code Lazy<T>} against {@code T} at a line they wrote and did not change.
+     * the storage type against {@code T} at a line they wrote and did not change.
      *
      * <p>Lambda and anonymous-class bodies are not descended into. An assignment
      * there runs after the constructor rather than during it, so it is not what
@@ -291,12 +323,11 @@ public final class LazyFieldMutator {
     }
 
     private void rewriteFieldDecl(FieldSpec lazy, JCVariableDecl decl) {
-        JCExpression lazyType = types.parseType(LAZY_FQN + "<" + lazy.typeDisplay + ">");
-        decl.vartype = lazyType;
+        decl.vartype = holderType(lazy);
         decl.mods = make.Modifiers(decl.mods.flags | Flags.FINAL, decl.mods.annotations);
         if (decl.init != null) {
             JCExpression cleaned = cloneAndReset(decl.init);
-            decl.init = lazyOfLambda(cleaned);
+            decl.init = newHolderOfLambda(lazy, cleaned);
         }
         // Marked, but deliberately not annotated: this is the author's own
         // field declaration rewritten in place, not a member we introduced.
@@ -316,10 +347,10 @@ public final class LazyFieldMutator {
      *       names match a processed @Lazy field from {@code T} to
      *       {@code Supplier<T>} so the builder can pass a supplier through;</li>
      *   <li>rewrites the matching {@code this.foo = foo} body assignment so
-     *       the field's {@code Lazy<T>} type is satisfied. With
+     *       the field's rewritten storage type is satisfied. With
      *       {@code @ClassBuilder} the param is now a {@code Supplier<T>} and
-     *       the wrap is {@code Lazy.of(foo)}; without it the param stays
-     *       {@code T} and the wrap is {@code Lazy.of(() -> foo)}.</li>
+     *       the wrap is a fresh holder over it; without it the param stays
+     *       {@code T} and the wrap is a holder over {@code () -> foo}.</li>
      * </ul>
      */
     private void rewriteConstructorParams(Set<String> processed, Map<String, FieldSpec> lazyByName) {
@@ -338,7 +369,7 @@ public final class LazyFieldMutator {
                 }
             }
             if (method.body != null) {
-                rewriteAssignmentsInBlock(method.body, processed, rewrittenParams,
+                rewriteAssignmentsInBlock(method.body, processed, lazyByName, rewrittenParams,
                     AstMarkers.isGenerated(method));
             }
         }
@@ -347,12 +378,12 @@ public final class LazyFieldMutator {
     /**
      * Rewrites every {@code this.<name> = <expr>} in a constructor body where
      * {@code <name>} is a processed {@code @Lazy} field, so the assignment
-     * satisfies the field's rewritten {@code Lazy<T>} type.
+     * satisfies the field's rewritten storage type.
      *
      * <p>A parameter this pass retyped to {@code Supplier<T>} passes straight
-     * through as {@code Lazy.of(param)} - the caller already deferred it.
+     * through into a fresh holder - the caller already deferred it.
      * Everything else is <b>the value</b>, and is wrapped as
-     * {@code Lazy.of(() -> <expr>)} so it is computed on first read rather than
+     * a holder over {@code () -> <expr>} so it is computed on first read rather than
      * in the constructor. That is what makes the whole expression the supplier
      * body, which is the point: a field derived from sibling fields or from
      * constructor arguments has no initializer to put that expression in, and
@@ -361,27 +392,29 @@ public final class LazyFieldMutator {
      * <p>Any {@code <expr>} qualifies in a constructor the <b>author</b> wrote,
      * not only a parameter of the same name. Restricting it to that spelled one
      * shape and left every other assignment un-rewritten, which javac then
-     * rejects as {@code T} against {@code Lazy<T>} - on the author's own
+     * rejects as {@code T} against the storage type - on the author's own
      * constructor line, about a type they never wrote.
      *
      * <p>A constructor <b>this pipeline</b> generated is the opposite case and
      * takes only the pass-through. {@code AllArgsConstructorFactory} already
-     * emits a complete {@code Lazy<T>} right-hand side for every shape it
+     * emits a complete holder right-hand side for every shape it
      * knows - a supplied slot wrapped verbatim, an instance default deferred
-     * over its provider - so wrapping again would nest a {@code Lazy} inside a
-     * {@code Lazy} and the field would no longer accept it.
+     * over its provider - so wrapping again would nest one holder inside another
+     * and the field would no longer accept it.
      */
     private void rewriteAssignmentsInBlock(JCBlock block, Set<String> processed,
+                                           Map<String, FieldSpec> lazyByName,
                                            Set<String> rewrittenParams, boolean generated) {
         for (String name : processed) {
+            FieldSpec lazy = lazyByName.get(name);
             for (JCAssign assign : assignmentsTo(block, name)) {
                 boolean passesSupplierThrough = rewrittenParams.contains(name)
                     && assign.rhs instanceof JCIdent rhs
                     && rhs.name.toString().equals(name);
                 if (passesSupplierThrough) {
-                    assign.rhs = lazyOfIdent(name);
+                    assign.rhs = newHolderOfIdent(lazy, name);
                 } else if (!generated) {
-                    assign.rhs = lazyOfLambda(assign.rhs);
+                    assign.rhs = newHolderOfLambda(lazy, assign.rhs);
                 }
             }
         }
@@ -391,16 +424,35 @@ public final class LazyFieldMutator {
     // Getter synthesis
     // ------------------------------------------------------------------
 
-    private JCMethodDecl buildGetter(FieldSpec lazy, String getterName) {
-        JCExpression callGet = make.Apply(
+    /**
+     * The memoizing read itself, kept private and separate from the getter.
+     *
+     * <p>An author who writes their own getter still needs one correct way to
+     * read the field: the storage holds the supplier rather than the value, and
+     * calling that supplier by hand would recompute on every read instead of
+     * memoizing.
+     */
+    private JCMethodDecl buildResolver(FieldSpec lazy) {
+        JCMethodDecl resolver = make.MethodDef(
+            make.Modifiers(Flags.PRIVATE),
+            names.fromString(LazyHolders.resolver(lazy.name)),
+            types.parseType(lazy.typeDisplay),
             List.nil(),
-            make.Select(
-                make.Select(make.Ident(names._this), names.fromString(lazy.name)),
-                names.fromString("get")
-            ),
-            List.nil()
+            List.nil(),
+            List.nil(),
+            make.Block(0, List.of(fastPath(lazy), computeUnderLock(lazy))),
+            null
         );
-        JCBlock body = make.Block(0, List.of(make.Return(callGet)));
+        AstMarkers.markGenerated(resolver, generated);
+        return resolver;
+    }
+
+    private JCMethodDecl buildGetter(FieldSpec lazy, String getterName) {
+        JCBlock body = make.Block(0, List.of(make.Return(make.Apply(
+            List.nil(),
+            make.Ident(names.fromString(LazyHolders.resolver(lazy.name))),
+            List.nil()
+        ))));
         JCExpression returnType = types.parseType(lazy.typeDisplay);
         List<JCAnnotation> declAnnotations = collectDeclarationAnnotations(lazy);
         // The contract states only what the field states. A @NotNull field
@@ -416,7 +468,10 @@ public final class LazyFieldMutator {
         // runs the author's supplier - arbitrary code that may do IO or throw -
         // and pure would license the IDE to drop or reorder the call that
         // triggers it.
-        if (hasAnnotation(lazy, NOT_NULL_FQN))
+        //
+        // Never on a primitive return either, where non-nullness is not a claim
+        // there is any way to violate.
+        if (!lazy.type.getKind().isPrimitive() && hasAnnotation(lazy, NOT_NULL_FQN))
             declAnnotations = contracts.returnNonNull().appendList(declAnnotations);
         JCModifiers mods = make.Modifiers(accessFlagFor(lazy), declAnnotations);
         JCMethodDecl getter = make.MethodDef(
@@ -452,15 +507,15 @@ public final class LazyFieldMutator {
                 int dot = name.lastIndexOf('.');
                 if (dot >= 0) name = name.substring(dot + 1);
                 // NONE is named explicitly rather than falling through to the
-                // default. A @Lazy field's storage is Lazy<T>, so the
+                // default. A @Lazy field's storage holds a supplier, so the
                 // synthesised getter is the only read that yields the declared
                 // type - suppressing it leaves the field unreachable, and
                 // silently emitting a public getter instead hides that.
                 if ("NONE".equals(name)) {
                     messager.printMessage(Diagnostic.Kind.ERROR,
                         "@Lazy(access = NONE) would leave field '" + lazy.name
-                            + "' unreadable - its storage is Lazy<T> and the synthesised getter is "
-                            + "the only read that unwraps it",
+                            + "' unreadable - its storage holds the deferred supplier and the "
+                            + "synthesised getter is the only read that resolves it",
                         lazy.element);
                     return Flags.PUBLIC;
                 }
@@ -530,7 +585,7 @@ public final class LazyFieldMutator {
      * dual-target annotation.
      *
      * <p>A {@code TYPE_USE}-only annotation is a separate matter this method
-     * neither causes nor cures. It fails on the rewritten {@code Lazy<T>}
+     * neither causes nor cures. It fails on the rewritten storage
      * <i>field</i> type with "scoping construct cannot be annotated with
      * type-use annotation", before the getter is ever built.
      *
@@ -554,35 +609,112 @@ public final class LazyFieldMutator {
     // AST helpers
     // ------------------------------------------------------------------
 
-    /** {@code Lazy.of(() -> <expr>)}. */
-    private JCExpression lazyOfLambda(JCExpression expr) {
-        var lambda = make.Lambda(List.nil(), expr);
-        return make.Apply(
-            List.nil(),
-            make.Select(types.qualIdent(LAZY_FQN), names.fromString("of")),
-            List.of(lambda)
-        );
+    /** {@code AtomicReference<Supplier<T>>} - the rewritten field's storage. */
+    private JCExpression holderType(FieldSpec lazy) {
+        return LazyHolders.holderType(make, types, lazy.typeDisplay);
     }
 
-    /** {@code Lazy.of(<paramName>)} - passes an existing Supplier through. */
+    /** {@code Supplier<T>}, boxed when the field is primitive. */
+    private JCExpression supplierType(FieldSpec lazy) {
+        return LazyHolders.supplierType(make, types, lazy.typeDisplay);
+    }
+
+    /** {@code new AtomicReference<Supplier<T>>(<supplier>)}. */
+    private JCExpression newHolder(FieldSpec lazy, JCExpression supplier) {
+        return LazyHolders.newHolder(make, types, lazy.typeDisplay, supplier);
+    }
+
+    /** {@code new AtomicReference<Supplier<T>>(() -> <expr>)}. */
+    private JCExpression newHolderOfLambda(FieldSpec lazy, JCExpression expr) {
+        return newHolder(lazy, make.Lambda(List.nil(), expr));
+    }
+
     /**
-     * {@code Lazy.of(param, owner, field)} for a constructor assignment whose
-     * parameter is a {@code Supplier}. Uses the field-attributed overload
-     * because this is the one path where a null supplier can arrive - the
-     * builder slot was never filled - and the resulting failure should name the
-     * field at {@code build()} instead of surfacing as a bare NPE at first
-     * {@code get()}.
+     * {@code new AtomicReference<>(Objects.requireNonNull(param, ...))} for a
+     * constructor assignment whose parameter is already a {@code Supplier}.
+     * Null-checked here because this is the one path where a missing supplier
+     * can arrive - the builder slot was never filled - and the resulting
+     * failure should name the field at {@code build()} instead of surfacing as
+     * a bare NPE at the first read.
      */
-    private JCExpression lazyOfIdent(String paramName) {
-        return make.Apply(
-            List.nil(),
-            make.Select(types.qualIdent(LAZY_FQN), names.fromString("of")),
-            List.of(
-                make.Ident(names.fromString(paramName)),
-                make.Literal(ownerQualifiedName()),
-                make.Literal(paramName)
-            )
+    private JCExpression newHolderOfIdent(FieldSpec lazy, String paramName) {
+        return LazyHolders.newCheckedHolder(make, names, types, lazy.typeDisplay,
+            make.Ident(names.fromString(paramName)), ownerQualifiedName(), paramName);
+    }
+
+    /** {@code private T $value$<name>;} - the slot the memoized value lands in. */
+    private JCVariableDecl valueFieldDecl(FieldSpec lazy) {
+        JCVariableDecl field = make.VarDef(
+            make.Modifiers(Flags.PRIVATE),
+            names.fromString(valueField(lazy.name)),
+            types.parseType(lazy.typeDisplay),
+            null
         );
+        AstMarkers.markGenerated(field, generated);
+        return field;
+    }
+
+    /** {@code this.<name>} - the holder the supplier lives in. */
+    private JCExpression holderRead(FieldSpec lazy) {
+        return make.Select(make.Ident(names._this), names.fromString(lazy.name));
+    }
+
+    /** {@code this.<name>.get()} - a volatile read of the supplier. */
+    private JCExpression holderGet(FieldSpec lazy) {
+        return make.Apply(List.nil(),
+            make.Select(holderRead(lazy), names.fromString("get")), List.nil());
+    }
+
+    /** {@code this.$value$<name>}. */
+    private JCExpression valueRead(FieldSpec lazy) {
+        return make.Select(make.Ident(names._this), names.fromString(valueField(lazy.name)));
+    }
+
+    /**
+     * {@code if (this.<name>.get() == null) return this.$value$<name>;}
+     *
+     * <p>The uncontended read, and the reason the supplier rather than the
+     * value carries the state: a cleared supplier is a volatile read that
+     * happens-after the value was written, so the plain value field is safely
+     * published without being volatile itself.
+     */
+    private JCStatement fastPath(FieldSpec lazy) {
+        JCExpression computed = make.Binary(JCTree.Tag.EQ, holderGet(lazy),
+            make.Literal(TypeTag.BOT, null));
+        return make.If(computed, make.Return(valueRead(lazy)), null);
+    }
+
+    /**
+     * The double-checked half: re-reads the supplier under the holder's own
+     * monitor, computes and stores exactly once, then clears the supplier so
+     * it and everything its lambda captured become collectable.
+     *
+     * <p>The store precedes the clear, which is what the fast path's volatile
+     * read pairs with. An initializer that throws propagates with the supplier
+     * still set, so the next call retries rather than caching a failure.
+     */
+    private JCStatement computeUnderLock(FieldSpec lazy) {
+        JCVariableDecl local = make.VarDef(
+            make.Modifiers(0),
+            names.fromString(SUPPLIER_LOCAL),
+            supplierType(lazy),
+            holderGet(lazy)
+        );
+        JCExpression stillSet = make.Binary(JCTree.Tag.NE,
+            make.Ident(names.fromString(SUPPLIER_LOCAL)),
+            make.Literal(TypeTag.BOT, null));
+        JCStatement store = make.Exec(make.Assign(valueRead(lazy),
+            make.Apply(List.nil(),
+                make.Select(make.Ident(names.fromString(SUPPLIER_LOCAL)), names.fromString("get")),
+                List.nil())));
+        JCStatement clear = make.Exec(make.Apply(List.nil(),
+            make.Select(holderRead(lazy), names.fromString("set")),
+            List.of(make.Literal(TypeTag.BOT, null))));
+        return make.Synchronized(holderRead(lazy), make.Block(0, List.of(
+            local,
+            make.If(stillSet, make.Block(0, List.of(store, clear)), null),
+            make.Return(valueRead(lazy))
+        )));
     }
 
     /** Fully-qualified name of the class declaring the field, for error messages. */

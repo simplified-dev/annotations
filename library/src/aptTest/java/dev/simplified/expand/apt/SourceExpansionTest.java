@@ -259,7 +259,7 @@ public class SourceExpansionTest {
         // reading the mark alone writes the field a second time in its retyped
         // form and javadoc reports it as already defined.
         assertFalse("the retyped storage must not be written as a second declaration; saw:\n" + src,
-            src.contains("dev.simplified.lazy.Lazy<"));
+            src.contains("java.util.concurrent.atomic.AtomicReference<"));
         assertTrue("the memoizing accessor must still be written; saw:\n" + src,
             src.contains("getExpensive() { }"));
         assertTrue("the accessor must carry the field's prose; saw:\n" + src,

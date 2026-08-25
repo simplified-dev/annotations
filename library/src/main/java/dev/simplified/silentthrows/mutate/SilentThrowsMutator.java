@@ -46,8 +46,7 @@ import java.util.ArrayList;
  * </code></pre>
  *
  * <p>The helper is emitted rather than shipped so the feature adds no runtime
- * classpath entry - it holds no state and needs no configuration, which is what
- * separates it from {@code dev.simplified.lazy.Lazy}.
+ * classpath entry - it holds no state and needs no configuration.
  *
  * <p><b>The existing {@link JCBlock} is reused as the try body rather than
  * copied.</b> Nothing is re-parented into a fresh tree, so there is no

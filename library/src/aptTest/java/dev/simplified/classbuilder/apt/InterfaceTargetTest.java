@@ -3,7 +3,6 @@ package dev.simplified.classbuilder.apt;
 import com.google.testing.compile.Compilation;
 import com.google.testing.compile.Compiler;
 import com.google.testing.compile.JavaFileObjects;
-import dev.simplified.classbuilder.validate.BuilderValidationException;
 import org.junit.Test;
 
 import javax.tools.JavaFileObject;
@@ -98,17 +97,17 @@ public class InterfaceTargetTest {
 
     /**
      * Invokes a generated builder chain and returns the
-     * {@link BuilderValidationException} it threw, failing when it did not.
+     * {@link IllegalStateException} it threw, failing when it did not.
      *
      * @param use the compiled caller class
      * @param method the zero-arg static method driving the builder
      * @return the rejection
      */
-    private static BuilderValidationException rejected(Class<?> use, String method) throws Exception {
+    private static IllegalStateException rejected(Class<?> use, String method) throws Exception {
         try {
             use.getMethod(method).invoke(null);
         } catch (InvocationTargetException e) {
-            if (e.getCause() instanceof BuilderValidationException rejection) return rejection;
+            if (e.getCause() instanceof IllegalStateException rejection) return rejection;
             throw new AssertionError("build() failed for something other than validation", e.getCause());
         }
         fail("expected build() to reject the instance");
@@ -148,7 +147,7 @@ public class InterfaceTargetTest {
 
         ClassLoader cl = loadClasses(c);
         Class<?> use = Class.forName("demo.UseShape", true, cl);
-        BuilderValidationException rejection = rejected(use, "unset");
+        IllegalStateException rejection = rejected(use, "unset");
         assertTrue("the message must name the accessor, got: " + rejection.getMessage(),
             rejection.getMessage().contains("'name'"));
         assertTrue("and the Impl it was enforced on, got: " + rejection.getMessage(),

@@ -12,10 +12,9 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Declares runtime-enforced constraints on a builder field, or on the abstract
- * accessor standing in for one on an interface target, verified by
- * {@code BuildFlagValidator.validate($result)} inside the builder's generated
- * {@code build()} method.
+ * Declares constraints on a builder field, or on the abstract accessor
+ * standing in for one on an interface target, verified by the generated
+ * {@code $validate$($result)} inside the builder's {@code build()} method.
  *
  * <p>Each attribute is independent and may be combined. Every one of them states
  * something about the value a single field holds; a rule spanning two fields
@@ -31,17 +30,16 @@ import java.util.Optional;
  * valid - the "A or B" pattern used by Discord buttons requiring an emoji or a
  * label.
  *
- * <p>The validator is provided by this plugin's runtime support and has no
- * external dependencies. Fields are scanned once per class and cached - the
- * scan walking the superclass chain, so an inherited constraint is enforced on
- * the subclass being built.
+ * <p>Constraints are resolved where the builder is generated and enforced by
+ * checks emitted into it, so a target carrying one needs nothing on its runtime
+ * classpath. The walk climbs the superclass chain, so an inherited constraint
+ * is enforced on the subclass being built.
  *
  * <p>On an interface {@link ClassBuilder} target the constraint goes on the
  * abstract accessor instead, an interface declaring no fields of its own. The
- * processor copies it onto the matching field of the generated
- * {@code <Name>Impl} - the instance {@code build()} actually constructs, and
- * the one the validator reads - so an accessor constraint is enforced exactly
- * as a field constraint is. That is the only place a method target is read:
+ * generated {@code build()} reads it by calling the accessor on the instance
+ * it constructed, so an accessor constraint is enforced exactly as a field
+ * constraint is. That is the only place a method target is read:
  * written on any other method it has no effect.
  *
  * <h2>Examples</h2>
@@ -79,7 +77,7 @@ import java.util.Optional;
  * @see ClassBuilder#validate
  */
 @Target({ElementType.FIELD, ElementType.METHOD})
-@Retention(RetentionPolicy.RUNTIME)
+@Retention(RetentionPolicy.CLASS)
 public @interface BuildFlag {
 
     /**

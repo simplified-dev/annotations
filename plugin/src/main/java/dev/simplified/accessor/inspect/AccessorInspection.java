@@ -27,7 +27,7 @@ import org.jetbrains.annotations.Nullable;
  *   <li>{@code @Setter} on a {@code final} field, which has no assignment to
  *       generate.</li>
  *   <li>{@code @Setter} beside {@code @Lazy}, whose storage is a
- *       {@code Lazy<T>} wrapper a plain assignment cannot type-check
+ *       deferred supplier a plain assignment cannot type-check
  *       against.</li>
  *   <li>{@code @Getter} beside {@code @Lazy}, which already synthesises the
  *       accessor - redundant rather than wrong.</li>
@@ -155,7 +155,7 @@ public final class AccessorInspection extends LocalInspectionTool {
         if (field.getAnnotation(AccessorConstants.LAZY_FQN) != null) {
             holder.registerProblem(anchor,
                 "@Setter cannot be combined with @Lazy on '" + fieldName + "' - the field's "
-                    + "storage is a Lazy wrapper, so a plain assignment does not type-check",
+                    + "storage holds the deferred supplier, so a plain assignment does not type-check",
                 ProblemHighlightType.GENERIC_ERROR);
             return;
         }

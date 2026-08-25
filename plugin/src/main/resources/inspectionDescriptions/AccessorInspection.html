@@ -5,8 +5,8 @@ Flags misuse of <code>@Getter</code> and <code>@Setter</code>:
 <ul>
   <li><code>@Setter</code> on a <code>final</code> field - there is no
       assignment to generate.</li>
-  <li><code>@Setter</code> beside <code>@Lazy</code>. The field's storage is a
-      <code>Lazy&lt;T&gt;</code> wrapper, so the generated assignment does not
+  <li><code>@Setter</code> beside <code>@Lazy</code>. The field's storage
+      holds the deferred supplier, so the generated assignment does not
       type-check.</li>
   <li><code>@Getter</code> beside <code>@Lazy</code>, which already synthesises
       a memoizing accessor - redundant rather than wrong, so the second one is
