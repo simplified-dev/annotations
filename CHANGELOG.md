@@ -56,6 +56,13 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   stays this annotation's own rather than deferring to a `@Getter` on the same field or type - the
   accessor pass steps over a lazy field precisely so there is one getter, which leaves the naming of
   it here to answer.
+- **The `@Lazy` inspection reports a getter that does not follow the type's accessor naming.** A
+  type-level `@Getter` fans out over a class's fields and steps over the lazy one, so the annotation
+  that carries the class's style generates nothing there and had nothing to say about it - leaving
+  one member spelled unlike every other accessor on the class and no report anywhere. It now says
+  which name each side produces, and only when `@Lazy` names neither `style` nor `name`: writing one
+  is a choice about that field rather than a slip. It also rejects a `@Lazy(name)` written without
+  the `{}` placeholder, which the accessor pair was already held to.
 
 ### Fixed
 

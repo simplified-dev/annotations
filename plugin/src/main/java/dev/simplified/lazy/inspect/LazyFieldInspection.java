@@ -19,9 +19,13 @@ import com.intellij.psi.PsiRecordComponent;
 import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiThisExpression;
 import com.intellij.psi.PsiType;
+import com.intellij.psi.PsiTypes;
 import com.intellij.psi.util.PsiTreeUtil;
+import dev.simplified.accessor.inspect.AccessorConstants;
+import dev.simplified.classbuilder.apt.AccessorScheme;
 import dev.simplified.classbuilder.apt.NamePattern;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
+import dev.simplified.shared.psi.WrittenTypes;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -47,6 +51,10 @@ import org.jetbrains.annotations.NotNull;
  *   <li>{@code @Lazy(name)} written without the {@code {}} placeholder - the
  *       pattern is applied to one field's name, so a literal is the method name
  *       whatever the field is called.</li>
+ *   <li>A lazy getter spelled differently from the accessors a type-level
+ *       {@code @Getter} asks for - the accessor pass steps over a lazy field, so
+ *       nothing else reports the one member on the class that does not follow
+ *       its convention.</li>
  *   <li>{@code @Lazy} alongside Lombok {@code @Getter} - the Lazy-generated
  *       getter wins, Lombok's would be a duplicate.</li>
  * </ul>
@@ -105,6 +113,7 @@ public class LazyFieldInspection extends LocalInspectionTool {
                 }
 
                 checkName(holder, lazy);
+                checkNamingFollowsTheType(holder, field, lazy);
 
                 checkConflict(holder, field, COLLECTOR_FQN, "@Collector");
                 checkConflict(holder, field, NEGATE_FQN, "@Negate");
@@ -176,6 +185,61 @@ public class LazyFieldInspection extends LocalInspectionTool {
                     holder.registerProblem(value, "Naming pattern for 'name' " + error,
                         ProblemHighlightType.GENERIC_ERROR);
                 }
+            }
+
+            /**
+             * Reports a lazy getter spelled differently from the accessors the
+             * enclosing type asks for.
+             *
+             * <p>{@code @Lazy} names its own getter, and the accessor pass steps
+             * over a lazy field so that getter is the only one. Nothing carries
+             * a type-level {@code @Getter}'s style across that gap, so a class
+             * that spells its accessors one way ends up with a single field
+             * spelled the other, and the annotation that would say so generates
+             * nothing on that field and is silent.
+             *
+             * <p>Only when {@code @Lazy} names neither {@code style} nor
+             * {@code name}. Writing one is a choice about this field, and a
+             * choice that differs from the type's is the reason the attributes
+             * exist rather than a mistake to point at.
+             */
+            private void checkNamingFollowsTheType(@NotNull ProblemsHolder holder,
+                                                   @NotNull PsiField field,
+                                                   @NotNull PsiAnnotation lazy) {
+                if (lazy.findDeclaredAttributeValue("style") != null) return;
+                if (lazy.findDeclaredAttributeValue("name") != null) return;
+
+                PsiClass owner = field.getContainingClass();
+                if (owner == null) return;
+                PsiAnnotation typeGetter = owner.getAnnotation(AccessorConstants.GETTER_FQN);
+                if (typeGetter == null) return;
+                // A field-level @Getter is reported as redundant on its own, and
+                // a field the fan-out does not reach has no convention to miss.
+                if (field.getAnnotation(AccessorConstants.GETTER_FQN) != null) return;
+                if (!AccessorConstants.generates(typeGetter)) return;
+                String name = field.getName();
+                if (name == null || AccessorConstants.excludes(typeGetter, name)) return;
+                if (!AccessorConstants.reachedByTypeLevel(field)) return;
+
+                // The written type, not the storage: the storage is a supplier
+                // and would never read as boolean.
+                PsiType written = WrittenTypes.of(field);
+                if (written == null) return;
+                boolean isBoolean = PsiTypes.booleanType().equals(written);
+
+                String lazyName = AccessorScheme
+                    .resolve(AccessorConstants.style(lazy), AccessorConstants.name(lazy))
+                    .readName(name, isBoolean);
+                String typeName = AccessorScheme
+                    .resolve(AccessorConstants.style(typeGetter), AccessorConstants.name(typeGetter))
+                    .readName(name, isBoolean);
+                if (lazyName.equals(typeName)) return;
+
+                holder.registerProblem(lazy,
+                    "@Lazy generates '" + lazyName + "()' where the type's @Getter spells its "
+                        + "accessors '" + typeName + "()' - give @Lazy the same style or name to "
+                        + "match",
+                    ProblemHighlightType.WEAK_WARNING);
             }
 
             private void checkConflict(@NotNull ProblemsHolder holder, @NotNull PsiField field,
