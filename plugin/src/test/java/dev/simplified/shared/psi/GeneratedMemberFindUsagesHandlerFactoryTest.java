@@ -1,6 +1,7 @@
 package dev.simplified.shared.psi;
 
 import com.intellij.find.findUsages.JavaFindUsagesHandlerFactory;
+import com.intellij.find.findUsages.JavaVariableFindUsagesOptions;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiField;
@@ -144,6 +145,64 @@ public class GeneratedMemberFindUsagesHandlerFactoryTest extends LightJavaCodeIn
         assertEquals("both the written read and the generated call, got " + usages, 2, usages.size());
         assertTrue(usages.contains("label"));
         assertTrue(usages.contains("widget.getLabel"));
+    }
+
+    // ------------------------------------------------------------------
+    // Narrowing to one kind of access
+    // ------------------------------------------------------------------
+
+    /**
+     * The platform decides read from write by asking whether the expression is
+     * assigned to, which a call never is - so a write-only search would drop
+     * exactly the calls it was narrowed to find.
+     */
+    public void testNarrowingToWritesKeepsTheGeneratedSetterCall() {
+        PsiField label = accessorPair();
+        withAccess(false, true, () ->
+            assertEquals(List.of("widget.setLabel"), usageTexts(label)));
+    }
+
+    public void testNarrowingToReadsKeepsTheGeneratedGetterCall() {
+        PsiField label = accessorPair();
+        withAccess(true, false, () ->
+            assertEquals(List.of("widget.getLabel"), usageTexts(label)));
+    }
+
+    /** A class whose field is both read and written through generated accessors. */
+    private PsiField accessorPair() {
+        PsiClass widget = configure("Widget",
+            """
+            import dev.simplified.annotations.Getter;
+            import dev.simplified.annotations.Setter;
+            @Getter @Setter
+            public class Widget {
+                private String label;
+            }
+            """);
+        myFixture.addFileToProject("Caller.java",
+            """
+            public class Caller {
+                int width(Widget widget) { return widget.getLabel().length(); }
+                void rename(Widget widget) { widget.setLabel("x"); }
+            }
+            """);
+        return widget.findFieldByName("label", false);
+    }
+
+    /** Runs {@code body} with the variable search narrowed to one kind of access. */
+    private void withAccess(boolean read, boolean write, Runnable body) {
+        JavaVariableFindUsagesOptions options =
+            JavaFindUsagesHandlerFactory.getInstance(getProject()).getFindVariableOptions();
+        boolean wasRead = options.isReadAccess;
+        boolean wasWrite = options.isWriteAccess;
+        options.isReadAccess = read;
+        options.isWriteAccess = write;
+        try {
+            body.run();
+        } finally {
+            options.isReadAccess = wasRead;
+            options.isWriteAccess = wasWrite;
+        }
     }
 
     // ------------------------------------------------------------------

@@ -29,6 +29,11 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   and every `@ClassBuilder` setter is named after its slot - so a whole builder chain was filed
   under read access and coloured as one in the editor. The provider that minted the member records
   which it was, so the classification is a marker read rather than a guess at the name.
+- **A Find Usages narrowed to write access keeps the generated setter calls.** Read and write are
+  filtered one usage at a time, by asking whether that expression is assigned to - which a call is
+  not, whatever the method does with its argument, so narrowing to writes dropped every call the
+  search was narrowed to find. A generated accessor needs no per-usage question: every call to it
+  does the same thing to the slot, so the answer is a property of the method and is settled once.
 - **Renaming a field renames the members generated from it.** A generated member is spelled from the
   slot behind it, so a rename that touched only what it could see in source left every call site in
   the project naming a method that would not exist after the next build - and said nothing about it.

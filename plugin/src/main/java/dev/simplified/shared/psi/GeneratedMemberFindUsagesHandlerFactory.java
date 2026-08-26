@@ -2,13 +2,17 @@ package dev.simplified.shared.psi;
 
 import com.intellij.find.findUsages.FindUsagesHandler;
 import com.intellij.find.findUsages.FindUsagesHandlerFactory;
+import com.intellij.find.findUsages.FindUsagesOptions;
 import com.intellij.find.findUsages.JavaFindUsagesHandler;
 import com.intellij.find.findUsages.JavaFindUsagesHandlerFactory;
+import com.intellij.find.findUsages.JavaVariableFindUsagesOptions;
 import com.intellij.openapi.project.DumbService;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiMember;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.util.PsiUtilCore;
+import com.intellij.usageView.UsageInfo;
+import com.intellij.util.Processor;
 import dev.simplified.shared.inspect.GeneratedFieldAccess;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -77,6 +81,39 @@ public final class GeneratedMemberFindUsagesHandlerFactory extends FindUsagesHan
         Handler(@NotNull PsiElement element, @NotNull JavaFindUsagesHandlerFactory java) {
             super(element, java);
             this.java = java;
+        }
+
+        /**
+         * {@inheritDoc}
+         *
+         * <p>Read access and write access are filtered one usage at a time, by
+         * asking whether that expression is assigned to. A call is not, whatever
+         * the method does with its argument, so narrowing a search to writes
+         * drops every generated setter call - the usages the search was narrowed
+         * to find.
+         *
+         * <p>A generated accessor needs no per-usage question. Every call to it
+         * does the same thing to the slot, so the answer is a property of the
+         * method: either all of its call sites are the access being asked for or
+         * none of them are. Deciding once and handing the search a copy that
+         * asks for both leaves the filter with nothing to reject.
+         */
+        @Override
+        public boolean processElementUsages(@NotNull PsiElement element,
+                                            @NotNull Processor<? super UsageInfo> processor,
+                                            @NotNull FindUsagesOptions options) {
+            if (!(options instanceof JavaVariableFindUsagesOptions access)
+                || access.isReadAccess == access.isWriteAccess
+                || !(element instanceof PsiMethod method)
+                || !GeneratedMemberMarker.isGenerated(method)) {
+                return super.processElementUsages(element, processor, options);
+            }
+            if (GeneratedMemberMarker.isWrite(method) != access.isWriteAccess) return true;
+
+            JavaVariableFindUsagesOptions both = (JavaVariableFindUsagesOptions) access.clone();
+            both.isReadAccess = true;
+            both.isWriteAccess = true;
+            return super.processElementUsages(element, processor, both);
         }
 
         @Override
