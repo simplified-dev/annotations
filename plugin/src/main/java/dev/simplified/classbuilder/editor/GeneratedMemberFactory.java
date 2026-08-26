@@ -1071,12 +1071,14 @@ public final class GeneratedMemberFactory {
 
     /**
      * Shared half-built setter: public, returns the nested Builder self-type,
-     * lives on the synthesised builder class, navigates to the backing field
-     * so Ctrl-click jumps to the right place, and exposes the field's Javadoc
-     * as the setter's Javadoc so Ctrl-Q / brief-hover show the field doc on
-     * the setter call. Callers chain {@code addParameter} calls then hand
-     * the builder back; {@link DocProxyingLightMethodBuilder} doubles as the
-     * resulting {@link PsiMethod}.
+     * lives on the synthesised builder class, navigates to the declaration the
+     * slot was read from so Ctrl-click jumps to the right place, and exposes
+     * that slot's Javadoc as the setter's own so Ctrl-Q / brief-hover show it
+     * on the setter call. The two come from different elements on a record,
+     * where the component holds the declaration and the record holds the prose.
+     * Callers chain {@code addParameter} calls then hand the builder back;
+     * {@link DocProxyingLightMethodBuilder} doubles as the resulting
+     * {@link PsiMethod}.
      */
     private static DocProxyingLightMethodBuilder newSetter(SetterCtx ctx, PsiFieldShape field, String name) {
         DocProxyingLightMethodBuilder m = (DocProxyingLightMethodBuilder) new DocProxyingLightMethodBuilder(ctx.manager, name)
@@ -1084,8 +1086,11 @@ public final class GeneratedMemberFactory {
             .addModifier(PsiModifier.PUBLIC)
             .setContainingClass(ctx.builder);
         m.withDocSource(field != null ? field.docSource : null);
-        GeneratedMemberMarker.mark(m);
-        m.setNavigationElement(field != null && field.docSource != null ? field.docSource : ctx.target);
+        // Every role this builds - replace, flag, add, put, compute, clear -
+        // changes the slot, which is what the read/write classification of a
+        // call to it turns on.
+        GeneratedMemberMarker.markWrite(m);
+        m.setNavigationElement(field != null && field.navSource != null ? field.navSource : ctx.target);
         return m;
     }
 

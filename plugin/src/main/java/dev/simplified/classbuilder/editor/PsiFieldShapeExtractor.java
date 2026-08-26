@@ -163,6 +163,7 @@ final class PsiFieldShapeExtractor {
         b.setters = ClassBuilderConstants.setterOverride(
             findAnnotation(owner, SETTER_NAMES_FQN), setters);
         if (owner instanceof PsiDocCommentOwner docOwner) b.docSource = docOwner;
+        b.navSource = owner;
         // The two JetBrains names, matched off the source text - not
         // NullableNotNullManager, which this used to ask, for two reasons that
         // point the same way.

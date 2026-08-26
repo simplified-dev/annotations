@@ -186,7 +186,7 @@ public final class AccessorAugmentProvider extends AbstractRecursionSafeAugmentP
         method.setMethodReturnType(PsiTypes.voidType());
         method.setContainingClass(target);
         method.setNavigationElement(field);
-        GeneratedMemberMarker.mark(method);
+        GeneratedMemberMarker.markWrite(method);
         return method;
     }
 

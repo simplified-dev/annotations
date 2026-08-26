@@ -295,6 +295,17 @@
         <lang.inspectionSuppressor language="JAVA" implementationClass="dev.simplified.cleanup.inspect.CleanupSuppressor"/>
         <lang.inspectionSuppressor language="JAVA" implementationClass="dev.simplified.shared.inspect.GeneratedMemberSuppressor"/>
         <daemon.highlightInfoFilter implementation="dev.simplified.shared.inspect.GeneratedMemberHighlightFilter"/>
+        <!-- No order attribute: the Java factory registers itself last, so this
+             one is consulted first and declines everything it has nothing to
+             add to. -->
+        <findUsagesHandlerFactory
+                implementation="dev.simplified.shared.psi.GeneratedMemberFindUsagesHandlerFactory"/>
+        <!-- Ahead of the Java detector, which it otherwise defers to: the
+             detector that answers first is the one the platform uses. -->
+        <readWriteAccessDetector
+                implementation="dev.simplified.shared.psi.GeneratedMemberReadWriteAccessDetector"
+                id="simplified"
+                order="before java"/>
         <lang.inferredAnnotationProvider implementation="dev.simplified.xcontract.XContractInferredAnnotationProvider"/>
         <lang.inferredAnnotationProvider implementation="dev.simplified.classbuilder.editor.ClassBuilderInferredAnnotationProvider"/>
         <lang.inferredAnnotationProvider implementation="dev.simplified.args.editor.ArgsInferredAnnotationProvider"/>

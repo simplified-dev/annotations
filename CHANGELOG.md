@@ -9,6 +9,32 @@ Versions 1.0.0 through 1.0.5 were published under the legacy plugin ID
 Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations` /
 `io.github.simplified-dev:annotations`. See the 2.0.0 entry for the rename details.
 
+## [2.6.3]
+
+### Added
+
+- **Find Usages on a field reports the calls made through the members generated from it.** A
+  `@Getter` field, a `@Lazy` field and a `@ClassBuilder` slot are all called through a member that
+  exists in no source file, so the field itself is written nowhere and the usage view came back
+  empty on a property called from one end of a project to the other. The platform gathers a field's
+  accessors and then drops the ones whose backing field it cannot recover by reading the method
+  body, which is every generated one. Provenance answers what a body read cannot, so the search now
+  runs over the field and everything minted from it - accessors on the class, and the setters
+  `@ClassBuilder` hangs off the nested `Builder`. A call written against a supertype is included
+  under the same "search for base accessors" option the platform already puts a hand-written
+  accessor behind.
+- **A call that assigns a slot reads as a write of it.** The platform identifies a setter by a
+  `set` prefix and a one-argument signature, which is the one shape a generated setter is free not
+  to have: a fluent `@Setter` mints `label(String)`, a `name` attribute mints whatever it was given,
+  and every `@ClassBuilder` setter is named after its slot - so a whole builder chain was filed
+  under read access and coloured as one in the editor. The provider that minted the member records
+  which it was, so the classification is a marker read rather than a guess at the name.
+
+### Fixed
+
+- **A generated builder setter on a record navigates to the component it fills** rather than to the
+  record. Ctrl-Q still shows the record's own prose, since that is where a component is documented.
+
 ## [2.6.2]
 
 ### Changed
