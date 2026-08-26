@@ -86,6 +86,25 @@ final class GeneratedMemberStubs {
                 String toBuilder() default INHERIT;
             }
             """);
+        fixture.addFileToProject("dev/simplified/annotations/Collector.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
+            public @interface Collector {
+                String singularMethodName() default "";
+                boolean singular() default false;
+                boolean clearable() default false;
+                boolean compute() default false;
+            }
+            """);
+        fixture.addFileToProject("dev/simplified/annotations/Negate.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
+            public @interface Negate { String value(); }
+            """);
         fixture.addFileToProject("dev/simplified/annotations/ClassBuilder.java",
             """
             package dev.simplified.annotations;

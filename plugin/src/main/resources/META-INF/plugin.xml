@@ -306,6 +306,14 @@
                 implementation="dev.simplified.shared.psi.GeneratedMemberReadWriteAccessDetector"
                 id="simplified"
                 order="before java"/>
+        <renamePsiElementProcessor
+                implementation="dev.simplified.shared.psi.GeneratedMemberRenameProcessor"
+                order="first"/>
+        <renamePsiElementProcessor
+                implementation="dev.simplified.shared.psi.GeneratedMemberRenameSubstitutor"
+                order="first"/>
+        <renameHandler implementation="dev.simplified.shared.psi.GeneratedMemberRenameVetoHandler"
+                       order="first"/>
         <lang.inferredAnnotationProvider implementation="dev.simplified.xcontract.XContractInferredAnnotationProvider"/>
         <lang.inferredAnnotationProvider implementation="dev.simplified.classbuilder.editor.ClassBuilderInferredAnnotationProvider"/>
         <lang.inferredAnnotationProvider implementation="dev.simplified.args.editor.ArgsInferredAnnotationProvider"/>

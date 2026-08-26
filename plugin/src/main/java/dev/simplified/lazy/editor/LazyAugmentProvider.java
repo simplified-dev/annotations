@@ -28,6 +28,7 @@ import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.lazy.mutate.LazyFieldMutator;
 import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
 import dev.simplified.shared.psi.AnnotatedLightModifierList;
+import dev.simplified.shared.psi.GeneratedLightMethod;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
 import dev.simplified.shared.psi.WrittenAnnotations;
 import dev.simplified.shared.psi.WrittenTypes;
@@ -207,13 +208,14 @@ public final class LazyAugmentProvider extends AbstractRecursionSafeAugmentProvi
             modifiers.add(entry.getKey(), entry.getValue());
         }
 
-        LightMethodBuilder method = new LightMethodBuilder(manager, JavaLanguage.INSTANCE, getterName,
+        LightMethodBuilder method = new GeneratedLightMethod(manager, JavaLanguage.INSTANCE, getterName,
             new com.intellij.psi.impl.light.LightParameterListBuilder(manager, JavaLanguage.INSTANCE),
             modifiers);
         method.setMethodReturnType(effectiveReturnType);
         method.setContainingClass(target);
         method.setNavigationElement(field);
         GeneratedMemberMarker.mark(method);
+        GeneratedMemberMarker.markRename(method, renamed -> "get" + capitalise(renamed));
         return method;
     }
 

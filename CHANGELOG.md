@@ -29,6 +29,15 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   and every `@ClassBuilder` setter is named after its slot - so a whole builder chain was filed
   under read access and coloured as one in the editor. The provider that minted the member records
   which it was, so the classification is a marker read rather than a guess at the name.
+- **Renaming a field renames the members generated from it.** A generated member is spelled from the
+  slot behind it, so a rename that touched only what it could see in source left every call site in
+  the project naming a method that would not exist after the next build - and said nothing about it.
+  An accessor's new name comes from the naming scheme that spelled the old one; a builder setter's
+  comes from asking the setter dispatch for the same slot under the new name, so a name a companion
+  annotation pins - a `@Negate` flag, a `@Collector(singularMethodName)` - stays where it is while
+  the singular name a collector derives follows the slot. Renaming a generated accessor renames the
+  field it stands for. A generated member that stands for no field at all - the nested `Builder`,
+  the bootstrap methods, the whole-object trio - is refused up front rather than partway through.
 
 ### Fixed
 

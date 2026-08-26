@@ -20,6 +20,7 @@ import com.intellij.psi.util.CachedValuesManager;
 import com.intellij.psi.util.PsiModificationTracker;
 import dev.simplified.enumlookup.inspect.EnumLookupConstants;
 import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
+import dev.simplified.shared.psi.GeneratedLightMethod;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
 import dev.simplified.shared.psi.WrittenAnnotations;
 import org.jetbrains.annotations.NotNull;
@@ -207,7 +208,7 @@ public final class EnumLookupAugmentProvider extends AbstractRecursionSafeAugmen
 
     private static PsiMethod staticMethod(PsiManager manager, PsiClass target,
                                           String name, PsiType returnType) {
-        LightMethodBuilder method = new LightMethodBuilder(manager, name)
+        LightMethodBuilder method = new GeneratedLightMethod(manager, name)
             .setMethodReturnType(returnType)
             .addModifiers(PsiModifier.PUBLIC, PsiModifier.STATIC)
             .setContainingClass(target);
@@ -219,7 +220,7 @@ public final class EnumLookupAugmentProvider extends AbstractRecursionSafeAugmen
     private static PsiMethod staticMethodOneParam(PsiManager manager, PsiClass target,
                                                   String name, PsiType returnType,
                                                   String paramName, PsiType paramType) {
-        LightMethodBuilder method = new LightMethodBuilder(manager, name)
+        LightMethodBuilder method = new GeneratedLightMethod(manager, name)
             .setMethodReturnType(returnType)
             .addModifiers(PsiModifier.PUBLIC, PsiModifier.STATIC)
             .setContainingClass(target)

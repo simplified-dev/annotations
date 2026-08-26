@@ -2,6 +2,9 @@ package dev.simplified.shared.psi;
 
 import com.intellij.openapi.util.Key;
 import com.intellij.psi.PsiElement;
+import org.jetbrains.annotations.Nullable;
+
+import java.util.function.UnaryOperator;
 
 /**
  * Carries provenance on PSI elements synthesised by any of the plugin's
@@ -29,6 +32,14 @@ public final class GeneratedMemberMarker {
     public static final Key<Boolean> WRITES =
         Key.create("dev.simplified.psi.generated.writes");
 
+    /**
+     * Non-null when the generated member's name can be recomputed for a renamed
+     * slot. Holds the derivation the synthesising site used, applied to the
+     * slot's new name.
+     */
+    public static final Key<UnaryOperator<String>> RENAME =
+        Key.create("dev.simplified.psi.generated.rename");
+
     /** Tags the given element as generated. */
     public static void mark(PsiElement element) {
         element.putUserData(GENERATED, Boolean.TRUE);
@@ -48,5 +59,33 @@ public final class GeneratedMemberMarker {
     /** Returns {@code true} when the element writes the slot it was minted from. */
     public static boolean isWrite(PsiElement element) {
         return Boolean.TRUE.equals(element.getUserData(WRITES));
+    }
+
+    /**
+     * Records how to spell this member's name for a renamed slot.
+     *
+     * <p>The derivation rather than the result, because the site that minted the
+     * name is the only place that knows which rule produced it - a naming
+     * scheme, a fixed {@code name} attribute, or a companion annotation that
+     * pins the name whatever the slot is called.
+     *
+     * @param element the synthesised member
+     * @param naming the slot's new name to this member's new name
+     */
+    public static void markRename(PsiElement element, UnaryOperator<String> naming) {
+        element.putUserData(RENAME, naming);
+    }
+
+    /**
+     * This member's name for a slot renamed to {@code slotName}.
+     *
+     * @param element the synthesised member
+     * @param slotName the slot's new name
+     * @return the member's new name, or {@code null} when the site recorded no
+     *     derivation
+     */
+    public static @Nullable String renamedTo(PsiElement element, String slotName) {
+        UnaryOperator<String> naming = element.getUserData(RENAME);
+        return naming == null ? null : naming.apply(slotName);
     }
 }

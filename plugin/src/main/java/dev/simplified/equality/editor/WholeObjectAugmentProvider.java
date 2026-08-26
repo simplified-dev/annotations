@@ -25,6 +25,7 @@ import com.intellij.psi.util.CachedValuesManager;
 import com.intellij.psi.util.PsiModificationTracker;
 import dev.simplified.equality.apt.EqualityConfig;
 import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
+import dev.simplified.shared.psi.GeneratedLightMethod;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
 import dev.simplified.tostring.apt.ToStringConfig;
 import org.jetbrains.annotations.NotNull;
@@ -288,7 +289,7 @@ public final class WholeObjectAugmentProvider extends AbstractRecursionSafeAugme
     private static PsiMethod method(PsiManager manager, PsiClass target, PsiAnnotation source,
                                     String name, PsiType returnType, String access,
                                     @Nullable String paramName, @Nullable PsiType paramType) {
-        LightMethodBuilder method = new LightMethodBuilder(manager, name)
+        LightMethodBuilder method = new GeneratedLightMethod(manager, name)
             .setMethodReturnType(returnType)
             .setContainingClass(target);
         method.addModifier(access);

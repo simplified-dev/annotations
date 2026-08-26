@@ -27,6 +27,7 @@ import dev.simplified.annotations.NamingStyle;
 import dev.simplified.classbuilder.apt.AccessorScheme;
 import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
 import dev.simplified.shared.psi.AnnotatedLightModifierList;
+import dev.simplified.shared.psi.GeneratedLightMethod;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
 import dev.simplified.shared.psi.WrittenAnnotations;
 import org.jetbrains.annotations.NotNull;
@@ -37,6 +38,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.UnaryOperator;
 
 /**
  * Surfaces the accessors {@code @Getter} and {@code @Setter} synthesise at
@@ -143,34 +145,39 @@ public final class AccessorAugmentProvider extends AbstractRecursionSafeAugmentP
         String signature = methodName + "/" + (read ? 0 : 1);
         if (!declared.add(signature)) return;
 
+        // The scheme is what spelled this name, so it is also what spells the
+        // name a rename of the field has to produce.
         out.add(read
-            ? buildGetter(manager, elements, target, field, methodName, access)
-            : buildSetter(manager, elements, target, field, methodName, access));
+            ? buildGetter(manager, elements, target, field, methodName, access,
+                renamed -> scheme.readName(renamed, isBoolean))
+            : buildSetter(manager, elements, target, field, methodName, access,
+                renamed -> scheme.writeName(renamed, isBoolean)));
     }
 
     private static PsiMethod buildGetter(PsiManager manager, PsiElementFactory elements,
                                          PsiClass target, PsiField field, String methodName,
-                                         String access) {
+                                         String access, UnaryOperator<String> naming) {
         PsiType returnType = annotate(field.getType(), nullness(elements, target, field));
         AnnotatedLightModifierList modifiers = modifiers(manager, field, access, elements, target);
 
-        LightMethodBuilder method = new LightMethodBuilder(manager, JavaLanguage.INSTANCE, methodName,
+        LightMethodBuilder method = new GeneratedLightMethod(manager, JavaLanguage.INSTANCE, methodName,
             new LightParameterListBuilder(manager, JavaLanguage.INSTANCE), modifiers);
         method.setMethodReturnType(returnType);
         method.setContainingClass(target);
         method.setNavigationElement(field);
         GeneratedMemberMarker.mark(method);
+        GeneratedMemberMarker.markRename(method, naming);
         return method;
     }
 
     private static PsiMethod buildSetter(PsiManager manager, PsiElementFactory elements,
                                          PsiClass target, PsiField field, String methodName,
-                                         String access) {
+                                         String access, UnaryOperator<String> naming) {
         AnnotatedLightModifierList modifiers = modifiers(manager, field, access, elements, target);
 
         LightParameterListBuilder params =
             new LightParameterListBuilder(manager, JavaLanguage.INSTANCE);
-        LightMethodBuilder method = new LightMethodBuilder(manager, JavaLanguage.INSTANCE, methodName,
+        LightMethodBuilder method = new GeneratedLightMethod(manager, JavaLanguage.INSTANCE, methodName,
             params, modifiers);
         // Nullness rides the parameter here, not the return type - the inverse
         // of the getter, and the reason the two shapes are built separately.
@@ -187,6 +194,7 @@ public final class AccessorAugmentProvider extends AbstractRecursionSafeAugmentP
         method.setContainingClass(target);
         method.setNavigationElement(field);
         GeneratedMemberMarker.markWrite(method);
+        GeneratedMemberMarker.markRename(method, naming);
         return method;
     }
 
