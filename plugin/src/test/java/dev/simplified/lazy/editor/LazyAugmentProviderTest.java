@@ -25,13 +25,109 @@ public class LazyAugmentProviderTest extends LightJavaCodeInsightFixtureTestCase
     @Override
     protected void setUp() throws Exception {
         super.setUp();
+        myFixture.addFileToProject("dev/simplified/annotations/NamingStyle.java",
+            """
+            package dev.simplified.annotations;
+            public enum NamingStyle { SIMPLIFIED, LOMBOK, BEAN, FLUENT }
+            """);
         myFixture.addFileToProject("dev/simplified/annotations/Lazy.java",
             """
             package dev.simplified.annotations;
             import java.lang.annotation.*;
             @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
-            public @interface Lazy { }
+            public @interface Lazy {
+                NamingStyle style() default NamingStyle.SIMPLIFIED;
+                String name() default "";
+            }
             """);
+    }
+
+    private PsiClass configure(String name, String source) {
+        return ((PsiJavaFile) myFixture.configureByText(name + ".java", source)).getClasses()[0];
+    }
+
+    // ------------------------------------------------------------------
+    // Getter naming, which follows the same scheme @Getter reads
+    // ------------------------------------------------------------------
+
+    /**
+     * A boolean lazy field reads through {@code is}, the same choice the
+     * accessor pair makes, so a lazy field's accessor sits in the same naming
+     * territory as every other generated one on the class.
+     */
+    public void testBooleanLazyFieldReadsThroughIs() {
+        PsiClass holder = configure("Holder",
+            """
+            import dev.simplified.annotations.Lazy;
+            public class Holder {
+                @Lazy
+                private boolean active = compute();
+                private static boolean compute() { return true; }
+            }
+            """);
+        assertEquals("isActive() must be synthesised",
+            1, holder.findMethodsByName("isActive", false).length);
+        assertEquals("get must not double up with is",
+            0, holder.findMethodsByName("getActive", false).length);
+    }
+
+    public void testBooleanLazyFieldAlreadyNamedIsKeepsTheOnePrefix() {
+        PsiClass holder = configure("Holder",
+            """
+            import dev.simplified.annotations.Lazy;
+            public class Holder {
+                @Lazy
+                private boolean isReady = compute();
+                private static boolean compute() { return true; }
+            }
+            """);
+        assertEquals(1, holder.findMethodsByName("isReady", false).length);
+        assertEquals(0, holder.findMethodsByName("isIsReady", false).length);
+    }
+
+    public void testFluentStyleDropsThePrefix() {
+        PsiClass holder = configure("Holder",
+            """
+            import dev.simplified.annotations.Lazy;
+            import dev.simplified.annotations.NamingStyle;
+            public class Holder {
+                @Lazy(style = NamingStyle.FLUENT)
+                private String label = "x";
+            }
+            """);
+        assertEquals(1, holder.findMethodsByName("label", false).length);
+        assertEquals(0, holder.findMethodsByName("getLabel", false).length);
+    }
+
+    public void testNamePatternOverridesTheStyle() {
+        PsiClass holder = configure("Holder",
+            """
+            import dev.simplified.annotations.Lazy;
+            public class Holder {
+                @Lazy(name = "fetch{}")
+                private String label = "x";
+            }
+            """);
+        assertEquals(1, holder.findMethodsByName("fetchLabel", false).length);
+        assertEquals(0, holder.findMethodsByName("getLabel", false).length);
+    }
+
+    /** A hand-written accessor still wins, whatever the style spelled. */
+    public void testHandWrittenFluentGetterSuppressesSynthesis() {
+        PsiClass holder = configure("Holder",
+            """
+            import dev.simplified.annotations.Lazy;
+            import dev.simplified.annotations.NamingStyle;
+            public class Holder {
+                @Lazy(style = NamingStyle.FLUENT)
+                private String label = "x";
+                public String label() { return "hand-written"; }
+            }
+            """);
+        PsiMethod[] found = holder.findMethodsByName("label", false);
+        assertEquals("no duplicate beside the declared one", 1, found.length);
+        assertFalse("the author's method survives, not ours",
+            GeneratedMemberMarker.isGenerated(found[0]));
     }
 
     public void testLazyGetterSynthesized() {

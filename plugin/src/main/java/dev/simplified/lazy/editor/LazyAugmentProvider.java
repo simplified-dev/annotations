@@ -15,6 +15,7 @@ import com.intellij.psi.PsiPrimitiveType;
 import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypeElement;
+import com.intellij.psi.PsiTypes;
 import com.intellij.psi.TypeAnnotationProvider;
 import com.intellij.psi.impl.light.LightMethodBuilder;
 import com.intellij.psi.impl.light.LightModifierList;
@@ -23,7 +24,10 @@ import com.intellij.psi.util.CachedValueProvider;
 import com.intellij.psi.util.CachedValuesManager;
 import com.intellij.psi.util.PsiModificationTracker;
 import com.intellij.util.IncorrectOperationException;
+import dev.simplified.accessor.inspect.AccessorConstants;
 import dev.simplified.annotations.AccessLevel;
+import dev.simplified.annotations.NamingStyle;
+import dev.simplified.classbuilder.apt.AccessorScheme;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.lazy.mutate.LazyFieldMutator;
 import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
@@ -41,6 +45,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.UnaryOperator;
 
 /**
  * Surfaces the memoizing getter that {@link LazyFieldMutator}
@@ -171,9 +176,14 @@ public final class LazyAugmentProvider extends AbstractRecursionSafeAugmentProvi
             // is what hands the caller the value.
             PsiType fieldType = WrittenTypes.of(field);
             if (fieldType == null) continue;
-            String getterName = "get" + capitalise(field.getName());
+            // The written type decides this, not the storage: the storage is a
+            // supplier and would never read as boolean.
+            boolean isBoolean = PsiTypes.booleanType().equals(fieldType);
+            AccessorScheme scheme = schemeFor(field);
+            String getterName = scheme.readName(field.getName(), isBoolean);
             if (existingZeroArg.contains(getterName)) continue;
-            out.add(buildGetter(manager, elements, target, field, getterName, fieldType));
+            out.add(buildGetter(manager, elements, target, field, getterName, fieldType,
+                renamed -> scheme.readName(renamed, isBoolean)));
         }
         return out;
     }
@@ -186,7 +196,7 @@ public final class LazyAugmentProvider extends AbstractRecursionSafeAugmentProvi
      */
     private static PsiMethod buildGetter(PsiManager manager, PsiElementFactory elements,
                                          PsiClass target, PsiField field, String getterName,
-                                         PsiType fieldType) {
+                                         PsiType fieldType, UnaryOperator<String> naming) {
         Map<String, PsiAnnotation> propagated = collectPropagatedAnnotations(elements, target, field);
 
         PsiType effectiveReturnType = fieldType;
@@ -215,8 +225,24 @@ public final class LazyAugmentProvider extends AbstractRecursionSafeAugmentProvi
         method.setContainingClass(target);
         method.setNavigationElement(field);
         GeneratedMemberMarker.mark(method);
-        GeneratedMemberMarker.markRename(method, renamed -> "get" + capitalise(renamed));
+        GeneratedMemberMarker.markRename(method, naming);
         return method;
+    }
+
+    /**
+     * The accessor naming scheme the field's {@code @Lazy} asks for.
+     *
+     * <p>Its own attributes, not a {@code @Getter}'s: the accessor pass steps
+     * over a lazy field so that this one getter is the only one, which leaves
+     * the naming of it this annotation's to answer.
+     *
+     * @param field the annotated field
+     * @return the resolved scheme
+     */
+    private static AccessorScheme schemeFor(PsiField field) {
+        PsiAnnotation lazy = WrittenAnnotations.find(field, LAZY_FQN);
+        if (lazy == null) return AccessorScheme.of(NamingStyle.SIMPLIFIED);
+        return AccessorScheme.resolve(AccessorConstants.style(lazy), AccessorConstants.name(lazy));
     }
 
     /**
@@ -302,11 +328,6 @@ public final class LazyAugmentProvider extends AbstractRecursionSafeAugmentProvi
             if (m.getParameterList().getParametersCount() == 0) out.add(m.getName());
         }
         return out;
-    }
-
-    private static String capitalise(String s) {
-        if (s == null || s.isEmpty()) return s;
-        return Character.toUpperCase(s.charAt(0)) + s.substring(1);
     }
 
 }

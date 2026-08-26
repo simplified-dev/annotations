@@ -44,6 +44,19 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   field it stands for. A generated member that stands for no field at all - the nested `Builder`,
   the bootstrap methods, the whole-object trio - is refused up front rather than partway through.
 
+### Changed
+
+- **`@Lazy` names its getter through the same scheme `@Getter` reads.** It minted `get` plus a
+  capitalised field name for every type, which put the one accessor on a lazy field in different
+  naming territory from every other generated accessor on the same class - and left a class that
+  spells its accessors fluently with one that does not. It now carries `style` and `name` with
+  `@Getter`'s defaults and resolves them through the shared `AccessorScheme`. **This renames the
+  getter on a `boolean` lazy field**, which now reads through `is` like every other boolean
+  accessor: `@Lazy boolean active` generates `isActive()` where it generated `getActive()`. Naming
+  stays this annotation's own rather than deferring to a `@Getter` on the same field or type - the
+  accessor pass steps over a lazy field precisely so there is one getter, which leaves the naming of
+  it here to answer.
+
 ### Fixed
 
 - **A generated builder setter on a record navigates to the component it fills** rather than to the

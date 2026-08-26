@@ -907,4 +907,79 @@ public class LazyFieldMutatorTest {
         Boolean pure;
     }
 
+    // ------------------------------------------------------------------
+    // Getter naming
+    // ------------------------------------------------------------------
+
+    /** Compiles a one-field class and returns the names of its declared methods. */
+    private static Set<String> lazyMethodNames(String field, String annotation) throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Named",
+            "package demo;",
+            "import dev.simplified.annotations.Lazy;",
+            "import dev.simplified.annotations.NamingStyle;",
+            "public class Named {",
+            "    " + annotation,
+            "    private " + field + ";",
+            "    private static String compute() { return \"x\"; }",
+            "    private static boolean flag() { return true; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+        Class<?> named = Class.forName("demo.Named", true, loadClasses(c));
+        Set<String> out = new LinkedHashSet<>();
+        for (Method m : named.getDeclaredMethods()) out.add(m.getName());
+        return out;
+    }
+
+    /**
+     * A boolean lazy field reads through {@code is}, the same choice the
+     * accessor pair makes. The declared getter used to be {@code getX} for every
+     * type, which put a lazy field's accessor in different naming territory from
+     * every other generated one on the same class.
+     */
+    @Test
+    public void lazyBooleanField_readsThroughIs() throws Exception {
+        Set<String> methods = lazyMethodNames("boolean active = flag()", "@Lazy");
+        assertTrue("expected isActive among " + methods, methods.contains("isActive"));
+        assertFalse("get must not double up with is", methods.contains("getActive"));
+    }
+
+    @Test
+    public void lazyStyleDropsThePrefix() throws Exception {
+        Set<String> methods = lazyMethodNames("String value = compute()", "@Lazy(style = NamingStyle.FLUENT)");
+        assertTrue("expected value among " + methods, methods.contains("value"));
+        assertFalse(methods.contains("getValue"));
+    }
+
+    @Test
+    public void lazyNamePatternOverridesTheStyle() throws Exception {
+        Set<String> methods = lazyMethodNames("String value = compute()", "@Lazy(name = \"fetch{}\")");
+        assertTrue("expected fetchValue among " + methods, methods.contains("fetchValue"));
+        assertFalse(methods.contains("getValue"));
+    }
+
+    /** A boolean field already named {@code isX} must not double the prefix. */
+    @Test
+    public void lazyBooleanFieldAlreadyNamedIs_keepsTheOnePrefix() throws Exception {
+        Set<String> methods = lazyMethodNames("boolean isReady = flag()", "@Lazy");
+        assertTrue("expected isReady among " + methods, methods.contains("isReady"));
+        assertFalse(methods.contains("isIsReady"));
+    }
+
+    /** A hand-written getter still wins over the synthesised one, under any style. */
+    @Test
+    public void handWrittenFluentGetter_suppressesTheSynthesisedOne() {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Declared",
+            "package demo;",
+            "import dev.simplified.annotations.Lazy;",
+            "import dev.simplified.annotations.NamingStyle;",
+            "public class Declared {",
+            "    @Lazy(style = NamingStyle.FLUENT)",
+            "    private String value = compute();",
+            "    public String value() { return \"hand-written\"; }",
+            "    private static String compute() { return \"x\"; }",
+            "}");
+        assertThat(compile(src)).succeeded();
+    }
+
 }

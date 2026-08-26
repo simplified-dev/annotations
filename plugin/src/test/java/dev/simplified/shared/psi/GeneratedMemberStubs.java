@@ -86,6 +86,17 @@ final class GeneratedMemberStubs {
                 String toBuilder() default INHERIT;
             }
             """);
+        fixture.addFileToProject("dev/simplified/annotations/Lazy.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
+            public @interface Lazy {
+                AccessLevel access() default AccessLevel.PUBLIC;
+                NamingStyle style() default NamingStyle.SIMPLIFIED;
+                String name() default "";
+            }
+            """);
         fixture.addFileToProject("dev/simplified/annotations/Collector.java",
             """
             package dev.simplified.annotations;

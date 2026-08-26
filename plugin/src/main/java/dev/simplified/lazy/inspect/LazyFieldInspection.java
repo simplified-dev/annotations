@@ -4,12 +4,14 @@ import com.intellij.codeInspection.ProblemHighlightType;
 import com.intellij.codeInspection.ProblemsHolder;
 import com.intellij.psi.JavaElementVisitor;
 import com.intellij.psi.PsiAnnotation;
+import com.intellij.psi.PsiAnnotationMemberValue;
 import com.intellij.psi.PsiAssignmentExpression;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiCodeBlock;
 import com.intellij.psi.PsiElementVisitor;
 import com.intellij.psi.PsiExpression;
 import com.intellij.psi.PsiField;
+import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiPrimitiveType;
@@ -18,6 +20,7 @@ import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiThisExpression;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.util.PsiTreeUtil;
+import dev.simplified.classbuilder.apt.NamePattern;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import org.jetbrains.annotations.NotNull;
 
@@ -41,6 +44,9 @@ import org.jetbrains.annotations.NotNull;
  *       assume direct {@code T} storage. {@code @BuilderDefault} and
  *       {@code @BuilderIgnore} are not flagged: they govern the builder's view
  *       of the field, not its storage.</li>
+ *   <li>{@code @Lazy(name)} written without the {@code {}} placeholder - the
+ *       pattern is applied to one field's name, so a literal is the method name
+ *       whatever the field is called.</li>
  *   <li>{@code @Lazy} alongside Lombok {@code @Getter} - the Lazy-generated
  *       getter wins, Lombok's would be a duplicate.</li>
  * </ul>
@@ -98,6 +104,8 @@ public class LazyFieldInspection extends LocalInspectionTool {
                         ProblemHighlightType.GENERIC_ERROR);
                 }
 
+                checkName(holder, lazy);
+
                 checkConflict(holder, field, COLLECTOR_FQN, "@Collector");
                 checkConflict(holder, field, NEGATE_FQN, "@Negate");
                 checkConflict(holder, field, FORMATTABLE_FQN, "@Formattable");
@@ -148,6 +156,26 @@ public class LazyFieldInspection extends LocalInspectionTool {
                 if (!name.equals(reference.getReferenceName())) return false;
                 PsiExpression qualifier = reference.getQualifierExpression();
                 return qualifier == null || qualifier instanceof PsiThisExpression;
+            }
+
+            /**
+             * Reports a {@code name} pattern the getter cannot be spelled from.
+             *
+             * <p>The same rule the accessor pair is held to, and for the same
+             * reason: the pattern is applied to one field's name, so one
+             * without the placeholder is a literal, and a literal is the method
+             * name whatever the field is called.
+             */
+            private void checkName(@NotNull ProblemsHolder holder, @NotNull PsiAnnotation lazy) {
+                PsiAnnotationMemberValue value = lazy.findDeclaredAttributeValue("name");
+                if (!(value instanceof PsiLiteralExpression literal)) return;
+                if (!(literal.getValue() instanceof String pattern)) return;
+                if (pattern.isEmpty()) return; // inherits from the style
+                String error = NamePattern.patternError(pattern, true);
+                if (error != null) {
+                    holder.registerProblem(value, "Naming pattern for 'name' " + error,
+                        ProblemHighlightType.GENERIC_ERROR);
+                }
             }
 
             private void checkConflict(@NotNull ProblemsHolder holder, @NotNull PsiField field,

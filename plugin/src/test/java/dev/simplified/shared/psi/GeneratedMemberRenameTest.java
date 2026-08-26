@@ -93,6 +93,32 @@ public class GeneratedMemberRenameTest extends LightJavaCodeInsightFixtureTestCa
         assertTrue("got " + caller.getText(), caller.getText().contains("widget.caption(\"x\")"));
     }
 
+    /**
+     * {@code @Lazy} mints its own getter and names it through the same scheme,
+     * so a rename has to reach it the same way.
+     */
+    public void testRenamingALazyFieldRenamesItsGetterCalls() {
+        PsiClass holder = configure("Holder",
+            """
+            import dev.simplified.annotations.Lazy;
+            import dev.simplified.annotations.NamingStyle;
+            public class Holder {
+                @Lazy(style = NamingStyle.FLUENT)
+                private String label = "x";
+            }
+            """);
+        PsiFile caller = myFixture.addFileToProject("Caller.java",
+            """
+            public class Caller {
+                int width(Holder holder) { return holder.label().length(); }
+            }
+            """);
+
+        rename(holder, "label", "caption");
+
+        assertTrue("got " + caller.getText(), caller.getText().contains("holder.caption()"));
+    }
+
     // ------------------------------------------------------------------
     // Builder setters
     // ------------------------------------------------------------------
