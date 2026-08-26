@@ -324,7 +324,17 @@ publishing {
 // Defaults OFF so local developers without GPG can run the publish flow against
 // the staging repo to verify mechanics; releases to Central must opt in. Uses
 // the gpg CLI's default secret key when enabled (gpg --list-secret-keys).
-val signArtifacts = providers.gradleProperty("signArtifacts").orNull?.toBoolean() == true
+//
+// The root's publish tasks turn it on without the flag, because an unsigned
+// bundle is not something any of them has a use for. Read off the invocation
+// rather than set from the root task: this runs while the project configures,
+// which is before any task anywhere has started, so there is no task to have
+// set it. publishLocal is not in the set - it exists to try the library from a
+// real consumer, which should not need a GPG key.
+val signingTasks = setOf("publishBuild", "publishValidate", "publishCentral", "publishMarketplace")
+val signingRequested = gradle.startParameter.taskNames.any { it.substringAfterLast(':') in signingTasks }
+val signArtifacts = signingRequested
+    || providers.gradleProperty("signArtifacts").orNull?.toBoolean() == true
 if (signArtifacts) {
     signing {
         useGpgCmd()
@@ -368,8 +378,7 @@ val centralBundle by tasks.registering(Zip::class) {
     from(layout.buildDirectory.dir("central-staging"))
 }
 
-tasks.register("publishAndPackage") {
-    description = "Publishes the plugin to Maven Local and builds the Central upload bundle."
-    group = "publishing"
-    dependsOn("publishToMavenLocal", centralBundle)
-}
+// A release is built and shipped through the root's publish group, which is
+// also what turns signing on. A task here that bundled without it would answer
+// to a name promising something fit to publish while producing a bundle Central
+// rejects, so the pairing lives where the signing decision is made.
