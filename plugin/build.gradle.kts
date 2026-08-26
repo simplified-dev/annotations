@@ -153,6 +153,21 @@ intellijPlatform {
     // settings pre-index step; plugin still loads fine in 2023.2+ consumers.
     buildSearchableOptions = false
 
+    // Marketplace upload, driven by the root's publishMarketplace task.
+    //
+    // channels is left alone. Its default is "default", which IS the stable
+    // channel; writing listOf("stable") would create a custom channel of that
+    // name, which nobody sees without adding a repository URL by hand - a
+    // release that looks published and reaches no one.
+    //
+    // The token's own default is the PUBLISH_TOKEN environment variable. It is
+    // named here instead so both halves of a release read the same way, and so
+    // the name says which of the two services it opens.
+    publishing {
+        token = providers.environmentVariable("JETBRAINS_MARKETPLACE_TOKEN")
+            .orElse(providers.gradleProperty("jetbrainsMarketplaceToken"))
+    }
+
     // Plugin Verifier: catches API breakage across IDE versions before users
     // hit it. Pinned to explicit released builds rather than recommended()
     // because the latter pulls in unreleased EAP IDEs that fail to download.

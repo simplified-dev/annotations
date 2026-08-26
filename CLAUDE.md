@@ -105,13 +105,106 @@ via `allprojects { }`. Everything else lives in the subprojects' own build scrip
 ./gradlew :plugin:test               # IntelliJ-fixture tests
 ./gradlew :plugin:verifyPlugin       # verifier against IC 2023.2 / 2024.3 / 2025.2
 ./gradlew :plugin:buildPlugin        # -> plugin/build/distributions/Simplified-Annotations-<ver>.zip
-
-# Library publishing
-./gradlew :library:publishToMavenLocal
-./gradlew :library:publishReleasePublicationToCentralStagingRepository -PsignArtifacts=true
-./gradlew :library:centralBundle     # -> library/build/distributions/*-bundle.zip
-./gradlew :library:publishAndPackage # publishToMavenLocal + centralBundle
 ```
+
+## Publishing - use the `publish` group, never the module tasks
+
+Both artifacts of a release are built, checked and shipped through five root tasks.
+Reach for these rather than `:library:centralBundle`, `:plugin:buildPlugin` or a
+hand-passed `-PsignArtifacts`.
+
+```bash
+./gradlew publishBuild        # both artifacts, the bundle signed
+./gradlew publishValidate     # publishBuild, then check what was built
+./gradlew publishLocal        # install the library into ~/.m2 (unsigned, no GPG key needed)
+./gradlew publishCentral      # publishValidate, confirm, then upload the bundle
+./gradlew publishMarketplace  # publishValidate, confirm, then upload the plugin
+```
+
+- **Do not pass `-PsignArtifacts=true`.** Requesting any of `publishBuild`,
+  `publishValidate`, `publishCentral` or `publishMarketplace` turns signing on by
+  itself, read off the invocation in `library/build.gradle.kts`. The flag still works
+  and is what a module-level task needs, but nothing in this group does.
+  `publishLocal` is deliberately outside the set - it exists to try the library from a
+  real consumer, which should not require a GPG key.
+- **`publishValidate` reads both archives in place** - no unzipping to a temp
+  directory, no `gpg --verify` round trip. It asserts the bundle carries one version
+  matching the build, that every jar / pom / module has an `.asc` beside it, and that
+  each `.asc` is armored PGP. On the plugin zip it asserts the packaged
+  `plugin-<ver>.jar` and `library-<ver>.jar`, which is what catches a zip left behind
+  by an earlier build and reported up to date.
+- **What it does not prove:** presence and armor, not cryptographic validity. To
+  check a signature for real, see the GPG recipe below.
+- **The plugin zip is unsigned and that is expected.** JetBrains plugin signing needs
+  a certificate chain and private key this project does not hold; `publishValidate`
+  says so on its own line rather than passing in silence.
+- **Uploads confirm before sending.** Interactive by default; pass `-Pupload=yes` or
+  `-Pupload=no` when there is no console, which there is not in an agent session.
+  `no` reports where the artifact sits and succeeds; anything but yes/no is rejected.
+  On the Marketplace the confirmation is an `onlyIf` on `:plugin:publishPlugin`, not a
+  check in `publishMarketplace` - a dependency runs *before* the task declaring it, so
+  a confirmation asked there would be asked after the upload it authorises.
+- **Both uploads are real, and the two are not equally recoverable.** A Marketplace
+  upload is queued for a human moderator, so the release is not live when the task
+  succeeds and a mistake is still catchable. `publishCentral` posts with
+  `publishingType=AUTOMATIC`, which has no such gate: once validation passes the
+  version is on Maven Central, and Central coordinates can never be withdrawn. Treat
+  `publishCentral` as the sharper of the two even though they read alike.
+- **`publishCentral` stops at `PUBLISHING`, on purpose.** That state means validation
+  passed and the publish is under way, which is the last thing the build can usefully
+  learn - `PUBLISHING` to `PUBLISHED` has been observed to take 15-20 minutes, and
+  appearing on `repo1.maven.org` takes longer still. Waiting for either would block a
+  build on something no longer in doubt. The five-minute timeout therefore only ever
+  applies to `PENDING` / `VALIDATING` / `VALIDATED`, and if it fires the message says to
+  check the Portal rather than re-upload - a second upload of a version Central already
+  accepted is rejected, and there is no way to take the first one back.
+- **Neither upload can be rehearsed.** There is no dry run against either service, and
+  a version cannot be published twice. Anything to be checked has to be checked before
+  the confirmation, which is what `publishValidate` is for.
+- **Central is a hand-written call, by choice.** Sonatype ships no official Gradle
+  plugin and marks every community one unsupported, so `publishCentral` posts the
+  bundle to `/api/v1/publisher/upload` itself and polls `/api/v1/publisher/status`
+  until `PUBLISHING`, `PUBLISHED` or `FAILED`. The `maven-publish` tasks
+  (`publish`, `publishAllPublicationsTo…`, `publishReleasePublicationTo…`) cannot do
+  this - the only repository declared is `centralStaging`, a local directory.
+- **Never set `channels` on the plugin.** Its default is `default`, which *is* the
+  stable channel. Writing `listOf("stable")` creates a custom channel of that name,
+  which nobody sees without adding a repository URL by hand.
+
+### Tokens
+
+Both are read as an environment variable first, falling back to a Gradle property, so
+either location works and neither is in the repo:
+
+| Service | Environment variable | Gradle property |
+|---|---|---|
+| Maven Central | `MAVEN_CENTRAL_TOKEN` | `mavenCentralToken` |
+| JetBrains Marketplace | `JETBRAINS_MARKETPLACE_TOKEN` | `jetbrainsMarketplaceToken` |
+
+The Gradle property belongs in `~/.gradle/gradle.properties`
+(`C:\Users\<user>\.gradle\gradle.properties`), which is outside the repo and is the
+usual home for these. **A token in the project's own `gradle.properties` would be
+committed** - that file is tracked.
+
+`providers.gradleProperty` and `providers.environmentVariable` are different sources:
+a value in `gradle.properties` is *not* visible to the environment lookup, which is why
+both are wired. Do not `cat` either location to check a value - test for emptiness
+instead (`[ -z "${MAVEN_CENTRAL_TOKEN:-}" ]`).
+
+Central's token is a *pair*: the Portal generates a username and password, and the API
+wants `Bearer <base64 of user:pass>`. Either form can be given - a value containing a
+colon is encoded before sending, and base64 never contains one - so pasting
+`username:password` straight in works.
+
+Verifying a signature for real, which `publishValidate` deliberately does not:
+
+```bash
+GPG="/c/Program Files (x86)/GnuPG/bin/gpg.exe"
+GNUPGHOME="$APPDATA/gnupg" "$GPG" --verify <file>.asc <file>
+```
+
+`$APPDATA/gnupg` is not optional - git-bash ships its own `gpg` pointing at an empty
+keyring that prints nothing and reports no error.
 
 ## Pass ordering (load-bearing)
 
