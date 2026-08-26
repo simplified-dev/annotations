@@ -26,7 +26,7 @@ import org.jetbrains.annotations.Nullable;
  * hover info goes through {@link PsiDocCommentOwner#getDocComment()}
  * directly - navigation element isn't consulted.
  */
-public class DocProxyingLightMethodBuilder extends LightMethodBuilder {
+public class DocProxyingLightMethodBuilder extends GeneratedLightMethod {
 
     private @Nullable PsiDocCommentOwner docSource;
     private @Nullable LightTypeParameterListBuilder typeParameterList;

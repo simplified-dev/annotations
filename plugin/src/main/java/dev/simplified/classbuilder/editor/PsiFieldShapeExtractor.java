@@ -145,9 +145,21 @@ final class PsiFieldShapeExtractor {
      * Builds a shape from an annotated owner (field or record component),
      * pulling type classification from the type mirror and companion-
      * annotation state from the owner's annotations.
+     *
+     * <p>The name is a parameter rather than read off the owner, so a caller
+     * can ask what the slot would look like under a different one. Everything
+     * the name reaches - the singular subject a {@code @Collector} falls back
+     * to, and every setter spelled through the scheme - follows it, while what
+     * an annotation pins stays pinned.
+     *
+     * @param owner the field or record component the slot comes from
+     * @param name the name to shape the slot under
+     * @param type the slot's declared type
+     * @param setters the target's setter naming scheme
+     * @return the shape
      */
-    private static PsiFieldShape buildShape(PsiModifierListOwner owner, String name,
-                                            com.intellij.psi.PsiType type, SetterScheme setters) {
+    static PsiFieldShape buildShape(PsiModifierListOwner owner, String name,
+                                    com.intellij.psi.PsiType type, SetterScheme setters) {
         return classify(owner, name, type, setters).build();
     }
 
@@ -163,6 +175,7 @@ final class PsiFieldShapeExtractor {
         b.setters = ClassBuilderConstants.setterOverride(
             findAnnotation(owner, SETTER_NAMES_FQN), setters);
         if (owner instanceof PsiDocCommentOwner docOwner) b.docSource = docOwner;
+        b.navSource = owner;
         // The two JetBrains names, matched off the source text - not
         // NullableNotNullManager, which this used to ask, for two reasons that
         // point the same way.

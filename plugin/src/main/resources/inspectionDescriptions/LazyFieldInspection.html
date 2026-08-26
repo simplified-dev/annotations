@@ -9,9 +9,9 @@ Flags misuse of the <code>@Lazy</code> field annotation:
   <li><code>@Lazy</code> does not apply to an array field - the storage
       rewrite has no shape for one.</li>
   <li><code>@Lazy</code> on a class without <code>@ClassBuilder</code>
-      requires a field initializer expression - the initializer becomes
-      the supplier body. Without one and without a builder driving
-      construction, no value can ever be produced.</li>
+      requires either a field initializer or a constructor assignment -
+      whichever is written becomes the supplier body. With neither, and with
+      no builder driving construction, no value can ever be produced.</li>
   <li><code>@Lazy</code> alongside <code>@Collector</code>,
       <code>@Negate</code>, <code>@Formattable</code>,
       <code>@BuildFlag</code>, or <code>@ObtainVia</code>
@@ -20,6 +20,16 @@ Flags misuse of the <code>@Lazy</code> field annotation:
       a deferred supplier. <code>@BuilderDefault</code> and
       <code>@BuilderIgnore</code> are not flagged: they govern how the
       builder treats the field, not how it is stored.</li>
+  <li><code>@Lazy(name)</code> written without the <code>{}</code>
+      placeholder - the pattern is applied to one field's name, so a literal
+      names the getter the same thing whatever the field is called.</li>
+  <li>A lazy getter spelled differently from the accessors a type-level
+      <code>@Getter</code> asks for. <code>@Lazy</code> names its own getter
+      and the accessor pass steps over a lazy field, so a class that spells
+      its accessors one way can end up with a single field spelled the other
+      and nothing else to say so. Reported only when <code>@Lazy</code> names
+      neither <code>style</code> nor <code>name</code>: writing one is a
+      choice about that field rather than a slip.</li>
   <li><code>@Lazy</code> alongside Lombok <code>@Getter</code> is
       redundant: <code>@Lazy</code> generates its own memoizing getter,
       so Lombok's getter is never emitted.</li>
@@ -28,9 +38,16 @@ Flags misuse of the <code>@Lazy</code> field annotation:
 <!-- tooltip end -->
 
 <p>
-Hard errors (static, primitive, missing initializer) report at ERROR
-severity because the AST mutation cannot complete safely. Companion
-clashes report at ERROR; Lombok redundancy reports at INFORMATION.
+Hard errors (static, record component, array, nothing to defer, an
+unexpandable name pattern) report at ERROR severity because the AST mutation
+cannot complete safely. Companion clashes report at ERROR; the naming mismatch
+and Lombok redundancy report as weak warnings, both being about a member that
+is generated either way.
+</p>
+
+<p>
+Primitive fields are supported and are not flagged: the memoized value keeps a
+primitive slot and only the supplier's type argument is boxed.
 </p>
 
 </body>

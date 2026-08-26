@@ -4,6 +4,7 @@ import com.intellij.psi.CommonClassNames;
 import com.intellij.psi.PsiArrayType;
 import com.intellij.psi.PsiClassType;
 import com.intellij.psi.PsiDocCommentOwner;
+import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypes;
 import com.intellij.psi.util.InheritanceUtil;
@@ -152,6 +153,16 @@ public final class PsiFieldShape {
     public final @Nullable PsiDocCommentOwner docSource;
 
     /**
+     * Declaration the generated setter navigates to - the field, record
+     * component or parameter the slot was read from. Separate from
+     * {@link #docSource} because a record component owns no Javadoc of its own,
+     * so the two answers differ there: the prose is on the record, and the
+     * declaration a reader wants is the component. Null when the slot came from
+     * somewhere with no declaration to reach.
+     */
+    public final @Nullable PsiElement navSource;
+
+    /**
      * One {@code @AssignVia} reaching a slot, as the editor needs it - the
      * parameter type the transform declares, and whether that is the slot's own.
      *
@@ -196,6 +207,7 @@ public final class PsiFieldShape {
         this.seed = b.seed;
         this.assignVia = b.assignVia == null ? java.util.List.of() : b.assignVia;
         this.docSource = b.docSource;
+        this.navSource = b.navSource;
     }
 
     /** Classifies a {@link PsiType} into the shape fields used for setter dispatch. */
@@ -334,6 +346,7 @@ public final class PsiFieldShape {
         boolean seed;
         java.util.List<AssignTransform> assignVia;
         @Nullable PsiDocCommentOwner docSource;
+        @Nullable PsiElement navSource;
 
         PsiFieldShape build() {
             return new PsiFieldShape(this);

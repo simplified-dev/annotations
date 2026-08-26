@@ -14,8 +14,10 @@ import java.lang.annotation.Target;
  * <p>The annotation processor rewrites the annotated field's storage type from
  * {@code T} to an {@code AtomicReference&lt;Supplier&lt;T&gt;&gt;} holding the
  * deferred computation, adds a sibling field for the memoized value, and
- * synthesises a public memoizing getter ({@code getFoo()} for object types,
- * {@code isFoo()} for {@code boolean}). The original initializer expression, when
+ * synthesises a public memoizing getter, named through {@link #style()} and
+ * {@link #name()} the way {@link Getter @Getter} names one - {@code getFoo()}
+ * for object types, {@code isFoo()} for {@code boolean}, and whatever the style
+ * asks for when it is not the default. The original initializer expression, when
  * present, becomes the supplier body so source-level reads of
  * {@code "expensive()"} now run once on the first {@code getFoo()} call rather
  * than at construction time.
@@ -117,5 +119,28 @@ public @interface Lazy {
      * {@link AccessLevel#PACKAGE} emits no access keyword (package-private).
      */
     @NotNull AccessLevel access() default AccessLevel.PUBLIC;
+
+    /**
+     * Naming style supplying the accessor pattern.
+     *
+     * <p>Read here rather than from a {@link Getter @Getter} on the same field
+     * or type. The getter is this annotation's to mint - {@code @Getter} skips a
+     * lazy field precisely so there is one of them - so the naming it answers to
+     * is its own, and a type that spells its accessors one way does not have to
+     * write {@code @Getter} on a lazy field to have it match.
+     */
+    @NotNull NamingStyle style() default NamingStyle.SIMPLIFIED;
+
+    /**
+     * Name pattern overriding the style's, where {@code {}} expands to the
+     * field name. Empty inherits from {@link #style()}.
+     *
+     * <p>Overrides the boolean and non-boolean patterns together.
+     *
+     * <p>The placeholder is mandatory and a value without one is rejected: a
+     * literal would name the getter the same thing whatever the field is
+     * called.
+     */
+    @NotNull String name() default "";
 
 }

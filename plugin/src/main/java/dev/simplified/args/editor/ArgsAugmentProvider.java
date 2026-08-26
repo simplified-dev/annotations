@@ -14,6 +14,7 @@ import dev.simplified.args.apt.ArgsMode;
 import dev.simplified.args.inspect.ArgsConstants;
 import dev.simplified.classbuilder.editor.GeneratedMemberFactory;
 import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
+import dev.simplified.shared.psi.GeneratedLightMethod;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -94,7 +95,7 @@ public final class ArgsAugmentProvider extends AbstractRecursionSafeAugmentProvi
                 if (access == null) continue; // AccessLevel.NONE generates nothing
 
                 List<PsiField> fields = ArgsConstants.select(target, mode, List.of());
-                LightMethodBuilder ctor = new LightMethodBuilder(manager, name)
+                LightMethodBuilder ctor = new GeneratedLightMethod(manager, name)
                     .setConstructor(true)
                     .setContainingClass(target);
                 StringBuilder signature = new StringBuilder();

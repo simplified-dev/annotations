@@ -9,6 +9,66 @@ Versions 1.0.0 through 1.0.5 were published under the legacy plugin ID
 Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations` /
 `io.github.simplified-dev:annotations`. See the 2.0.0 entry for the rename details.
 
+## [2.6.3]
+
+### Added
+
+- **Find Usages on a field reports the calls made through the members generated from it.** A
+  `@Getter` field, a `@Lazy` field and a `@ClassBuilder` slot are all called through a member that
+  exists in no source file, so the field itself is written nowhere and the usage view came back
+  empty on a property called from one end of a project to the other. The platform gathers a field's
+  accessors and then drops the ones whose backing field it cannot recover by reading the method
+  body, which is every generated one. Provenance answers what a body read cannot, so the search now
+  runs over the field and everything minted from it - accessors on the class, and the setters
+  `@ClassBuilder` hangs off the nested `Builder`. A call written against a supertype is included
+  under the same "search for base accessors" option the platform already puts a hand-written
+  accessor behind.
+- **A call that assigns a slot reads as a write of it.** The platform identifies a setter by a
+  `set` prefix and a one-argument signature, which is the one shape a generated setter is free not
+  to have: a fluent `@Setter` mints `label(String)`, a `name` attribute mints whatever it was given,
+  and every `@ClassBuilder` setter is named after its slot - so a whole builder chain was filed
+  under read access and coloured as one in the editor. The provider that minted the member records
+  which it was, so the classification is a marker read rather than a guess at the name.
+- **A Find Usages narrowed to write access keeps the generated setter calls.** Read and write are
+  filtered one usage at a time, by asking whether that expression is assigned to - which a call is
+  not, whatever the method does with its argument, so narrowing to writes dropped every call the
+  search was narrowed to find. A generated accessor needs no per-usage question: every call to it
+  does the same thing to the slot, so the answer is a property of the method and is settled once.
+- **Renaming a field renames the members generated from it.** A generated member is spelled from the
+  slot behind it, so a rename that touched only what it could see in source left every call site in
+  the project naming a method that would not exist after the next build - and said nothing about it.
+  An accessor's new name comes from the naming scheme that spelled the old one; a builder setter's
+  comes from asking the setter dispatch for the same slot under the new name, so a name a companion
+  annotation pins - a `@Negate` flag, a `@Collector(singularMethodName)` - stays where it is while
+  the singular name a collector derives follows the slot. Renaming a generated accessor renames the
+  field it stands for. A generated member that stands for no field at all - the nested `Builder`,
+  the bootstrap methods, the whole-object trio - is refused up front rather than partway through.
+
+### Changed
+
+- **`@Lazy` names its getter through the same scheme `@Getter` reads.** It minted `get` plus a
+  capitalised field name for every type, which put the one accessor on a lazy field in different
+  naming territory from every other generated accessor on the same class - and left a class that
+  spells its accessors fluently with one that does not. It now carries `style` and `name` with
+  `@Getter`'s defaults and resolves them through the shared `AccessorScheme`. **This renames the
+  getter on a `boolean` lazy field**, which now reads through `is` like every other boolean
+  accessor: `@Lazy boolean active` generates `isActive()` where it generated `getActive()`. Naming
+  stays this annotation's own rather than deferring to a `@Getter` on the same field or type - the
+  accessor pass steps over a lazy field precisely so there is one getter, which leaves the naming of
+  it here to answer.
+- **The `@Lazy` inspection reports a getter that does not follow the type's accessor naming.** A
+  type-level `@Getter` fans out over a class's fields and steps over the lazy one, so the annotation
+  that carries the class's style generates nothing there and had nothing to say about it - leaving
+  one member spelled unlike every other accessor on the class and no report anywhere. It now says
+  which name each side produces, and only when `@Lazy` names neither `style` nor `name`: writing one
+  is a choice about that field rather than a slip. It also rejects a `@Lazy(name)` written without
+  the `{}` placeholder, which the accessor pair was already held to.
+
+### Fixed
+
+- **A generated builder setter on a record navigates to the component it fills** rather than to the
+  record. Ctrl-Q still shows the record's own prose, since that is where a component is documented.
+
 ## [2.6.2]
 
 ### Changed

@@ -21,6 +21,8 @@ import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
 import com.sun.tools.javac.util.Position;
 import dev.simplified.annotations.AccessLevel;
+import dev.simplified.annotations.NamingStyle;
+import dev.simplified.classbuilder.apt.AccessorScheme;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.ContractAnnotations;
@@ -204,7 +206,7 @@ public final class LazyFieldMutator {
 
         for (String name : processed) {
             FieldSpec lazy = lazyByName.get(name);
-            String getterName = "get" + capitalise(name);
+            String getterName = schemeFor(lazy).readName(name, lazy.isBoolean);
             if (existingGetters.contains(getterName)) continue;
             JCMethodDecl getter = buildGetter(lazy, getterName);
             // The getter's documentation is the field's documentation, and this
@@ -741,9 +743,55 @@ public final class LazyFieldMutator {
         return false;
     }
 
-    private static String capitalise(String s) {
-        if (s == null || s.isEmpty()) return s;
-        return Character.toUpperCase(s.charAt(0)) + s.substring(1);
+    /**
+     * The accessor naming scheme the field's {@code @Lazy} asks for.
+     *
+     * <p>{@link AccessorScheme} rather than a prefix of its own, so a lazy
+     * field's getter is spelled the way the accessor pass would spell it and
+     * the two cannot answer a boolean, or a written pattern, differently.
+     *
+     * @param lazy the annotated field
+     * @return the resolved scheme
+     */
+    private static AccessorScheme schemeFor(FieldSpec lazy) {
+        NamingStyle style = NamingStyle.SIMPLIFIED;
+        String name = null;
+        if (lazy.element != null) {
+            for (AnnotationMirror m : lazy.element.getAnnotationMirrors()) {
+                if (!"dev.simplified.annotations.Lazy".equals(m.getAnnotationType().toString())) continue;
+                for (var entry : m.getElementValues().entrySet()) {
+                    Object raw = entry.getValue().getValue();
+                    if (raw == null) continue;
+                    if (entry.getKey().getSimpleName().contentEquals("style")) {
+                        style = styleNamed(raw.toString(), style);
+                    } else if (entry.getKey().getSimpleName().contentEquals("name")) {
+                        String written = raw.toString();
+                        if (!written.isEmpty()) name = written;
+                    }
+                }
+            }
+        }
+        return AccessorScheme.resolve(style, name);
+    }
+
+    /**
+     * The style a written constant names.
+     *
+     * @param written the constant as the mirror renders it, qualified or not
+     * @param fallback the style to keep when it names none
+     * @return the resolved style
+     */
+    private static NamingStyle styleNamed(String written, NamingStyle fallback) {
+        int dot = written.lastIndexOf('.');
+        String simple = dot >= 0 ? written.substring(dot + 1) : written;
+        try {
+            return NamingStyle.valueOf(simple);
+        } catch (IllegalArgumentException e) {
+            // A constant this library version does not declare. Keeping the
+            // default leaves the field readable, where dropping the getter
+            // leaves its storage the only way in and that is a supplier.
+            return fallback;
+        }
     }
 
     private static Set<String> collectExistingGetterNames(JCClassDecl target) {

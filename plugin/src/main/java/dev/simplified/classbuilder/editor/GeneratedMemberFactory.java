@@ -37,6 +37,7 @@ import dev.simplified.classbuilder.apt.SetterScheme;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.shared.psi.AnnotatedLightModifierList;
 import dev.simplified.shared.psi.DocProxyingLightMethodBuilder;
+import dev.simplified.shared.psi.GeneratedLightMethod;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
 import dev.simplified.shared.psi.WrittenAnnotations;
 import org.jetbrains.annotations.NotNull;
@@ -231,7 +232,7 @@ public final class GeneratedMemberFactory {
         String name = target.getName();
         if (name == null) return null;
 
-        LightMethodBuilder ctor = new LightMethodBuilder(psiManager, name)
+        LightMethodBuilder ctor = new GeneratedLightMethod(psiManager, name)
             .setConstructor(true)
             .setContainingClass(target);
         for (PsiFieldShape field : fields) {
@@ -440,7 +441,7 @@ public final class GeneratedMemberFactory {
 
     private static PsiMethod buildInstanceNoArg(PsiManager manager, PsiClass target,
                                                 String name, PsiType returnType, String access) {
-        LightMethodBuilder m = new LightMethodBuilder(manager, name)
+        LightMethodBuilder m = new GeneratedLightMethod(manager, name)
             .setMethodReturnType(returnType)
             .setContainingClass(target);
         applyAccess(m, access);
@@ -756,7 +757,7 @@ public final class GeneratedMemberFactory {
      */
     private static PsiMethod builderConstructor(PsiManager manager, PsiClass builder, String access,
                                                 List<PsiFieldShape> slots) {
-        LightMethodBuilder ctor = new LightMethodBuilder(manager, JavaLanguage.INSTANCE, builder.getName());
+        LightMethodBuilder ctor = new GeneratedLightMethod(manager, JavaLanguage.INSTANCE, builder.getName());
         ctor.setConstructor(true);
         ctor.setContainingClass(builder);
         ctor.setNavigationElement(builder);
@@ -772,7 +773,7 @@ public final class GeneratedMemberFactory {
     private static PsiMethod chainMethod(PsiManager manager, PsiClass target, PsiClass builder,
                                          String name, PsiType returnType, String access,
                                          boolean isAbstract) {
-        LightMethodBuilder m = new LightMethodBuilder(manager, name)
+        LightMethodBuilder m = new GeneratedLightMethod(manager, name)
             .setMethodReturnType(returnType)
             .addModifier(access)
             .setContainingClass(builder);
@@ -785,6 +786,34 @@ public final class GeneratedMemberFactory {
     // ------------------------------------------------------------------
     // Setter dispatch
     // ------------------------------------------------------------------
+
+    /**
+     * The names {@link #settersFor} mints for one slot, in the order it mints
+     * them.
+     *
+     * <p>Running the dispatch rather than restating its naming rules. Those
+     * rules are spread across a dozen roles and are not uniform - a
+     * {@code @Negate} flag and a {@code @Collector} singular name are pinned by
+     * their annotation and do not follow the slot at all - so a second
+     * description of them would be a second thing to keep true. Asking the
+     * dispatch for the same slot under two names, and pairing the answers by
+     * position, needs no description of the rules to be written down anywhere.
+     *
+     * @param target the annotated type
+     * @param builder the synthesised builder the setters would live on
+     * @param config the resolved builder configuration
+     * @param slot the slot to name setters for
+     * @return the names, in dispatch order
+     */
+    static List<String> setterNames(PsiClass target, PsiClass builder, EditorBuilderConfig config,
+                                    PsiFieldShape slot) {
+        PsiElementFactory elements = JavaPsiFacade.getElementFactory(target.getProject());
+        SetterCtx ctx = new SetterCtx(target.getManager(), elements, target, builder,
+            elements.createType(builder), config);
+        List<String> out = new ArrayList<>();
+        for (PsiMethod setter : settersFor(ctx, slot)) out.add(setter.getName());
+        return out;
+    }
 
     /**
      * Mirrors the dispatch in {@code FieldMutators.setters}: picks one or
@@ -1071,12 +1100,14 @@ public final class GeneratedMemberFactory {
 
     /**
      * Shared half-built setter: public, returns the nested Builder self-type,
-     * lives on the synthesised builder class, navigates to the backing field
-     * so Ctrl-click jumps to the right place, and exposes the field's Javadoc
-     * as the setter's Javadoc so Ctrl-Q / brief-hover show the field doc on
-     * the setter call. Callers chain {@code addParameter} calls then hand
-     * the builder back; {@link DocProxyingLightMethodBuilder} doubles as the
-     * resulting {@link PsiMethod}.
+     * lives on the synthesised builder class, navigates to the declaration the
+     * slot was read from so Ctrl-click jumps to the right place, and exposes
+     * that slot's Javadoc as the setter's own so Ctrl-Q / brief-hover show it
+     * on the setter call. The two come from different elements on a record,
+     * where the component holds the declaration and the record holds the prose.
+     * Callers chain {@code addParameter} calls then hand the builder back;
+     * {@link DocProxyingLightMethodBuilder} doubles as the resulting
+     * {@link PsiMethod}.
      */
     private static DocProxyingLightMethodBuilder newSetter(SetterCtx ctx, PsiFieldShape field, String name) {
         DocProxyingLightMethodBuilder m = (DocProxyingLightMethodBuilder) new DocProxyingLightMethodBuilder(ctx.manager, name)
@@ -1084,8 +1115,11 @@ public final class GeneratedMemberFactory {
             .addModifier(PsiModifier.PUBLIC)
             .setContainingClass(ctx.builder);
         m.withDocSource(field != null ? field.docSource : null);
-        GeneratedMemberMarker.mark(m);
-        m.setNavigationElement(field != null && field.docSource != null ? field.docSource : ctx.target);
+        // Every role this builds - replace, flag, add, put, compute, clear -
+        // changes the slot, which is what the read/write classification of a
+        // call to it turns on.
+        GeneratedMemberMarker.markWrite(m);
+        m.setNavigationElement(field != null && field.navSource != null ? field.navSource : ctx.target);
         return m;
     }
 
