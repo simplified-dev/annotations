@@ -9,6 +9,53 @@ Versions 1.0.0 through 1.0.5 were published under the legacy plugin ID
 Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations` /
 `io.github.simplified-dev:annotations`. See the 2.0.0 entry for the rename details.
 
+## [2.7.0]
+
+### Fixed
+
+- **A chain subclass no longer builds a slot for its parent's lazy storage.** A `@Lazy` field is
+  given a sibling holding the value it memoizes, and that sibling is private, instance and
+  non-transient - none of the tests that exclude a type's non-properties excludes it. A subclass
+  reading its parent's fields therefore collected the storage beside the property it belongs to and
+  minted a second slot for one field, whose entry points then read a value through an accessor that
+  was never generated. The sibling is now recognised where it is spelled, so one lazy field is one
+  slot however far down the chain it is inherited. The shape appears only when the parent is already
+  compiled, which is why nothing caught it: a parent in the same round has not been given the
+  sibling yet at the point the subclass reads it.
+- **The expanded sources a javadoc run reads no longer keep a deleted type.** The expander only ever
+  created files, so a renamed or deleted type left its copy behind and the doclet documented a type
+  the build no longer produces. Each run now records what it wrote and removes what the previous run
+  wrote and this one did not. It is recorded rather than inferred, because the target is a directory
+  the consumer names and sweeping it for anything that looks generated would eventually meet a
+  directory holding something else - a copy the expander did not create is never deleted, and a run
+  that cannot record what it wrote says so rather than silently leaving the next one nothing to
+  compare against.
+- **Two compilation units sharing a file name no longer overwrite each other's expanded copy.** The
+  copy was named after the file it was read from, so an authored `Helpers.java` declaring only a
+  package-private type and a processor-generated `Helpers` in the same package resolved to one path,
+  where the last written won and the doclet read whichever that was. A link resolves against the
+  declared type, so the copy is now named for the type it declares; a unit declaring no type at all,
+  which is what `package-info` is, keeps the name it was read under. A collision that survives that
+  is reported rather than written over.
+
+### Changed
+
+- **The README documents the dependency scope the artifact is actually built for.** It showed
+  `implementation`, which puts a jar on a consumer's runtime classpath that nothing ever loads: every
+  annotation emits the code it needs into the type it is written on, and no generated member calls
+  back into this library. The Gradle examples now read `compileOnly` plus `annotationProcessor` and
+  the Maven one carries `provided`, with the reason stated beside them and the one genuine runtime
+  requirement - the logging API a `@Log` field is typed against - named as the consumer's own.
+
+### Added
+
+- **A processor suite that compiles against an already-compiled ancestor.** Every other fixture here
+  builds its whole chain in one round, so a subclass read its parent from a tree the round was still
+  building. A consumer almost never does, and the two views differ: a tree carries the marks the
+  passes set and a class file carries only what a class file carries. Three cases now cross that
+  boundary - a chain inheriting its parent's setters, a lazy parent field staying one slot, and the
+  no-runtime-dependency pin applied to an inherited builder, which no existing fixture covered.
+
 ## [2.6.3]
 
 ### Added

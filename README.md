@@ -68,8 +68,8 @@ Two IDE-only inspections read *hand-written* `equals` / `hashCode` pairs on clas
 
 ```kotlin
 dependencies {
-    implementation("io.github.simplified-dev:annotations:2.5.0")
-    annotationProcessor("io.github.simplified-dev:annotations:2.5.0")
+    compileOnly("io.github.simplified-dev:annotations:2.7.0")
+    annotationProcessor("io.github.simplified-dev:annotations:2.7.0")
 }
 ```
 
@@ -80,8 +80,8 @@ dependencies {
 
 ```groovy
 dependencies {
-    implementation 'io.github.simplified-dev:annotations:2.5.0'
-    annotationProcessor 'io.github.simplified-dev:annotations:2.5.0'
+    compileOnly 'io.github.simplified-dev:annotations:2.7.0'
+    annotationProcessor 'io.github.simplified-dev:annotations:2.7.0'
 }
 ```
 
@@ -94,13 +94,22 @@ dependencies {
 <dependency>
     <groupId>io.github.simplified-dev</groupId>
     <artifactId>annotations</artifactId>
-    <version>2.5.0</version>
+    <version>2.7.0</version>
+    <scope>provided</scope>
 </dependency>
 ```
 
 For annotation-processor registration on Maven, add the same coordinate under `<annotationProcessorPaths>` in the `maven-compiler-plugin` configuration.
 
 </details>
+
+**The artifact is compile-only, on purpose.** Every annotation here emits the code it needs into the
+type it is written on, so nothing generated calls back into this library at run time and nothing here
+belongs on a runtime classpath. `compileOnly` plus `annotationProcessor` is therefore the whole
+dependency, and a consumer who scopes it `implementation` ships a jar they never load. The one
+requirement that does reach run time comes from `@Log`, whose generated field is typed
+`org.apache.logging.log4j.Logger`: a module using it supplies `org.apache.logging.log4j:log4j-api`
+itself, exactly as it would without this library.
 
 > [!NOTE]
 > Published to Maven Central as `io.github.simplified-dev:annotations` and to JetBrains Marketplace as plugin ID `dev.simplified.simplified-annotations`.

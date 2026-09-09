@@ -292,4 +292,105 @@ public class SourceExpansionTest {
         }
     }
 
+    // ------------------------------------------------------------------
+    // What the copy is named, and what happens to one the build stops making
+    // ------------------------------------------------------------------
+
+    /**
+     * The copy is named for the type it declares, not the file it was read from.
+     *
+     * <p>Only a public type has to share its file's name, so a unit declaring a
+     * package-private one may be read from a file called anything. A link
+     * resolves against the declared type, so that is what the copy is named for -
+     * and it is also what keeps two units of one file name from landing on one
+     * path and overwriting each other.
+     */
+    @Test
+    public void theCopyIsNamedForTheTypeItDeclares() throws IOException {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.Holder",
+            "package demo;",
+            "import dev.simplified.annotations.Getter;",
+            "/** Declared under a file of another name. */",
+            "@Getter",
+            "class Tucked {",
+            "    /** The name. */",
+            "    private String name;",
+            "}"));
+        assertThat(c).succeeded();
+
+        assertTrue("the copy takes the declared type's name - wrote: " + listing(),
+            Files.exists(this.expandTo.resolve("demo/Tucked.java")));
+        assertFalse("the copy must not be named for the file it was read from",
+            Files.exists(this.expandTo.resolve("demo/Holder.java")));
+        assertTrue(expanded("demo/Tucked.java").contains("getName()"));
+    }
+
+    /**
+     * A copy the build stops producing is removed rather than left to be read.
+     *
+     * <p>The expander only ever created files, so a renamed or deleted type left
+     * its copy in place and the doclet went on documenting a type that no longer
+     * existed. Two compilations over one target directory are what a consumer's
+     * second build is, so that is what this runs.
+     */
+    @Test
+    public void aCopyTheBuildStopsMakingIsRemoved() throws IOException {
+        Compilation first = compile(
+            JavaFileObjects.forSourceLines("demo.Kept",
+                "package demo;",
+                "/** Survives the rename. */",
+                "public class Kept { }"),
+            JavaFileObjects.forSourceLines("demo.Dropped",
+                "package demo;",
+                "/** Renamed away in the second build. */",
+                "public class Dropped { }"));
+        assertThat(first).succeeded();
+        assertTrue(Files.exists(this.expandTo.resolve("demo/Dropped.java")));
+
+        Path target = this.expandTo;
+        Compilation second = Compiler.javac()
+            .withProcessors(new ClassBuilderProcessor(), new SourceExpanderProcessor())
+            .withOptions("-A" + SourceExpanderProcessor.EXPAND_TO + "=" + target)
+            .compile(JavaFileObjects.forSourceLines("demo.Kept",
+                "package demo;",
+                "/** Survives the rename. */",
+                "public class Kept { }"));
+        assertThat(second).succeeded();
+
+        assertTrue("a type the build still produces keeps its copy",
+            Files.exists(target.resolve("demo/Kept.java")));
+        assertFalse("a type the build no longer produces must not keep its copy",
+            Files.exists(target.resolve("demo/Dropped.java")));
+    }
+
+    /**
+     * A directory the expander did not write is left alone.
+     *
+     * <p>The target is a directory the consumer names, so the removal above must
+     * never reach a file this tool did not create. With no record of a previous
+     * run there is nothing it may delete, whatever the directory happens to hold.
+     */
+    @Test
+    public void aFileTheExpanderDidNotWriteIsNeverRemoved() throws IOException {
+        Path target = this.folder.newFolder("shared").toPath();
+        Path foreign = target.resolve("demo");
+        Files.createDirectories(foreign);
+        Path keep = foreign.resolve("Handwritten.java");
+        Files.writeString(keep, "package demo; class Handwritten { }", StandardCharsets.UTF_8);
+
+        Compilation c = Compiler.javac()
+            .withProcessors(new ClassBuilderProcessor(), new SourceExpanderProcessor())
+            .withOptions("-A" + SourceExpanderProcessor.EXPAND_TO + "=" + target)
+            .compile(JavaFileObjects.forSourceLines("demo.Mine",
+                "package demo;",
+                "/** Written by this run. */",
+                "public class Mine { }"));
+        assertThat(c).succeeded();
+
+        assertTrue("a file the expander did not write must survive",
+            Files.exists(keep));
+        assertEquals("package demo; class Handwritten { }",
+            Files.readString(keep, StandardCharsets.UTF_8));
+    }
+
 }

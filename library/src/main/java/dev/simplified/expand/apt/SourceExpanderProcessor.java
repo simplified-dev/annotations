@@ -1,6 +1,8 @@
 package dev.simplified.expand.apt;
 
+import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
+import com.sun.source.tree.Tree;
 import com.sun.source.util.TreePath;
 import com.sun.source.util.Trees;
 import dev.simplified.shared.javac.compat.JavacAccessFactory;
@@ -21,6 +23,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 
@@ -57,6 +60,12 @@ public class SourceExpanderProcessor extends AbstractProcessor {
     /** The processor option naming the directory expanded sources are written to. */
     public static final String EXPAND_TO = "dev.simplified.expandTo";
 
+    /**
+     * Name of the file recording what a run wrote, held at the target's root so
+     * the next run knows which copies are its own to remove.
+     */
+    private static final String MANIFEST = ".expanded";
+
     private final Map<URI, CompilationUnitTree> units = new LinkedHashMap<>();
     private Path target;
     private Trees trees;
@@ -84,18 +93,32 @@ public class SourceExpanderProcessor extends AbstractProcessor {
             return false;
         }
 
+        Set<String> stale = readManifest();
+        Set<String> fresh = new LinkedHashSet<>();
         int written = 0;
         for (CompilationUnitTree unit : this.units.values()) {
+            String relative = relativePath(unit);
+            if (!fresh.add(relative)) {
+                this.processingEnv.getMessager().printMessage(Diagnostic.Kind.WARNING,
+                    "Two compilation units expand to '" + relative + "' - '"
+                        + unit.getSourceFile().getName() + "' was not written");
+                continue;
+            }
             try {
-                write(unit);
+                write(unit, relative);
                 written++;
             } catch (IOException | UncheckedIOException e) {
                 this.processingEnv.getMessager().printMessage(Diagnostic.Kind.WARNING,
                     "Could not expand '" + unit.getSourceFile().getName() + "': " + e.getMessage());
             }
         }
+        stale.removeAll(fresh);
+        int removed = removeStale(stale);
+        writeManifest(fresh);
+
         this.processingEnv.getMessager().printMessage(Diagnostic.Kind.NOTE,
-            "Expanded " + written + " source files to " + this.target);
+            "Expanded " + written + " source files to " + this.target
+                + (removed == 0 ? "" : ", removing " + removed + " no longer written"));
         return false;
     }
 
@@ -113,24 +136,119 @@ public class SourceExpanderProcessor extends AbstractProcessor {
     }
 
     /** Expands one compilation unit and writes it under the target directory. */
-    private void write(CompilationUnitTree unit) throws IOException {
+    private void write(CompilationUnitTree unit, String relative) throws IOException {
         CharSequence source = unit.getSourceFile().getCharContent(true);
         String expanded = new SourceExpansion(unit, this.trees.getSourcePositions()).expand(source);
 
-        Path destination = this.target.resolve(relativePath(unit));
-        Files.createDirectories(destination.getParent());
+        Path destination = this.target.resolve(relative);
+        Path parent = destination.getParent();
+        if (parent != null) Files.createDirectories(parent);
         Files.writeString(destination, expanded, StandardCharsets.UTF_8);
     }
 
-    /** The unit's path under the target directory, mirroring its package. */
-    private static Path relativePath(CompilationUnitTree unit) {
-        String name = unit.getSourceFile().toUri().getPath();
-        int slash = name.lastIndexOf('/');
-        String simple = slash < 0 ? name : name.substring(slash + 1);
-
+    /**
+     * The unit's path under the target directory, mirroring its package, with
+     * {@code /} as the separator whatever the platform uses.
+     *
+     * <p>Held as a string rather than a {@link Path} because it is also what the
+     * manifest records, and a manifest written on one platform names the same
+     * file when it is read back on another.
+     */
+    private static String relativePath(CompilationUnitTree unit) {
+        String simple = fileName(unit);
         var declared = unit.getPackageName();
-        if (declared == null) return Path.of(simple);
-        return Path.of(declared.toString().replace('.', '/'), simple);
+        if (declared == null) return simple;
+        return declared.toString().replace('.', '/') + '/' + simple;
+    }
+
+    /**
+     * The name to write the unit under, taken from the first type it declares
+     * rather than from the file it was read from.
+     *
+     * <p>Two units can share a file name while declaring different types - a
+     * processor minting {@code demo.Helpers} beside an authored
+     * {@code Helpers.java} declaring only a package-private type is legal Java -
+     * and naming the copy after the file lands both on one path, where the last
+     * written wins and the doclet reads whichever that was. A link resolves
+     * against the declared type, so the declared type is what the copy is named
+     * for. A unit declaring no type at all, which is what {@code package-info}
+     * is, keeps the name it was read under.
+     *
+     * @param unit the compilation unit being expanded
+     * @return the file name, always ending in {@code .java}
+     */
+    private static String fileName(CompilationUnitTree unit) {
+        for (Tree declaration : unit.getTypeDecls()) {
+            if (declaration instanceof ClassTree type && type.getSimpleName().length() > 0) {
+                return type.getSimpleName() + ".java";
+            }
+        }
+        String path = unit.getSourceFile().toUri().getPath();
+        if (path == null) return unit.getSourceFile().getName();
+        int slash = path.lastIndexOf('/');
+        return slash < 0 ? path : path.substring(slash + 1);
+    }
+
+    /**
+     * What the previous run wrote, so a copy this one no longer produces can be
+     * removed.
+     *
+     * <p>Recorded rather than inferred, because the expander must never delete a
+     * file it did not create: the target is a directory a consumer names, and
+     * sweeping it for anything that looks like ours would eventually meet a
+     * directory holding something else. An unreadable or absent manifest answers
+     * empty, which removes nothing.
+     *
+     * @return the relative paths the previous run recorded
+     */
+    private Set<String> readManifest() {
+        Path manifest = this.target.resolve(MANIFEST);
+        if (!Files.isRegularFile(manifest)) return new LinkedHashSet<>();
+        try {
+            return new LinkedHashSet<>(Files.readAllLines(manifest, StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            return new LinkedHashSet<>();
+        }
+    }
+
+    /** Records what this run wrote, for the next one to compare against. */
+    private void writeManifest(Set<String> written) {
+        try {
+            Files.createDirectories(this.target);
+            Files.writeString(this.target.resolve(MANIFEST), String.join("\n", written),
+                StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            this.processingEnv.getMessager().printMessage(Diagnostic.Kind.WARNING,
+                "Could not record what was expanded to '" + this.target + "': " + e.getMessage()
+                    + " - a copy this build stops producing will be left behind");
+        }
+    }
+
+    /**
+     * Deletes the copies the previous run wrote and this one did not.
+     *
+     * <p>A renamed or deleted type otherwise leaves its copy in place and the
+     * doclet documents a type the build no longer produces. Each path is resolved
+     * and checked to be under the target before anything is removed, so an edited
+     * manifest cannot reach outside the directory the consumer named.
+     *
+     * @param stale the relative paths to remove
+     * @return how many files were deleted
+     */
+    private int removeStale(Set<String> stale) {
+        Path root = this.target.normalize();
+        int removed = 0;
+        for (String relative : stale) {
+            Path resolved = this.target.resolve(relative).normalize();
+            if (!resolved.startsWith(root)) continue;
+            try {
+                if (Files.deleteIfExists(resolved)) removed++;
+            } catch (IOException e) {
+                this.processingEnv.getMessager().printMessage(Diagnostic.Kind.WARNING,
+                    "Could not remove the stale expansion '" + relative + "': " + e.getMessage());
+            }
+        }
+        return removed;
     }
 
 }

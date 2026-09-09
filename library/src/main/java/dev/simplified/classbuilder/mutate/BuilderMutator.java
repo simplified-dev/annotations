@@ -6,6 +6,7 @@ import dev.simplified.args.mutate.ArgsConstructorMutator;
 import dev.simplified.classbuilder.apt.BuilderConfig;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.lazy.mutate.LazyFieldMutator;
+import dev.simplified.lazy.mutate.LazyHolders;
 import dev.simplified.shared.apt.AnnotationLookup;
 import dev.simplified.shared.javac.JavacBridge;
 
@@ -271,6 +272,13 @@ public final class BuilderMutator {
                 if (enc.getKind() != ElementKind.FIELD) continue;
                 if (enc.getModifiers().contains(Modifier.STATIC)) continue;
                 if (enc.getModifiers().contains(Modifier.TRANSIENT)) continue;
+                // The memoized-value sibling a lazy field is given is storage,
+                // not a property: it holds what the supplier computed and is
+                // written only by the generated getter. It is private, instance
+                // and non-transient, so none of the tests above sees it, and a
+                // subclass that collected it would publish a setter for a slot
+                // the constructor never takes.
+                if (LazyHolders.isValueField(enc.getSimpleName().toString())) continue;
                 // Inherited fields use the plain classification (no Types walk):
                 // their initializers aren't accessible cross-class, so a custom
                 // container on a parent falls back to a plain setter here.
