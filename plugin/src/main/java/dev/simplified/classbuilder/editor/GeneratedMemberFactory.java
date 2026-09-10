@@ -724,12 +724,16 @@ public final class GeneratedMemberFactory {
         PsiType targetType;
         if (role.isSelfTyped()) {
             PsiTypeParameter[] selfTypes = selfTypeParameters(builder, sourceParams.length);
-            selfType = selfTypes.length == 2
-                ? elements.createType(selfTypes[1])
-                : applied(elements, builder, ownParams);
-            targetType = selfTypes.length == 2
-                ? elements.createType(selfTypes[0])
-                : applied(elements, target, ownParams);
+            // The pair is read off the declaration rather than computed, so the
+            // names are whoever wrote them - the synthesiser on a builder it
+            // made, the author on one being merged into. Where the declaration
+            // carries no pair there is no name to return, and the fallback that
+            // used to type these members by the builder's own name would spell
+            // every setter's return type differently from the build, on the one
+            // shape where the author's spelling is the only correct one.
+            if (selfTypes.length != 2) return List.of();
+            selfType = elements.createType(selfTypes[1]);
+            targetType = elements.createType(selfTypes[0]);
         } else {
             selfType = applied(elements, builder, ownParams);
             targetType = builtType(elements, site, ownParams, toBuilder);
