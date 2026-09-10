@@ -393,4 +393,47 @@ public class SourceExpansionTest {
             Files.readString(keep, StandardCharsets.UTF_8));
     }
 
+    // ------------------------------------------------------------------
+    // A chain, where every member returns the builder's own self type
+    // ------------------------------------------------------------------
+
+    /**
+     * A self-typed builder's members return the second of its trailing pair
+     * rather than the builder's own name, so the owner test answered no for
+     * every one of them and each fell through to a sentence written for a
+     * different member - the self accessor being documented as the build method
+     * most visibly.
+     */
+    @Test
+    public void expansionRendersASelfTypedBuildersMembersAsReturningItsOwner() throws IOException {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.Rooted",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "/** A rooted thing. */",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Rooted {",
+            "    private String label;",
+            "    public String getLabel() { return label; }",
+            "}"));
+        assertThat(c).succeeded();
+        String expanded = expanded("demo/Rooted.java");
+
+        assertTrue("the self accessor gets its own sentence: " + expanded,
+            expanded.contains("Returns this builder as its own type."));
+        assertEquals("and exactly one member is the build method: " + expanded,
+            1, occurrences(expanded, "Builds a new instance from the values set so far."));
+        assertTrue("a self-typed setter still reads as a setter: " + expanded,
+            expanded.contains("Sets the value and returns this builder."));
+        assertTrue("and its @return names the builder: " + expanded,
+            expanded.contains("@return this builder"));
+    }
+
+    private static int occurrences(String haystack, String needle) {
+        int found = 0;
+        for (int at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + 1)) {
+            found++;
+        }
+        return found;
+    }
+
 }
