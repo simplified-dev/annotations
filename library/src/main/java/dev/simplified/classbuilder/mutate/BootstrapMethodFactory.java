@@ -17,6 +17,7 @@ import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.ContractAnnotations;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.JavacTypeFactory;
+import org.jetbrains.annotations.Nullable;
 
 import javax.annotation.processing.Messager;
 import javax.lang.model.element.Element;
@@ -56,8 +57,10 @@ final class BootstrapMethodFactory {
     private final Collection<FieldSpec> fromFields;
     private final ContractAnnotations contracts;
 
+    private final @Nullable JCClassDecl mergedInto;
+
     BootstrapMethodFactory(MutationContext ctx, Messager messager) {
-        this(ctx, messager, ctx.fields());
+        this(ctx, messager, ctx.fields(), null);
     }
 
     /**
@@ -68,6 +71,19 @@ final class BootstrapMethodFactory {
      *        {@link MutationContext#fields()}.
      */
     BootstrapMethodFactory(MutationContext ctx, Messager messager, Collection<FieldSpec> fromFields) {
+        this(ctx, messager, fromFields, null);
+    }
+
+    /**
+     * @param fromFields the fields to populate in {@code from(T)}
+     * @param mergedInto the builder the author declared and the generated members
+     *        were appended to, or {@code null} when the builder was synthesised.
+     *        Every entry point instantiates the builder, and an author's own
+     *        class is the one case where there may be no constructor to do it
+     *        with
+     */
+    BootstrapMethodFactory(MutationContext ctx, Messager messager, Collection<FieldSpec> fromFields,
+                           @Nullable JCClassDecl mergedInto) {
         this.ctx = ctx;
         this.make = ctx.make();
         this.names = ctx.names();
@@ -75,6 +91,35 @@ final class BootstrapMethodFactory {
         this.isRecord = ctx.targetElement().getKind() == ElementKind.RECORD;
         this.fromFields = fromFields;
         this.contracts = ctx.contracts();
+        this.mergedInto = mergedInto;
+    }
+
+    /**
+     * Whether the builder the entry points would instantiate has a constructor
+     * they can call.
+     *
+     * <p>Only ever false for a merged builder: a synthesised one is given the
+     * constructor it needs. The author's is theirs throughout - javac's own
+     * default included - so a class that declares constructors and none of the
+     * right arity leaves every entry point with nothing to call, which used to
+     * be a generated line javac rejects rather than something said out loud.
+     *
+     * @param seeds how many arguments the entry point passes the constructor
+     * @return whether the entry points can be emitted
+     */
+    private boolean builderCanBeInstantiated(int seeds) {
+        if (mergedInto == null) return true;
+        boolean declaresAny = false;
+        for (JCTree def : mergedInto.defs) {
+            if (!(def instanceof JCMethodDecl method)) continue;
+            if (!method.name.contentEquals("<init>")) continue;
+            if ((method.mods.flags & Flags.GENERATEDCONSTR) != 0) continue;
+            declaresAny = true;
+            if (method.params.size() == seeds) return true;
+        }
+        // No constructor written at all leaves javac's own default, which takes
+        // none - so it serves whenever the entry points pass none.
+        return !declaresAny && seeds == 0;
     }
 
     /** Appends whichever bootstrap methods are missing from the target. */
@@ -89,6 +134,15 @@ final class BootstrapMethodFactory {
         // @BuilderNames(x = NONE) to the empty string, so there is no second
         // generate-flag to consult.
         int seeds = ctx.seeds().size();
+        if (!builderCanBeInstantiated(seeds)) {
+            messager.printMessage(Diagnostic.Kind.NOTE,
+                "@ClassBuilder merged into '" + mergedInto.name + "' but every constructor it "
+                    + "declares takes parameters, so '" + builderMethod + "', '" + fromMethod
+                    + "' and '" + mutateMethod + "' were not added - declare a no-argument "
+                    + "constructor or write them",
+                ctx.targetElement());
+            return;
+        }
         if (!builderMethod.isEmpty())
             appendUnless(target, builderMethod, "/" + seeds,
                 BootstrapCollisions.declaresArity(target, builderMethod, seeds), this::builderFactory);

@@ -271,6 +271,53 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
         assertNoErrors();
     }
 
+    /**
+     * The processor skips all three entry points where the declared builder has
+     * constructors and no nullary one, every entry point instantiating it. An
+     * editor still offering them would be the same divergence in a narrower
+     * shape, so the two withhold together.
+     */
+    public void testMergedBuilderWithNoNullaryConstructor_offersNoEntryPoints() {
+        PsiFile file = myFixture.configureByText("Seeded.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(mergeDeclaredBuilder = true)
+            public class Seeded {
+                private String name;
+                public static class Builder {
+                    private final String origin;
+                    public Builder(String origin) { this.origin = origin; }
+                }
+            }
+            """);
+        PsiClass target = ((PsiJavaFile) file).getClasses()[0];
+        List<String> names = methodNamesOf(target);
+        assertFalse("nothing can call new on it: " + names, names.contains("builder"));
+        assertFalse("nor seed one: " + names, names.contains("from"));
+        assertFalse("nor read one back: " + names, names.contains("mutate"));
+        assertTrue("but the setters are still merged in: "
+                + methodNamesOf(nestedOf(target, "Builder")),
+            methodNamesOf(nestedOf(target, "Builder")).contains("name"));
+    }
+
+    /** A nullary constructor beside a seeded one keeps them. */
+    public void testMergedBuilderWithANullaryConstructor_keepsItsEntryPoints() {
+        PsiFile file = myFixture.configureByText("Both.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(mergeDeclaredBuilder = true)
+            public class Both {
+                private String name;
+                public static class Builder {
+                    public Builder() { }
+                    public Builder(String origin) { }
+                }
+            }
+            """);
+        List<String> names = methodNamesOf(((PsiJavaFile) file).getClasses()[0]);
+        assertTrue("one constructor serves them: " + names, names.contains("builder"));
+    }
+
     /** And a field the author declared themselves is not doubled. */
     public void testMergedBuilder_doesNotDuplicateADeclaredSlotField() {
         PsiFile file = myFixture.configureByText("Doc.java",

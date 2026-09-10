@@ -157,7 +157,7 @@ public final class BuilderMutator {
             bridge.compat().appendDef(target, nested);
         }
 
-        new BootstrapMethodFactory(ctx, messager).appendAll();
+        new BootstrapMethodFactory(ctx, messager, ctx.fields(), declared).appendAll();
         return true;
     }
 

@@ -377,10 +377,39 @@ public final class ClassBuilderConstants {
                                                @NotNull String builderName,
                                                boolean mergeDeclaredBuilder,
                                                boolean executable) {
-        if (declaredBuilderOf(target, builderName) == null) return false;
+        PsiClass declared = declaredBuilderOf(target, builderName);
+        if (declared == null) return false;
         if (executable) return true;
         if (chainRoleOf(target).isChained()) return true;
-        return !mergeDeclaredBuilder;
+        if (!mergeDeclaredBuilder) return true;
+        // The merge runs, but every entry point instantiates the builder and the
+        // declared builder's constructors are the author's throughout. One that
+        // declares constructors and no nullary one leaves the three entry points
+        // with nothing to call, so the processor skips them with a note - and an
+        // editor still offering them would be the divergence back again in a
+        // narrower shape.
+        return !hasNullaryConstructor(declared);
+    }
+
+    /**
+     * Whether the class can be instantiated with no arguments.
+     *
+     * <p>A class that declares no constructor at all keeps javac's default,
+     * which takes none. Read through {@link PsiExtensibleClass#getOwnMethods()}
+     * rather than {@code getConstructors()}, the latter being augment-aware.
+     *
+     * @param declared the builder the author wrote
+     * @return whether a no-argument constructor is reachable
+     */
+    private static boolean hasNullaryConstructor(@NotNull PsiClass declared) {
+        if (!(declared instanceof PsiExtensibleClass extensible)) return true;
+        boolean declaresAny = false;
+        for (PsiMethod own : extensible.getOwnMethods()) {
+            if (!own.isConstructor()) continue;
+            declaresAny = true;
+            if (own.getParameterList().isEmpty()) return true;
+        }
+        return !declaresAny;
     }
 
     // ------------------------------------------------------------------

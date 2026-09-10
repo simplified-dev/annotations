@@ -339,6 +339,70 @@ public class DeclaredBuilderMergeTest {
     }
 
     /**
+     * Every entry point instantiates the builder, and a declared builder's
+     * constructors are the author's throughout. One that declares constructors
+     * and no nullary one leaves all three with nothing to call - which used to
+     * be a generated line javac rejects rather than something said out loud.
+     */
+    @Test
+    public void merge_whereTheAuthorsBuilderConstructorTakesParameters_skipsTheBootstrapsWithANote()
+        throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Seeded",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, mergeDeclaredBuilder = true)",
+                "public class Seeded {",
+                "    private String name;",
+                "    Seeded(String name) { this.name = name; }",
+                "    public String getName() { return name; }",
+                "    public static class Builder {",
+                "        private final String origin;",
+                "        public Builder(String origin) { this.origin = origin; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseSeeded",
+                "package demo;",
+                "public class UseSeeded {",
+                "    public static String go() {",
+                "        return new Seeded.Builder(\"x\").name(\"n\").build().getName();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining(
+            "@ClassBuilder merged into 'Builder' but every constructor it declares takes "
+                + "parameters, so 'builder', 'from' and 'mutate' were not added");
+        assertEquals("the setters are still merged in", "n", runGo(c, "demo.UseSeeded"));
+    }
+
+    /** A builder declaring a nullary constructor beside a seeded one keeps its entry points. */
+    @Test
+    public void merge_whereTheAuthorAlsoDeclaresANullaryConstructor_keepsTheBootstraps()
+        throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Both",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, mergeDeclaredBuilder = true)",
+                "public class Both {",
+                "    private String name;",
+                "    Both(String name) { this.name = name; }",
+                "    public String getName() { return name; }",
+                "    public static class Builder {",
+                "        public Builder() { }",
+                "        public Builder(String origin) { }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseBoth",
+                "package demo;",
+                "public class UseBoth {",
+                "    public static String go() { return Both.builder().name(\"n\").build().getName(); }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("n", runGo(c, "demo.UseBoth"));
+    }
+
+    /**
      * The entry points call {@code new} on the declared builder, so declaring it
      * abstract leaves them nothing to create - which used to be found by javac
      * on a generated line rather than said here.
