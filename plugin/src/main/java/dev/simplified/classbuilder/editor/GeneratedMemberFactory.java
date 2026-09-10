@@ -24,6 +24,7 @@ import com.intellij.psi.PsiTypes;
 import com.intellij.psi.PsiWildcardType;
 import com.intellij.psi.TypeAnnotationProvider;
 import com.intellij.psi.augment.PsiAugmentProvider;
+import com.intellij.psi.impl.light.LightFieldBuilder;
 import com.intellij.psi.impl.light.LightMethodBuilder;
 import com.intellij.psi.impl.light.LightModifierList;
 import com.intellij.psi.impl.light.LightParameter;
@@ -790,6 +791,55 @@ public final class GeneratedMemberFactory {
      * @param toBuilder mapping into the synth Builder's own type parameters
      * @return the slot shapes, in declaration order
      */
+    /**
+     * The slot fields the merge appends into a builder the author declared.
+     *
+     * <p>Contributed because the merge writes them and the editor wrote none, so
+     * an author's own verb inside that class referencing a slot was red over
+     * source that builds - which lands on exactly the hand-written verb the
+     * merge exists to allow.
+     *
+     * <p>A lazy slot is held as a supplier rather than as its declared type, the
+     * slot needing a value that means "never set" without that value being a
+     * legal one. The third shape the processor knows - a slot whose retained
+     * initializer reads instance state, which is also held as a supplier -
+     * cannot be told apart here, initializer flow being something the editor
+     * does not analyse, so such a slot is contributed with its declared type.
+     *
+     * @param site the annotated site
+     * @param config the resolved configuration
+     * @param builder the declared builder being merged into
+     * @return the fields to add, in slot order
+     */
+    static List<PsiField> synthesizeBuilderFields(BuilderSite site, EditorBuilderConfig config,
+                                                  PsiClass builder) {
+        PsiClass target = site.owner();
+        Project project = target.getProject();
+        PsiManager psiManager = PsiManager.getInstance(project);
+        PsiElementFactory elements = JavaPsiFacade.getElementFactory(project);
+
+        PsiTypeParameter[] sourceParams = site.typeParameterSource();
+        PsiTypeParameter[] ownParams = ownTypeParameters(builder, sourceParams.length);
+        PsiSubstitutor toBuilder = remap(elements, sourceParams, ownParams);
+
+        List<PsiField> out = new ArrayList<>();
+        for (PsiFieldShape slot : slotsOf(site, toBuilder, config.setters())) {
+            // A seeded slot is supplied to builder(...) and never held here.
+            if (slot.seed) continue;
+            PsiType type = slot.lazy
+                ? elements.createTypeFromText(
+                    "java.util.function.Supplier<" + slot.type.getCanonicalText() + ">", builder)
+                : slot.type;
+            LightFieldBuilder field = new LightFieldBuilder(psiManager, slot.name, type);
+            field.setContainingClass(builder);
+            field.setModifiers(PsiModifier.PRIVATE);
+            field.setNavigationElement(target);
+            GeneratedMemberMarker.mark(field);
+            out.add(field);
+        }
+        return out;
+    }
+
     private static List<PsiFieldShape> slotsOf(BuilderSite site, PsiSubstitutor toBuilder,
                                                SetterScheme setters) {
         if (site.isExecutable()) {

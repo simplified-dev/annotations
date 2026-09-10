@@ -3,6 +3,7 @@ import com.intellij.openapi.util.Key;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiParameter;
@@ -229,11 +230,20 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         if (site == null) {
             // The class carries no annotation of its own, which is also what a
             // declared Builder being merged into looks like. Its members come
-            // from the annotation on the class around it.
-            if (!PsiMethod.class.isAssignableFrom(type)) return Collections.emptyList();
-            @SuppressWarnings("unchecked")
-            List<Psi> merged = (List<Psi>) cachedMergedBuilderMethods(target);
-            return merged;
+            // from the annotation on the class around it - the slot fields as
+            // well as the methods, since the merge appends both and an author's
+            // own verb in that class reads the fields.
+            if (PsiMethod.class.isAssignableFrom(type)) {
+                @SuppressWarnings("unchecked")
+                List<Psi> merged = (List<Psi>) cachedMergedBuilderMethods(target);
+                return merged;
+            }
+            if (PsiField.class.isAssignableFrom(type)) {
+                @SuppressWarnings("unchecked")
+                List<Psi> fields = (List<Psi>) cachedMergedBuilderFields(target);
+                return fields;
+            }
+            return Collections.emptyList();
         }
 
         if (PsiMethod.class.isAssignableFrom(type)) {
@@ -302,18 +312,90 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         });
     }
 
-    private static List<PsiMethod> mergedBuilderMethods(PsiClass declared) {
+    /**
+     * The slot fields for a {@code Builder} the target declares itself and asked
+     * to have merged into.
+     *
+     * <p>The merge writes them and the editor wrote none, so an author's own verb
+     * inside that class referencing a slot was red over source that builds. A
+     * generated field is offered only where the declared class spells no field of
+     * that name, which is the processor's own rule.
+     *
+     * @param declared the class that might be a merged builder
+     * @return the fields to add, empty when it is not one
+     */
+    private static List<PsiField> cachedMergedBuilderFields(PsiClass declared) {
+        return CachedValuesManager.getCachedValue(declared, () -> {
+            List<PsiField> members = mergedBuilderFields(declared);
+            return CachedValueProvider.Result.create(members,
+                PsiModificationTracker.MODIFICATION_COUNT);
+        });
+    }
+
+    private static List<PsiField> mergedBuilderFields(PsiClass declared) {
+        MergeTarget merge = mergeTargetOf(declared);
+        if (merge == null) return Collections.emptyList();
+
+        Set<String> spelled = new HashSet<>();
+        for (PsiField own : ownFields(declared)) spelled.add(own.getName());
+        // Opened here rather than around the lookup above: BuilderSite.of
+        // answers null for a class already in progress, so a guard taken before
+        // it silently empties the whole merged path instead of protecting it.
+        // Field-type resolution is this codebase's known augment-recursion
+        // trigger, and every slot below resolves the type its field was written
+        // with, so the guard is a prerequisite of the contribution rather than a
+        // precaution beside it.
+        return withInProgress(merge.owner(), () -> {
+            List<PsiField> out = new ArrayList<>();
+            for (PsiField generated : GeneratedMemberFactory.synthesizeBuilderFields(
+                merge.site(), merge.config(), declared)) {
+                if (spelled.contains(generated.getName())) continue;
+                out.add(generated);
+            }
+            return out;
+        });
+    }
+
+    /** The declared fields, read without the augment pass that is asking. */
+    private static List<PsiField> ownFields(PsiClass declared) {
+        return declared instanceof PsiExtensibleClass extensible
+            ? extensible.getOwnFields()
+            : List.of(declared.getFields());
+    }
+
+    /**
+     * The annotated target a declared builder is being merged into, with the
+     * configuration that decides it.
+     *
+     * @param site the annotated site around the declaration
+     * @param owner the annotated type
+     * @param config its resolved configuration
+     */
+    private record MergeTarget(BuilderSite site, PsiClass owner,
+                               GeneratedMemberFactory.EditorBuilderConfig config) { }
+
+    /**
+     * Whether this class is a builder the merge runs into, and what decides it.
+     *
+     * <p>Every gate the processor applies, asked once for both the method and the
+     * field contribution so the two cannot disagree about whether a merge is
+     * happening at all.
+     *
+     * @param declared the class that might be a merged builder
+     * @return the target, or {@code null} when no merge reaches this class
+     */
+    private static @Nullable MergeTarget mergeTargetOf(PsiClass declared) {
         String name = declared.getName();
-        if (name == null) return Collections.emptyList();
+        if (name == null) return null;
         PsiClass owner = declared.getContainingClass();
-        if (owner == null || IN_PROGRESS.get().contains(owner)) return Collections.emptyList();
+        if (owner == null || IN_PROGRESS.get().contains(owner)) return null;
         BuilderSite site = BuilderSite.of(owner);
-        if (site == null || site.isExecutable()) return Collections.emptyList();
+        if (site == null || site.isExecutable()) return null;
 
         GeneratedMemberFactory.EditorBuilderConfig config =
             GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
-        if (!config.mergeDeclaredBuilder()) return Collections.emptyList();
-        if (!name.equals(config.builderName())) return Collections.emptyList();
+        if (!config.mergeDeclaredBuilder()) return null;
+        if (!name.equals(config.builderName())) return null;
         // The opt-in asks nothing about where the target sits in a chain, and
         // the chain branch returns ahead of the declared-builder check without
         // reading the attribute at all - so on a root, a link or a chained
@@ -321,28 +403,37 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         // here would list the setters, the self accessor and the build method
         // on a class javac appends nothing to, and a call to any of them fails
         // the build.
-        if (ClassBuilderConstants.chainRoleOf(owner).isChained()) return Collections.emptyList();
+        if (ClassBuilderConstants.chainRoleOf(owner).isChained()) return null;
         // The shape the processor accepts, asked of the same facts. Contributing
         // into a builder javac rejects leaves the author reading a populated
         // completion list right up to the moment the build fails on it.
-        if (ClassBuilderConstants.mergeRejection(owner, declared, config.names()) != null) {
-            return Collections.emptyList();
-        }
+        if (ClassBuilderConstants.mergeRejection(owner, declared, config.names()) != null) return null;
+        return new MergeTarget(site, owner, config);
+    }
 
+    private static List<PsiMethod> mergedBuilderMethods(PsiClass declared) {
+        MergeTarget merge = mergeTargetOf(declared);
+        if (merge == null) return Collections.emptyList();
         Set<String> spelled = new HashSet<>();
         for (PsiMethod own : GeneratedMemberFactory.ownMethods(declared)) {
             spelled.add(own.getName() + "/" + own.getParameterList().getParametersCount());
         }
-        List<PsiMethod> out = new ArrayList<>();
-        for (PsiMethod generated : GeneratedMemberFactory.synthesizeBuilderMethods(site, config, declared)) {
-            if (generated.isConstructor()) continue;
-            if (spelled.contains(generated.getName() + "/"
-                + generated.getParameterList().getParametersCount())) {
-                continue;
+        // Guarded for the reason the field contribution is, and opened in the
+        // same place: synthesising a setter resolves the type of the slot it
+        // assigns, which re-enters this provider for the class that wrote it.
+        return withInProgress(merge.owner(), () -> {
+            List<PsiMethod> out = new ArrayList<>();
+            for (PsiMethod generated : GeneratedMemberFactory.synthesizeBuilderMethods(
+                merge.site(), merge.config(), declared)) {
+                if (generated.isConstructor()) continue;
+                if (spelled.contains(generated.getName() + "/"
+                    + generated.getParameterList().getParametersCount())) {
+                    continue;
+                }
+                out.add(generated);
             }
-            out.add(generated);
-        }
-        return out;
+            return out;
+        });
     }
 
     private static List<PsiMethod> cachedMethods(PsiClass target) {

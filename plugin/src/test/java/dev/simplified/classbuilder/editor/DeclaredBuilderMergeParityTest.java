@@ -1,7 +1,10 @@
 package dev.simplified.classbuilder.editor;
 
+import com.intellij.codeInsight.daemon.impl.HighlightInfo;
+import com.intellij.lang.annotation.HighlightSeverity;
 import com.intellij.openapi.application.AccessToken;
 import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiMethod;
@@ -242,9 +245,64 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
         assertParity(BuilderParityFixture.load("chain-root-declared-builder-opt-out"));
     }
 
+    /**
+     * The merge appends the slot fields into the author's builder and the editor
+     * contributed none, so a reference to one inside the author's own verb was
+     * red over source that builds - which lands on exactly the hand-written verb
+     * the merge exists to allow.
+     */
+    public void testMergedBuilder_slotFieldsResolveInsideAnAuthorVerb() {
+        myFixture.configureByText("Settings.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(mergeDeclaredBuilder = true)
+            public class Settings {
+                private String name;
+                private int size;
+                public static class Builder {
+                    public Builder shout() {
+                        this.name = this.name.toUpperCase();
+                        this.size = this.size + 1;
+                        return this;
+                    }
+                }
+            }
+            """);
+        assertNoErrors();
+    }
+
+    /** And a field the author declared themselves is not doubled. */
+    public void testMergedBuilder_doesNotDuplicateADeclaredSlotField() {
+        PsiFile file = myFixture.configureByText("Doc.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(mergeDeclaredBuilder = true)
+            public class Doc {
+                private String fileName;
+                private int pages;
+                public static class Builder {
+                    private String fileName = "untitled";
+                }
+            }
+            """);
+        PsiClass builder = nestedOf(((PsiJavaFile) file).getClasses()[0], "Builder");
+        List<String> names = new ArrayList<>();
+        for (PsiField field : builder.getFields()) names.add(field.getName());
+        assertEquals("exactly one fileName: " + names, 1, count(names, "fileName"));
+        assertTrue("and the other slot is contributed: " + names, names.contains("pages"));
+    }
+
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+
+    private void assertNoErrors() {
+        List<String> errors = new ArrayList<>();
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            if (info.getSeverity() == HighlightSeverity.ERROR) errors.add(info.getDescription());
+        }
+        assertTrue("expected no editor errors, got: " + errors, errors.isEmpty());
+    }
 
     /**
      * Asserts every claim the shared case makes about what both halves produce.

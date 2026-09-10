@@ -145,6 +145,62 @@ public class GeneratedMemberRenameTest extends LightJavaCodeInsightFixtureTestCa
     }
 
     /**
+     * A merged builder is the author's own class and carries no generated mark,
+     * so the lookup that found the builder by that mark found none and the whole
+     * collection came back empty - every contributed setter kept its old name
+     * until the next build re-minted it under the new one.
+     */
+    public void testRenamingASlot_renamesTheContributedSettersOnADeclaredBuilder() {
+        PsiClass settings = configure("Settings",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(mergeDeclaredBuilder = true)
+            public class Settings {
+                String label;
+                public static class Builder {
+                    public Builder apply(Runnable task) { return this; }
+                }
+            }
+            """);
+        PsiFile caller = myFixture.addFileToProject("Caller.java",
+            """
+            public class Caller {
+                Settings make() { return Settings.builder().label("x").build(); }
+            }
+            """);
+
+        rename(settings, "label", "caption");
+
+        assertTrue("got " + caller.getText(), caller.getText().contains(".caption(\"x\")"));
+    }
+
+    /** With the opt-in off nothing was contributed there, so nothing is renamed. */
+    public void testWithoutTheOptIn_aDeclaredBuilderIsNotRenamedInto() {
+        PsiClass settings = configure("Untouched",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Untouched {
+                String label;
+                public static class Builder {
+                    public Builder label(String label) { return this; }
+                }
+            }
+            """);
+        PsiFile caller = myFixture.addFileToProject("Caller.java",
+            """
+            public class Caller {
+                void use(Untouched.Builder b) { b.label("x"); }
+            }
+            """);
+
+        rename(settings, "label", "caption");
+
+        assertTrue("the author's own setter keeps its name: " + caller.getText(),
+            caller.getText().contains(".label(\"x\")"));
+    }
+
+    /**
      * The singular name a {@code @Collector} falls back to is derived from the
      * slot, so it has to follow the slot too - which is the whole reason the
      * new names come from the dispatch rather than from a prefix swap.
