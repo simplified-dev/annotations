@@ -21,6 +21,7 @@ import com.intellij.psi.PsiSubstitutor;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypeParameter;
 import com.intellij.psi.PsiTypes;
+import com.intellij.psi.PsiWildcardType;
 import com.intellij.psi.TypeAnnotationProvider;
 import com.intellij.psi.augment.PsiAugmentProvider;
 import com.intellij.psi.impl.light.LightMethodBuilder;
@@ -251,6 +252,65 @@ public final class GeneratedMemberFactory {
         GeneratedMemberMarker.mark(ctor);
         ctor.setNavigationElement(target);
         return ctor;
+    }
+
+    /**
+     * Synthesises the copy constructor a SuperBuilder chain takes instead of the
+     * all-args one, so a hand-written {@code super(builder)} resolves.
+     *
+     * <p>The parameter type follows the builder's shape rather than the target's,
+     * exactly as {@code CopyConstructorFactory} decides it: a root and a chained
+     * abstract both carry the self-typed pair and take the wildcard form, which
+     * is what lets them accept any subclass builder, while a concrete link's
+     * builder binds the pair and is named plainly.
+     *
+     * @param target the annotated type
+     * @param builderClass the builder synthesised for it
+     * @param role the target's position in the chain
+     * @return the synthesised constructor, or {@code null} when the target has no name
+     */
+    static @Nullable PsiMethod copyConstructor(PsiClass target, PsiClass builderClass,
+                                               ChainRole role) {
+        String name = target.getName();
+        if (name == null) return null;
+        Project project = target.getProject();
+        PsiManager psiManager = PsiManager.getInstance(project);
+        PsiElementFactory elements = JavaPsiFacade.getElementFactory(project);
+
+        PsiTypeParameter[] targetParams = target.getTypeParameters();
+        PsiType parameterType = role.isSelfTyped()
+            ? selfTypedBuilderType(elements, target, builderClass, targetParams)
+            : applied(elements, builderClass, targetParams);
+
+        LightMethodBuilder ctor = new GeneratedLightMethod(psiManager, name)
+            .setConstructor(true)
+            .setContainingClass(target);
+        ctor.addParameter(buildParam(ctor, "b", parameterType, false, NO_ANNOTATIONS));
+        ctor.addModifier(PsiModifier.PROTECTED);
+        GeneratedMemberMarker.mark(ctor);
+        ctor.setNavigationElement(target);
+        return ctor;
+    }
+
+    /**
+     * {@code Builder<targetArgs..., ?, ?>} - the target's own parameters are
+     * bound, the enclosing class supplying them, while the two self-type slots
+     * stay unbounded so any subclass builder is accepted.
+     *
+     * @param elements the element factory
+     * @param target the annotated type
+     * @param builderClass the builder synthesised for it
+     * @param targetParams the target's own type parameters
+     * @return the applied builder type
+     */
+    private static PsiType selfTypedBuilderType(PsiElementFactory elements, PsiClass target,
+                                                PsiClass builderClass,
+                                                PsiTypeParameter[] targetParams) {
+        List<PsiType> args = new ArrayList<>(targetParams.length + 2);
+        for (PsiTypeParameter parameter : targetParams) args.add(elements.createType(parameter));
+        args.add(PsiWildcardType.createUnbounded(target.getManager()));
+        args.add(PsiWildcardType.createUnbounded(target.getManager()));
+        return elements.createType(builderClass, args.toArray(PsiType.EMPTY_ARRAY));
     }
 
     private static String builderTypeFqn(PsiClass target, EditorBuilderConfig config) {
@@ -1242,6 +1302,7 @@ public final class GeneratedMemberFactory {
                                String access, String constructorAccess,
                                String builderConstructorAccess,
                                boolean mergeDeclaredBuilder,
+                               boolean generateCopyConstructor,
                                String factoryMethod) {
         static EditorBuilderConfig fromAnnotation(PsiAnnotation annotation) {
             NamingStyle style = ClassBuilderConstants.namingStyle(annotation);
@@ -1254,13 +1315,19 @@ public final class GeneratedMemberFactory {
                 ClassBuilderConstants.ATTR_BUILDER_CONSTRUCTOR_ACCESS, "");
             boolean mergeDeclaredBuilder = ClassBuilderConstants.booleanAttr(annotation,
                 ClassBuilderConstants.ATTR_MERGE_DECLARED_BUILDER, false);
+            // Read with the annotation's own default, and part of the record for
+            // the same reason every other attribute is: this record is the
+            // augment cache key, and an attribute absent from it can neither be
+            // conditioned on nor invalidate the cache when it changes.
+            boolean generateCopyConstructor = ClassBuilderConstants.booleanAttr(annotation,
+                ClassBuilderConstants.ATTR_GENERATE_COPY_CONSTRUCTOR, true);
             String factoryMethod = ClassBuilderConstants.stringAttr(annotation,
                 ClassBuilderConstants.ATTR_FACTORY_METHOD, "");
             return new EditorBuilderConfig(
                 ClassBuilderConstants.builderScheme(annotation, style, targetSimpleName(annotation)),
                 ClassBuilderConstants.setterScheme(annotation, style),
                 access, constructorAccess, builderConstructorAccess, mergeDeclaredBuilder,
-                factoryMethod);
+                generateCopyConstructor, factoryMethod);
         }
 
         /**

@@ -5,7 +5,10 @@ import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
+import com.intellij.psi.PsiParameter;
+import com.intellij.psi.PsiTypeElement;
 import com.intellij.psi.impl.source.PsiExtensibleClass;
+import dev.simplified.classbuilder.apt.ChainRole;
 import com.intellij.psi.util.CachedValueProvider;
 import com.intellij.psi.util.CachedValuesManager;
 import com.intellij.psi.util.PsiModificationTracker;
@@ -59,7 +62,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
                                       PsiClass builderClass,
                                       DeferredConstructor allArgsConstructor) {
 
-        /** Bootstrap methods plus the all-args constructor when one was synthesised. */
+        /** Bootstrap methods plus the synthesised constructor, when there is one. */
         List<PsiMethod> allMethods() {
             PsiMethod constructor = allArgsConstructor.get();
             if (constructor == null) return bootstrapMethods;
@@ -67,6 +70,21 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             out.addAll(bootstrapMethods);
             out.add(constructor);
             return out;
+        }
+
+        /**
+         * The constructor alone, for a target that gets no entry points.
+         *
+         * <p>An abstract target's bootstraps come from its concrete subclasses,
+         * but its copy constructor is emitted on the target itself - the
+         * processor writes it above the gate that withholds the entry points, so
+         * withholding both together left a chain root with no constructor the
+         * editor could see and an author's {@code super(builder)} red over source
+         * that builds.
+         */
+        List<PsiMethod> constructorOnly() {
+            PsiMethod constructor = allArgsConstructor.get();
+            return constructor == null ? List.of() : List.of(constructor);
         }
     }
 
@@ -99,11 +117,14 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
 
         private final BuilderSite site;
         private final GeneratedMemberFactory.EditorBuilderConfig config;
+        private final PsiClass builderClass;
         private final AtomicReference<Optional<PsiMethod>> computed = new AtomicReference<>();
 
-        DeferredConstructor(BuilderSite site, GeneratedMemberFactory.EditorBuilderConfig config) {
+        DeferredConstructor(BuilderSite site, GeneratedMemberFactory.EditorBuilderConfig config,
+                            PsiClass builderClass) {
             this.site = site;
             this.config = config;
+            this.builderClass = builderClass;
         }
 
         /**
@@ -115,16 +136,72 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             Optional<PsiMethod> known = computed.get();
             if (known != null) return known.orElse(null);
 
-            PsiClass target = site.owner();
-            // The annotated member is what build() calls on the executable path,
-            // so there is no constructor to synthesise beside it.
-            PsiMethod fresh = !site.isExecutable() && needsAllArgsConstructor(target, config)
-                ? withInProgress(target, () -> GeneratedMemberFactory.allArgsConstructor(target, config))
-                : null;
+            PsiMethod fresh = compute();
             return computed.compareAndSet(null, Optional.ofNullable(fresh))
                 ? fresh
                 : computed.get().orElse(null);
         }
+
+        /**
+         * Which of the two constructors the processor emits here, if either.
+         *
+         * <p>A target in a chain takes the builder-copying one and never the
+         * all-args form, which is the split {@code needsAllArgsConstructor}
+         * already makes by refusing an abstract target and a concrete subclass of
+         * an annotated super. That refusal is why the chain's constructor was
+         * contributed by nothing at all, leaving an author's own
+         * {@code super(builder)} red over source that builds.
+         *
+         * @return the constructor, or {@code null} when the target needs none
+         */
+        private @Nullable PsiMethod compute() {
+            PsiClass target = site.owner();
+            // The annotated member is what build() calls on the executable path,
+            // so there is no constructor to synthesise beside it.
+            if (site.isExecutable()) return null;
+            if (ClassBuilderConstants.chainRoleOf(target).isChained()) {
+                if (!needsCopyConstructor(target, config)) return null;
+                ChainRole role = ClassBuilderConstants.chainRoleOf(target);
+                return withInProgress(target,
+                    () -> GeneratedMemberFactory.copyConstructor(target, builderClass, role));
+            }
+            return needsAllArgsConstructor(target, config)
+                ? withInProgress(target, () -> GeneratedMemberFactory.allArgsConstructor(target, config))
+                : null;
+        }
+    }
+
+    /**
+     * Mirrors the two gates the processor emits the chain's copy constructor
+     * under, and not the role alone.
+     *
+     * <p>Gating on the role would contribute a constructor javac omits whenever
+     * {@code generateCopyConstructor = false} is written or the author declared
+     * their own - the inverse of the divergence this closes, and the same class
+     * of error.
+     *
+     * <p>Reads {@code getOwnMethods()} rather than {@code getConstructors()}:
+     * the latter is augment-aware and would recurse back into this provider.
+     *
+     * @param target the annotated type
+     * @param config the resolved configuration for it
+     * @return whether the processor emits one here
+     */
+    private static boolean needsCopyConstructor(PsiClass target,
+                                                GeneratedMemberFactory.EditorBuilderConfig config) {
+        if (!config.generateCopyConstructor()) return false;
+        if (!(target instanceof PsiExtensibleClass extensible)) return false;
+        String builderName = config.builderName();
+        for (PsiMethod own : extensible.getOwnMethods()) {
+            if (!own.isConstructor()) continue;
+            PsiParameter[] parameters = own.getParameterList().getParameters();
+            if (parameters.length != 1) continue;
+            PsiTypeElement written = parameters[0].getTypeElement();
+            if (written == null) continue;
+            String text = written.getText();
+            if (text.equals(builderName) || text.startsWith(builderName + "<")) return false;
+        }
+        return true;
     }
 
     @Override
@@ -160,13 +237,6 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         }
 
         if (PsiMethod.class.isAssignableFrom(type)) {
-            // Bootstrap methods (builder/from/mutate) only on concrete targets;
-            // abstract targets get their bootstraps from concrete subclasses.
-            // An executable target is never in a chain, so an abstract enclosing
-            // type is no reason to withhold its entry point.
-            if (!site.isExecutable() && target.hasModifierProperty(PsiModifier.ABSTRACT)) {
-                return Collections.emptyList();
-            }
             @SuppressWarnings("unchecked")
             List<Psi> methods = (List<Psi>) cachedMethods(target);
             return methods;
@@ -289,8 +359,17 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
                     PsiModificationTracker.MODIFICATION_COUNT);
             }
             SynthesizedMembers members = synthesizeOrReuse(site);
+            // Bootstrap methods (builder/from/mutate) only on concrete targets;
+            // an abstract target gets its entry points from concrete subclasses.
+            // Its constructor is a separate question and is answered separately,
+            // the processor emitting the chain's copy constructor above the gate
+            // that withholds the entry points. An executable target is never in a
+            // chain, so an abstract enclosing type is no reason to withhold its
+            // entry point.
+            boolean entryPointsWithheld = !site.isExecutable()
+                && target.hasModifierProperty(PsiModifier.ABSTRACT);
             return CachedValueProvider.Result.create(
-                members.allMethods(),
+                entryPointsWithheld ? members.constructorOnly() : members.allMethods(),
                 PsiModificationTracker.MODIFICATION_COUNT);
         });
     }
@@ -390,7 +469,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             PsiClass builderClass = GeneratedMemberFactory.synthesizeBuilderClass(site, config);
             List<PsiMethod> bootstrap = GeneratedMemberFactory.bootstrapMethods(site, config, builderClass);
             SynthesizedMembers fresh = new SynthesizedMembers(config, bootstrap, builderClass,
-                new DeferredConstructor(site, config));
+                new DeferredConstructor(site, config, builderClass));
             target.putUserData(SYNTHESIZED, fresh);
             return fresh;
         });

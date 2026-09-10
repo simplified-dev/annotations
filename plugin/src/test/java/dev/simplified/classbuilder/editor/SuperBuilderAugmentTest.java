@@ -7,6 +7,7 @@ import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
+import com.intellij.psi.PsiParameter;
 import com.intellij.testFramework.LightProjectDescriptor;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
 import dev.simplified.testutil.JSvgErrorSuppressor;
@@ -153,6 +154,95 @@ public class SuperBuilderAugmentTest extends LightJavaCodeInsightFixtureTestCase
     // ------------------------------------------------------------------
     // Shape
     // ------------------------------------------------------------------
+
+    // ------------------------------------------------------------------
+    // The chain's copy constructor
+    //
+    // The processor emits protected Target(Builder) on every chain role and the
+    // editor synthesised none, so an author writing super(builder) in a
+    // constructor of their own was red over source that builds. It is
+    // contributed under both of the processor's gates rather than on the role,
+    // because gating on the role alone produces the inverse divergence wherever
+    // the attribute is written false or the author declared their own.
+    // ------------------------------------------------------------------
+
+    /** Every constructor the editor offers on the target, by parameter type. */
+    private List<String> constructorParameterTypesOf(PsiClass target) {
+        List<String> out = new ArrayList<>();
+        for (PsiMethod method : target.getMethods()) {
+            if (!method.isConstructor()) continue;
+            PsiParameter[] parameters = method.getParameterList().getParameters();
+            out.add(parameters.length == 1 ? parameters[0].getType().getPresentableText() : "");
+        }
+        return out;
+    }
+
+    public void testChainCopyConstructor_isOffered() {
+        addPlainChain();
+        myFixture.configureByText("Use.java", "package b;\npublic class Use { }\n");
+        List<String> types = constructorParameterTypesOf(myFixture.findClass("b.K"));
+        assertTrue("a concrete link takes its own builder plainly: " + types,
+            types.contains("Builder"));
+    }
+
+    /** A root's builder carries the self-typed pair, so its constructor takes the wildcard form. */
+    public void testChainCopyConstructorOnARoot_takesTheWildcardBuilder() {
+        addPlainChain();
+        myFixture.configureByText("Use.java", "package b;\npublic class Use { }\n");
+        List<String> types = constructorParameterTypesOf(myFixture.findClass("b.P"));
+        assertTrue("a root accepts any subclass builder: " + types,
+            types.contains("Builder<?, ?>"));
+    }
+
+    public void testWithGenerateCopyConstructorFalse_isNotOffered() {
+        myFixture.addFileToProject("c/P.java",
+            """
+            package c;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(generateCopyConstructor = false)
+            public abstract class P { String t; }
+            """);
+        myFixture.configureByText("Use.java", "package c;\npublic class Use { }\n");
+        List<String> types = constructorParameterTypesOf(myFixture.findClass("c.P"));
+        assertFalse("the attribute is read, so nothing is contributed: " + types,
+            types.contains("Builder<?, ?>"));
+    }
+
+    public void testWhereTheTargetDeclaresItsOwn_isNotOfferedTwice() {
+        myFixture.addFileToProject("d/P.java",
+            """
+            package d;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class P {
+                String t;
+                protected P(Builder<?, ?> b) { }
+            }
+            """);
+        myFixture.configureByText("Use.java", "package d;\npublic class Use { }\n");
+        List<String> types = constructorParameterTypesOf(myFixture.findClass("d.P"));
+        assertEquals("the author's version wins and nothing lands beside it: " + types,
+            1, types.stream().filter(t -> t.startsWith("Builder")).count());
+    }
+
+    /** An unrelated one-parameter constructor is not the author's copy constructor. */
+    public void testWhereTheTargetDeclaresAnUnrelatedConstructor_isStillOffered() {
+        myFixture.addFileToProject("e/P.java",
+            """
+            package e;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class P {
+                String t;
+                protected P(String t) { this.t = t; }
+            }
+            """);
+        myFixture.configureByText("Use.java", "package e;\npublic class Use { }\n");
+        List<String> types = constructorParameterTypesOf(myFixture.findClass("e.P"));
+        assertTrue("the builder-taking one is still missing without this: " + types,
+            types.contains("Builder<?, ?>"));
+        assertTrue("and the author's own is untouched: " + types, types.contains("String"));
+    }
 
     public void testRootBuilder_isAbstractAndSelfTyped() {
         myFixture.configureByText("P.java",

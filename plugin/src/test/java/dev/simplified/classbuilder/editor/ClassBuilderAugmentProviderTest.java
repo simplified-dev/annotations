@@ -248,7 +248,15 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
         assertEquals("a set factoryMethod suppresses synthesis", 0, factoried.getConstructors().length);
     }
 
-    public void testAbstractClass_noAllArgsConstructor() {
+    /**
+     * An abstract target takes the chain's copy constructor and never the
+     * all-args form. Asserted on which constructor is there rather than on there
+     * being none: the copy constructor is emitted by the processor above the
+     * gate that withholds the entry points, so an editor contributing nothing at
+     * all left an author's own {@code super(builder)} red over source that
+     * builds.
+     */
+    public void testAbstractClass_takesTheCopyConstructorAndNotTheAllArgsOne() {
         PsiFile file = myFixture.configureByText("Base.java",
             """
             import dev.simplified.annotations.ClassBuilder;
@@ -258,8 +266,13 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
             }
             """);
         PsiClass base = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
-        assertEquals("abstract targets take the copy constructor instead",
-            0, base.getConstructors().length);
+        PsiMethod[] constructors = base.getConstructors();
+        assertEquals("exactly one, and it is the builder-taking one",
+            1, constructors.length);
+        assertEquals(1, constructors[0].getParameterList().getParametersCount());
+        assertEquals("the wildcard form, so any subclass builder is accepted",
+            "Builder<?, ?>",
+            constructors[0].getParameterList().getParameters()[0].getType().getPresentableText());
     }
 
     public void testRecord_noAllArgsConstructor() {

@@ -118,6 +118,7 @@ public final class ClassBuilderConstants {
     public static final @NotNull String ATTR_BUILDER_CONSTRUCTOR_ACCESS = "builderConstructorAccess";
     public static final @NotNull String ATTR_FACTORY_METHOD = "factoryMethod";
     public static final @NotNull String ATTR_MERGE_DECLARED_BUILDER = "mergeDeclaredBuilder";
+    public static final @NotNull String ATTR_GENERATE_COPY_CONSTRUCTOR = "generateCopyConstructor";
 
     /** Attribute names of {@code @SetterNames}, in declaration order. */
     public static final @NotNull String[] SETTER_ROLES =
