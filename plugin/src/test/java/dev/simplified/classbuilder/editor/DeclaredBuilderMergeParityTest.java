@@ -7,6 +7,7 @@ import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiMethod;
 import com.intellij.testFramework.LightProjectDescriptor;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
+import dev.simplified.testutil.BuilderParityFixture;
 import dev.simplified.testutil.JSvgErrorSuppressor;
 import org.jetbrains.annotations.NotNull;
 
@@ -214,9 +215,70 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
         fail("expected the Helper nested class to be present");
     }
 
+    /**
+     * The processor returns ahead of every entry point where the target declares
+     * a nested type of the builder's name and the opt-in is not written, so an
+     * editor that offers one is completing a member the build answers
+     * {@code cannot find symbol} on. Reachable on a plain standalone target with
+     * no chain and no opt-in anywhere in it.
+     */
+    public void testDeclaredBuilder_offersNoEntryPoints() {
+        assertParity(BuilderParityFixture.load("standalone-declared-builder-opt-out"));
+    }
+
+    /**
+     * The chain branch returns ahead of the declared-builder check, so the
+     * opt-in reaches nothing on a link: no member is appended to the author's
+     * builder and no entry point lands on the target. The attribute being
+     * written is what makes this worth pinning separately - the editor reads it
+     * and the processor never does.
+     */
+    public void testADeclaredChainBuilderWithTheOptIn_isLeftAlone() {
+        assertParity(BuilderParityFixture.load("chain-link-declared-builder-opt-in"));
+    }
+
+    /** The same abort one role up, where no opt-in is written at all. */
+    public void testADeclaredChainBuilderWithoutTheOptIn_isLeftAlone() {
+        assertParity(BuilderParityFixture.load("chain-root-declared-builder-opt-out"));
+    }
+
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+
+    /**
+     * Asserts every claim the shared case makes about what both halves produce.
+     *
+     * @param fixture the case, read off the root the apt suite reads too
+     */
+    private void assertParity(BuilderParityFixture fixture) {
+        PsiFile file = myFixture.addFileToProject(fixture.path(), fixture.source());
+        PsiClass target = ((PsiJavaFile) file).getClasses()[0];
+        assertEquals("the case's type line names the file's first type",
+            fixture.simpleName(), target.getName());
+
+        List<String> mismatches =
+            new ArrayList<>(fixture.mismatches(BuilderParityFixture.TARGET, methodNamesOf(target)));
+        if (!fixture.forOwner(BuilderParityFixture.BUILDER).isEmpty()) {
+            mismatches.addAll(fixture.mismatches(BuilderParityFixture.BUILDER,
+                methodNamesOf(nestedOf(target, fixture.builderName()))));
+        }
+        assertTrue(String.join("\n", mismatches), mismatches.isEmpty());
+    }
+
+    /** Reads the augment-aware member list, which is what a call site resolves against. */
+    private static List<String> methodNamesOf(PsiClass owner) {
+        List<String> out = new ArrayList<>();
+        for (PsiMethod method : owner.getMethods()) out.add(method.getName());
+        return out;
+    }
+
+    private static PsiClass nestedOf(PsiClass target, String name) {
+        for (PsiClass nested : target.getInnerClasses()) {
+            if (name.equals(nested.getName())) return nested;
+        }
+        throw new AssertionError("expected a declared " + name + " on " + target.getName());
+    }
 
     private List<String> declaredBuilderMethodsOf(String className, String source) {
         PsiFile file = myFixture.configureByText(className + ".java", source);

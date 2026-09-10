@@ -244,6 +244,14 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
         if (!config.mergeDeclaredBuilder()) return Collections.emptyList();
         if (!name.equals(config.builderName())) return Collections.emptyList();
+        // The opt-in asks nothing about where the target sits in a chain, and
+        // the chain branch returns ahead of the declared-builder check without
+        // reading the attribute at all - so on a root, a link or a chained
+        // abstract the author's builder is left exactly as written. Merging
+        // here would list the setters, the self accessor and the build method
+        // on a class javac appends nothing to, and a call to any of them fails
+        // the build.
+        if (ChainRole.of(owner) != ChainRole.STANDALONE) return Collections.emptyList();
 
         Set<String> spelled = new HashSet<>();
         for (PsiMethod own : GeneratedMemberFactory.ownMethods(declared)) {
@@ -268,11 +276,66 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
                 return CachedValueProvider.Result.create(Collections.<PsiMethod>emptyList(),
                     PsiModificationTracker.MODIFICATION_COUNT);
             }
+            GeneratedMemberFactory.EditorBuilderConfig config =
+                GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
+            if (suppressesEntryPoints(site, config)) {
+                return CachedValueProvider.Result.create(Collections.<PsiMethod>emptyList(),
+                    PsiModificationTracker.MODIFICATION_COUNT);
+            }
             SynthesizedMembers members = synthesizeOrReuse(site);
             return CachedValueProvider.Result.create(
                 members.allMethods(),
                 PsiModificationTracker.MODIFICATION_COUNT);
         });
+    }
+
+    /**
+     * Whether the entry points are withheld because the target declares a nested
+     * type of the configured builder name.
+     *
+     * <p>All three mutation paths skip on that declaration, and only one of them
+     * reads the merge opt-in. A plain type target keeps its entry points when
+     * {@code mergeDeclaredBuilder} is written, the generated members going into
+     * the class the author wrote; a chain role aborts ahead of the bootstraps
+     * without consulting the attribute at all; and an executable target aborts
+     * the same way, having no merge to opt into. Offering any of the three where
+     * the build emits none is the shape a hand-migration off a Lombok builder
+     * produces most naturally, and it resolves green all the way to
+     * {@code cannot find symbol}.
+     *
+     * @param site the annotated site
+     * @param config the resolved configuration for it
+     * @return whether {@code builder()}, {@code from(T)} and {@code mutate()} must be withheld
+     */
+    private static boolean suppressesEntryPoints(BuilderSite site,
+                                                 GeneratedMemberFactory.EditorBuilderConfig config) {
+        PsiClass target = site.owner();
+        if (declaredBuilder(target, config) == null) return false;
+        if (site.isExecutable()) return true;
+        if (ChainRole.of(target) != ChainRole.STANDALONE) return true;
+        return !config.mergeDeclaredBuilder();
+    }
+
+    /**
+     * The nested type the target declares under the configured builder name.
+     *
+     * <p>Read through {@code getOwnInnerClasses()} rather than
+     * {@code getChildren()} or {@code getInnerClasses()}: the first forces a full
+     * AST load, which is illegal for a file not open in the editor and throws
+     * during cross-file highlighting, and the second is augment-aware and would
+     * recurse back into this provider.
+     *
+     * @param target the annotated type
+     * @param config the resolved configuration for it
+     * @return the declared class, or {@code null} when the target declares none
+     */
+    private static @Nullable PsiClass declaredBuilder(PsiClass target,
+                                                      GeneratedMemberFactory.EditorBuilderConfig config) {
+        if (!(target instanceof PsiExtensibleClass extensible)) return null;
+        for (PsiClass nested : extensible.getOwnInnerClasses()) {
+            if (config.builderName().equals(nested.getName())) return nested;
+        }
+        return null;
     }
 
     private static List<PsiClass> cachedNestedClasses(PsiClass target) {
@@ -283,21 +346,13 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
                     PsiModificationTracker.MODIFICATION_COUNT);
             }
             // Skip when the target already declares a nested class with the
-            // configured Builder name - the user's hand-written version wins.
-            // Use the stub-based getOwnInnerClasses() instead of getChildren()
-            // or getInnerClasses(): getChildren() forces full AST load (illegal
-            // for files that aren't open in the editor - throws during cross-
-            // file highlighting); getInnerClasses() is augment-aware and would
-            // recurse back into this provider.
+            // configured Builder name - the user's hand-written version wins,
+            // whether it is being merged into or is suppressing generation.
             GeneratedMemberFactory.EditorBuilderConfig config =
                 GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
-            if (target instanceof com.intellij.psi.impl.source.PsiExtensibleClass extensible) {
-                for (PsiClass nested : extensible.getOwnInnerClasses()) {
-                    if (config.builderName().equals(nested.getName())) {
-                        return CachedValueProvider.Result.create(Collections.<PsiClass>emptyList(),
-                            PsiModificationTracker.MODIFICATION_COUNT);
-                    }
-                }
+            if (declaredBuilder(target, config) != null) {
+                return CachedValueProvider.Result.create(Collections.<PsiClass>emptyList(),
+                    PsiModificationTracker.MODIFICATION_COUNT);
             }
             SynthesizedMembers members = synthesizeOrReuse(site);
             return CachedValueProvider.Result.create(
