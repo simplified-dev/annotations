@@ -3,6 +3,7 @@ package dev.simplified.classbuilder.mutate;
 import com.google.testing.compile.Compilation;
 import com.google.testing.compile.Compiler;
 import com.google.testing.compile.JavaFileObjects;
+import dev.simplified.classbuilder.BuilderParityFixture;
 import dev.simplified.classbuilder.apt.ClassBuilderProcessor;
 import org.junit.Test;
 
@@ -301,6 +302,86 @@ public class DeclaredBuilderMergeTest {
                 "}"));
         assertThat(c).failed();
         assertThat(c).hadErrorContaining("the slot it stands for is int");
+    }
+
+    // ------------------------------------------------------------------
+    // The shared parity cases
+    //
+    // Each of these compiles the same source the editor suite configures and
+    // asserts the same claim from the other side. The declared-builder-on-a-
+    // chain column was empty on both halves - nothing asserted that the abort
+    // fires and nothing would have failed if it stopped - which is what let the
+    // editor contribute a whole surface into a class javac never touches.
+    // ------------------------------------------------------------------
+
+    private static JavaFileObject parity(BuilderParityFixture fixture) {
+        return JavaFileObjects.forSourceString(fixture.qualifiedName(), fixture.source());
+    }
+
+    /**
+     * The entry points are the claim: a consumer calling {@code builder()} on a
+     * target that declares its own nested builder does not compile, which is
+     * what makes the editor offering it a divergence rather than a preference.
+     */
+    @Test
+    public void declaredBuilderWithoutTheOptIn_emitsNoEntryPoints() {
+        BuilderParityFixture fixture =
+            BuilderParityFixture.load("standalone-declared-builder-opt-out");
+        Compilation c = compile(
+            parity(fixture),
+            JavaFileObjects.forSourceLines("demo.UseUntouchedEntryPoints",
+                "package demo;",
+                "public class UseUntouchedEntryPoints {",
+                "    public static Object go() { return Untouched.builder(); }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("builder");
+        assertThat(c).hadNoteContaining(
+            "@ClassBuilder skipped injection: class Untouched already declares a nested 'Builder' type");
+    }
+
+    /**
+     * The chain path aborts on the same declaration by a different route, and
+     * neither half asserted it. Pinned on a stable prefix of the note rather
+     * than the whole line, the chain merge having a clause to append to it.
+     */
+    @Test
+    public void aDeclaredChainBuilderWithoutTheOptIn_stillNotesAndSkips() {
+        BuilderParityFixture fixture =
+            BuilderParityFixture.load("chain-root-declared-builder-opt-out");
+        Compilation c = compile(
+            parity(fixture),
+            JavaFileObjects.forSourceLines("demo.UseRooted",
+                "package demo;",
+                "public class UseRooted {",
+                "    public static Object go() { return new Rooted.Builder(); }",
+                "}"));
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining(
+            "@ClassBuilder skipped injection: class Rooted already declares a nested 'Builder' type");
+    }
+
+    /**
+     * The opt-in written on a link reaches nothing, the chain branch returning
+     * ahead of the declared-builder check - so a consumer calling a generated
+     * setter on the author's builder fails, and the editor listing one is the
+     * divergence.
+     */
+    @Test
+    public void aDeclaredChainBuilderWithTheOptIn_isStillSkipped() {
+        BuilderParityFixture fixture =
+            BuilderParityFixture.load("chain-link-declared-builder-opt-in");
+        Compilation c = compile(
+            parity(fixture),
+            JavaFileObjects.forSourceLines("demo.UseLink",
+                "package demo;",
+                "public class UseLink {",
+                "    public static Object go() { return new Link.Builder().extra(\"x\"); }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("extra");
+        assertThat(c).hadNoteContaining(
+            "@ClassBuilder skipped injection: class Link already declares a nested 'Builder' type");
     }
 
 }
