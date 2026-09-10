@@ -126,6 +126,72 @@ public final class DeclaredBuilderShape {
     }
 
     /**
+     * Renders a rejection with the operands its wording names.
+     *
+     * <p>Which values a rejection interpolates is part of the wording rather
+     * than of the caller, so it is decided here: the processor reporting on the
+     * annotated class and the inspection reporting on the declaration produce
+     * one sentence, and a test asserting a substring on one side is asserting it
+     * of the other.
+     *
+     * @param rejection what {@link #check} returned
+     * @param declaredName the declared builder's simple name
+     * @param targetName the annotated type's simple name
+     * @param builderMethodName the configured name of the static entry point
+     * @param facts the declared builder as written
+     * @param expectation what the role required
+     * @return the diagnostic text
+     */
+    public static @NotNull String describe(@NotNull DeclaredBuilderRejection rejection,
+                                           @NotNull String declaredName,
+                                           @NotNull String targetName,
+                                           @NotNull String builderMethodName,
+                                           @NotNull DeclaredBuilderFacts facts,
+                                           @NotNull RoleExpectation expectation) {
+        return switch (rejection) {
+            case NOT_STATIC, ABSTRACT_ON_CONCRETE_ROLE ->
+                rejection.message(declaredName, builderMethodName);
+            case NOT_ABSTRACT -> rejection.message(declaredName, targetName);
+            case TYPE_PARAMETERS, SELF_TYPE_BOUNDS -> rejection.message(declaredName,
+                names(expectation.typeParameterNames()), names(facts.typeParameterNames()));
+            case MISSING_SUPER_TYPE -> rejection.message(declaredName, expectation.superType());
+            case WRONG_SUPER_TYPE -> rejection.message(declaredName, expectation.superType(),
+                facts.writtenSuperType());
+            case BUILD_RETURN_TYPE -> rejection.message(declaredName,
+                facts.buildMethod() == null ? "nothing" : facts.buildMethod().returnType(),
+                expectation.buildReturnType());
+        };
+    }
+
+    /** A type-parameter list as it reads in a diagnostic, or {@code none}. */
+    private static String names(List<String> parameters) {
+        List<String> distinct = new ArrayList<>();
+        for (String name : parameters) {
+            if (!distinct.contains(name)) distinct.add(name);
+        }
+        return distinct.isEmpty() ? "none" : "<" + String.join(", ", distinct) + ">";
+    }
+
+    /**
+     * A written type stripped of its arguments and its qualifier, for a
+     * same-erasure comparison.
+     *
+     * <p>Shared because the two models render an applied type differently and
+     * neither can be resolved where it is read - the javac side runs mid-round
+     * and the PSI side must not start a resolve. Comparing the erased simple
+     * name is what both can do, and it is what the facts are stated in.
+     *
+     * @param type the type as written
+     * @return its erased simple name
+     */
+    public static @NotNull String erasedName(@NotNull String type) {
+        int generics = type.indexOf('<');
+        String raw = (generics < 0 ? type : type.substring(0, generics)).trim();
+        int dot = raw.lastIndexOf('.');
+        return dot < 0 ? raw : raw.substring(dot + 1);
+    }
+
+    /**
      * Whether the trailing pair carries any bound at all.
      *
      * <p>Presence rather than shape: the bound a self-typed pair needs is

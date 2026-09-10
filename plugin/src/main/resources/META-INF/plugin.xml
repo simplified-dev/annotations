@@ -167,6 +167,16 @@
         />
         <localInspection
                 language="JAVA"
+                implementationClass="dev.simplified.classbuilder.inspect.DeclaredBuilderShapeInspection"
+                enabledByDefault="true"
+                level="ERROR"
+                shortName="DeclaredBuilderShapeInspection"
+                displayName="@ClassBuilder cannot merge into the declared builder"
+                groupPath="Simplified Annotations"
+                groupName="Misuse"
+        />
+        <localInspection
+                language="JAVA"
                 implementationClass="dev.simplified.lazy.inspect.LazyFieldInspection"
                 enabledByDefault="true"
                 level="ERROR"

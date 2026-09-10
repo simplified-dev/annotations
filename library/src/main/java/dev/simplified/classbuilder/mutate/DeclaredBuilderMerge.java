@@ -150,7 +150,8 @@ final class DeclaredBuilderMerge {
         DeclaredBuilderRejection rejection = DeclaredBuilderShape.check(role, facts, expectation);
         if (rejection == null) return true;
         messager.printMessage(Diagnostic.Kind.ERROR,
-            rejection.message(operandsFor(rejection, declared, facts, expectation)),
+            DeclaredBuilderShape.describe(rejection, declared.name.toString(),
+                ctx.targetSimpleName(), ctx.config().builderMethodName(), facts, expectation),
             targetElement);
         return false;
     }
@@ -234,34 +235,6 @@ final class DeclaredBuilderMerge {
                 (method.mods.flags & Flags.ABSTRACT) != 0);
         }
         return null;
-    }
-
-    /**
-     * The values a rejection's wording interpolates, in the order it names them.
-     *
-     * @param rejection what came back from the shape decision
-     * @param declared the builder the author wrote
-     * @param facts the same builder as facts
-     * @param expectation what the role required
-     * @return the operands, ready to render
-     */
-    private Object[] operandsFor(DeclaredBuilderRejection rejection, JCClassDecl declared,
-                                 DeclaredBuilderFacts facts, RoleExpectation expectation) {
-        return switch (rejection) {
-            case NOT_STATIC -> new Object[]{declared.name, ctx.config().builderMethodName()};
-            case NOT_ABSTRACT, ABSTRACT_ON_CONCRETE_ROLE ->
-                new Object[]{declared.name, ctx.targetSimpleName()};
-            case TYPE_PARAMETERS -> new Object[]{declared.name,
-                names(expectation.typeParameterNames()), names(facts.typeParameterNames())};
-            case SELF_TYPE_BOUNDS -> new Object[]{declared.name,
-                names(expectation.typeParameterNames()), names(facts.typeParameterNames())};
-            case MISSING_SUPER_TYPE -> new Object[]{declared.name, expectation.superType()};
-            case WRONG_SUPER_TYPE ->
-                new Object[]{declared.name, expectation.superType(), facts.writtenSuperType()};
-            case BUILD_RETURN_TYPE -> new Object[]{declared.name,
-                facts.buildMethod() == null ? "nothing" : facts.buildMethod().returnType(),
-                expectation.buildReturnType()};
-        };
     }
 
     /**
@@ -392,10 +365,7 @@ final class DeclaredBuilderMerge {
 
     /** A declared type stripped of its arguments, for a same-erasure comparison. */
     private static String erasedName(String type) {
-        int generics = type.indexOf('<');
-        String raw = (generics < 0 ? type : type.substring(0, generics)).trim();
-        int dot = raw.lastIndexOf('.');
-        return dot < 0 ? raw : raw.substring(dot + 1);
+        return DeclaredBuilderShape.erasedName(type);
     }
 
     /**

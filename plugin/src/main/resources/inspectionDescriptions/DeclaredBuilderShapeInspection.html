@@ -1,0 +1,45 @@
+<html>
+<body>
+Reports a builder declared under <code>@ClassBuilder(mergeDeclaredBuilder =
+true)</code> whose shape cannot carry the generated members.
+
+<p>
+The processor refuses these with a compile error, and until this fires the
+editor had no analogue: the whole generated surface appeared in completion on a
+class the build was going to reject, so the first sign of the problem was a
+failure inside code the author never wrote.
+</p>
+
+<!-- tooltip end -->
+
+<p>
+The shapes refused, each for a reason the generated members cannot work around:
+</p>
+
+<ul>
+  <li><b>Not <code>static</code></b> - an inner class captures the enclosing
+      instance, so the static entry point has nothing to create one from.</li>
+  <li><b><code>abstract</code> where the entry points instantiate it</b> - the
+      builder a standalone target or a concrete link declares is what
+      <code>builder()</code> calls <code>new</code> on.</li>
+  <li><b>The wrong type parameters</b> - the generated members are written in
+      the builder's own re-declared parameters, so they have to be present and
+      in the same order for a setter to name a slot's type at all.</li>
+  <li><b>An unbounded trailing pair</b> on a self-typed builder - a setter
+      returning it would return something with no members.</li>
+  <li><b>The wrong <code>extends</code> clause</b> - a chained builder inherits
+      the parent's setters through it.</li>
+  <li><b>A build method returning something else</b> - a method the author wrote
+      is kept in place of the generated one, so it has to return what the
+      generated one returns.</li>
+</ul>
+
+<p>
+Reported at error level because the alternative is javac failing on a generated
+line. The message is the one the processor prints, rendered from the same
+decision, so the editor is red exactly where and for exactly the reason the
+build is.
+</p>
+
+</body>
+</html>

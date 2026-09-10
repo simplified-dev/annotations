@@ -305,6 +305,49 @@ public class DeclaredBuilderMergeTest {
     }
 
     /**
+     * The entry points call {@code new} on the declared builder, so declaring it
+     * abstract leaves them nothing to create - which used to be found by javac
+     * on a generated line rather than said here.
+     */
+    @Test
+    public void merge_intoAnAbstractBuilder_isRejected() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Sealed",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, mergeDeclaredBuilder = true)",
+                "public class Sealed {",
+                "    private String name;",
+                "    Sealed(String name) { this.name = name; }",
+                "    public abstract static class Builder { }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("it is what builder() instantiates, so it cannot be abstract");
+    }
+
+    /**
+     * A build method the author wrote is kept in place of the generated one, so
+     * a return type that cannot stand in for it is refused at the declaration.
+     */
+    @Test
+    public void merge_ontoABuildMethodReturningSomethingElse_isRejected() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Wrong",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, mergeDeclaredBuilder = true)",
+                "public class Wrong {",
+                "    private String name;",
+                "    Wrong(String name) { this.name = name; }",
+                "    public static class Builder {",
+                "        public Object build() { return null; }",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("its build method returns Object where this role builds Wrong");
+    }
+
+    /**
      * A lazy slot is held in the builder as a supplier, so the supplier spelling
      * is the one the generated setters can assign - and it was the one rejected.
      *

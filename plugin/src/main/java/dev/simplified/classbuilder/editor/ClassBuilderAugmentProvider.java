@@ -252,6 +252,12 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         // on a class javac appends nothing to, and a call to any of them fails
         // the build.
         if (ClassBuilderConstants.chainRoleOf(owner).isChained()) return Collections.emptyList();
+        // The shape the processor accepts, asked of the same facts. Contributing
+        // into a builder javac rejects leaves the author reading a populated
+        // completion list right up to the moment the build fails on it.
+        if (ClassBuilderConstants.mergeRejection(owner, declared, config.names()) != null) {
+            return Collections.emptyList();
+        }
 
         Set<String> spelled = new HashSet<>();
         for (PsiMethod own : GeneratedMemberFactory.ownMethods(declared)) {

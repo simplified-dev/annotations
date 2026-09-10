@@ -36,11 +36,11 @@ public enum DeclaredBuilderRejection {
         + "self() and build(), so the class holding them has to be abstract too"),
 
     /**
-     * A concrete link's builder binds the parent's parameters and is instantiated
-     * by the entry points, so it cannot be abstract.
+     * A role whose entry points instantiate the builder cannot have that builder
+     * declared abstract.
      */
-    ABSTRACT_ON_CONCRETE_ROLE("@ClassBuilder cannot merge into '%s' - the builder of a concrete "
-        + "link is what %s() instantiates, so it cannot be abstract"),
+    ABSTRACT_ON_CONCRETE_ROLE("@ClassBuilder cannot merge into '%s' - it is what %s() "
+        + "instantiates, so it cannot be abstract"),
 
     /**
      * The generated members are written in the builder's own re-declared

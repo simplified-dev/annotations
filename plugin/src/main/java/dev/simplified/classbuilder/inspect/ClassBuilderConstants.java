@@ -4,18 +4,30 @@ import com.intellij.psi.CommonClassNames;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationMemberValue;
 import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiJavaCodeReferenceElement;
 import com.intellij.psi.PsiLiteralExpression;
+import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiReferenceExpression;
+import com.intellij.psi.PsiReferenceList;
+import com.intellij.psi.PsiTypeElement;
+import com.intellij.psi.PsiTypeParameter;
 import com.intellij.psi.impl.source.PsiExtensibleClass;
 import dev.simplified.annotations.NamingStyle;
 import dev.simplified.classbuilder.apt.BuilderScheme;
 import dev.simplified.classbuilder.apt.ChainRole;
+import dev.simplified.classbuilder.apt.DeclaredBuildMethod;
+import dev.simplified.classbuilder.apt.DeclaredBuilderFacts;
+import dev.simplified.classbuilder.apt.DeclaredBuilderRejection;
+import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
+import dev.simplified.classbuilder.apt.RoleExpectation;
 import dev.simplified.classbuilder.apt.SetterScheme;
 import dev.simplified.shared.psi.WrittenAnnotations;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -367,6 +379,143 @@ public final class ClassBuilderConstants {
         if (executable) return true;
         if (chainRoleOf(target).isChained()) return true;
         return !mergeDeclaredBuilder;
+    }
+
+    // ------------------------------------------------------------------
+    // The declared builder's shape, as the shared decision states it
+    // ------------------------------------------------------------------
+
+    /**
+     * Why the merge cannot run into the builder this target declares, worded as
+     * the processor words it.
+     *
+     * <p>One entry point for the two callers that have to agree: the augment
+     * provider withholds where this answers and the inspection reports what it
+     * answers, so the editor cannot populate a builder it also marks red or stay
+     * silent about one it refuses to populate. The text comes back rather than
+     * the constant, because rendering it is where the two halves would otherwise
+     * pick different operands.
+     *
+     * <p>Answers only for a standalone target, because that is the only role the
+     * merge runs on - a chain role aborts ahead of the declared-builder check,
+     * so its declaration is left whole and its shape is not a question. Judging
+     * one would need the two trailing parameter names, which nothing on this
+     * side reads while no chain merges.
+     *
+     * @param target the annotated type
+     * @param declared the builder it declares
+     * @param names the resolved builder-member names
+     * @return the diagnostic, or {@code null} when the shape is usable or unjudged
+     */
+    public static @Nullable String mergeRejection(@NotNull PsiClass target,
+                                                  @NotNull PsiClass declared,
+                                                  @NotNull BuilderScheme names) {
+        ChainRole role = chainRoleOf(target);
+        if (role.isChained()) return null;
+        String declaredName = declared.getName();
+        String targetName = target.getName();
+        if (declaredName == null || targetName == null) return null;
+        DeclaredBuilderFacts facts = declaredBuilderFacts(declared, names.build());
+        RoleExpectation expectation = roleExpectation(target, role, List.of(), null);
+        DeclaredBuilderRejection rejection = DeclaredBuilderShape.check(role, facts, expectation);
+        return rejection == null
+            ? null
+            : DeclaredBuilderShape.describe(rejection, declaredName, targetName, names.builder(),
+                facts, expectation);
+    }
+
+    /**
+     * Reads a declared builder as written, for
+     * {@link DeclaredBuilderShape#check}.
+     *
+     * <p>Every read here is a declared read and a textual one. The reference
+     * elements are asked for their text rather than for the types they resolve
+     * to, and the methods come from {@link PsiExtensibleClass#getOwnMethods()}
+     * rather than {@code getAllMethods()} or {@code findMethodsByName} - both of
+     * which are augment-aware, so a provider asking them while it runs would see
+     * whatever it contributed last and never settle.
+     *
+     * @param declared the builder the author wrote
+     * @param buildMethodName the configured name of the terminal method
+     * @return the facts the shape decision measures
+     */
+    public static @NotNull DeclaredBuilderFacts declaredBuilderFacts(@NotNull PsiClass declared,
+                                                                     @NotNull String buildMethodName) {
+        List<String> parameterNames = new ArrayList<>();
+        List<String> parameterBounds = new ArrayList<>();
+        for (PsiTypeParameter parameter : declared.getTypeParameters()) {
+            parameterNames.add(parameter.getName() == null ? "" : parameter.getName());
+            parameterBounds.add(firstReferenceText(parameter.getExtendsList()));
+        }
+        String writtenSuper = firstReferenceText(declared.getExtendsList());
+        return new DeclaredBuilderFacts(
+            declared.hasModifierProperty(PsiModifier.STATIC),
+            declared.hasModifierProperty(PsiModifier.ABSTRACT),
+            parameterNames, parameterBounds,
+            writtenSuper == null ? null : DeclaredBuilderShape.erasedName(writtenSuper),
+            List.of(),
+            declaredBuildMethod(declared, buildMethodName));
+    }
+
+    /**
+     * What the role requires of a declared builder, expressed the way the
+     * processor expresses it.
+     *
+     * @param target the annotated type
+     * @param role its position in a chain
+     * @param selfNames the two trailing parameter names a self-typed role appends
+     * @param superBuilderType the erased builder type of the nearest annotated ancestor, or null
+     * @return the expectation to measure the declaration against
+     */
+    public static @NotNull RoleExpectation roleExpectation(@NotNull PsiClass target,
+                                                           @NotNull ChainRole role,
+                                                           @NotNull List<String> selfNames,
+                                                           @Nullable String superBuilderType) {
+        List<String> targetParameters = new ArrayList<>();
+        for (PsiTypeParameter parameter : target.getTypeParameters()) {
+            targetParameters.add(parameter.getName() == null ? "" : parameter.getName());
+        }
+        String targetName = target.getName() == null ? "" : target.getName();
+        String builtName = selfNames.isEmpty() ? targetName : selfNames.get(0);
+        return new RoleExpectation(
+            DeclaredBuilderShape.expectedTypeParameters(role, targetParameters, selfNames),
+            DeclaredBuilderShape.expectedSuperType(role, superBuilderType),
+            DeclaredBuilderShape.expectedBuildReturnType(role, targetName, builtName));
+    }
+
+    /**
+     * The no-argument build method the author wrote, by the configured name.
+     *
+     * @param declared the builder the author wrote
+     * @param buildMethodName the configured name of the terminal method
+     * @return the method as written, or {@code null} when the class declares none
+     */
+    private static @Nullable DeclaredBuildMethod declaredBuildMethod(@NotNull PsiClass declared,
+                                                                     @NotNull String buildMethodName) {
+        List<PsiMethod> own = declared instanceof PsiExtensibleClass extensible
+            ? extensible.getOwnMethods()
+            : List.of(declared.getMethods());
+        for (PsiMethod method : own) {
+            if (!buildMethodName.equals(method.getName())) continue;
+            if (!method.getParameterList().isEmpty()) continue;
+            PsiTypeElement returnType = method.getReturnTypeElement();
+            return new DeclaredBuildMethod(
+                returnType == null ? "" : DeclaredBuilderShape.erasedName(returnType.getText()),
+                method.hasModifierProperty(PsiModifier.ABSTRACT));
+        }
+        return null;
+    }
+
+    /**
+     * The text of a reference list's first entry, read rather than resolved.
+     *
+     * @param list the extends or bounds list, or {@code null}
+     * @return the first reference as written, or {@code null} when the list is empty
+     */
+    private static @Nullable String firstReferenceText(@Nullable PsiReferenceList list) {
+        if (list == null) return null;
+        PsiJavaCodeReferenceElement[] references = list.getReferenceElements();
+        return references.length == 0 ? null : references[0].getText();
     }
 
 }
