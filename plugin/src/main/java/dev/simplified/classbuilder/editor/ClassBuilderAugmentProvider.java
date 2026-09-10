@@ -251,7 +251,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         // here would list the setters, the self accessor and the build method
         // on a class javac appends nothing to, and a call to any of them fails
         // the build.
-        if (ChainRole.of(owner) != ChainRole.STANDALONE) return Collections.emptyList();
+        if (ClassBuilderConstants.chainRoleOf(owner).isChained()) return Collections.emptyList();
 
         Set<String> spelled = new HashSet<>();
         for (PsiMethod own : GeneratedMemberFactory.ownMethods(declared)) {
@@ -293,15 +293,13 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      * Whether the entry points are withheld because the target declares a nested
      * type of the configured builder name.
      *
-     * <p>All three mutation paths skip on that declaration, and only one of them
-     * reads the merge opt-in. A plain type target keeps its entry points when
-     * {@code mergeDeclaredBuilder} is written, the generated members going into
-     * the class the author wrote; a chain role aborts ahead of the bootstraps
-     * without consulting the attribute at all; and an executable target aborts
-     * the same way, having no merge to opt into. Offering any of the three where
-     * the build emits none is the shape a hand-migration off a Lombok builder
-     * produces most naturally, and it resolves green all the way to
-     * {@code cannot find symbol}.
+     * <p>Offering any of the three where the build emits none is the shape a
+     * hand-migration off a Lombok builder produces most naturally, and it
+     * resolves green all the way to {@code cannot find symbol}. The decision
+     * itself is
+     * {@link ClassBuilderConstants#suppressesGeneration(PsiClass, String, boolean, boolean)},
+     * so the inspection explaining the withholding and the withholding cannot
+     * disagree about when it happens.
      *
      * @param site the annotated site
      * @param config the resolved configuration for it
@@ -309,33 +307,8 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      */
     private static boolean suppressesEntryPoints(BuilderSite site,
                                                  GeneratedMemberFactory.EditorBuilderConfig config) {
-        PsiClass target = site.owner();
-        if (declaredBuilder(target, config) == null) return false;
-        if (site.isExecutable()) return true;
-        if (ChainRole.of(target) != ChainRole.STANDALONE) return true;
-        return !config.mergeDeclaredBuilder();
-    }
-
-    /**
-     * The nested type the target declares under the configured builder name.
-     *
-     * <p>Read through {@code getOwnInnerClasses()} rather than
-     * {@code getChildren()} or {@code getInnerClasses()}: the first forces a full
-     * AST load, which is illegal for a file not open in the editor and throws
-     * during cross-file highlighting, and the second is augment-aware and would
-     * recurse back into this provider.
-     *
-     * @param target the annotated type
-     * @param config the resolved configuration for it
-     * @return the declared class, or {@code null} when the target declares none
-     */
-    private static @Nullable PsiClass declaredBuilder(PsiClass target,
-                                                      GeneratedMemberFactory.EditorBuilderConfig config) {
-        if (!(target instanceof PsiExtensibleClass extensible)) return null;
-        for (PsiClass nested : extensible.getOwnInnerClasses()) {
-            if (config.builderName().equals(nested.getName())) return nested;
-        }
-        return null;
+        return ClassBuilderConstants.suppressesGeneration(site.owner(), config.builderName(),
+            config.mergeDeclaredBuilder(), site.isExecutable());
     }
 
     private static List<PsiClass> cachedNestedClasses(PsiClass target) {
@@ -350,7 +323,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             // whether it is being merged into or is suppressing generation.
             GeneratedMemberFactory.EditorBuilderConfig config =
                 GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
-            if (declaredBuilder(target, config) != null) {
+            if (ClassBuilderConstants.declaredBuilderOf(target, config.builderName()) != null) {
                 return CachedValueProvider.Result.create(Collections.<PsiClass>emptyList(),
                     PsiModificationTracker.MODIFICATION_COUNT);
             }

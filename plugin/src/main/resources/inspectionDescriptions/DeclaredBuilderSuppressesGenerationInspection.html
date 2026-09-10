@@ -1,0 +1,41 @@
+<html>
+<body>
+Reports a <code>@ClassBuilder</code> that generates nothing, because the target
+already declares a nested type named the same as the builder.
+
+<p>
+All three mutation paths skip on that declaration, and the only signal the build
+gives is a compiler note. Without this the entry points
+(<code>builder()</code>, <code>from(T)</code>, <code>mutate()</code>) and the
+whole generated surface are simply absent from completion with nothing on the
+screen saying why - which reads as the annotation being broken rather than as
+the declaration having turned it off.
+</p>
+
+<!-- tooltip end -->
+
+<p>
+Only one of the three positions reads the merge opt-in, and the message says
+which one the target is in:
+</p>
+
+<ul>
+  <li>A plain type target keeps its builder and its entry points when
+      <code>mergeDeclaredBuilder = true</code> is written - the generated
+      members are then appended to the class the author wrote, member for
+      member, with the author winning every collision.</li>
+  <li>A target in a SuperBuilder chain - abstract, or extending an annotated
+      class - aborts ahead of everything the pass would emit, including the
+      retained-initializer providers, the copy constructor and the bootstraps,
+      without consulting the attribute at all.</li>
+  <li>A constructor or static factory target has no merge to opt into and
+      aborts the same way.</li>
+</ul>
+
+<p>
+Reported at weak-warning severity because the code is correct: the author's own
+builder is what runs. What is worth knowing is that the generated half is off.
+</p>
+
+</body>
+</html>

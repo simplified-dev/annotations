@@ -1,12 +1,18 @@
 package dev.simplified.classbuilder.inspect;
 
+import com.intellij.psi.CommonClassNames;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationMemberValue;
+import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiLiteralExpression;
+import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiReferenceExpression;
+import com.intellij.psi.impl.source.PsiExtensibleClass;
 import dev.simplified.annotations.NamingStyle;
 import dev.simplified.classbuilder.apt.BuilderScheme;
+import dev.simplified.classbuilder.apt.ChainRole;
 import dev.simplified.classbuilder.apt.SetterScheme;
+import dev.simplified.shared.psi.WrittenAnnotations;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -275,6 +281,92 @@ public final class ClassBuilderConstants {
             }
         }
         return fallback;
+    }
+
+    // ------------------------------------------------------------------
+    // Chain role and the declared builder
+    // ------------------------------------------------------------------
+
+    /**
+     * Classifies a target's position in a SuperBuilder chain.
+     *
+     * <p>The two questions are the ones {@code BuilderMutator.mutate} dispatches
+     * on, asked of PSI here and of the element model there, so the editor's model
+     * of a chain is the shape javac will emit.
+     *
+     * @param target the annotated type
+     * @return its position in a chain, never null
+     */
+    public static @NotNull ChainRole chainRoleOf(@NotNull PsiClass target) {
+        boolean isAbstract = target.hasModifierProperty(PsiModifier.ABSTRACT) && !target.isInterface();
+        return ChainRole.of(isAbstract, annotatedSuperOf(target) != null);
+    }
+
+    /**
+     * The direct superclass when it also carries {@code @ClassBuilder}. Only the
+     * immediate parent is consulted, matching the processor's
+     * {@code findAnnotatedDirectSuper} - an unannotated class in between breaks
+     * the chain rather than being skipped over.
+     *
+     * @param target the annotated type
+     * @return the annotated superclass, or {@code null}
+     */
+    public static @Nullable PsiClass annotatedSuperOf(@NotNull PsiClass target) {
+        if (target.isInterface() || target.isRecord() || target.isEnum()) return null;
+        PsiClass superClass = target.getSuperClass();
+        if (superClass == null) return null;
+        if (CommonClassNames.JAVA_LANG_OBJECT.equals(superClass.getQualifiedName())) return null;
+        return WrittenAnnotations.has(superClass, ANNOTATION_FQN) ? superClass : null;
+    }
+
+    /**
+     * The nested type the target declares under the configured builder name.
+     *
+     * <p>Read through {@link PsiExtensibleClass#getOwnInnerClasses()} rather than
+     * {@code getChildren()} or {@code getInnerClasses()}: the first forces a full
+     * AST load, which is illegal for a file not open in the editor and throws
+     * during cross-file highlighting, and the second is augment-aware and would
+     * re-enter the provider that asked.
+     *
+     * @param target the annotated type
+     * @param builderName the configured builder class name
+     * @return the declared class, or {@code null} when the target declares none
+     */
+    public static @Nullable PsiClass declaredBuilderOf(@NotNull PsiClass target,
+                                                       @NotNull String builderName) {
+        if (!(target instanceof PsiExtensibleClass extensible)) return null;
+        for (PsiClass nested : extensible.getOwnInnerClasses()) {
+            if (builderName.equals(nested.getName())) return nested;
+        }
+        return null;
+    }
+
+    /**
+     * Whether a declared nested type of the builder's name suppresses generation
+     * outright, as opposed to being merged into.
+     *
+     * <p>All three mutation paths skip on that declaration and only one of them
+     * reads the merge opt-in. A plain type target keeps its builder and its entry
+     * points when {@code mergeDeclaredBuilder} is written, the generated members
+     * going into the class the author wrote. A chain role aborts ahead of
+     * everything - the retained-initializer providers, the copy constructor and
+     * the bootstraps - without consulting the attribute at all, and an executable
+     * target aborts the same way, having no merge to opt into.
+     *
+     * @param target the annotated type
+     * @param builderName the configured builder class name
+     * @param mergeDeclaredBuilder whether the merge opt-in is written
+     * @param executable whether the annotation sits on a constructor or factory method
+     * @return whether the processor generates nothing because of the declaration
+     */
+    public static boolean suppressesGeneration(@NotNull PsiClass target,
+                                               @NotNull String builderName,
+                                               boolean mergeDeclaredBuilder,
+                                               boolean executable) {
+        if (declaredBuilderOf(target, builderName) == null) return false;
+        if (executable) return true;
+        if (chainRoleOf(target).isChained()) return true;
+        return !mergeDeclaredBuilder;
     }
 
 }

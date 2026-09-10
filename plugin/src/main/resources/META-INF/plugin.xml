@@ -157,6 +157,16 @@
         />
         <localInspection
                 language="JAVA"
+                implementationClass="dev.simplified.classbuilder.inspect.DeclaredBuilderSuppressesGenerationInspection"
+                enabledByDefault="true"
+                level="WEAK WARNING"
+                shortName="DeclaredBuilderSuppressesGenerationInspection"
+                displayName="@ClassBuilder generates nothing beside a declared builder"
+                groupPath="Simplified Annotations"
+                groupName="Misuse"
+        />
+        <localInspection
+                language="JAVA"
                 implementationClass="dev.simplified.lazy.inspect.LazyFieldInspection"
                 enabledByDefault="true"
                 level="ERROR"

@@ -32,6 +32,7 @@ import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.util.IncorrectOperationException;
 import dev.simplified.annotations.NamingStyle;
 import dev.simplified.classbuilder.apt.BuilderScheme;
+import dev.simplified.classbuilder.apt.ChainRole;
 import dev.simplified.classbuilder.apt.SetterScheme;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.shared.psi.AnnotatedLightModifierList;
@@ -500,7 +501,7 @@ public final class GeneratedMemberFactory {
      *
      * <p>An executable target is never in one: a constructor has no chain to
      * find, so the processor's third path never looks for an annotated super and
-     * neither does this. Asking {@link ChainRole#of} anyway would read the
+     * neither does this. Classifying it anyway would read the
      * enclosing class's own shape - abstract, or extending an annotated parent -
      * and synthesise a self-typed Builder javac does not emit.
      *
@@ -508,7 +509,7 @@ public final class GeneratedMemberFactory {
      * @return the chain role, {@link ChainRole#STANDALONE} for an executable target
      */
     private static ChainRole roleOf(BuilderSite site) {
-        return site.isExecutable() ? ChainRole.STANDALONE : ChainRole.of(site.owner());
+        return site.isExecutable() ? ChainRole.STANDALONE : ClassBuilderConstants.chainRoleOf(site.owner());
     }
 
     /**
@@ -557,7 +558,7 @@ public final class GeneratedMemberFactory {
      */
     private static void applySuperBuilder(PsiElementFactory elements, PsiClass target,
                                           GeneratedBuilderClass builder, ChainRole role) {
-        PsiClass parent = ChainRole.annotatedSuperOf(target);
+        PsiClass parent = ClassBuilderConstants.annotatedSuperOf(target);
         if (parent == null) return;
         PsiClass parentBuilder = synthBuilderOf(parent);
         if (parentBuilder == null) return;
