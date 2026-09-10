@@ -156,14 +156,22 @@ final class DeclaredBuilderMerge {
     }
 
     /**
-     * Reports a declared slot field whose type is not the slot's, which the
-     * generated setter would otherwise fail to assign on a line the author never
-     * wrote.
+     * Reports a declared slot field whose type is not the one the builder holds
+     * that slot in, which the generated setter would otherwise fail to assign on
+     * a line the author never wrote.
      *
-     * <p>Compared on the rendered declared type rather than through the element
-     * model, which is what is available for a tree the round is still building.
-     * A false negative here is only a missed diagnostic - javac still refuses
-     * the assignment - so the comparison errs towards saying nothing.
+     * <p>Compared against the <em>storage</em> type rather than the field's
+     * declared type, because the two differ for three shapes and the setters
+     * assign into the first. Comparing against the declared type gets a lazy
+     * field wrong in both directions at once: it rejects the supplier spelling,
+     * which is the only one the generated setters can assign, and accepts the
+     * natural one, which then fails on a generated line - the exact outcome this
+     * check exists to prevent.
+     *
+     * <p>Compared on the rendered type rather than through the element model,
+     * which is what is available for a tree the round is still building. A false
+     * negative here is only a missed diagnostic - javac still refuses the
+     * assignment - so the comparison errs towards saying nothing.
      */
     private void rejectMistypedSlots(TypeElement targetElement, JCClassDecl declared) {
         for (JCTree def : declared.defs) {
@@ -172,14 +180,56 @@ final class DeclaredBuilderMerge {
             for (FieldSpec slot : ctx.fields()) {
                 if (!slot.name.equals(name)) continue;
                 if (field.vartype == null) continue;
-                if (erasedName(field.vartype.toString()).equals(erasedName(slot.typeDisplay))) continue;
+                String storage = slotStorageType(slot);
+                if (erasedName(field.vartype.toString()).equals(erasedName(storage))) continue;
                 messager.printMessage(Diagnostic.Kind.ERROR,
                     "@ClassBuilder merged into '" + declared.name + "' finds '" + name
                         + "' declared as " + field.vartype + ", and the slot it stands for is "
-                        + slot.typeDisplay + " - the generated setter has nothing to assign it to",
+                        + storage + " - the generated setter has nothing to assign it to"
+                        + heldIndirectly(slot),
                     targetElement);
             }
         }
+    }
+
+    /**
+     * The type the generated builder declares the slot as, which is not always
+     * the type the field is declared with.
+     *
+     * <p>Three shapes, matching {@code FieldMutators} exactly: a collected field
+     * whose default reads instance state gathers into a plain {@code java.util}
+     * scratch container, a lazy field or one whose default is computed on the
+     * instance is held as a supplier so the slot can carry "unset" without
+     * ambiguity, and everything else is held as declared.
+     *
+     * @param slot the slot being merged
+     * @return the storage type, rendered
+     */
+    private String slotStorageType(FieldSpec slot) {
+        if (ctx.isCollectedInstanceDefault(slot)) return ctx.collectedSlotType(slot).toString();
+        if (slot.lazy || ctx.isInstanceDefault(slot.name)) {
+            return "java.util.function.Supplier<" + slot.typeDisplay + ">";
+        }
+        return slot.typeDisplay;
+    }
+
+    /**
+     * Why a slot is held as something other than its declared type, for the two
+     * shapes where an author would otherwise read the storage type as a mistake
+     * in the generator rather than a property of their own field.
+     *
+     * @param slot the slot being merged
+     * @return the trailing clause, empty where the slot is held as declared
+     */
+    private String heldIndirectly(FieldSpec slot) {
+        if (slot.lazy) {
+            return ". A @Lazy field is held in the builder as a supplier of its declared type";
+        }
+        if (ctx.isInstanceDefault(slot.name)) {
+            return ". A slot whose retained initializer reads instance state is held in the builder "
+                + "as a supplier of its declared type";
+        }
+        return "";
     }
 
     /** Field names the declared builder already spells. */

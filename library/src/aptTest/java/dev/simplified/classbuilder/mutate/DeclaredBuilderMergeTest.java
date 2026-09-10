@@ -304,6 +304,64 @@ public class DeclaredBuilderMergeTest {
         assertThat(c).hadErrorContaining("the slot it stands for is int");
     }
 
+    /**
+     * A lazy slot is held in the builder as a supplier, so the supplier spelling
+     * is the one the generated setters can assign - and it was the one rejected.
+     *
+     * <p>Seeded through the generated setter rather than left to default,
+     * because the author's declared field wins whole: the merge appends no field
+     * of a name the builder already spells, so the initializer the generated
+     * slot would have carried is not there either.
+     */
+    @Test
+    public void merge_whereALazySlotIsDeclaredAsASupplier_isAccepted() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Held",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import dev.simplified.annotations.Lazy;",
+                "import java.util.function.Supplier;",
+                "@ClassBuilder(validate = false, mergeDeclaredBuilder = true)",
+                "public class Held {",
+                "    @Lazy private String note = compute();",
+                "    private static String compute() { return \"computed\"; }",
+                "    public static class Builder {",
+                "        private Supplier<String> note;",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseHeld",
+                "package demo;",
+                "public class UseHeld {",
+                "    public static String go() { return Held.builder().note(\"set\").build().getNote(); }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("set", runGo(c, "demo.UseHeld"));
+    }
+
+    /**
+     * And the natural spelling is the one that cannot work, which the check used
+     * to accept and leave to fail on a generated line.
+     */
+    @Test
+    public void merge_whereALazySlotIsDeclaredWithItsNaturalType_isRejected() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Natural",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import dev.simplified.annotations.Lazy;",
+                "@ClassBuilder(validate = false, mergeDeclaredBuilder = true)",
+                "public class Natural {",
+                "    @Lazy private String note = compute();",
+                "    private static String compute() { return \"computed\"; }",
+                "    public static class Builder {",
+                "        private String note;",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(
+            "A @Lazy field is held in the builder as a supplier of its declared type");
+    }
+
     // ------------------------------------------------------------------
     // The shared parity cases
     //
