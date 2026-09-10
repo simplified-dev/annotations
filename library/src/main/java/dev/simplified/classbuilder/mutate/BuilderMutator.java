@@ -4,6 +4,7 @@ import com.sun.tools.javac.tree.JCTree.JCMethodDecl;
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.args.mutate.ArgsConstructorMutator;
 import dev.simplified.classbuilder.apt.BuilderConfig;
+import dev.simplified.classbuilder.apt.ChainRole;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.lazy.mutate.LazyFieldMutator;
 import dev.simplified.lazy.mutate.LazyHolders;
@@ -317,7 +318,15 @@ public final class BuilderMutator {
             if (m.getAnnotationType().toString().equals("dev.simplified.annotations.ClassBuilder")) {
                 List<String> args = new ArrayList<>();
                 for (TypeMirror arg : dt.getTypeArguments()) args.add(arg.toString());
-                return new AnnotatedSuper(superType.getSimpleName().toString(), args);
+                // The superclass's own role, walked one level further up. What it
+                // is decides whether a concrete member found on its builder can
+                // be read as the author's, since a self-typed role generates an
+                // abstract pair and a concrete link generates a concrete one.
+                ChainRole superRole = ChainRole.of(
+                    superType.getModifiers().contains(Modifier.ABSTRACT),
+                    findAnnotatedDirectSuper(superType) != null);
+                return new AnnotatedSuper(superType.getSimpleName().toString(), args, superType,
+                    superRole);
             }
         }
         return null;

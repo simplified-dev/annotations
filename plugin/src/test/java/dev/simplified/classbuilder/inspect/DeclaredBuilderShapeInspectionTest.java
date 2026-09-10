@@ -148,6 +148,48 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
         assertEquals("no merge, no shape requirement: " + errors(), 0, errors().size());
     }
 
+    /**
+     * The other direction the same divergence was recorded from: the processor
+     * wrote an extends clause naming a builder that could not take it, and the
+     * editor left the child's builder unrooted and reported nothing.
+     */
+    public void testALinkWhoseAnnotatedSuperDeclaresItsOwnBuilder_isReported() {
+        myFixture.configureByText("Leaf.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            abstract class Rooted {
+                private String label;
+                public static class Builder { }
+            }
+            @ClassBuilder
+            public class Leaf extends Rooted {
+                private String extra;
+            }
+            """);
+        assertTrue("names the supertype: " + errors(),
+            theOnlyError().contains(
+                "@ClassBuilder generates no builder on 'Leaf' - its annotated supertype 'Rooted' "
+                    + "declares its own nested builder"));
+    }
+
+    /** An ancestor whose builder is generated takes the clause, so nothing is said. */
+    public void testALinkWhoseAnnotatedSuperGeneratesItsBuilder_isNotReported() {
+        myFixture.configureByText("Child.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            abstract class Parent {
+                private String label;
+            }
+            @ClassBuilder
+            public class Child extends Parent {
+                private String extra;
+            }
+            """);
+        assertEquals("an ordinary chain is left alone: " + errors(), 0, errors().size());
+    }
+
     private String theOnlyError() {
         List<String> errors = errors();
         assertEquals("expected exactly one highlight, got: " + errors, 1, errors.size());
@@ -161,7 +203,8 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
         for (HighlightInfo info : myFixture.doHighlighting()) {
             if (info.getSeverity() != HighlightSeverity.ERROR) continue;
             String description = info.getDescription();
-            if (description != null && description.startsWith("@ClassBuilder cannot merge into")) {
+            if (description != null && (description.startsWith("@ClassBuilder cannot merge into")
+                || description.startsWith("@ClassBuilder generates no builder on"))) {
                 out.add(description);
             }
         }

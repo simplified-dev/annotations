@@ -1,5 +1,8 @@
 package dev.simplified.classbuilder.mutate;
 
+import dev.simplified.classbuilder.apt.ChainRole;
+
+import javax.lang.model.element.TypeElement;
 import java.util.List;
 
 /**
@@ -15,6 +18,9 @@ import java.util.List;
  * @param simpleName the superclass's simple name
  * @param typeArguments type-display strings for the arguments the target passes
  *        to the superclass, empty when the superclass is not generic
+ * @param element the superclass, for reading what its own builder already carries
+ * @param role where the superclass itself sits in the chain
  */
-record AnnotatedSuper(String simpleName, List<String> typeArguments) {
+record AnnotatedSuper(String simpleName, List<String> typeArguments, TypeElement element,
+                      ChainRole role) {
 }

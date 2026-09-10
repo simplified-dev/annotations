@@ -10,6 +10,7 @@ import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiReferenceList;
+import com.intellij.psi.PsiReferenceParameterList;
 import com.intellij.psi.PsiTypeElement;
 import com.intellij.psi.PsiTypeParameter;
 import com.intellij.psi.impl.source.PsiExtensibleClass;
@@ -422,6 +423,50 @@ public final class ClassBuilderConstants {
             ? null
             : DeclaredBuilderShape.describe(rejection, declaredName, targetName, names.builder(),
                 facts, expectation);
+    }
+
+    /**
+     * The annotated supertype whose own declared builder leaves this target with
+     * no builder to generate.
+     *
+     * <p>A link's builder extends the ancestor's, passing it the ancestor's own
+     * arguments plus the self-typed pair. Where the ancestor's author wrote that
+     * class themselves it takes whatever they declared - usually none - and the
+     * clause cannot be formed. The processor's answer is to generate nothing and
+     * say so; this is the same test, so the editor withholds the same builder
+     * rather than leaving it unrooted in silence.
+     *
+     * <p>An ancestor declaring nothing is not blocking: the builder it gets is
+     * the generated one, in the shape the clause expects.
+     *
+     * @param target the annotated type
+     * @param builderName the builder class name the chain is written in
+     * @return the blocking supertype, or {@code null} when the chain can be formed
+     */
+    public static @Nullable PsiClass ancestorBlockingGeneration(@NotNull PsiClass target,
+                                                                @NotNull String builderName) {
+        PsiClass parent = annotatedSuperOf(target);
+        if (parent == null) return null;
+        PsiClass declared = declaredBuilderOf(parent, builderName);
+        if (declared == null) return null;
+        return declared.getTypeParameters().length == superTypeArgumentCount(target) + 2
+            ? null
+            : parent;
+    }
+
+    /**
+     * How many type arguments the target passes to its superclass.
+     *
+     * @param target the annotated type
+     * @return the count, read off the extends clause as written
+     */
+    private static int superTypeArgumentCount(@NotNull PsiClass target) {
+        PsiReferenceList extendsList = target.getExtendsList();
+        if (extendsList == null) return 0;
+        PsiJavaCodeReferenceElement[] references = extendsList.getReferenceElements();
+        if (references.length == 0) return 0;
+        PsiReferenceParameterList parameters = references[0].getParameterList();
+        return parameters == null ? 0 : parameters.getTypeParameterElements().length;
     }
 
     /**

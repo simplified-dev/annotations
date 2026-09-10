@@ -313,8 +313,27 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      */
     private static boolean suppressesEntryPoints(BuilderSite site,
                                                  GeneratedMemberFactory.EditorBuilderConfig config) {
-        return ClassBuilderConstants.suppressesGeneration(site.owner(), config.builderName(),
-            config.mergeDeclaredBuilder(), site.isExecutable());
+        return suppressesGeneration(site.owner(), config, site.isExecutable());
+    }
+
+    /**
+     * Whether no builder is generated for this target at all, from either cause -
+     * a declared nested type of the builder's name, or an annotated supertype
+     * whose own declared builder the generated extends clause cannot name.
+     *
+     * @param target the annotated type
+     * @param config the resolved configuration for it
+     * @param executable whether the annotation sits on a constructor or factory method
+     * @return whether the builder and its entry points are both withheld
+     */
+    private static boolean suppressesGeneration(PsiClass target,
+                                                GeneratedMemberFactory.EditorBuilderConfig config,
+                                                boolean executable) {
+        if (ClassBuilderConstants.suppressesGeneration(target, config.builderName(),
+            config.mergeDeclaredBuilder(), executable)) {
+            return true;
+        }
+        return ClassBuilderConstants.ancestorBlockingGeneration(target, config.builderName()) != null;
     }
 
     private static List<PsiClass> cachedNestedClasses(PsiClass target) {
@@ -326,10 +345,14 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             }
             // Skip when the target already declares a nested class with the
             // configured Builder name - the user's hand-written version wins,
-            // whether it is being merged into or is suppressing generation.
+            // whether it is being merged into or is suppressing generation - and
+            // skip when the ancestor's own declared builder leaves the extends
+            // clause unformable, which is the shape the processor refuses.
             GeneratedMemberFactory.EditorBuilderConfig config =
                 GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
-            if (ClassBuilderConstants.declaredBuilderOf(target, config.builderName()) != null) {
+            if (ClassBuilderConstants.declaredBuilderOf(target, config.builderName()) != null
+                || ClassBuilderConstants.ancestorBlockingGeneration(target,
+                    config.builderName()) != null) {
                 return CachedValueProvider.Result.create(Collections.<PsiClass>emptyList(),
                     PsiModificationTracker.MODIFICATION_COUNT);
             }

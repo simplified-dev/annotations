@@ -163,6 +163,29 @@ public final class DeclaredBuilderShape {
         };
     }
 
+    /**
+     * The diagnostic for a link whose annotated supertype declares its own
+     * nested builder.
+     *
+     * <p>Not one of the {@link DeclaredBuilderRejection} constants, which are
+     * about the builder a target declares for itself. This one is about the
+     * builder above it: the extends clause a link generates names the ancestor's
+     * builder and passes it the ancestor's arguments plus two, and a builder the
+     * ancestor's author wrote takes whatever they declared - usually none. The
+     * clause then fails to resolve on a line nobody wrote, and the editor's own
+     * answer was to leave the child's builder with no supertype and report
+     * nothing, which is what hid the condition until the build ran.
+     *
+     * @param targetName the link's simple name
+     * @param ancestorName the annotated supertype's simple name
+     * @return the diagnostic text both halves report
+     */
+    public static @NotNull String ancestorDeclaresItsOwnBuilder(@NotNull String targetName,
+                                                                @NotNull String ancestorName) {
+        return "@ClassBuilder generates no builder on '" + targetName + "' - its annotated "
+            + "supertype '" + ancestorName + "' declares its own nested builder";
+    }
+
     /** A type-parameter list as it reads in a diagnostic, or {@code none}. */
     private static String names(List<String> parameters) {
         List<String> distinct = new ArrayList<>();

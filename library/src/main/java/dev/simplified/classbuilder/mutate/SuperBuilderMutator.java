@@ -12,6 +12,8 @@ import com.sun.tools.javac.tree.TreeMaker;
 import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
+import dev.simplified.classbuilder.apt.ChainMemberIndex;
+import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.ContractAnnotations;
@@ -78,6 +80,22 @@ final class SuperBuilderMutator {
             messager.printMessage(Diagnostic.Kind.NOTE,
                 "@ClassBuilder skipped injection: class " + ctx.targetSimpleName()
                     + " already declares a nested '" + ctx.builderName() + "' type",
+                ctx.targetElement());
+            return;
+        }
+
+        // The extends clause a link generates names the ancestor's builder and
+        // passes it the ancestor's own arguments plus the self-typed pair, so a
+        // builder the ancestor's author wrote - which takes whatever they
+        // declared, usually none - cannot receive it. Emitting the clause anyway
+        // fails at attribution on a generated line, which is the one place an
+        // author cannot act. Absent means "not generated yet" rather than "not
+        // there", so only a builder that is present and cannot take the
+        // arguments is refused.
+        if (annotatedSuper != null && ancestorBuilderCannotBeExtended()) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                DeclaredBuilderShape.ancestorDeclaresItsOwnBuilder(ctx.targetSimpleName(),
+                    annotatedSuper.simpleName()),
                 ctx.targetElement());
             return;
         }
@@ -305,6 +323,25 @@ final class SuperBuilderMutator {
      * @param selfArgs the two trailing self-type arguments
      * @return the parameterised supertype expression
      */
+    /**
+     * Whether the ancestor's builder is present and takes a different number of
+     * type parameters than the generated extends clause passes it.
+     *
+     * <p>Read through the two-view index, so an ancestor compiled in this round
+     * is asked of its tree and one compiled earlier of its element model. A
+     * builder that is not there yet answers false: within a round the order
+     * targets are processed in is unspecified, and one this pass will generate
+     * arrives in exactly the shape the clause expects.
+     *
+     * @return whether the clause would name a builder that cannot take it
+     */
+    private boolean ancestorBuilderCannotBeExtended() {
+        ChainMemberIndex ancestor = ChainMemberIndex.of(ctx.bridge(), annotatedSuper.element(),
+            ctx.builderName(), annotatedSuper.role());
+        if (!ancestor.builderPresent()) return false;
+        return ancestor.builderTypeParameters() != annotatedSuper.typeArguments().size() + 2;
+    }
+
     private JCExpression superBuilderType(List<JCExpression> selfArgs) {
         ListBuffer<JCExpression> args = new ListBuffer<>();
         for (String arg : annotatedSuper.typeArguments()) args.append(ctx.types().parseType(arg));

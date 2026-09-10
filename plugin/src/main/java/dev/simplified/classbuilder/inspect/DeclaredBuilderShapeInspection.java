@@ -11,6 +11,7 @@ import com.intellij.psi.PsiElementVisitor;
 import com.intellij.psi.util.PsiTreeUtil;
 import dev.simplified.annotations.NamingStyle;
 import dev.simplified.classbuilder.apt.BuilderScheme;
+import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -41,14 +42,28 @@ public class DeclaredBuilderShapeInspection extends LocalInspectionTool {
 
                 PsiClass target = PsiTreeUtil.getParentOfType(annotation, PsiClass.class);
                 if (target == null || target.getName() == null) return;
-                if (!ClassBuilderConstants.booleanAttr(annotation,
-                    ClassBuilderConstants.ATTR_MERGE_DECLARED_BUILDER, false)) {
-                    return;
-                }
 
                 NamingStyle style = ClassBuilderConstants.namingStyle(annotation);
                 BuilderScheme names =
                     ClassBuilderConstants.builderScheme(annotation, style, target.getName());
+
+                // The ancestor case is reported on the annotation rather than on
+                // a declaration, the offending class being one the author did
+                // not write and may not own.
+                PsiClass blocking =
+                    ClassBuilderConstants.ancestorBlockingGeneration(target, names.type());
+                if (blocking != null && blocking.getName() != null) {
+                    holder.registerProblem(annotation,
+                        DeclaredBuilderShape.ancestorDeclaresItsOwnBuilder(target.getName(),
+                            blocking.getName()),
+                        ProblemHighlightType.GENERIC_ERROR);
+                    return;
+                }
+
+                if (!ClassBuilderConstants.booleanAttr(annotation,
+                    ClassBuilderConstants.ATTR_MERGE_DECLARED_BUILDER, false)) {
+                    return;
+                }
                 PsiClass declared = ClassBuilderConstants.declaredBuilderOf(target, names.type());
                 if (declared == null || declared.getName() == null) return;
 

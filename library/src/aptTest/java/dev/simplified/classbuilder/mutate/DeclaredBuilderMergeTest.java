@@ -9,11 +9,14 @@ import org.junit.Test;
 
 import javax.tools.JavaFileObject;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.InputStream;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 import static com.google.testing.compile.CompilationSubject.assertThat;
 import static org.junit.Assert.assertEquals;
@@ -35,6 +38,19 @@ public class DeclaredBuilderMergeTest {
     }
 
     private static ClassLoader loadClasses(Compilation compilation) throws Exception {
+        return new URLClassLoader(new URL[]{classesOf(compilation).toUri().toURL()},
+            DeclaredBuilderMergeTest.class.getClassLoader());
+    }
+
+    /**
+     * Writes a compilation's class files out, so a second compilation can be run
+     * against them as a classpath entry rather than as sources.
+     *
+     * @param compilation the finished compilation
+     * @return the directory holding its class files
+     * @throws Exception if a file cannot be written
+     */
+    private static Path classesOf(Compilation compilation) throws Exception {
         Path tmp = Files.createTempDirectory("classbuilder-merge-test");
         for (JavaFileObject f : compilation.generatedFiles()) {
             if (f.getKind() != JavaFileObject.Kind.CLASS) continue;
@@ -49,12 +65,30 @@ public class DeclaredBuilderMergeTest {
                 Files.write(out, baos.toByteArray());
             }
         }
-        return new URLClassLoader(new URL[]{tmp.toUri().toURL()},
-            DeclaredBuilderMergeTest.class.getClassLoader());
+        return tmp;
     }
 
     private static Object runGo(Compilation c, String consumer) throws Exception {
         return Class.forName(consumer, true, loadClasses(c)).getMethod("go").invoke(null);
+    }
+
+    /**
+     * This JVM's own classpath with one more directory on the end.
+     *
+     * <p>A second-stage compilation resolves the annotations off the running
+     * classpath exactly as the first stage does, and the extra entry is what
+     * makes the ancestor a compiled type rather than a source one.
+     *
+     * @param extra the directory holding the first stage's class files
+     * @return the classpath to compile the second stage against
+     */
+    private static List<File> runtimeClasspathPlus(Path extra) {
+        List<File> classpath = new ArrayList<>();
+        for (String entry : System.getProperty("java.class.path").split(File.pathSeparator)) {
+            if (!entry.isEmpty()) classpath.add(new File(entry));
+        }
+        classpath.add(extra.toFile());
+        return classpath;
     }
 
     /**
@@ -460,6 +494,66 @@ public class DeclaredBuilderMergeTest {
         assertThat(c).succeeded();
         assertThat(c).hadNoteContaining(
             "@ClassBuilder skipped injection: class Rooted already declares a nested 'Builder' type");
+    }
+
+    /**
+     * A link's extends clause names its ancestor's builder and passes it the
+     * ancestor's own arguments plus the self-typed pair. Where the ancestor's
+     * author wrote that class themselves it takes none of them, and the clause
+     * used to be emitted anyway and fail at attribution on a line nobody wrote,
+     * with the editor silently leaving the child's builder unrooted and saying
+     * nothing at all.
+     */
+    @Test
+    public void aLinkWhoseAnnotatedSuperDeclaresItsOwnBuilder_isRejected() {
+        BuilderParityFixture fixture =
+            BuilderParityFixture.load("chain-root-declared-builder-opt-out");
+        Compilation c = compile(
+            parity(fixture),
+            JavaFileObjects.forSourceLines("demo.Leaf",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Leaf extends Rooted {",
+                "    private String extra;",
+                "    public String getExtra() { return extra; }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(
+            "its annotated supertype 'Rooted' declares its own nested builder");
+    }
+
+    /**
+     * The same refusal against an ancestor that is already compiled, which is
+     * the other of the two views an ancestor can be in and the one a single-round
+     * test cannot reach.
+     *
+     * <p>Neither view subsumes the other: an ancestor in this round has a tree
+     * and no settled element model, one compiled earlier has an element model and
+     * no tree. A read that used only the first would say nothing here, and every
+     * consumer compiling against a published chain is in exactly this position.
+     */
+    @Test
+    public void aLinkWhoseCompiledSuperDeclaresItsOwnBuilder_isRejected() throws Exception {
+        BuilderParityFixture fixture =
+            BuilderParityFixture.load("chain-root-declared-builder-opt-out");
+        Compilation ancestor = compile(parity(fixture));
+        assertThat(ancestor).succeeded();
+
+        Compilation c = Compiler.javac()
+            .withProcessors(new ClassBuilderProcessor())
+            .withClasspath(runtimeClasspathPlus(classesOf(ancestor)))
+            .compile(JavaFileObjects.forSourceLines("demo.Leaf",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Leaf extends Rooted {",
+                "    private String extra;",
+                "    public String getExtra() { return extra; }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(
+            "its annotated supertype 'Rooted' declares its own nested builder");
     }
 
     /**
