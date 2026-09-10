@@ -253,11 +253,13 @@ final class MemberRenderer {
             return "Constructs a new {@code " + owner.getSimpleName() + "}.";
         if (declaredOnBuilder(owner)) {
             if (returnsOwner(method, owner)) {
-                // A no-argument member returning the builder is the self
-                // accessor, not a setter. Without this it fell past the owner
-                // test into the arm below and was documented as the build
-                // method - a sentence about a different member entirely.
-                return method.getParameters().isEmpty()
+                // Told apart by name, not by arity. The self accessor takes no
+                // arguments and so do several setters - a boolean flag, a
+                // @Negate inverse, a @Collector clear - so an arity test alone
+                // documents every one of those as the self accessor. Without any
+                // test the self accessor instead fell past the owner test below
+                // and was documented as the build method.
+                return "self".contentEquals(method.getName())
                     ? "Returns this builder as its own type."
                     : "Sets the value and returns this builder.";
             }

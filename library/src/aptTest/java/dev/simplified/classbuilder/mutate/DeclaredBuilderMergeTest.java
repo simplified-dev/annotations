@@ -20,6 +20,7 @@ import java.util.List;
 
 import static com.google.testing.compile.CompilationSubject.assertThat;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 
 /**
  * {@code @ClassBuilder(mergeDeclaredBuilder = true)} - generated members landing
@@ -424,11 +425,12 @@ public class DeclaredBuilderMergeTest {
     }
 
     /**
-     * A build method the author wrote is kept in place of the generated one, so
-     * a return type that cannot stand in for it is refused at the declaration.
+     * Standing alone, nothing generated calls {@code build()} - the author's is
+     * kept and reported as kept - so a build method returning something else is
+     * theirs to write. Refusing it here rejected source javac accepts.
      */
     @Test
-    public void merge_ontoABuildMethodReturningSomethingElse_isRejected() {
+    public void merge_ontoABuildMethodReturningSomethingElse_isAccepted() {
         Compilation c = compile(
             JavaFileObjects.forSourceLines("demo.Wrong",
                 "package demo;",
@@ -441,8 +443,8 @@ public class DeclaredBuilderMergeTest {
                 "        public Object build() { return null; }",
                 "    }",
                 "}"));
-        assertThat(c).failed();
-        assertThat(c).hadErrorContaining("its build method returns Object where this role builds Wrong");
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("already spells");
     }
 
     /**
@@ -585,6 +587,86 @@ public class DeclaredBuilderMergeTest {
         assertThat(c).failed();
         assertThat(c).hadErrorContaining(
             "its annotated supertype 'Rooted' declares its own nested builder");
+    }
+
+    /**
+     * A chain over an ancestor whose builder was generated rather than written
+     * is not the refused shape. The index reads any nested class of the builder's
+     * name, so without asking which of the two it is, an ordinary chain over a
+     * concrete link was refused and the ancestor's author blamed for a class
+     * they never wrote.
+     */
+    @Test
+    public void aChainOverAGeneratedAncestorBuilder_isNotRefused() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Base",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public abstract class Base {",
+                "    private String a;",
+                "    public String getA() { return a; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.Mid",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public abstract class Mid extends Base {",
+                "    private String b;",
+                "    public String getB() { return b; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.Leafy",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Leafy extends Mid {",
+                "    private String c;",
+                "    public String getC() { return c; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseLeafy",
+                "package demo;",
+                "public class UseLeafy {",
+                "    public static String go() {",
+                "        return Leafy.builder().a(\"x\").b(\"y\").c(\"z\").build().getA();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("x", runGo(c, "demo.UseLeafy"));
+    }
+
+    /**
+     * A concrete class extending another concrete annotated class is a shape the
+     * generator cannot express - the parent's builder binds its self types and
+     * cannot be extended - and it failed to compile before this work and after
+     * it. What must not happen is blaming the parent's author for declaring a
+     * builder they never wrote: the index reads any nested class of the name,
+     * and the parent's was generated.
+     */
+    @Test
+    public void aChainOverAConcreteAncestor_isNotBlamedOnADeclarationThatDoesNotExist() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Outer",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Outer {",
+                "    private String a;",
+                "    public String getA() { return a; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.Inner2",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Inner2 extends Outer {",
+                "    private String b;",
+                "    public String getB() { return b; }",
+                "}"));
+        for (var diagnostic : c.diagnostics()) {
+            assertFalse("the parent declares no builder, so it must not be blamed for one: "
+                    + diagnostic.getMessage(null),
+                String.valueOf(diagnostic.getMessage(null))
+                    .contains("declares its own nested builder"));
+        }
     }
 
     /**

@@ -300,6 +300,57 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
             methodNamesOf(nestedOf(target, "Builder")).contains("name"));
     }
 
+    /**
+     * A constructor target is never in a chain, so its enclosing class's
+     * supertype says nothing about whether a builder is generated - the
+     * processor's third path never looks for an annotated super at all. Asking
+     * anyway withheld a builder and an entry point the build emits.
+     */
+    public void testAConstructorTargetUnderADeclaringSuper_keepsItsBuilder() {
+        PsiFile file = myFixture.configureByText("Child.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            class Parent { public static class Builder { } }
+            public class Child extends Parent {
+                private final String a;
+                @ClassBuilder
+                public Child(String a) { this.a = a; }
+            }
+            """);
+        PsiClass child = ((PsiJavaFile) file).getClasses()[1];
+        assertEquals("Child", child.getName());
+        assertTrue("its entry point is emitted: " + methodNamesOf(child),
+            methodNamesOf(child).contains("builder"));
+        assertNotNull("and its builder with it", nestedOf(child, "Builder"));
+    }
+
+    /**
+     * The skip withholds those three and nothing else. The merge still runs and
+     * the target still gets the all-args constructor {@code build()} calls, so
+     * answering the whole request empty took that constructor with it and put a
+     * same-package {@code new Target(...)} red over source that builds.
+     */
+    public void testMergedBuilderWithNoNullaryConstructor_keepsTheAllArgsConstructor() {
+        PsiFile file = myFixture.configureByText("Seeded.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(mergeDeclaredBuilder = true)
+            public class Seeded {
+                private String name;
+                public static class Builder {
+                    private final String origin;
+                    public Builder(String origin) { this.origin = origin; }
+                }
+            }
+            """);
+        PsiClass target = ((PsiJavaFile) file).getClasses()[0];
+        PsiMethod[] constructors = target.getConstructors();
+        assertEquals("the constructor build() calls is still there: "
+            + constructors.length, 1, constructors.length);
+        assertEquals(1, constructors[0].getParameterList().getParametersCount());
+    }
+
     /** A nullary constructor beside a seeded one keeps them. */
     public void testMergedBuilderWithANullaryConstructor_keepsItsEntryPoints() {
         PsiFile file = myFixture.configureByText("Both.java",

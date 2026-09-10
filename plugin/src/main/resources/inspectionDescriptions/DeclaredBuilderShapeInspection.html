@@ -29,9 +29,10 @@ The shapes refused, each for a reason the generated members cannot work around:
       returning it would return something with no members.</li>
   <li><b>The wrong <code>extends</code> clause</b> - a chained builder inherits
       the parent's setters through it.</li>
-  <li><b>A build method returning something else</b> - a method the author wrote
-      is kept in place of the generated one, so it has to return what the
-      generated one returns.</li>
+  <li><b>A build method returning something else</b>, on a chain only - the
+      method a link inherits has to be the one its role declares. Standing
+      alone nothing generated calls <code>build()</code>, so an author's own
+      is kept whatever it returns.</li>
 </ul>
 
 <p>

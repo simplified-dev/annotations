@@ -304,6 +304,11 @@ final class DeclaredBuilderMerge {
      * @return the trailing clause, empty where the slot is held as declared
      */
     private String heldIndirectly(FieldSpec slot) {
+        // A collected slot with an instance-computed default is held as a plain
+        // java.util container, not as a supplier - the storage type above has
+        // already printed it as one, and the supplier clause would contradict
+        // the sentence it is appended to.
+        if (ctx.isCollectedInstanceDefault(slot)) return "";
         if (slot.lazy) {
             return ". A @Lazy field is held in the builder as a supplier of its declared type";
         }

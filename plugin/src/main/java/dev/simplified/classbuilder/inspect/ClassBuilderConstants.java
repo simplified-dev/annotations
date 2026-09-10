@@ -381,14 +381,37 @@ public final class ClassBuilderConstants {
         if (declared == null) return false;
         if (executable) return true;
         if (chainRoleOf(target).isChained()) return true;
-        if (!mergeDeclaredBuilder) return true;
-        // The merge runs, but every entry point instantiates the builder and the
-        // declared builder's constructors are the author's throughout. One that
-        // declares constructors and no nullary one leaves the three entry points
-        // with nothing to call, so the processor skips them with a note - and an
-        // editor still offering them would be the divergence back again in a
-        // narrower shape.
-        return !hasNullaryConstructor(declared);
+        return !mergeDeclaredBuilder;
+    }
+
+    /**
+     * Whether the three entry points alone are withheld, the builder itself
+     * still being generated.
+     *
+     * <p>Separate from {@link #suppressesGeneration} because the two withhold
+     * different sets. Every entry point instantiates the builder, and a declared
+     * builder's constructors are the author's throughout, so one that declares
+     * constructors and no nullary one leaves the three with nothing to call and
+     * the processor skips them with a note. Everything else still runs - the
+     * merge appends every setter, and the target still gets the all-args
+     * constructor {@code build()} calls. Folding this into the wider test
+     * withheld that constructor too, and a same-package {@code new Target(...)}
+     * went red over source that builds.
+     *
+     * @param target the annotated type
+     * @param builderName the configured builder class name
+     * @param mergeDeclaredBuilder whether the merge opt-in is written
+     * @param executable whether the annotation sits on a constructor or factory method
+     * @return whether {@code builder()}, {@code from(T)} and {@code mutate()} are skipped
+     */
+    public static boolean withholdsEntryPointsOnly(@NotNull PsiClass target,
+                                                   @NotNull String builderName,
+                                                   boolean mergeDeclaredBuilder,
+                                                   boolean executable) {
+        if (executable || !mergeDeclaredBuilder) return false;
+        if (chainRoleOf(target).isChained()) return false;
+        PsiClass declared = declaredBuilderOf(target, builderName);
+        return declared != null && !hasNullaryConstructor(declared);
     }
 
     /**
@@ -474,7 +497,18 @@ public final class ClassBuilderConstants {
      * @return the blocking supertype, or {@code null} when the chain can be formed
      */
     public static @Nullable PsiClass ancestorBlockingGeneration(@NotNull PsiClass target,
-                                                                @NotNull String builderName) {
+                                                                @NotNull String builderName,
+                                                                boolean executable) {
+        // An executable target is never in a chain - a constructor has no chain
+        // to find, and the processor's third path never looks for an annotated
+        // super. Asking anyway reads the enclosing class's own supertype and
+        // withholds a builder that is emitted.
+        if (executable) return null;
+        // The processor asks about the target's own declaration first and
+        // returns on it, so a target that declares its own builder never reaches
+        // the ancestor question at all. Asking it here anyway reports an error
+        // where the build prints a note.
+        if (declaredBuilderOf(target, builderName) != null) return null;
         PsiClass parent = annotatedSuperOf(target);
         if (parent == null) return null;
         PsiClass declared = declaredBuilderOf(parent, builderName);

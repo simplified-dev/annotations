@@ -830,6 +830,16 @@ public final class GeneratedMemberFactory {
         for (PsiFieldShape slot : slotsOf(site, toBuilder, config.setters())) {
             // A seeded slot is supplied to builder(...) and never held here.
             if (slot.seed) continue;
+            // A slot whose retained initializer reads instance state is held as
+            // a supplier, and whether an initializer does that is a flow
+            // question the editor does not answer. Contributing such a slot with
+            // its declared type made a reference to it resolve green over source
+            // javac rejects - the very shape this contribution exists to
+            // prevent - so a slot carrying any initializer is left out unless it
+            // is lazy, which is held as a supplier whatever its initializer says.
+            // Absent means unresolved, which is the state before this existed;
+            // present and mistyped would be worse than either.
+            if (!slot.lazy && hasInitializer(target, slot.name)) continue;
             PsiType type = slot.lazy
                 ? elements.createTypeFromText(
                     "java.util.function.Supplier<" + slot.type.getCanonicalText() + ">", builder)
@@ -842,6 +852,21 @@ public final class GeneratedMemberFactory {
             out.add(field);
         }
         return out;
+    }
+
+    /**
+     * Whether the target declares that field with an initializer.
+     *
+     * <p>Read off the written declaration rather than resolved - the question is
+     * whether an expression is there, not what it evaluates to.
+     *
+     * @param target the annotated type
+     * @param name the slot's name
+     * @return whether the field carries an initializer
+     */
+    private static boolean hasInitializer(PsiClass target, String name) {
+        PsiField field = ownField(target, name);
+        return field != null && field.hasInitializer();
     }
 
     private static List<PsiFieldShape> slotsOf(BuilderSite site, PsiSubstitutor toBuilder,

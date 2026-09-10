@@ -9,6 +9,7 @@ import dev.simplified.shared.javac.JavacBridge;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
@@ -37,6 +38,8 @@ import java.util.Set;
  * shape the generator gives it.
  */
 public final class ChainMemberIndex {
+
+    private static final String GENERATED_FQN = "dev.simplified.annotations.Generated";
 
     private final boolean builderPresent;
     private final int builderTypeParameters;
@@ -80,6 +83,12 @@ public final class ChainMemberIndex {
         for (JCTree def : ancestor.defs) {
             if (!(def instanceof JCClassDecl nested)) continue;
             if (!nested.name.contentEquals(builderName)) continue;
+            // A builder this round generated is not the author's, and its shape
+            // is whatever the generator gave it - so it answers nothing about
+            // what the author already spells and nothing about whether a clause
+            // can name it. Reading one as declared blamed the ancestor's author
+            // for a class they never wrote.
+            if (AstMarkers.isGenerated(nested)) return absent();
             Set<String> authored = new HashSet<>();
             for (JCTree member : nested.defs) {
                 if (!(member instanceof JCMethodDecl method) || !method.params.isEmpty()) continue;
@@ -109,6 +118,12 @@ public final class ChainMemberIndex {
         for (Element enclosed : ancestor.getEnclosedElements()) {
             if (!(enclosed instanceof TypeElement nested)) continue;
             if (!nested.getSimpleName().contentEquals(builderName)) continue;
+            // The tree view reads the marker the pass set; a compiled ancestor
+            // has no tree, and what survives into the class file is the
+            // annotation the generator writes onto everything it emits. An
+            // ancestor built with emitGenerated off is the one shape this cannot
+            // tell apart, and it reads as the author's.
+            if (carriesGeneratedAnnotation(nested)) return absent();
             Set<String> authored = new HashSet<>();
             for (Element member : nested.getEnclosedElements()) {
                 if (member.getKind() != ElementKind.METHOD) continue;
@@ -140,6 +155,20 @@ public final class ChainMemberIndex {
      */
     private static boolean recordsConcreteMatches(ChainRole ancestorRole) {
         return ancestorRole.isSelfTyped();
+    }
+
+    /**
+     * Whether a compiled nested type carries the marker the generator writes
+     * onto everything it emits.
+     *
+     * @param nested the ancestor's nested type
+     * @return whether it was generated rather than written
+     */
+    private static boolean carriesGeneratedAnnotation(TypeElement nested) {
+        for (AnnotationMirror mirror : nested.getAnnotationMirrors()) {
+            if (GENERATED_FQN.contentEquals(mirror.getAnnotationType().toString())) return true;
+        }
+        return false;
     }
 
     private static boolean isAbstract(JCMethodDecl method) {

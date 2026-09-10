@@ -100,8 +100,13 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
             theOnlyError().contains("it is what builder() instantiates, so it cannot be abstract"));
     }
 
-    /** A declared build method stands in for the generated one, so it has to match it. */
-    public void testAMistypedBuildMethod_isReported() {
+    /**
+     * Standing alone, nothing generated calls {@code build()} - the author's is
+     * kept and reported as kept - so a build method returning something else is
+     * theirs to write, and the build accepts it. Reporting it here would be red
+     * over source that compiles.
+     */
+    public void testAStandaloneMistypedBuildMethod_isNotReported() {
         myFixture.configureByText("Wrong.java",
             """
             import dev.simplified.annotations.ClassBuilder;
@@ -113,8 +118,7 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
                 }
             }
             """);
-        assertTrue("names both types: " + errors(),
-            theOnlyError().contains("its build method returns Object where this role builds Wrong"));
+        assertEquals("the build accepts it, so nothing is said: " + errors(), 0, errors().size());
     }
 
     /** The shape the feature exists for draws nothing. */
@@ -171,6 +175,47 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
             theOnlyError().contains(
                 "@ClassBuilder generates no builder on 'Leaf' - its annotated supertype 'Rooted' "
                     + "declares its own nested builder"));
+    }
+
+    /**
+     * A constructor target is never in a chain - the processor's third path
+     * never looks for an annotated super - so its enclosing class's supertype
+     * says nothing about whether a builder is generated.
+     */
+    public void testAConstructorTargetUnderADeclaringSuper_isNotReported() {
+        myFixture.configureByText("Child.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            class Parent { public static class Builder { } }
+            public class Child extends Parent {
+                private final String a;
+                @ClassBuilder
+                public Child(String a) { this.a = a; }
+            }
+            """);
+        assertEquals("the executable path has no chain to block it: " + errors(),
+            0, errors().size());
+    }
+
+    /**
+     * The processor asks about the target's own declaration first and returns on
+     * it with a note, so the ancestor question is never reached. Reporting it
+     * anyway was red over source javac accepts.
+     */
+    public void testWhereBothTargetAndAncestorDeclareABuilder_isNotReportedAsAnAncestorError() {
+        myFixture.configureByText("Leaf.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            class Rooted { public static class Builder { } }
+            @ClassBuilder
+            public class Leaf extends Rooted {
+                private String b;
+                public static class Builder { }
+            }
+            """);
+        assertEquals("the build prints a note, not an error: " + errors(), 0, errors().size());
     }
 
     /** An ancestor whose builder is generated takes the clause, so nothing is said. */

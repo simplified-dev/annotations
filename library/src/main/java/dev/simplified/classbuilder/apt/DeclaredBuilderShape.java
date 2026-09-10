@@ -118,8 +118,15 @@ public final class DeclaredBuilderShape {
                 return DeclaredBuilderRejection.WRONG_SUPER_TYPE;
             }
         }
+        // Asked only where a generated member depends on the answer. On a chain
+        // the build method a link inherits has to be the one its role declares,
+        // so a different return type cannot stand in for it. Standing alone
+        // nothing generated calls build() at all - the author's is simply kept
+        // and reported as kept - so rejecting one there refuses source javac
+        // accepts.
         DeclaredBuildMethod build = facts.buildMethod();
-        if (build != null && !expectation.buildReturnType().equals(build.returnType())) {
+        if (role.isChained() && build != null
+            && !expectation.buildReturnType().equals(build.returnType())) {
             return DeclaredBuilderRejection.BUILD_RETURN_TYPE;
         }
         return null;

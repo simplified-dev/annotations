@@ -168,13 +168,30 @@ public class DeclaredBuilderShapeTest {
                 new RoleExpectation(List.of(), "Base.Builder", "Target")));
     }
 
+    /**
+     * On a chain the build method a link inherits has to be the one its role
+     * declares, so a different return type cannot stand in for it.
+     */
     @Test
-    public void check_onAMistypedBuildMethod_isBuildReturnType() {
+    public void check_onAChainedMistypedBuildMethod_isBuildReturnType() {
         assertEquals(DeclaredBuilderRejection.BUILD_RETURN_TYPE,
-            DeclaredBuilderShape.check(ChainRole.STANDALONE,
-                facts(true, false, List.of(), List.of(), null,
+            DeclaredBuilderShape.check(ChainRole.CONCRETE_LINK,
+                facts(true, false, List.of(), List.of(), "Base.Builder",
                     new DeclaredBuildMethod("Object", false)),
-                standaloneExpectation()));
+                new RoleExpectation(List.of(), "Base.Builder", "Target")));
+    }
+
+    /**
+     * Standing alone, nothing generated calls {@code build()} - the author's is
+     * kept and reported as kept - so a different return type is theirs to write
+     * and refusing it would reject source javac accepts.
+     */
+    @Test
+    public void check_onAStandaloneMistypedBuildMethod_isAccepted() {
+        assertNull(DeclaredBuilderShape.check(ChainRole.STANDALONE,
+            facts(true, false, List.of(), List.of(), null,
+                new DeclaredBuildMethod("Object", false)),
+            standaloneExpectation()));
     }
 
     /** A build method returning what the role builds is the author's to keep. */

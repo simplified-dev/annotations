@@ -98,10 +98,12 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
 ### Added
 
 - **An inspection for a declared builder the merge cannot append to.** Non-static, the wrong type
-  parameters, declared abstract where the entry points instantiate it, an unbounded self-type pair, a
-  wrong `extends` clause, or a build method that cannot stand in for the generated one. The processor
-  refuses all of these with a compile error and the editor had no analogue, so the whole generated
-  surface appeared in completion on a class the build was going to reject.
+  parameters, or declared abstract where the entry points instantiate it. The processor refuses these
+  with a compile error and the editor had no analogue, so the whole generated surface appeared in
+  completion on a class the build was going to reject. Three further shapes - an unbounded self-type
+  pair, a wrong `extends` clause, and a build method that cannot stand in for the generated one - are
+  stated in the same decision and asked only of a chain, where a generated member depends on the
+  answer; standing alone the author's `build()` is simply kept, as it always was.
 
 - **A weak warning where a declared builder turns generation off.** Three members and a whole nested
   class leave completion and the only account of it was a compiler note. The message names the

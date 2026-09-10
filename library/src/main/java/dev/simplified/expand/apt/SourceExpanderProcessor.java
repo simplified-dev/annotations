@@ -14,6 +14,7 @@ import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.annotation.processing.SupportedOptions;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.Element;
+import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
 import javax.tools.Diagnostic;
 import java.io.IOException;
@@ -174,15 +175,26 @@ public class SourceExpanderProcessor extends AbstractProcessor {
      * for. A unit declaring no type at all, which is what {@code package-info}
      * is, keeps the name it was read under.
      *
+     * <p>The <em>public</em> type wins where there is one, and it need not be
+     * declared first: a unit may declare package-private types above it, and a
+     * copy named after one of those puts a public type in a file of the wrong
+     * name, which javadoc rejects outright rather than merely failing to link.
+     *
      * @param unit the compilation unit being expanded
      * @return the file name, always ending in {@code .java}
      */
     private static String fileName(CompilationUnitTree unit) {
+        String first = null;
         for (Tree declaration : unit.getTypeDecls()) {
-            if (declaration instanceof ClassTree type && type.getSimpleName().length() > 0) {
+            if (!(declaration instanceof ClassTree type) || type.getSimpleName().length() == 0) {
+                continue;
+            }
+            if (type.getModifiers().getFlags().contains(Modifier.PUBLIC)) {
                 return type.getSimpleName() + ".java";
             }
+            if (first == null) first = type.getSimpleName() + ".java";
         }
+        if (first != null) return first;
         String path = unit.getSourceFile().toUri().getPath();
         if (path == null) return unit.getSourceFile().getName();
         int slash = path.lastIndexOf('/');

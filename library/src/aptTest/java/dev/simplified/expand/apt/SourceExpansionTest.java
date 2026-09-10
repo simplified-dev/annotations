@@ -393,6 +393,26 @@ public class SourceExpansionTest {
             Files.readString(keep, StandardCharsets.UTF_8));
     }
 
+    /**
+     * A unit may declare package-private types above its public one, and a copy
+     * named after one of those puts a public type in a file of the wrong name -
+     * which javadoc rejects outright rather than merely failing to link.
+     */
+    @Test
+    public void theCopyIsNamedForThePublicType_evenWhenItIsNotDeclaredFirst() throws IOException {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.Utils",
+            "package demo;",
+            "/** An internal helper. */",
+            "class Internal { }",
+            "/** The public one. */",
+            "public class Utils { }"));
+        assertThat(c).succeeded();
+        assertTrue("expected demo/Utils.java, wrote: " + listing(),
+            Files.exists(this.expandTo.resolve("demo/Utils.java")));
+        assertFalse("and not a file named for the package-private type: " + listing(),
+            Files.exists(this.expandTo.resolve("demo/Internal.java")));
+    }
+
     // ------------------------------------------------------------------
     // A chain, where every member returns the builder's own self type
     // ------------------------------------------------------------------
@@ -413,13 +433,18 @@ public class SourceExpansionTest {
             "@ClassBuilder(validate = false)",
             "public abstract class Rooted {",
             "    private String label;",
+            "    private boolean animated;",
             "    public String getLabel() { return label; }",
+            "    public boolean isAnimated() { return animated; }",
             "}"));
         assertThat(c).succeeded();
         String expanded = expanded("demo/Rooted.java");
 
         assertTrue("the self accessor gets its own sentence: " + expanded,
             expanded.contains("Returns this builder as its own type."));
+        assertEquals("and it is the only member that does - a boolean's zero-argument setter "
+                + "takes no arguments either, and is a setter: " + expanded,
+            1, occurrences(expanded, "Returns this builder as its own type."));
         assertEquals("and exactly one member is the build method: " + expanded,
             1, occurrences(expanded, "Builds a new instance from the values set so far."));
         assertTrue("a self-typed setter still reads as a setter: " + expanded,

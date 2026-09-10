@@ -457,8 +457,16 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             // that withholds the entry points. An executable target is never in a
             // chain, so an abstract enclosing type is no reason to withhold its
             // entry point.
-            boolean entryPointsWithheld = !site.isExecutable()
-                && target.hasModifierProperty(PsiModifier.ABSTRACT);
+            // The second cause is a merged builder with no constructor the entry
+            // points can call. It withholds the same three and nothing else -
+            // the merge still runs and the target still gets the all-args
+            // constructor build() calls, so answering the whole request empty
+            // here took that constructor with it and put a same-package
+            // new Target(...) red over source that builds.
+            boolean entryPointsWithheld = (!site.isExecutable()
+                && target.hasModifierProperty(PsiModifier.ABSTRACT))
+                || ClassBuilderConstants.withholdsEntryPointsOnly(target, config.builderName(),
+                    config.mergeDeclaredBuilder(), site.isExecutable());
             return CachedValueProvider.Result.create(
                 entryPointsWithheld ? members.constructorOnly() : members.allMethods(),
                 PsiModificationTracker.MODIFICATION_COUNT);
@@ -503,7 +511,8 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             config.mergeDeclaredBuilder(), executable)) {
             return true;
         }
-        return ClassBuilderConstants.ancestorBlockingGeneration(target, config.builderName()) != null;
+        return ClassBuilderConstants.ancestorBlockingGeneration(target, config.builderName(),
+            executable) != null;
     }
 
     private static List<PsiClass> cachedNestedClasses(PsiClass target) {
@@ -522,7 +531,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
                 GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
             if (ClassBuilderConstants.declaredBuilderOf(target, config.builderName()) != null
                 || ClassBuilderConstants.ancestorBlockingGeneration(target,
-                    config.builderName()) != null) {
+                    config.builderName(), site.isExecutable()) != null) {
                 return CachedValueProvider.Result.create(Collections.<PsiClass>emptyList(),
                     PsiModificationTracker.MODIFICATION_COUNT);
             }
