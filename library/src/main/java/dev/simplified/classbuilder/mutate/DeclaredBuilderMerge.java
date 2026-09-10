@@ -2,11 +2,20 @@ package dev.simplified.classbuilder.mutate;
 
 import com.sun.tools.javac.code.Flags;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
+import com.sun.tools.javac.tree.JCTree.JCExpression;
 import com.sun.tools.javac.tree.JCTree.JCMethodDecl;
+import com.sun.tools.javac.tree.JCTree.JCTypeApply;
 import com.sun.tools.javac.tree.JCTree.JCTypeParameter;
 import com.sun.tools.javac.tree.JCTree.JCVariableDecl;
 import com.sun.tools.javac.tree.JCTree;
+import dev.simplified.classbuilder.apt.ChainRole;
+import dev.simplified.classbuilder.apt.DeclaredBuildMethod;
+import dev.simplified.classbuilder.apt.DeclaredBuilderFacts;
+import dev.simplified.classbuilder.apt.DeclaredBuilderRejection;
+import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.classbuilder.apt.RoleExpectation;
+import org.jetbrains.annotations.Nullable;
 
 import javax.annotation.processing.Messager;
 import javax.lang.model.element.Element;
@@ -126,33 +135,133 @@ final class DeclaredBuilderMerge {
     }
 
     /**
-     * Reports the two shapes a declared builder cannot take, returning whether
-     * the merge may proceed.
+     * Reports the shapes a declared builder cannot take, returning whether the
+     * merge may proceed.
      *
-     * <p>An inner class captures the enclosing instance, so no {@code static}
-     * entry point can create one; and a generic target's members are written in
-     * the builder's own re-declared parameters, which have to be there and in
-     * the same order for a generated setter to name the slot's type at all.
+     * <p>The decision itself is {@link DeclaredBuilderShape#check}, which the
+     * editor runs over the same facts read out of PSI, so a builder the editor
+     * populates is a builder javac accepts. What is left here is filling the
+     * facts from the tree and choosing the operands each rejection interpolates.
      */
     private boolean rejectUnusableShape(TypeElement targetElement, JCClassDecl declared) {
-        if ((declared.mods.flags & Flags.STATIC) == 0) {
-            messager.printMessage(Diagnostic.Kind.ERROR,
-                "@ClassBuilder cannot merge into '" + declared.name + "' - an inner class captures "
-                    + "the enclosing instance, so " + ctx.config().builderMethodName()
-                    + "() has nothing to create it from. Declare it static",
-                targetElement);
-            return false;
+        ChainRole role = roleOf();
+        RoleExpectation expectation = expectationFor(role);
+        DeclaredBuilderFacts facts = factsOf(declared);
+        DeclaredBuilderRejection rejection = DeclaredBuilderShape.check(role, facts, expectation);
+        if (rejection == null) return true;
+        messager.printMessage(Diagnostic.Kind.ERROR,
+            rejection.message(operandsFor(rejection, declared, facts, expectation)),
+            targetElement);
+        return false;
+    }
+
+    /**
+     * Where the target this merge runs for sits in a chain.
+     *
+     * <p>Only the standalone branch reaches the merge today - the chain branch
+     * returns ahead of the declared-builder check - so this answers the one role
+     * that gets here, while the decision it feeds is written for all four.
+     *
+     * @return the target's role
+     */
+    private ChainRole roleOf() {
+        return ChainRole.STANDALONE;
+    }
+
+    /**
+     * What the role requires of the declared builder.
+     *
+     * @param role the target's position in a chain
+     * @return the parameter names, supertype and build return type to measure against
+     */
+    private RoleExpectation expectationFor(ChainRole role) {
+        List<String> targetParameters = new ArrayList<>();
+        for (JCTypeParameter parameter : ctx.typeParams()) {
+            targetParameters.add(parameter.name.toString());
         }
-        com.sun.tools.javac.util.List<JCTypeParameter> expected = ctx.typeParams();
-        if (!sameParameterNames(expected, declared.typarams)) {
-            messager.printMessage(Diagnostic.Kind.ERROR,
-                "@ClassBuilder cannot merge into '" + declared.name + "' - a static nested builder "
-                    + "for a generic target has to re-declare the target's type parameters "
-                    + names(expected) + ", and this one declares " + names(declared.typarams),
-                targetElement);
-            return false;
+        List<String> selfNames = List.of(ctx.selfTypeName(), ctx.selfBuilderName());
+        return new RoleExpectation(
+            DeclaredBuilderShape.expectedTypeParameters(role, targetParameters, selfNames),
+            DeclaredBuilderShape.expectedSuperType(role, null),
+            DeclaredBuilderShape.expectedBuildReturnType(role, ctx.targetSimpleName(),
+                ctx.selfTypeName()));
+    }
+
+    /**
+     * Reads the declared builder as written, taking nothing from the element
+     * model - the round is still building this tree.
+     *
+     * @param declared the builder the author wrote
+     * @return the facts the shape decision measures
+     */
+    private DeclaredBuilderFacts factsOf(JCClassDecl declared) {
+        List<String> parameterNames = new ArrayList<>();
+        List<String> parameterBounds = new ArrayList<>();
+        if (declared.typarams != null) {
+            for (JCTypeParameter parameter : declared.typarams) {
+                parameterNames.add(parameter.name.toString());
+                parameterBounds.add(parameter.bounds == null || parameter.bounds.isEmpty()
+                    ? null
+                    : parameter.bounds.head.toString());
+            }
         }
-        return true;
+        String writtenSuper = declared.extending == null
+            ? null
+            : erasedName(declared.extending.toString());
+        List<String> superArguments = new ArrayList<>();
+        if (declared.extending instanceof JCTypeApply applied) {
+            for (JCExpression argument : applied.arguments) superArguments.add(argument.toString());
+        }
+        return new DeclaredBuilderFacts((declared.mods.flags & Flags.STATIC) != 0,
+            (declared.mods.flags & Flags.ABSTRACT) != 0,
+            parameterNames, parameterBounds, writtenSuper, superArguments,
+            declaredBuildMethod(declared));
+    }
+
+    /**
+     * The no-argument build method the author wrote, by the configured name.
+     *
+     * @param declared the builder the author wrote
+     * @return the method as written, or {@code null} when the class declares none
+     */
+    private @Nullable DeclaredBuildMethod declaredBuildMethod(JCClassDecl declared) {
+        String buildName = ctx.config().buildMethodName();
+        for (JCTree def : declared.defs) {
+            if (!(def instanceof JCMethodDecl method)) continue;
+            if (!method.name.contentEquals(buildName) || !method.params.isEmpty()) continue;
+            String returnType = method.restype == null ? "" : erasedName(method.restype.toString());
+            return new DeclaredBuildMethod(returnType,
+                (method.mods.flags & Flags.ABSTRACT) != 0);
+        }
+        return null;
+    }
+
+    /**
+     * The values a rejection's wording interpolates, in the order it names them.
+     *
+     * @param rejection what came back from the shape decision
+     * @param declared the builder the author wrote
+     * @param facts the same builder as facts
+     * @param expectation what the role required
+     * @return the operands, ready to render
+     */
+    private Object[] operandsFor(DeclaredBuilderRejection rejection, JCClassDecl declared,
+                                 DeclaredBuilderFacts facts, RoleExpectation expectation) {
+        return switch (rejection) {
+            case NOT_STATIC -> new Object[]{declared.name, ctx.config().builderMethodName()};
+            case NOT_ABSTRACT, ABSTRACT_ON_CONCRETE_ROLE ->
+                new Object[]{declared.name, ctx.targetSimpleName()};
+            case TYPE_PARAMETERS -> new Object[]{declared.name,
+                names(expectation.typeParameterNames()), names(facts.typeParameterNames())};
+            case SELF_TYPE_BOUNDS -> new Object[]{declared.name,
+                names(expectation.typeParameterNames()), names(facts.typeParameterNames())};
+            case MISSING_SUPER_TYPE -> new Object[]{declared.name, expectation.superType()};
+            case WRONG_SUPER_TYPE ->
+                new Object[]{declared.name, expectation.superType(), facts.writtenSuperType()};
+            case BUILD_RETURN_TYPE -> new Object[]{declared.name,
+                facts.buildMethod() == null ? "nothing" : facts.buildMethod().returnType(),
+                expectation.buildReturnType()};
+        };
     }
 
     /**
@@ -275,25 +384,9 @@ final class DeclaredBuilderMerge {
         return method.name + "(" + method.params.size() + " args)";
     }
 
-    /**
-     * Whether two type-parameter lists declare the same names in the same order.
-     * Names rather than bounds, because the generated members name the
-     * parameters and nothing else about them.
-     */
-    private static boolean sameParameterNames(com.sun.tools.javac.util.List<JCTypeParameter> expected,
-                                              com.sun.tools.javac.util.List<JCTypeParameter> declared) {
-        int size = declared == null ? 0 : declared.size();
-        if (expected.size() != size) return false;
-        int index = 0;
-        for (JCTypeParameter parameter : declared) {
-            if (!expected.get(index++).name.contentEquals(parameter.name.toString())) return false;
-        }
-        return true;
-    }
-
-    private static String names(Iterable<JCTypeParameter> parameters) {
-        Set<String> out = new LinkedHashSet<>();
-        for (JCTypeParameter parameter : parameters) out.add(parameter.name.toString());
+    /** A type-parameter list as it reads in a diagnostic, or {@code none}. */
+    private static String names(List<String> parameters) {
+        Set<String> out = new LinkedHashSet<>(parameters);
         return out.isEmpty() ? "none" : "<" + String.join(", ", out) + ">";
     }
 
