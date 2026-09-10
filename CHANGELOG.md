@@ -38,6 +38,54 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   which is what `package-info` is, keeps the name it was read under. A collision that survives that
   is reported rather than written over.
 
+- **The editor stopped offering three entry points beside a hand-written builder.** All three
+  mutation paths skip generation when the target declares a nested type of the configured builder
+  name, and only one of them reads `mergeDeclaredBuilder`: a plain type target keeps its entry points
+  when the opt-in is written, while a chain role and a constructor or factory target abort ahead of
+  the bootstraps without consulting it at all. The editor asked none of those questions, so
+  `Target.builder()`, `from(T)` and `mutate()` completed green on a target whose build answers
+  `cannot find symbol` - reachable on a plain standalone class with no chain and no opt-in anywhere
+  in it, which is the shape a hand-migration off a Lombok builder produces most naturally.
+
+- **The editor stopped synthesising a chain's members onto a builder javac never touches.** The
+  merged path asked about the opt-in and the builder's name and nothing about the chain role, so on a
+  root, a link or a chained abstract it listed the setters, the self accessor and the build method on
+  a class the processor appends nothing to.
+
+- **A merged slot is compared against the type the builder holds it in.** The check read the field's
+  declared type, and the builder does not always hold a slot as declared: a `@Lazy` field and a slot
+  whose retained initializer reads instance state are both held as a supplier. On a lazy slot that
+  was wrong in both directions at once - it rejected the supplier spelling, which is the only one the
+  generated setters can assign, and accepted the natural one, which then failed on a line the author
+  never wrote.
+
+- **A chain whose ancestor declares its own builder is refused rather than emitted.** A link's
+  builder extends the ancestor's and passes it the ancestor's arguments plus the self-typed pair, so
+  a builder the ancestor's author wrote cannot receive it. The clause was emitted anyway and failed
+  at attribution on a generated line, while the editor left the child's builder with no supertype and
+  reported nothing at all.
+
+- **The chain's copy constructor is offered in the editor.** The processor emits
+  `protected Target(Builder)` on every chain role and the editor synthesised none, so a hand-written
+  `super(builder)` was red over source that builds. Contributed under both of the gates javac reads -
+  `generateCopyConstructor`, and the author's own builder-taking constructor - rather than on the
+  chain role alone.
+
+- **A merged builder's slot fields resolve in the editor.** The merge appends them and the editor
+  contributed none, so an author's own verb inside that class referencing a slot was red over source
+  that builds - which lands on exactly the hand-written verb the merge exists to allow. Renaming a
+  slot now follows through to the setters contributed there, which it silently skipped.
+
+- **The entry points a merged builder has no constructor for are skipped with a note.** Every entry
+  point instantiates the builder and a declared builder's constructors are the author's throughout,
+  so one that declares constructors and no nullary one left all three with nothing to call. Both
+  halves withhold them together.
+
+- **The expansion stopped documenting a chain's members as each other.** A self-typed builder's
+  setters and its self accessor return the builder's own self type rather than its name, so the owner
+  test answered no for every member of every chain and each fell through to a sentence written for
+  something else - the self accessor coming out documented as the build method.
+
 ### Changed
 
 - **The README documents the dependency scope the artifact is actually built for.** It showed
@@ -49,12 +97,35 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
 
 ### Added
 
+- **An inspection for a declared builder the merge cannot append to.** Non-static, the wrong type
+  parameters, declared abstract where the entry points instantiate it, an unbounded self-type pair, a
+  wrong `extends` clause, or a build method that cannot stand in for the generated one. The processor
+  refuses all of these with a compile error and the editor had no analogue, so the whole generated
+  surface appeared in completion on a class the build was going to reject.
+
+- **A weak warning where a declared builder turns generation off.** Three members and a whole nested
+  class leave completion and the only account of it was a compiler note. The message names the
+  declaration and says whether the merge opt-in is read where the target sits, rather than advising
+  an attribute one of the three positions ignores.
+
+- **One shared decision behind both halves of the declared-builder rules.** The chain role, the
+  shape check, and the wording each rejection is reported with all live in the library and are
+  answered from names and flags alone, so the processor can fill them from a tree the round is still
+  building and the editor from stubs it must not resolve. A diagnostic reimplemented in the plugin is
+  the same class of drift as a validator reimplemented there.
+
 - **A processor suite that compiles against an already-compiled ancestor.** Every other fixture here
   builds its whole chain in one round, so a subclass read its parent from a tree the round was still
   building. A consumer almost never does, and the two views differ: a tree carries the marks the
   passes set and a class file carries only what a class file carries. Three cases now cross that
   boundary - a chain inheriting its parent's setters, a lazy parent field staying one slot, and the
   no-runtime-dependency pin applied to an inherited builder, which no existing fixture covered.
+
+- **One parity root both editor suites and the processor suite read.** A case is a target source and
+  a list of members each half must agree about, written once. The editor fixtures also hand-wrote
+  their own `@ClassBuilder` and between them omitted eight attributes, one naming constant, one
+  setter name and an access level - so a case reading an attribute its fixture did not declare
+  asserted nothing and still passed.
 
 ## [2.6.3]
 
