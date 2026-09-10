@@ -107,6 +107,16 @@ tasks.named<Zip>("buildPlugin") {
 // ----------------------------------------------------------------------------
 
 sourceSets {
+    // The parity cases live in :library's aptTest resources and are read from
+    // both sides, because the two suites cannot share a source set: the apt
+    // suite needs jdk.compiler, which the IntelliJ test framework's module
+    // layer hides. Pointing at the one directory is what keeps the editor's
+    // claim and the processor's claim the same claim rather than two
+    // transcriptions of one intent that drift apart.
+    named("test") {
+        resources.srcDir(rootProject.file("library/src/aptTest/resources"))
+    }
+
     create("demo") {
         java.srcDir("src/demo/java")
         resources.srcDir("src/demo/resources")

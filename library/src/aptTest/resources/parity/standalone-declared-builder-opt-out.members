@@ -1,0 +1,13 @@
+# The three entry points are the claim. The processor returns ahead of emitting
+# them because the target declares a nested type of the builder's name, so the
+# editor offering any of them is the divergence a call site walks into.
+type demo.Untouched
+
+target -builder
+target -from
+target -mutate
+
+# The author's own member stays, and nothing is appended beside it.
+builder +apply
+builder -name
+builder -build

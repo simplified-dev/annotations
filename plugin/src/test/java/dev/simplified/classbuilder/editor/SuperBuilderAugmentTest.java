@@ -44,27 +44,37 @@ public class SuperBuilderAugmentTest extends LightJavaCodeInsightFixtureTestCase
             """
             package dev.simplified.annotations;
             import java.lang.annotation.*;
-            @Retention(RetentionPolicy.CLASS) @Target(ElementType.TYPE)
+            @Retention(RetentionPolicy.CLASS)
+            @Target({ElementType.TYPE, ElementType.CONSTRUCTOR, ElementType.METHOD})
             public @interface ClassBuilder {
                 BuilderNames builder() default @BuilderNames;
                 NamingStyle style() default NamingStyle.SIMPLIFIED;
                 SetterNames setters() default @SetterNames;
                 String factoryMethod() default "";
+                boolean mergeDeclaredBuilder() default false;
+                boolean retainInit() default true;
+                boolean generateCopyConstructor() default true;
+                boolean validate() default true;
+                boolean emitContracts() default true;
+                boolean emitGenerated() default true;
+                boolean generateImpl() default true;
                 AccessLevel access() default AccessLevel.PUBLIC;
                 AccessLevel constructorAccess() default AccessLevel.PACKAGE;
+                AccessLevel builderConstructorAccess() default AccessLevel.PACKAGE;
                 String[] exclude() default {};
             }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/NamingStyle.java",
             """
             package dev.simplified.annotations;
-            public enum NamingStyle { SIMPLIFIED, LOMBOK, BEAN }
+            public enum NamingStyle { SIMPLIFIED, LOMBOK, BEAN, FLUENT }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/SetterNames.java",
             """
             package dev.simplified.annotations;
             import java.lang.annotation.*;
-            @Retention(RetentionPolicy.CLASS) @Target({})
+            @Retention(RetentionPolicy.CLASS)
+            @Target({ElementType.FIELD, ElementType.PARAMETER})
             public @interface SetterNames {
                 String INHERIT = "";
                 String NONE = "-";
@@ -74,6 +84,7 @@ public class SuperBuilderAugmentTest extends LightJavaCodeInsightFixtureTestCase
                 String put() default INHERIT;
                 String compute() default INHERIT;
                 String clear() default INHERIT;
+                String remove() default INHERIT;
             }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/BuilderNames.java",
@@ -94,7 +105,7 @@ public class SuperBuilderAugmentTest extends LightJavaCodeInsightFixtureTestCase
         myFixture.addFileToProject("dev/simplified/annotations/AccessLevel.java",
             """
             package dev.simplified.annotations;
-            public enum AccessLevel { PUBLIC, PROTECTED, PACKAGE, PRIVATE }
+            public enum AccessLevel { PUBLIC, PROTECTED, PACKAGE, PRIVATE, NONE }
             """);
     }
 

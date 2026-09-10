@@ -1,0 +1,7 @@
+# The abort is per-target and leaves the declared builder exactly as written.
+type demo.Rooted
+
+builder +apply
+builder -label
+builder -build
+builder -self

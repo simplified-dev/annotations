@@ -59,6 +59,12 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
                 SetterNames setters() default @SetterNames;
                 String factoryMethod() default "";
                 boolean mergeDeclaredBuilder() default false;
+                boolean retainInit() default true;
+                boolean generateCopyConstructor() default true;
+                boolean validate() default true;
+                boolean emitContracts() default true;
+                boolean emitGenerated() default true;
+                boolean generateImpl() default true;
                 AccessLevel access() default AccessLevel.PUBLIC;
                 AccessLevel constructorAccess() default AccessLevel.PACKAGE;
                 AccessLevel builderConstructorAccess() default AccessLevel.PACKAGE;
@@ -106,7 +112,7 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
         myFixture.addFileToProject("dev/simplified/annotations/AccessLevel.java",
             """
             package dev.simplified.annotations;
-            public enum AccessLevel { PUBLIC, PROTECTED, PACKAGE, PRIVATE }
+            public enum AccessLevel { PUBLIC, PROTECTED, PACKAGE, PRIVATE, NONE }
             """);
     }
 
