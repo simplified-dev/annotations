@@ -21,6 +21,8 @@ import dev.simplified.shared.javac.ContractAnnotations;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.JavacTypeFactory;
 
+import java.util.Optional;
+
 /**
  * Emits one or more setter {@link JCMethodDecl}s per {@link FieldSpec},
  * mirroring the shape matrix from the sibling emitter:
@@ -420,12 +422,6 @@ final class FieldMutators {
         );
     }
 
-    /**
-     * A fresh, empty container for a {@code @Collector} reset setter. A custom
-     * container comes from the field's own {@code $default$} provider, because
-     * {@code new ArrayList<>()} (etc.) is not assignable to the field's own
-     * type; java.util containers use the matching concrete implementation.
-     */
     /** Call to the target's synthesised {@code $empty$<field>()} factory. */
     private JCExpression emptyFactoryCall(FieldSpec field) {
         return make.Apply(
@@ -438,6 +434,15 @@ final class FieldMutators {
         );
     }
 
+    /**
+     * A fresh, empty container for a {@code @Collector} reset setter. A custom
+     * container comes from the field's own {@code $default$} provider, because
+     * {@code new ArrayList<>()} (etc.) is not assignable to the field's own
+     * type; java.util containers use the matching concrete implementation.
+     *
+     * @param field the collector slot being reset
+     * @return the expression producing the empty container
+     */
     private JCExpression freshContainer(FieldSpec field) {
         // A collected instance default collects into a plain java.util scratch:
         // the real container comes from the initializer in the constructor, so
@@ -601,7 +606,7 @@ final class FieldMutators {
      * {@code Builder withDescription(@PrintFormat @Nullable String description, Object... args)}
      * for an {@code Optional<String>} field; wraps the formatted value directly
      * so the Optional wrapper is preserved and a null format string becomes
-     * {@link java.util.Optional#empty()}.
+     * {@link Optional#empty()}.
      */
     private JCMethodDecl optionalFormattable(FieldSpec field) {
         String setterName = field.setters.setName(field.name, field.isBoolean);

@@ -20,6 +20,8 @@ import dev.simplified.shared.javac.ContractAnnotations;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.JavacTypeFactory;
 
+import java.util.Optional;
+
 /**
  * Self-typed variant of {@link FieldMutators}: emits setters whose return
  * type is the Builder type-parameter {@code B}, with {@code return self();}
@@ -242,7 +244,7 @@ final class SelfTypedSetters {
      * {@code B withDescription(@PrintFormat @Nullable String format, Object... args)}
      * for an {@code Optional<String>} field; wraps the formatted value so the
      * Optional wrapper is preserved and a null format string becomes
-     * {@link java.util.Optional#empty()}.
+     * {@link Optional#empty()}.
      */
     private JCMethodDecl optionalFormattable(FieldSpec field) {
         String setterName = field.setters.setName(field.name, field.isBoolean);
@@ -648,12 +650,6 @@ final class SelfTypedSetters {
         );
     }
 
-    /**
-     * A fresh, empty container for a {@code @Collector} reset setter. A custom
-     * container comes from the field's own {@code $default$} provider (a
-     * {@code new ArrayList<>()} would not be assignable to the field type);
-     * java.util containers use the matching concrete implementation.
-     */
     /** Call to the target's synthesised {@code $empty$<field>()} factory. */
     private JCExpression emptyFactoryCall(FieldSpec field) {
         return make.Apply(
@@ -666,6 +662,15 @@ final class SelfTypedSetters {
         );
     }
 
+    /**
+     * A fresh, empty container for a {@code @Collector} reset setter. A custom
+     * container comes from the field's own {@code $default$} provider (a
+     * {@code new ArrayList<>()} would not be assignable to the field type);
+     * java.util containers use the matching concrete implementation.
+     *
+     * @param field the collector slot being reset
+     * @return the expression producing the empty container
+     */
     private JCExpression freshContainer(FieldSpec field) {
         // A collected instance default collects into a plain java.util scratch:
         // the real container comes from the initializer in the constructor, so

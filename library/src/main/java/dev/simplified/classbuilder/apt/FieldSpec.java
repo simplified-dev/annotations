@@ -335,13 +335,6 @@ public final class FieldSpec {
     }
 
     /**
-     * Reads the three companions that shape a setter - {@code @Formattable},
-     * {@code @Negate} and {@code @Collector} - off whichever element declares
-     * the slot. One reading for all three factories, so a slot derived from a
-     * parameter cannot come out with a different setter matrix from a field of
-     * the same shape.
-     */
-    /**
      * Resolves the slot's setter patterns: the target's, overridden by a
      * {@code @SetterNames} written on the slot itself.
      *
@@ -447,6 +440,17 @@ public final class FieldSpec {
         return typeUtils.isSameType(typeUtils.erasure(param), typeUtils.erasure(slot));
     }
 
+    /**
+     * Reads the three companions that shape a setter - {@code @Formattable},
+     * {@code @Negate} and {@code @Collector} - off whichever element declares
+     * the slot. One reading for all three factories, so a slot derived from a
+     * parameter cannot come out with a different setter matrix from a field of
+     * the same shape.
+     *
+     * @param b the slot being assembled
+     * @param owner the field, component or parameter declaring the slot
+     * @param lookup the annotation reader
+     */
     private static void readSetterCompanions(Builder b, Element owner, AnnotationLookup lookup) {
         b.formattable = lookup.hasAnnotation(owner, "dev.simplified.annotations.Formattable");
         b.negateName = lookup.stringAttr(owner, "dev.simplified.annotations.Negate", "value", null);

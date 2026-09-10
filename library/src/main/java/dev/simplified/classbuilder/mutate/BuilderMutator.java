@@ -239,14 +239,6 @@ public final class BuilderMutator {
     }
 
     /**
-     * Returns the simple name of the direct superclass when it also carries
-     * {@code @ClassBuilder}; {@code null} otherwise. Matches Lombok's policy
-     * of checking only the immediate superclass - skipping annotation between
-     * two annotated ancestors still lets inherited builder setters flow
-     * through, but the generated Builder extends only the nearest annotated
-     * parent's Builder.
-     */
-    /**
      * Collects this type's fields plus every ancestor's fields up to and
      * including the nearest ancestor carrying {@code @ClassBuilder}. Fields
      * discovered higher in the chain come FIRST so generated
@@ -303,6 +295,17 @@ public final class BuilderMutator {
         return out;
     }
 
+    /**
+     * The direct superclass when it also carries {@code @ClassBuilder}, paired
+     * with the type arguments the target passes it. Matches Lombok's policy of
+     * checking only the immediate superclass - an unannotated class between two
+     * annotated ancestors breaks the chain rather than being skipped over, so
+     * the generated Builder extends the nearest annotated parent's Builder or
+     * none at all.
+     *
+     * @param target the annotated type
+     * @return the annotated superclass and its arguments, or {@code null}
+     */
     private static AnnotatedSuper findAnnotatedDirectSuper(TypeElement target) {
         TypeMirror superMirror = target.getSuperclass();
         if (!(superMirror instanceof DeclaredType dt)) return null;
