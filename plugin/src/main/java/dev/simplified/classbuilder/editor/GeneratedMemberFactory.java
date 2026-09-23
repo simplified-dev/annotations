@@ -828,8 +828,6 @@ public final class GeneratedMemberFactory {
 
         List<PsiField> out = new ArrayList<>();
         for (PsiFieldShape slot : slotsOf(site, toBuilder, config.setters())) {
-            // A seeded slot is supplied to builder(...) and never held here.
-            if (slot.seed) continue;
             // A slot whose retained initializer reads instance state is held as
             // a supplier, and whether an initializer does that is a flow
             // question the editor does not answer. Contributing such a slot with
@@ -838,15 +836,23 @@ public final class GeneratedMemberFactory {
             // prevent - so a slot carrying any initializer is left out unless it
             // is lazy, which is held as a supplier whatever its initializer says.
             // Absent means unresolved, which is the state before this existed;
-            // present and mistyped would be worse than either.
-            if (!slot.lazy && hasInitializer(target, slot.name)) continue;
+            // present and mistyped would be worse than either. On an executable
+            // site the slot is a parameter, which has no initializer, and a
+            // field of the enclosing type sharing its name is no part of it.
+            if (!site.isExecutable() && !slot.lazy && hasInitializer(target, slot.name)) continue;
             PsiType type = slot.lazy
                 ? elements.createTypeFromText(
                     "java.util.function.Supplier<" + slot.type.getCanonicalText() + ">", builder)
                 : slot.type;
             LightFieldBuilder field = new LightFieldBuilder(psiManager, slot.name, type);
             field.setContainingClass(builder);
-            field.setModifiers(PsiModifier.PRIVATE);
+            // A seed is appended final, as the builder the generator writes whole
+            // declares it: builder(seed) hands it to the constructor, which is
+            // the one place it is assigned. In a declared builder that
+            // constructor is the author's, so the field is theirs to assign there
+            // and nowhere else.
+            if (slot.seed) field.setModifiers(PsiModifier.PRIVATE, PsiModifier.FINAL);
+            else field.setModifiers(PsiModifier.PRIVATE);
             field.setNavigationElement(target);
             GeneratedMemberMarker.mark(field);
             out.add(field);

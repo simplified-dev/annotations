@@ -12,6 +12,7 @@ import com.sun.tools.javac.tree.TreeMaker;
 import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
+import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.ContractAnnotations;
@@ -101,25 +102,46 @@ final class BootstrapMethodFactory {
      * <p>Only ever false for a merged builder: a synthesised one is given the
      * constructor it needs. The author's is theirs throughout - javac's own
      * default included - so a class that declares constructors and none of the
-     * right arity leaves every entry point with nothing to call, which used to
-     * be a generated line javac rejects rather than something said out loud.
+     * arity the entry points pass leaves them with nothing to call, and they are
+     * skipped with a note rather than emitted onto a line javac rejects. The
+     * decision is {@link DeclaredBuilderShape#instantiable}, which the editor
+     * asks of the same arities read out of PSI.
      *
      * @param seeds how many arguments the entry point passes the constructor
      * @return whether the entry points can be emitted
      */
     private boolean builderCanBeInstantiated(int seeds) {
         if (mergedInto == null) return true;
-        boolean declaresAny = false;
+        java.util.List<Integer> arities = new ArrayList<>();
         for (JCTree def : mergedInto.defs) {
             if (!(def instanceof JCMethodDecl method)) continue;
             if (!method.name.contentEquals("<init>")) continue;
+            // javac's own default is in the tree by now; it is what a class
+            // declaring nothing falls back to, not a constructor the author wrote.
             if ((method.mods.flags & Flags.GENERATEDCONSTR) != 0) continue;
-            declaresAny = true;
-            if (method.params.size() == seeds) return true;
+            arities.add(method.params.size());
         }
-        // No constructor written at all leaves javac's own default, which takes
-        // none - so it serves whenever the entry points pass none.
-        return !declaresAny && seeds == 0;
+        return DeclaredBuilderShape.instantiable(arities, seeds);
+    }
+
+    /**
+     * The note for entry points skipped because the merged builder has no
+     * constructor they can call.
+     *
+     * @return the note text, naming only the entry points this path emits
+     */
+    private String uninstantiableNote() {
+        var config = ctx.config();
+        java.util.List<String> entryPoints = new ArrayList<>();
+        entryPoints.add(config.builderMethodName());
+        if (!ctx.isExecutableTarget()) {
+            entryPoints.add(config.fromMethodName());
+            entryPoints.add(config.toBuilderMethodName());
+        }
+        entryPoints.removeIf(String::isEmpty);
+        java.util.List<String> seedNames = new ArrayList<>();
+        for (FieldSpec seed : ctx.seeds()) seedNames.add(seed.name);
+        return DeclaredBuilderShape.uninstantiable(mergedInto.name.toString(), entryPoints, seedNames);
     }
 
     /** Appends whichever bootstrap methods are missing from the target. */
@@ -135,12 +157,7 @@ final class BootstrapMethodFactory {
         // generate-flag to consult.
         int seeds = ctx.seeds().size();
         if (!builderCanBeInstantiated(seeds)) {
-            messager.printMessage(Diagnostic.Kind.NOTE,
-                "@ClassBuilder merged into '" + mergedInto.name + "' but every constructor it "
-                    + "declares takes parameters, so '" + builderMethod + "', '" + fromMethod
-                    + "' and '" + mutateMethod + "' were not added - declare a no-argument "
-                    + "constructor or write them",
-                ctx.targetElement());
+            messager.printMessage(Diagnostic.Kind.NOTE, uninstantiableNote(), ctx.targetElement());
             return;
         }
         if (!builderMethod.isEmpty())

@@ -401,6 +401,171 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
         assertEquals("the supplier spelling is the storage type: " + errors(), 0, errors().size());
     }
 
+    // ------------------------------------------------------------------
+    // Executable targets
+    // ------------------------------------------------------------------
+
+    /**
+     * A constructor target merges into its enclosing type's declared builder, so
+     * the processor judges that builder's shape and refuses a non-static one.
+     * The inspection used to skip every executable target.
+     */
+    public void testANonStaticBuilderOnAConstructorTarget_isReportedOnItsName() {
+        myFixture.configureByText("Hook.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Hook {
+                private final String key;
+                @ClassBuilder
+                Hook(String key) { this.key = key; }
+                public class Builder { }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder cannot merge into 'Builder' - an inner class "
+                + "captures the enclosing instance, so builder() has nothing to create it from"));
+        List<String> anchors = new ArrayList<>();
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            String description = info.getDescription();
+            if (info.getSeverity() == HighlightSeverity.ERROR && description != null
+                && description.startsWith("@ClassBuilder cannot merge into")) {
+                anchors.add(info.getText());
+            }
+        }
+        assertEquals("reported on the builder's name identifier", List.of("Builder"), anchors);
+    }
+
+    /**
+     * A static factory's builder re-declares the factory's parameters, so one
+     * re-declaring the enclosing type's is refused in the processor's sentence,
+     * which names the factory's list.
+     */
+    public void testAStaticFactoryBuilderRedeclaringTheEnclosingTypesParameters_isReported() {
+        myFixture.configureByText("Crate.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Crate<V> {
+                private final V value;
+                private Crate(V value) { this.value = value; }
+                @ClassBuilder
+                public static <T> Crate<T> of(T value) { return new Crate<>(value); }
+                public static class Builder<V> { }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("re-declare the target's type parameters <T>, and this one "
+                + "declares <V>"));
+    }
+
+    /** And the factory's own list draws nothing. */
+    public void testAStaticFactoryBuilderRedeclaringTheFactorysParameters_isNotReported() {
+        myFixture.configureByText("Box.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Box<V> {
+                private final V value;
+                private Box(V value) { this.value = value; }
+                @ClassBuilder
+                public static <T> Box<T> of(T value) { return new Box<>(value); }
+                public static class Builder<T> { }
+            }
+            """);
+        assertEquals("the processor merges into this shape: " + errors(), 0, errors().size());
+    }
+
+    /**
+     * A declared field sharing a parameter slot's name is judged against the
+     * parameter's type. An enclosing-type field of the same name, initialised or
+     * not, is no part of the slot, so it leaves the slot judged.
+     */
+    public void testAMistypedParameterSlot_isReportedBesideAnInitialisedFieldOfItsName() {
+        myFixture.configureByText("Gauge.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Gauge {
+                private int size = 3;
+                @ClassBuilder
+                Gauge(int size) { this.size = size; }
+                public static class Builder {
+                    private String size;
+                }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder merged into 'Builder' finds 'size' declared as "
+                + "String, and the slot it stands for is int - the generated setter has nothing to "
+                + "assign it to"));
+    }
+
+    /**
+     * A seed is appended to the declared builder as a {@code final} field and
+     * only the author's constructors can assign it, so javac refuses one that
+     * does not. The platform's own check never saw the appended field, so the
+     * editor was green over it. A constructor assigning the seed, and one
+     * delegating to such a constructor, draw nothing.
+     */
+    public void testASeedTheBuildersConstructorLeavesUnassigned_isReportedOnThatConstructor() {
+        addBuilderSeedAnnotation();
+        myFixture.configureByText("Slip.java",
+            """
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Slip {
+                @ClassBuilder
+                Slip(@BuilderSeed String origin, String item) { }
+                public static class Builder {
+                    public Builder(String origin) { this.origin = origin; }
+                    public Builder(int copies) { this(String.valueOf(copies)); }
+                    public Builder(long ignored) { }
+                }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder merged into 'Builder' appends the seed 'origin' as "
+                + "a final field, and this constructor leaves it unassigned"));
+        List<String> anchors = new ArrayList<>();
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            String description = info.getDescription();
+            if (info.getSeverity() == HighlightSeverity.ERROR && description != null
+                && description.contains("appends the seed")) {
+                int line = myFixture.getEditor().getDocument().getLineNumber(info.getStartOffset());
+                anchors.add(info.getText() + "@" + (line + 1));
+            }
+        }
+        assertEquals("reported on the constructor that leaves it unassigned",
+            List.of("Builder@9"), anchors);
+    }
+
+    /** A builder declaring no constructor keeps javac's default, which assigns nothing. */
+    public void testASeedWithNoBuilderConstructorToAssignIt_isReportedOnTheBuildersName() {
+        addBuilderSeedAnnotation();
+        myFixture.configureByText("Ticket.java",
+            """
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Ticket {
+                @ClassBuilder
+                Ticket(@BuilderSeed String origin, String item) { }
+                public static class Builder { }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder merged into 'Builder' appends the seed 'origin' as "
+                + "a final field, and 'Builder' declares no constructor to assign it"));
+    }
+
+    private void addBuilderSeedAnnotation() {
+        myFixture.addFileToProject("dev/simplified/annotations/BuilderSeed.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS)
+            @Target(ElementType.PARAMETER)
+            public @interface BuilderSeed {
+            }
+            """);
+    }
+
     private void addLazyAnnotation() {
         myFixture.addFileToProject("dev/simplified/annotations/Lazy.java",
             """

@@ -395,8 +395,11 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         // looks at a class nested in the interface body, so nothing merges into
         // one - contributing here would list members javac never appends.
         if (owner.isInterface()) return null;
+        // A constructor or factory target merges into the builder its enclosing
+        // type declares exactly as a type target does, so the site may be
+        // either.
         BuilderSite site = BuilderSite.of(owner);
-        if (site == null || site.isExecutable()) return null;
+        if (site == null) return null;
 
         GeneratedMemberFactory.EditorBuilderConfig config =
             GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
@@ -405,12 +408,16 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         // root, a link or a chained abstract the author's builder is left
         // exactly as written. Merging here would list the setters, the self
         // accessor and the build method on a class javac appends nothing to,
-        // and a call to any of them fails the build.
-        if (ClassBuilderConstants.chainRoleOf(owner).isChained()) return null;
+        // and a call to any of them fails the build. An executable target is
+        // never in a chain, whatever its enclosing type extends.
+        if (!site.isExecutable() && ClassBuilderConstants.chainRoleOf(owner).isChained()) return null;
         // The shape the processor accepts, asked of the same facts. Contributing
         // into a builder javac rejects leaves the author reading a populated
         // completion list right up to the moment the build fails on it.
-        if (ClassBuilderConstants.mergeRejection(owner, declared, config.names()) != null) return null;
+        if (ClassBuilderConstants.mergeRejection(owner, site.executable(), declared,
+            config.names()) != null) {
+            return null;
+        }
         return new MergeTarget(site, owner, config);
     }
 
@@ -460,11 +467,12 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             // that withholds the entry points. An executable target is never in a
             // chain, so an abstract enclosing type is no reason to withhold its
             // entry point.
-            // The second cause is a merged builder with no constructor the entry
-            // points can call. It withholds the same three and nothing else -
-            // the merge still runs and the target still gets the all-args
-            // constructor build() calls, so answering the whole request empty
-            // here took that constructor with it and put a same-package
+            // The second cause is a merged builder with no constructor of the
+            // arity the entry points pass - none on a type target, one per seed
+            // on an executable one. It withholds the entry points and nothing
+            // else - the merge still runs and a class target still gets the
+            // all-args constructor build() calls, so answering the whole request
+            // empty here took that constructor with it and put a same-package
             // new Target(...) red over source that builds.
             // The third is a declared builder whose shape the merge refuses. The
             // processor reports it and returns before the entry points, having
@@ -473,7 +481,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             boolean entryPointsWithheld = (!site.isExecutable()
                 && target.hasModifierProperty(PsiModifier.ABSTRACT))
                 || ClassBuilderConstants.withholdsEntryPointsOnly(target, config.builderName(),
-                    site.isExecutable())
+                    site.isExecutable(), site.seedCount())
                 || rejectsDeclaredBuilder(site, config);
             return CachedValueProvider.Result.create(
                 entryPointsWithheld ? members.constructorOnly() : members.allMethods(),
@@ -489,8 +497,9 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      * offering them would leave {@code Target.builder()} green at a call site in
      * another file while the build fails. The decision is
      * {@link ClassBuilderConstants#mergeRejection}, the one the shape inspection
-     * reports, and it is asked only where a merge runs at all - never of an
-     * executable target, an interface or a chain role.
+     * reports, and it is asked only where a merge runs at all - a class or
+     * record target outside a chain, and a constructor or factory target - and
+     * never of an interface or a chain role.
      *
      * @param site the annotated site
      * @param config the resolved configuration for it
@@ -498,12 +507,12 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      */
     private static boolean rejectsDeclaredBuilder(BuilderSite site,
                                                   GeneratedMemberFactory.EditorBuilderConfig config) {
-        if (site.isExecutable()) return false;
         PsiClass target = site.owner();
-        if (target.isInterface() || ClassBuilderConstants.chainRoleOf(target).isChained()) return false;
+        if (target.isInterface()) return false;
+        if (!site.isExecutable() && ClassBuilderConstants.chainRoleOf(target).isChained()) return false;
         PsiClass declared = ClassBuilderConstants.declaredBuilderOf(target, config.builderName());
-        return declared != null
-            && ClassBuilderConstants.mergeRejection(target, declared, config.names()) != null;
+        return declared != null && ClassBuilderConstants.mergeRejection(target, site.executable(),
+            declared, config.names()) != null;
     }
 
     /**
@@ -622,10 +631,10 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      * The builder class the target declares and the merge runs into, which is
      * the class its entry points return.
      *
-     * <p>Only a class or record target merges. An executable target and a chain
-     * role with a declaration generate nothing and never reach synthesis, and an
-     * interface's entry points return its sibling builder, never a class nested
-     * in the interface body.
+     * <p>A class or record target and a constructor or factory target both
+     * merge. A chain role with a declaration generates nothing and never reaches
+     * synthesis, and an interface's entry points return its sibling builder,
+     * never a class nested in the interface body.
      *
      * @param site the annotated site
      * @param config the resolved configuration for it
@@ -633,7 +642,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      */
     private static @Nullable PsiClass entryPointBuilderOf(BuilderSite site,
                                                           GeneratedMemberFactory.EditorBuilderConfig config) {
-        if (site.isExecutable() || site.owner().isInterface()) return null;
+        if (site.owner().isInterface()) return null;
         return ClassBuilderConstants.declaredBuilderOf(site.owner(), config.builderName());
     }
 

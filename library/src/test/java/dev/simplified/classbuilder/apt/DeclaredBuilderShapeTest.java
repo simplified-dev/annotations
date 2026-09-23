@@ -6,6 +6,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -271,6 +272,49 @@ public class DeclaredBuilderShapeTest {
             "java.util.function.Supplier<java.lang.String>", SlotHolding.LAZY));
         assertNull(DeclaredBuilderShape.mistypedSlot("Builder", "size", "int", "int",
             SlotHolding.DECLARED));
+    }
+
+    /**
+     * The arity that serves is the seed count: zero on a type target, one per
+     * seed on an executable one. A class declaring nothing keeps the implicit
+     * default, which serves only an entry point passing nothing.
+     */
+    @Test
+    public void instantiable_comparesTheDeclaredAritiesWithTheSeedCount() {
+        assertTrue("the implicit default serves no seed", DeclaredBuilderShape.instantiable(List.of(), 0));
+        assertFalse("and nothing else", DeclaredBuilderShape.instantiable(List.of(), 1));
+        assertTrue("a seed-arity constructor serves a seeded entry point",
+            DeclaredBuilderShape.instantiable(List.of(1), 1));
+        assertFalse("a no-argument one does not", DeclaredBuilderShape.instantiable(List.of(0), 1));
+        assertFalse("nor does a seeded one serve no seed", DeclaredBuilderShape.instantiable(List.of(1), 0));
+        assertTrue("any one of them serving is enough", DeclaredBuilderShape.instantiable(List.of(2, 0), 0));
+    }
+
+    /** The skip note names only the entry points skipped, and the arity they needed. */
+    @Test
+    public void uninstantiable_wordsTheNoteByWhatTheEntryPointsPass() {
+        assertEquals("@ClassBuilder merged into 'Builder' but every constructor it declares takes "
+                + "parameters, so 'builder', 'from' and 'mutate' were not added - declare a no-argument "
+                + "constructor or write them",
+            DeclaredBuilderShape.uninstantiable("Builder", List.of("builder", "from", "mutate"), List.of()));
+        assertEquals("@ClassBuilder merged into 'Builder' but every constructor it declares takes "
+                + "parameters, so 'builder' was not added - declare a no-argument constructor or write it",
+            DeclaredBuilderShape.uninstantiable("Builder", List.of("builder"), List.of()));
+        assertEquals("@ClassBuilder merged into 'Builder' but none of its constructors takes the 2 seeds "
+                + "'builder' passes, so 'builder' was not added - declare a constructor taking "
+                + "(origin, kind) or write it",
+            DeclaredBuilderShape.uninstantiable("Builder", List.of("builder"), List.of("origin", "kind")));
+    }
+
+    /** The unassigned-seed sentence names the constructor, or the absence of one. */
+    @Test
+    public void unassignedSeed_rendersTheSharedSentence() {
+        assertEquals("@ClassBuilder merged into 'Builder' appends the seed 'origin' as a final field, "
+                + "and this constructor leaves it unassigned",
+            DeclaredBuilderShape.unassignedSeed("Builder", "origin", true));
+        assertEquals("@ClassBuilder merged into 'Builder' appends the seed 'origin' as a final field, "
+                + "and 'Builder' declares no constructor to assign it",
+            DeclaredBuilderShape.unassignedSeed("Builder", "origin", false));
     }
 
 }

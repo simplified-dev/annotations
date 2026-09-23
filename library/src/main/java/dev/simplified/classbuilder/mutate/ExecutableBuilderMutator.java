@@ -1,9 +1,9 @@
 package dev.simplified.classbuilder.mutate;
 
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
-import com.sun.tools.javac.tree.JCTree;
 import dev.simplified.classbuilder.apt.BuilderConfig;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.JavacBridge;
 
 import javax.annotation.processing.Messager;
@@ -30,8 +30,10 @@ import java.util.List;
  * <p>What it does share, it shares outright: {@link FieldSpec} is the slot IR,
  * the naming trio resolves the names, {@link FieldMutators} emits the setter
  * shapes, and {@link NestedBuilderFactory} and {@link BootstrapMethodFactory}
- * build everything but the instantiation {@code build()} performs. This class is
- * the ordering and the guards, not a second emitter.
+ * build everything but the instantiation {@code build()} performs. Where the
+ * enclosing type declares a class of the builder's name, {@link DeclaredBuilderMerge}
+ * appends those members into it, exactly as it does for a type target. This
+ * class is the ordering and the guards, not a second emitter.
  */
 public final class ExecutableBuilderMutator {
 
@@ -65,19 +67,23 @@ public final class ExecutableBuilderMutator {
         // errors on synthesised members point at a declaration the author wrote.
         bridge.treeMaker().at(target.pos);
 
-        if (hasExistingNested(target, ctx.builderName())) {
-            messager.printMessage(Diagnostic.Kind.NOTE,
-                "@ClassBuilder skipped injection: " + ctx.targetSimpleName()
-                    + " already declares a nested '" + ctx.builderName() + "' type",
-                executable
-            );
-            return true;
-        }
+        // A declared class of the builder's name is merged into below. One this
+        // pipeline generated is a builder an earlier run already produced, and
+        // merging into it would skip every member by name and report them all.
+        JCClassDecl declared = DeclaredBuilderMerge.declaredBuilder(target, ctx.builderName());
+        if (declared != null && AstMarkers.isGenerated(declared)) return true;
 
         warnUnbuildableCustomCollectors(executable, slots);
 
-        bridge.compat().appendDef(target, new NestedBuilderFactory(ctx).build());
-        new BootstrapMethodFactory(ctx, messager).appendAll();
+        // The merge reports against the annotated member rather than the type
+        // around it, as every other diagnostic on this path does. A refused
+        // shape emits nothing further, the entry point included.
+        if (declared != null) {
+            if (!new DeclaredBuilderMerge(ctx, messager).merge(target, executable, declared)) return true;
+        } else {
+            bridge.compat().appendDef(target, new NestedBuilderFactory(ctx).build());
+        }
+        new BootstrapMethodFactory(ctx, messager, ctx.fields(), declared).appendAll();
         return true;
     }
 
@@ -100,13 +106,6 @@ public final class ExecutableBuilderMutator {
                     + "a plain replace setter. Declare the slot as a java.util type for the bulk API",
                 executable);
         }
-    }
-
-    private static boolean hasExistingNested(JCClassDecl target, String nestedName) {
-        for (JCTree def : target.defs) {
-            if (def instanceof JCClassDecl c && c.name.toString().equals(nestedName)) return true;
-        }
-        return false;
     }
 
 }

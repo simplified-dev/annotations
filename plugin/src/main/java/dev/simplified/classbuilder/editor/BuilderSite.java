@@ -4,6 +4,7 @@ import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
+import com.intellij.psi.PsiParameter;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypeParameter;
 import com.intellij.psi.PsiTypes;
@@ -106,12 +107,30 @@ record BuilderSite(@NotNull PsiClass owner, @Nullable PsiMethod executable,
      *
      * <p>A {@code static} factory's own, since it cannot name the enclosing
      * type's; the enclosing type's everywhere else, a constructor running under
-     * exactly those.
+     * exactly those. The choice is
+     * {@link ClassBuilderConstants#typeParameterSource}, the one the declared
+     * builder's shape is measured against.
      *
      * @return the parameters to copy onto the builder
      */
     PsiTypeParameter[] typeParameterSource() {
-        return isStaticFactory() ? executable.getTypeParameters() : owner.getTypeParameters();
+        return ClassBuilderConstants.typeParameterSource(owner, executable);
+    }
+
+    /**
+     * How many of the annotated member's parameters are seeds, each of which
+     * {@code builder(..)} takes and passes to the builder's constructor.
+     *
+     * @return the seed count, zero when the annotation is on the type
+     */
+    int seedCount() {
+        if (executable == null) return 0;
+        int seeds = 0;
+        for (PsiParameter parameter : executable.getParameterList().getParameters()) {
+            if (PsiFieldShapeExtractor.hasAnnotation(parameter, ClassBuilderConstants.BUILDER_SEED_FQN))
+                seeds++;
+        }
+        return seeds;
     }
 
 }

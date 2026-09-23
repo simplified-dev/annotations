@@ -36,7 +36,8 @@ import java.util.Set;
  * express does not have to be written out in full.
  *
  * <p>Runs whenever a class or record target declares a nested type by the
- * builder's name, so a single {@code apply(GsonContributor)} or a
+ * builder's name, and whenever the type around an annotated constructor or
+ * static factory does, so a single {@code apply(GsonContributor)} or a
  * {@code withField(String, String, boolean)} that constructs its own value
  * costs the author that one member and nothing more - every other setter, the
  * slot fields and {@code build()} still come from the generator.
@@ -83,15 +84,17 @@ final class DeclaredBuilderMerge {
     /**
      * Merges the generated members into the declared builder.
      *
-     * @param target the annotated type's declaration
-     * @param targetElement the annotated type
+     * @param target the declaration the builder nests in
+     * @param anchor the element the annotation is written on, which every
+     *     diagnostic is reported against - the type, or the constructor or
+     *     factory method
      * @param declared the builder the target declares
      * @return whether the merge ran; {@code false} when the declared builder
      *     cannot host the generated members and an error was reported
      */
-    boolean merge(JCClassDecl target, TypeElement targetElement, JCClassDecl declared) {
-        if (!rejectUnusableShape(targetElement, declared)) return false;
-        rejectMistypedSlots(targetElement, declared);
+    boolean merge(JCClassDecl target, Element anchor, JCClassDecl declared) {
+        if (!rejectUnusableShape(anchor, declared)) return false;
+        rejectMistypedSlots(anchor, declared);
 
         Set<String> fields = declaredFieldNames(declared);
         Set<String> methods = declaredMethodKeys(declared);
@@ -129,7 +132,7 @@ final class DeclaredBuilderMerge {
                 "@ClassBuilder merged into the declared '" + declared.name + "'; "
                     + declared.name + " already spells " + String.join(", ", skipped)
                     + ", so the generated version was not added",
-                targetElement);
+                anchor);
         }
         return true;
     }
@@ -143,7 +146,7 @@ final class DeclaredBuilderMerge {
      * populates is a builder javac accepts. What is left here is filling the
      * facts from the tree and choosing the operands each rejection interpolates.
      */
-    private boolean rejectUnusableShape(TypeElement targetElement, JCClassDecl declared) {
+    private boolean rejectUnusableShape(Element anchor, JCClassDecl declared) {
         ChainRole role = roleOf();
         RoleExpectation expectation = expectationFor(role);
         DeclaredBuilderFacts facts = factsOf(declared);
@@ -152,16 +155,18 @@ final class DeclaredBuilderMerge {
         messager.printMessage(Diagnostic.Kind.ERROR,
             DeclaredBuilderShape.describe(rejection, declared.name.toString(),
                 ctx.targetSimpleName(), ctx.config().builderMethodName(), facts, expectation),
-            targetElement);
+            anchor);
         return false;
     }
 
     /**
      * Where the target this merge runs for sits in a chain.
      *
-     * <p>Only the standalone branch reaches the merge today - the chain branch
-     * returns ahead of the declared-builder check - so this answers the one role
-     * that gets here, while the decision it feeds is written for all four.
+     * <p>Two callers reach the merge - a class or record target outside any
+     * chain, and a constructor or factory target, which is never in one - and
+     * both are standalone. The chain branch returns ahead of the declared-builder
+     * check, so this answers the one role that gets here, while the decision it
+     * feeds is written for all four.
      *
      * @return the target's role
      */
@@ -252,7 +257,7 @@ final class DeclaredBuilderMerge {
      * member that assigns the slot - the report is what says why on a line the
      * author wrote.
      */
-    private void rejectMistypedSlots(TypeElement targetElement, JCClassDecl declared) {
+    private void rejectMistypedSlots(Element anchor, JCClassDecl declared) {
         for (JCTree def : declared.defs) {
             if (!(def instanceof JCVariableDecl field)) continue;
             if (field.vartype == null) continue;
@@ -262,7 +267,7 @@ final class DeclaredBuilderMerge {
                 SlotHolding holding = holdingOf(slot);
                 String message = DeclaredBuilderShape.mistypedSlot(declared.name.toString(), name,
                     field.vartype.toString(), storageType(slot, holding), holding);
-                if (message != null) messager.printMessage(Diagnostic.Kind.ERROR, message, targetElement);
+                if (message != null) messager.printMessage(Diagnostic.Kind.ERROR, message, anchor);
             }
         }
     }

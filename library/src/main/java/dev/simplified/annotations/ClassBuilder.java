@@ -49,10 +49,18 @@ import java.lang.annotation.Target;
  * wrong type parameters, an {@code abstract} builder the entry points would
  * instantiate - is a compile error.
  *
- * <p>A target in a SuperBuilder chain and a constructor or factory target do not
- * merge: a declared nested class of the builder's name suppresses generation
- * there, with a compiler note. An interface target never looks at a nested
- * class, its builder being a sibling file.
+ * <p>A constructor or static factory target merges the same way into the class
+ * its enclosing type declares. Its builder re-declares the type parameters the
+ * generated members are written in - a static factory's own - and its one entry
+ * point, {@code builder(..)}, passes each {@link BuilderSeed} to the builder's
+ * constructor, so it is emitted only where the author declares a constructor
+ * taking exactly those. A seed is appended as a {@code final} field that the
+ * author's constructors assign.
+ *
+ * <p>A target in a SuperBuilder chain does not merge: a declared nested class of
+ * the builder's name suppresses generation there, with a compiler note. An
+ * interface target never looks at a nested class, its builder being a sibling
+ * file.
  *
  * <p>An interface target gets its builder as a sibling
  * {@code <Name>Builder.java} (plus {@code <Name>Impl.java}), there being no

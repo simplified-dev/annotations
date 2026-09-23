@@ -36,6 +36,13 @@ The shapes refused, each for a reason the generated members cannot work around:
 </ul>
 
 <p>
+A constructor or static factory target merges into the builder its enclosing
+type declares, so that builder is judged the same way. Its type parameters are
+measured against the ones the generated members are written in: a static
+factory's own, and the enclosing type's for a constructor.
+</p>
+
+<p>
 On a shape the merge accepts, a field the author declares in the builder under
 a slot's name is also checked against the type the generated setters assign.
 That is the field's declared type, except for a <code>@Lazy</code> field, which
@@ -45,6 +52,14 @@ note;</code> beside a <code>@Lazy String note</code> is reported, and
 field carries an initializer is not checked here: whether the builder holds it
 as a supplier depends on what the initializer reads, which only the build
 decides.
+</p>
+
+<p>
+On a constructor or static factory target, a <code>@BuilderSeed</code>
+parameter is appended to the declared builder as a <code>final</code> field,
+and only the author's constructors can assign it. A constructor that leaves it
+unassigned is reported, as is a builder declaring no constructor at all -
+javac refuses both.
 </p>
 
 <p>

@@ -119,6 +119,14 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
             package dev.simplified.annotations;
             public enum AccessLevel { PUBLIC, PROTECTED, PACKAGE, PRIVATE, NONE }
             """);
+        myFixture.addFileToProject("dev/simplified/annotations/BuilderSeed.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS)
+            @Target(ElementType.PARAMETER)
+            public @interface BuilderSeed { }
+            """);
     }
 
     public void testMerge_offersTheGeneratedSettersOnTheDeclaredBuilder() {
@@ -482,6 +490,219 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
         assertEquals("the all-args constructor is decided ahead of the merge and kept: "
             + constructors.length, 1, constructors.length);
         assertEquals(1, constructors[0].getParameterList().getParametersCount());
+    }
+
+    // ------------------------------------------------------------------
+    // The executable merge
+    // ------------------------------------------------------------------
+
+    /**
+     * A constructor target merges into its enclosing type's declared builder, as
+     * the processor does: the parameter's setter and {@code build()} land beside
+     * the author's verb, and {@code builder()} is offered on the target. The
+     * declaration used to withhold all of it.
+     */
+    public void testMergeOnAConstructorTarget_offersTheSlotSetters() {
+        PsiFile file = myFixture.configureByText("Action.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Action {
+                private final String key;
+                @ClassBuilder
+                Action(String key) { this.key = key; }
+                public static class Builder {
+                    public Builder apply(Runnable task) { task.run(); return this; }
+                }
+            }
+            """);
+        PsiClass target = ((PsiJavaFile) file).getClasses()[0];
+        List<String> nested = methodNamesOf(nestedOf(target, "Builder"));
+        assertTrue("the author's verb stays: " + nested, nested.contains("apply"));
+        assertTrue("the parameter's setter is merged in: " + nested, nested.contains("key"));
+        assertTrue("and the terminal method: " + nested, nested.contains("build"));
+        List<String> entryPoints = methodNamesOf(target);
+        assertTrue("the entry point is offered: " + entryPoints, entryPoints.contains("builder"));
+        assertFalse("and nothing the executable path never emits: " + entryPoints,
+            entryPoints.contains("from") || entryPoints.contains("mutate"));
+    }
+
+    /** The entry point returns the declared builder, so a chain through the author's verb resolves. */
+    public void testMergeOnAConstructorTarget_entryPointReturnsTheDeclaredBuilder() {
+        myFixture.configureByText("Action.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Action {
+                private final String key;
+                @ClassBuilder
+                Action(String key) { this.key = key; }
+                public static class Builder {
+                    public Builder apply(Runnable task) { task.run(); return this; }
+                }
+            }
+            class Caller {
+                Action make() { return Action.builder().key("k").apply(() -> { }).build(); }
+            }
+            """);
+        assertNoErrors();
+    }
+
+    /**
+     * A slot here is a parameter, so an enclosing-type field of the same name
+     * carrying an initializer says nothing about how the merge holds it. Reading
+     * that field left the merged slot uncontributed, and the author's verb
+     * referencing it red over source that builds.
+     */
+    public void testMergeOnAConstructorTarget_aParameterSharingAnInitialisedFieldsName_resolves() {
+        myFixture.configureByText("Tag.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Tag {
+                private String label = "none";
+                @ClassBuilder
+                Tag(String label) { this.label = label; }
+                public static class Builder {
+                    public Builder shout() { this.label = this.label + "!"; return this; }
+                }
+            }
+            class Caller {
+                Tag make() { return Tag.builder().label("hi").shout().build(); }
+            }
+            """);
+        assertNoErrors();
+    }
+
+    /**
+     * A static factory's builder re-declares the factory's own type parameters,
+     * which is the list the processor measures the declaration against. Reading
+     * the enclosing type's refused this shape in the editor while javac merged
+     * into it.
+     */
+    public void testMergeOnAStaticFactory_readsTheFactorysOwnTypeParameters() {
+        PsiFile file = myFixture.configureByText("Box.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Box<V> {
+                private final V value;
+                private Box(V value) { this.value = value; }
+                @ClassBuilder
+                public static <T> Box<T> of(T value) { return new Box<>(value); }
+                public V getValue() { return value; }
+                public static class Builder<T> {
+                    public Builder<T> apply(Runnable task) { task.run(); return this; }
+                }
+            }
+            class Caller {
+                String make() { return Box.<String>builder().value("v").apply(() -> { }).build().getValue(); }
+            }
+            """);
+        PsiClass target = ((PsiJavaFile) file).getClasses()[0];
+        List<String> nested = methodNamesOf(nestedOf(target, "Builder"));
+        assertTrue("the factory's parameter is merged in: " + nested, nested.contains("value"));
+        assertNoErrors();
+    }
+
+    /**
+     * {@code builder(seed)} passes its seed to the builder's constructor, so a
+     * declared builder taking one argument keeps it - the processor compares the
+     * declared arities with the seed count, where the type path's count is zero.
+     * The seed's field is merged in too, and the author's constructor assigns it.
+     */
+    public void testMergeOnASeededConstructor_whereTheBuilderTakesTheSeed_keepsTheEntryPoint() {
+        PsiFile file = myFixture.configureByText("Order.java",
+            """
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Order {
+                private final String origin;
+                private final String item;
+                @ClassBuilder
+                Order(@BuilderSeed String origin, String item) { this.origin = origin; this.item = item; }
+                public static class Builder {
+                    public Builder(String origin) { this.origin = origin.trim(); }
+                }
+            }
+            class Caller {
+                Order make() { return Order.builder(" web ").item("tea").build(); }
+            }
+            """);
+        List<String> entryPoints = methodNamesOf(((PsiJavaFile) file).getClasses()[0]);
+        assertTrue("one constructor takes the seed: " + entryPoints, entryPoints.contains("builder"));
+        assertNoErrors();
+    }
+
+    /**
+     * A declared builder whose only constructor takes nothing cannot be reached
+     * by a seeded {@code builder(seed)}, so the processor skips it - and only it:
+     * the setters are still merged, and the author's constructor fills the seed.
+     */
+    public void testMergeOnASeededConstructor_whereTheBuilderTakesNoSeed_offersNoEntryPoint() {
+        PsiFile file = myFixture.configureByText("Ticket.java",
+            """
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Ticket {
+                private final String origin;
+                private final String item;
+                @ClassBuilder
+                Ticket(@BuilderSeed String origin, String item) { this.origin = origin; this.item = item; }
+                public static class Builder {
+                    public Builder() { this.origin = "desk"; }
+                }
+            }
+            class Caller {
+                Ticket make() { return new Ticket.Builder().item("tea").build(); }
+            }
+            """);
+        List<String> entryPoints = methodNamesOf(((PsiJavaFile) file).getClasses()[0]);
+        assertFalse("no constructor takes the seed: " + entryPoints, entryPoints.contains("builder"));
+        assertNoErrors();
+    }
+
+    /**
+     * The merged seed field is {@code final}, as javac declares it, so a verb
+     * writing over it is refused in the editor as it is in the build.
+     */
+    public void testMergeOnASeededConstructor_theSeedFieldIsFinal() {
+        myFixture.configureByText("Slip.java",
+            """
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Slip {
+                @ClassBuilder
+                Slip(@BuilderSeed String origin, String item) { }
+                public static class Builder {
+                    public Builder(String origin) { this.origin = origin; }
+                    public Builder reroute(String to) { this.origin = to; return this; }
+                }
+            }
+            """);
+        List<String> errors = errors();
+        assertEquals("only the write over the committed seed is refused: " + errors,
+            List.of("Cannot assign a value to final variable 'origin'"), errors);
+    }
+
+    /**
+     * A refused shape on a constructor target is an error in the build, which
+     * then emits no entry point and merges nothing - so the editor offers
+     * neither.
+     */
+    public void testARejectedShapeOnAConstructorTarget_offersNoEntryPointAndNoMembers() {
+        PsiFile file = myFixture.configureByText("Hook.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Hook {
+                private final String key;
+                @ClassBuilder
+                Hook(String key) { this.key = key; }
+                public class Builder { }
+            }
+            """);
+        PsiClass target = ((PsiJavaFile) file).getClasses()[0];
+        List<String> entryPoints = methodNamesOf(target);
+        assertFalse("no builder() beside a refused declaration: " + entryPoints,
+            entryPoints.contains("builder"));
+        List<String> nested = methodNamesOf(nestedOf(target, "Builder"));
+        assertFalse("and nothing merged into it: " + nested, nested.contains("key"));
     }
 
     // ------------------------------------------------------------------

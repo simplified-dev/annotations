@@ -4,9 +4,10 @@ Reports a <code>@ClassBuilder</code> that generates nothing, because the target
 already declares a nested type named the same as the builder.
 
 <p>
-A class or record target merges the generated members into that declaration,
-the author winning every collision. Two positions do not merge and skip on it
-instead, and the only signal the build gives is a compiler note. Without this
+A class or record target, and a constructor or static factory target, merge the
+generated members into that declaration, the author winning every collision. A
+target in a SuperBuilder chain does not merge and skips on it instead, and the
+only signal the build gives is a compiler note. Without this
 the entry points
 (<code>builder()</code>, <code>from(T)</code>, <code>mutate()</code>) and the
 whole generated surface are simply absent from completion with nothing on the
@@ -17,15 +18,10 @@ the declaration having turned it off.
 <!-- tooltip end -->
 
 <p>
-The message says which of the two the target is:
+A target in a SuperBuilder chain - abstract, or extending an annotated class -
+aborts ahead of everything the pass would emit, including the
+retained-initializer providers, the copy constructor and the bootstraps.
 </p>
-
-<ul>
-  <li>A target in a SuperBuilder chain - abstract, or extending an annotated
-      class - aborts ahead of everything the pass would emit, including the
-      retained-initializer providers, the copy constructor and the bootstraps.</li>
-  <li>A constructor or static factory target aborts the same way.</li>
-</ul>
 
 <p>
 Reported at weak-warning severity because the code is correct: the author's own

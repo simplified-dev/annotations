@@ -606,7 +606,324 @@ public class DeclaredBuilderMergeTest {
     }
 
     // ------------------------------------------------------------------
-    // The shared parity cases
+    // The executable merge
+    //
+    // A constructor or static factory target whose enclosing type declares the
+    // builder class merges into it exactly as a type target does. The
+    // declaration used to turn the whole pass off with a note, so none of these
+    // compiled.
+    // ------------------------------------------------------------------
+
+    /**
+     * The constructor-target shape of the feature: the author's verb stays, and
+     * the parameter's setter, {@code build()} and the entry point are generated
+     * around it.
+     */
+    @Test
+    public void merge_onAConstructorTarget_appendsToTheAuthorsBuilder() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Action",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public final class Action {",
+                "    private final String key;",
+                "    @ClassBuilder",
+                "    Action(String key) { this.key = key; }",
+                "    public String getKey() { return key; }",
+                "    public static class Builder {",
+                "        private int applied;",
+                "        public Builder apply(Runnable task) { task.run(); applied++; return this; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseAction",
+                "package demo;",
+                "public class UseAction {",
+                "    public static String go() {",
+                "        return Action.builder().key(\"k\").apply(() -> { }).build().getKey();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("@ClassBuilder merged into the declared 'Builder'");
+        assertEquals("k", runGo(c, "demo.UseAction"));
+    }
+
+    /**
+     * A slot here is a parameter, so a field of the enclosing type sharing its
+     * name - initialised or not - is no part of it, and the merged field is what
+     * an author's verb reads.
+     */
+    @Test
+    public void merge_onAConstructorTarget_whoseParameterSharesAnInitialisedFieldsName() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Tag",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public final class Tag {",
+                "    private String label = \"none\";",
+                "    @ClassBuilder",
+                "    Tag(String label) { this.label = label; }",
+                "    public String getLabel() { return label; }",
+                "    public static class Builder {",
+                "        public Builder shout() { this.label = this.label + \"!\"; return this; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseTag",
+                "package demo;",
+                "public class UseTag {",
+                "    public static String go() {",
+                "        return Tag.builder().label(\"hi\").shout().build().getLabel();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("hi!", runGo(c, "demo.UseTag"));
+    }
+
+    /**
+     * A static factory runs under its own type parameters and cannot name the
+     * enclosing type's, so the declared builder re-declares the factory's - the
+     * same list the generated members are written in.
+     */
+    @Test
+    public void merge_onAStaticFactory_expectsTheFactorysOwnTypeParameters() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Box",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public final class Box<V> {",
+                "    private final V value;",
+                "    private Box(V value) { this.value = value; }",
+                "    @ClassBuilder",
+                "    public static <T> Box<T> of(T value) { return new Box<>(value); }",
+                "    public V getValue() { return value; }",
+                "    public static class Builder<T> {",
+                "        public Builder<T> apply(Runnable task) { task.run(); return this; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseBox",
+                "package demo;",
+                "public class UseBox {",
+                "    public static String go() {",
+                "        return Box.<String>builder().value(\"v\").apply(() -> { }).build().getValue();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("v", runGo(c, "demo.UseBox"));
+    }
+
+    /**
+     * The inverse: a builder re-declaring the enclosing type's parameters where
+     * the factory has its own is refused, naming the factory's list as the one
+     * required. {@code DeclaredBuilderShapeInspectionTest} asserts the same
+     * sentence.
+     */
+    @Test
+    public void merge_onAStaticFactory_intoABuilderRedeclaringTheEnclosingTypesParameters_isRejected() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Crate",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public final class Crate<V> {",
+                "    private final V value;",
+                "    private Crate(V value) { this.value = value; }",
+                "    @ClassBuilder",
+                "    public static <T> Crate<T> of(T value) { return new Crate<>(value); }",
+                "    public static class Builder<V> { }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("re-declare the target's type parameters <T>, and this one "
+            + "declares <V>");
+    }
+
+    /**
+     * A declared field sharing a parameter slot's name is judged against the
+     * parameter's type, whatever the enclosing type's field of that name
+     * carries. {@code DeclaredBuilderShapeInspectionTest} asserts the same
+     * sentence.
+     */
+    @Test
+    public void merge_onAConstructorTarget_ontoAMistypedParameterSlot_isRejected() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Gauge",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public final class Gauge {",
+                "    private int size = 3;",
+                "    @ClassBuilder",
+                "    Gauge(int size) { this.size = size; }",
+                "    public static class Builder {",
+                "        private String size;",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds 'size' declared as "
+            + "String, and the slot it stands for is int - the generated setter has nothing to assign it to");
+    }
+
+    /**
+     * A seeded entry point passes its seeds to the builder's constructor, so a
+     * declared builder taking exactly that many keeps {@code builder(seed)} - the
+     * inverse of the type path, where the arity that serves is zero. The seed's
+     * final field is merged in and the author's constructor assigns it.
+     */
+    @Test
+    public void merge_onASeededConstructor_whereTheBuilderTakesTheSeed_keepsTheEntryPoint() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Order",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderSeed;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public final class Order {",
+                "    private final String origin;",
+                "    private final String item;",
+                "    @ClassBuilder",
+                "    Order(@BuilderSeed String origin, String item) { this.origin = origin; this.item = item; }",
+                "    public String describe() { return origin + \":\" + item; }",
+                "    public static class Builder {",
+                "        public Builder(String origin) { this.origin = origin.trim(); }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseOrder",
+                "package demo;",
+                "public class UseOrder {",
+                "    public static String go() {",
+                "        return Order.builder(\" web \").item(\"tea\").build().describe();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("web:tea", runGo(c, "demo.UseOrder"));
+    }
+
+    /**
+     * A declared builder whose only constructor takes no arguments has nothing a
+     * seeded {@code builder(seed)} can call, so the entry point is skipped with a
+     * note naming the arity it needed - while the setters are still merged in,
+     * and the author's constructor supplies the seed's value itself.
+     */
+    @Test
+    public void merge_onASeededConstructor_whereTheBuilderTakesNoSeed_skipsTheEntryPointWithANote()
+        throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Ticket",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderSeed;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public final class Ticket {",
+                "    private final String origin;",
+                "    private final String item;",
+                "    @ClassBuilder",
+                "    Ticket(@BuilderSeed String origin, String item) { this.origin = origin; this.item = item; }",
+                "    public String describe() { return origin + \":\" + item; }",
+                "    public static class Builder {",
+                "        public Builder() { this.origin = \"desk\"; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseTicket",
+                "package demo;",
+                "public class UseTicket {",
+                "    public static String go() {",
+                "        return new Ticket.Builder().item(\"tea\").build().describe();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("@ClassBuilder merged into 'Builder' but none of its "
+            + "constructors takes the seed 'builder' passes, so 'builder' was not added - declare a "
+            + "constructor taking (origin) or write it");
+        assertEquals("desk:tea", runGo(c, "demo.UseTicket"));
+    }
+
+    /**
+     * The seed's merged field is {@code final}, as it is on a builder the
+     * generator writes whole, so an author's verb writing over a committed seed
+     * is refused.
+     */
+    @Test
+    public void merge_onASeededConstructor_keepsTheSeedFieldFinal() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Slip",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderSeed;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public final class Slip {",
+                "    @ClassBuilder",
+                "    Slip(@BuilderSeed String origin, String item) { }",
+                "    public static class Builder {",
+                "        public Builder(String origin) { this.origin = origin; }",
+                "        public Builder reroute(String to) { this.origin = to; return this; }",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("cannot assign a value to final variable origin");
+    }
+
+    /**
+     * The merge appends the seed as a {@code final} field and never the
+     * constructor that assigns it, so a constructor of the author's that leaves
+     * it unassigned is refused by javac on that constructor - and only that one:
+     * the one assigning it and the one delegating to it are accepted.
+     * {@code DeclaredBuilderShapeInspectionTest} reports the same constructor.
+     */
+    @Test
+    public void merge_onASeededConstructor_whoseBuilderConstructorLeavesTheSeedUnassigned_fails() {
+        JavaFileObject slip = JavaFileObjects.forSourceLines("demo.Slip",
+            "package demo;",
+            "import dev.simplified.annotations.BuilderSeed;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "public final class Slip {",
+            "    @ClassBuilder",
+            "    Slip(@BuilderSeed String origin, String item) { }",
+            "    public static class Builder {",
+            "        public Builder(String origin) { this.origin = origin; }",
+            "        public Builder(int copies) { this(String.valueOf(copies)); }",
+            "        public Builder(long ignored) { }",
+            "    }",
+            "}");
+        Compilation c = compile(slip);
+        assertThat(c).failed();
+        assertThat(c).hadErrorCount(1);
+        assertThat(c).hadErrorContaining("variable origin might not have been initialized")
+            .inFile(slip).onLine(10);
+    }
+
+    /** A builder declaring no constructor keeps javac's default, which assigns nothing. */
+    @Test
+    public void merge_onASeededConstructor_whoseBuilderDeclaresNoConstructor_fails() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Stub",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderSeed;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public final class Stub {",
+                "    @ClassBuilder",
+                "    Stub(@BuilderSeed String origin, String item) { }",
+                "    public static class Builder { }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("variable origin not initialized in the default constructor");
+    }
+
+    /**
+     * A refused shape on an executable target is an error, reported on the
+     * constructor the author annotated, as every other diagnostic on that path
+     * is.
+     */
+    @Test
+    public void merge_onAConstructorTargetIntoANonStaticBuilder_isRejectedOnTheConstructor() {
+        JavaFileObject hook = JavaFileObjects.forSourceLines("demo.Hook",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "public final class Hook {",
+            "    private final String key;",
+            "    @ClassBuilder",
+            "    Hook(String key) { this.key = key; }",
+            "    public class Builder { }",
+            "}");
+        Compilation c = compile(hook);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder cannot merge into 'Builder' - an inner class "
+                + "captures the enclosing instance, so builder() has nothing to create it from")
+            .inFile(hook).onLine(6);
+    }
+
     //
     // Each of these compiles the same source the editor suite configures and
     // asserts the same claim from the other side. The declared-builder-on-a-

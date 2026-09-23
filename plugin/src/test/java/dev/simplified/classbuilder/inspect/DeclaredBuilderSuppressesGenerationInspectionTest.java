@@ -18,9 +18,9 @@ import java.util.List;
  * <p>Three members and a whole nested class vanish from completion when the
  * target declares a nested type of the builder's name, and until this fires the
  * only account of it anywhere is a compiler note. What the cases pin is which
- * positions suppress: a class or record target merges into the declaration and
- * draws nothing, while a chain role and a constructor or factory target do not
- * merge, and the message names which of the two the target is.
+ * positions suppress: a class or record target and a constructor or factory
+ * target merge into the declaration and draw nothing, while a chain role does
+ * not merge and the message says so.
  */
 public class DeclaredBuilderSuppressesGenerationInspectionTest extends BasePlatformTestCase {
 
@@ -170,8 +170,12 @@ public class DeclaredBuilderSuppressesGenerationInspectionTest extends BasePlatf
             theOnlyWarning().contains("A SuperBuilder chain does not merge into a declared builder"));
     }
 
-    /** A constructor target does not merge into a declared builder, and the message says so. */
-    public void testOnAConstructorTarget_isWarnedThatItDoesNotMerge() {
+    /**
+     * A constructor target merges into its enclosing type's declared builder, so
+     * nothing is suppressed and nothing is said. This position used to warn that
+     * the declaration turned generation off.
+     */
+    public void testOnAConstructorTarget_isNotWarned() {
         myFixture.configureByText("Action.java",
             """
             import dev.simplified.annotations.ClassBuilder;
@@ -184,10 +188,29 @@ public class DeclaredBuilderSuppressesGenerationInspectionTest extends BasePlatf
                 }
             }
             """);
-        assertTrue("no merge runs on that path: " + weakWarnings(),
-            theOnlyWarning().contains(
-                "A constructor or factory target does not merge into a declared builder, so the "
-                    + "declaration suppresses generation"));
+        assertEquals("the merge runs on that path too: " + weakWarnings(),
+            0, weakWarnings().size());
+    }
+
+    /**
+     * An executable target is never in a chain, so an abstract enclosing type
+     * suppresses nothing either - the merge runs whatever the class around the
+     * factory is.
+     */
+    public void testOnAFactoryInsideAnAbstractClass_isNotWarned() {
+        myFixture.configureByText("Shapes.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public abstract class Shapes {
+                @ClassBuilder
+                public static String label(String text) { return text; }
+                public static class Builder {
+                    public Builder apply(Runnable task) { return this; }
+                }
+            }
+            """);
+        assertEquals("an executable target is never a chain role: " + weakWarnings(),
+            0, weakWarnings().size());
     }
 
     /**

@@ -268,6 +268,93 @@ public final class DeclaredBuilderShape {
     }
 
     /**
+     * Decides whether the entry points can instantiate a declared builder.
+     *
+     * <p>Every entry point calls the builder's constructor with one argument per
+     * seed, so it needs a constructor of exactly that arity among the ones the
+     * author wrote. A class declaring none keeps the implicit default, which
+     * takes nothing and so serves only an entry point passing nothing. On a
+     * type target the seed count is always zero, a seed being a parameter's
+     * alone.
+     *
+     * @param declaredArities the parameter count of each constructor the author declared
+     * @param seeds how many arguments the entry points pass the constructor
+     * @return whether a constructor the entry points can call exists
+     */
+    public static boolean instantiable(@NotNull List<Integer> declaredArities, int seeds) {
+        if (declaredArities.isEmpty()) return seeds == 0;
+        return declaredArities.contains(seeds);
+    }
+
+    /**
+     * Renders the note for entry points skipped because the declared builder has
+     * no constructor they can call.
+     *
+     * <p>Worded by what the entry points pass: with no seed the missing
+     * constructor is a no-argument one, and with seeds it is one taking exactly
+     * those, which on a constructor or factory target is only ever
+     * {@code builder(..)}.
+     *
+     * @param declaredName the declared builder's simple name
+     * @param entryPoints the names of the entry points that were not added
+     * @param seedNames the seeded slots the entry points pass, in parameter order
+     * @return the note text
+     */
+    public static @NotNull String uninstantiable(@NotNull String declaredName,
+                                                 @NotNull List<String> entryPoints,
+                                                 @NotNull List<String> seedNames) {
+        boolean single = entryPoints.size() == 1;
+        String skipped = quotedList(entryPoints) + (single ? " was" : " were") + " not added";
+        String pronoun = single ? "it" : "them";
+        if (seedNames.isEmpty()) {
+            return "@ClassBuilder merged into '" + declaredName + "' but every constructor it "
+                + "declares takes parameters, so " + skipped + " - declare a no-argument "
+                + "constructor or write " + pronoun;
+        }
+        String seeds = seedNames.size() == 1 ? "the seed" : "the " + seedNames.size() + " seeds";
+        return "@ClassBuilder merged into '" + declaredName + "' but none of its constructors "
+            + "takes " + seeds + " " + quotedList(entryPoints) + " passes, so " + skipped
+            + " - declare a constructor taking (" + String.join(", ", seedNames) + ") or write "
+            + pronoun;
+    }
+
+    /**
+     * Renders the diagnostic for a seed the merge appends as a {@code final}
+     * field that the declared builder never assigns.
+     *
+     * <p>{@code builder(seed)} hands a seed to the builder's constructor, which
+     * is the only place a final field can take it. In a declared builder that
+     * constructor is the author's, so the field is theirs to assign, and javac
+     * refuses a constructor - or the implicit default of a class declaring none -
+     * that leaves it unassigned.
+     *
+     * @param declaredName the declared builder's simple name
+     * @param seedName the seeded slot's name, which the appended field carries
+     * @param declaresConstructor whether the builder declares a constructor, the
+     *     diagnostic then naming it rather than the missing one
+     * @return the diagnostic text
+     */
+    public static @NotNull String unassignedSeed(@NotNull String declaredName,
+                                                 @NotNull String seedName,
+                                                 boolean declaresConstructor) {
+        String appended = "@ClassBuilder merged into '" + declaredName + "' appends the seed '"
+            + seedName + "' as a final field, ";
+        return declaresConstructor
+            ? appended + "and this constructor leaves it unassigned"
+            : appended + "and '" + declaredName + "' declares no constructor to assign it";
+    }
+
+    /** Quoted names joined as a sentence reads them - {@code 'a', 'b' and 'c'}. */
+    private static String quotedList(List<String> names) {
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < names.size(); i++) {
+            if (i > 0) out.append(i == names.size() - 1 ? " and " : ", ");
+            out.append('\'').append(names.get(i)).append('\'');
+        }
+        return out.toString();
+    }
+
+    /**
      * A rendered type in the one spelling both halves print it in.
      *
      * <p>The two models render the same type differently: javac joins type

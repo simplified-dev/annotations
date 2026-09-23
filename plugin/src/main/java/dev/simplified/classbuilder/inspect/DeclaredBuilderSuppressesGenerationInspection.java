@@ -18,15 +18,14 @@ import org.jetbrains.annotations.Nullable;
  * Reports a {@code @ClassBuilder} that generates nothing because the target
  * already declares a nested type of the builder's name.
  *
- * <p>A class or record target merges into that declaration, but a SuperBuilder
- * chain and a constructor or factory target skip on it, and the only signal is a
- * compiler note nobody reads. Without this the three entry points and the whole
- * generated surface simply are not in completion and nothing on the screen says
- * why - which reads as the annotation being broken rather than as the
+ * <p>A class or record target and a constructor or factory target merge into
+ * that declaration, but a SuperBuilder chain skips on it, and the only signal is
+ * a compiler note nobody reads. Without this the three entry points and the
+ * whole generated surface simply are not in completion and nothing on the screen
+ * says why - which reads as the annotation being broken rather than as the
  * declaration having turned it off.
  *
  * <p>Weak, because the code is correct: the author's own builder is what runs.
- * What the message carries is which of the two positions the target is in.
  */
 public class DeclaredBuilderSuppressesGenerationInspection extends LocalInspectionTool {
 
@@ -49,7 +48,7 @@ public class DeclaredBuilderSuppressesGenerationInspection extends LocalInspecti
                     .builderScheme(annotation, style, target.getName()).type();
                 if (!ClassBuilderConstants.suppressesGeneration(target, builderName, executable)) return;
 
-                holder.registerProblem(annotation, message(target.getName(), builderName, executable),
+                holder.registerProblem(annotation, message(target.getName(), builderName),
                     ProblemHighlightType.WEAK_WARNING);
             }
         };
@@ -73,19 +72,12 @@ public class DeclaredBuilderSuppressesGenerationInspection extends LocalInspecti
      *
      * @param targetName the annotated type's simple name
      * @param builderName the configured builder class name
-     * @param executable whether the annotation sits on a constructor or factory method,
-     *        the only other position being a SuperBuilder chain
      * @return the message to report on the annotation
      */
-    private static String message(String targetName, String builderName, boolean executable) {
-        String reason = "No builder is generated because '" + targetName
-            + "' declares a nested type named '" + builderName + "'";
-        if (executable) {
-            return reason + ". A constructor or factory target does not merge into a declared "
-                + "builder, so the declaration suppresses generation";
-        }
-        return reason + ". A SuperBuilder chain does not merge into a declared builder, so the "
-            + "declaration suppresses generation";
+    private static String message(String targetName, String builderName) {
+        return "No builder is generated because '" + targetName
+            + "' declares a nested type named '" + builderName + "'. A SuperBuilder chain does "
+            + "not merge into a declared builder, so the declaration suppresses generation";
     }
 
 }

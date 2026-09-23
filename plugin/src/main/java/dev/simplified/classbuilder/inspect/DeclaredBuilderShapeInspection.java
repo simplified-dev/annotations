@@ -31,14 +31,23 @@ import org.jetbrains.annotations.NotNull;
  *
  * <p>A shape rejection is reported on the declared builder's name identifier -
  * the element the author would act on, and one no other {@code classbuilder}
- * inspection claims. The processor reports on the annotated class instead, which
- * is where it has an element to report on at all.
+ * inspection claims. The processor reports on the annotated class, constructor
+ * or factory instead, which is where it has an element to report on at all. On
+ * a constructor or factory target the builder judged is the one the enclosing
+ * type declares, and its type parameters are measured against the factory's own
+ * where the factory is static.
  *
  * <p>On a shape the merge accepts, a declared field sharing a slot's name and
  * holding a type the generated setters cannot assign is reported on that field's
  * type, again in the processor's sentence. The slot's storage is classified by
  * {@link MergedSlotStorage}, which leaves unjudged a slot whose storage depends
  * on what its initializer reads.
+ *
+ * <p>On a constructor or factory target, a seed the merge appends as a
+ * {@code final} field and a constructor of the declared builder leaves
+ * unassigned is reported on that constructor, or on the builder's name when it
+ * declares none. javac refuses both shapes in its own words; the platform's
+ * definite-assignment check reads only fields written in source.
  */
 public class DeclaredBuilderShapeInspection extends LocalInspectionTool {
 
@@ -52,10 +61,11 @@ public class DeclaredBuilderShapeInspection extends LocalInspectionTool {
 
                 PsiModifierListOwner owner =
                     PsiTreeUtil.getParentOfType(annotation, PsiModifierListOwner.class);
-                boolean executable = owner instanceof PsiMethod;
+                PsiMethod member = owner instanceof PsiMethod method ? method : null;
+                boolean executable = member != null;
                 PsiClass target = owner instanceof PsiClass cls
                     ? cls
-                    : owner instanceof PsiMethod method ? method.getContainingClass() : null;
+                    : member != null ? member.getContainingClass() : null;
                 if (target == null || target.getName() == null) return;
 
                 NamingStyle style = ClassBuilderConstants.namingStyle(annotation);
@@ -75,14 +85,15 @@ public class DeclaredBuilderShapeInspection extends LocalInspectionTool {
                     return;
                 }
 
-                // The merge runs on a class or record target and nowhere else -
-                // an interface's builder is a sibling file - so the shape of a
-                // declared builder is only a question there.
-                if (executable || target.isInterface()) return;
+                // The merge runs on a class or record target and on a constructor
+                // or factory target, into the builder the type declares, and
+                // nowhere else - an interface's builder is a sibling file - so
+                // the shape of a declared builder is only a question there.
+                if (target.isInterface()) return;
                 PsiClass declared = ClassBuilderConstants.declaredBuilderOf(target, names.type());
                 if (declared == null || declared.getName() == null) return;
 
-                String rejection = ClassBuilderConstants.mergeRejection(target, declared, names);
+                String rejection = ClassBuilderConstants.mergeRejection(target, member, declared, names);
                 if (rejection != null) {
                     PsiElement anchor = declared.getNameIdentifier();
                     holder.registerProblem(anchor == null ? declared : anchor, rejection,
@@ -92,14 +103,25 @@ public class DeclaredBuilderShapeInspection extends LocalInspectionTool {
 
                 // The processor judges the slot fields only once the shape is
                 // accepted, and only where it merges - a chain role leaves its
-                // declared builder whole. It keeps merging after reporting one,
-                // so this reports and the augment provider keeps contributing.
-                if (ClassBuilderConstants.chainRoleOf(target).isChained()) return;
+                // declared builder whole, and an executable target is never one.
+                // It keeps merging after reporting one, so this reports and the
+                // augment provider keeps contributing.
+                if (!executable && ClassBuilderConstants.chainRoleOf(target).isChained()) return;
                 for (MergedSlotStorage.Mistyped mistyped
-                    : MergedSlotStorage.mistypedFields(target, declared, annotation)) {
+                    : MergedSlotStorage.mistypedFields(target, member, declared, annotation)) {
                     PsiTypeElement anchor = mistyped.field().getTypeElement();
                     holder.registerProblem(anchor == null ? mistyped.field() : anchor,
                         mistyped.message(), ProblemHighlightType.GENERIC_ERROR);
+                }
+
+                // A seed is appended final and only the author's constructors can
+                // assign it. javac refuses one that does not, and the platform's
+                // own check never sees a field it did not read from source.
+                if (member == null) return;
+                for (MergedSlotStorage.UnassignedSeed unassigned
+                    : MergedSlotStorage.unassignedSeeds(member, declared)) {
+                    holder.registerProblem(unassigned.anchor(), unassigned.message(),
+                        ProblemHighlightType.GENERIC_ERROR);
                 }
             }
         };

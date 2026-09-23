@@ -360,11 +360,12 @@ public final class ClassBuilderConstants {
      *
      * <p>A class or record target merges into the declaration: it keeps its
      * builder and its entry points, the generated members going into the class
-     * the author wrote. A chain role aborts ahead of everything - the
-     * retained-initializer providers, the copy constructor and the bootstraps -
-     * and an executable target aborts the same way, neither merging into a
-     * declared builder. An interface target never looks at a nested class, its
-     * builder being a sibling file.
+     * the author wrote. A constructor or factory target merges the same way into
+     * the declaration its enclosing type carries, and is never in a chain
+     * whatever that type extends. A chain role aborts ahead of everything - the
+     * retained-initializer providers, the copy constructor and the bootstraps.
+     * An interface target never looks at a nested class, its builder being a
+     * sibling file.
      *
      * @param target the annotated type
      * @param builderName the configured builder class name
@@ -374,64 +375,69 @@ public final class ClassBuilderConstants {
     public static boolean suppressesGeneration(@NotNull PsiClass target,
                                                @NotNull String builderName,
                                                boolean executable) {
+        if (executable) return false;
         PsiClass declared = declaredBuilderOf(target, builderName);
         if (declared == null) return false;
-        if (executable) return true;
         return chainRoleOf(target).isChained();
     }
 
     /**
-     * Whether the three entry points alone are withheld, the builder itself
-     * still being generated.
+     * Whether the entry points alone are withheld, the builder itself still
+     * being generated.
      *
      * <p>Separate from {@link #suppressesGeneration} because the two withhold
-     * different sets. Every entry point instantiates the builder, and a declared
-     * builder's constructors are the author's throughout, so one that declares
-     * constructors and no nullary one leaves the three with nothing to call and
-     * the processor skips them with a note. Everything else still runs - the
-     * merge appends every setter, and the target still gets the all-args
-     * constructor {@code build()} calls. Folding this into the wider test
-     * withheld that constructor too, and a same-package {@code new Target(...)}
-     * went red over source that builds.
+     * different sets. Every entry point instantiates the builder with one
+     * argument per seed, and a declared builder's constructors are the author's
+     * throughout, so one that declares no constructor of that arity leaves the
+     * entry points with nothing to call and the processor skips them with a
+     * note. Everything else still runs - the merge appends every setter, and a
+     * class target still gets the all-args constructor {@code build()} calls.
+     * Folding this into the wider test withheld that constructor too, and a
+     * same-package {@code new Target(...)} went red over source that builds.
      *
-     * <p>Answers only for a class or record target. An executable target and a
-     * chain role withhold everything through {@link #suppressesGeneration}
-     * instead, and an interface's entry points call its sibling builder, never a
-     * class nested in the interface body.
+     * <p>The arity rule is {@link DeclaredBuilderShape#instantiable}, which the
+     * processor asks of the same counts. On a class or record target the seed
+     * count is zero, so the constructor that serves is a no-argument one; on a
+     * constructor or factory target it is one taking exactly the seeds
+     * {@code builder(..)} passes. A chain role withholds everything through
+     * {@link #suppressesGeneration} instead, and an interface's entry points
+     * call its sibling builder, never a class nested in the interface body.
      *
-     * @param target the annotated type
+     * @param target the type the builder nests in
      * @param builderName the configured builder class name
      * @param executable whether the annotation sits on a constructor or factory method
-     * @return whether {@code builder()}, {@code from(T)} and {@code mutate()} are skipped
+     * @param seeds how many arguments the entry points pass the builder's constructor
+     * @return whether the entry points are skipped
      */
     public static boolean withholdsEntryPointsOnly(@NotNull PsiClass target,
                                                    @NotNull String builderName,
-                                                   boolean executable) {
-        if (executable || target.isInterface()) return false;
-        if (chainRoleOf(target).isChained()) return false;
+                                                   boolean executable,
+                                                   int seeds) {
+        if (target.isInterface()) return false;
+        if (!executable && chainRoleOf(target).isChained()) return false;
         PsiClass declared = declaredBuilderOf(target, builderName);
-        return declared != null && !hasNullaryConstructor(declared);
+        return declared != null
+            && !DeclaredBuilderShape.instantiable(declaredConstructorArities(declared), seeds);
     }
 
     /**
-     * Whether the class can be instantiated with no arguments.
+     * The parameter count of each constructor the author declared.
      *
-     * <p>A class that declares no constructor at all keeps javac's default,
-     * which takes none. Read through {@link PsiExtensibleClass#getOwnMethods()}
-     * rather than {@code getConstructors()}, the latter being augment-aware.
+     * <p>Read through {@link PsiExtensibleClass#getOwnMethods()} rather than
+     * {@code getConstructors()}, the latter being augment-aware. The implicit
+     * default of a class declaring none is not in the list, which is what
+     * {@link DeclaredBuilderShape#instantiable} expects.
      *
      * @param declared the builder the author wrote
-     * @return whether a no-argument constructor is reachable
+     * @return the arities, in declaration order
      */
-    private static boolean hasNullaryConstructor(@NotNull PsiClass declared) {
-        if (!(declared instanceof PsiExtensibleClass extensible)) return true;
-        boolean declaresAny = false;
+    private static @NotNull List<Integer> declaredConstructorArities(@NotNull PsiClass declared) {
+        List<Integer> out = new ArrayList<>();
+        if (!(declared instanceof PsiExtensibleClass extensible)) return out;
         for (PsiMethod own : extensible.getOwnMethods()) {
-            if (!own.isConstructor()) continue;
-            declaresAny = true;
-            if (own.getParameterList().isEmpty()) return true;
+            if (own.isConstructor()) out.add(own.getParameterList().getParametersCount());
         }
-        return !declaresAny;
+        return out;
     }
 
     // ------------------------------------------------------------------
@@ -455,21 +461,30 @@ public final class ClassBuilderConstants {
      * one would need the two trailing parameter names, which nothing on this
      * side reads while no chain merges.
      *
-     * @param target the annotated type
+     * <p>A constructor or factory target is standalone whatever its enclosing
+     * type is, a constructor having no chain to find, and its builder re-declares
+     * the type parameters of {@link #typeParameterSource} - a static factory's
+     * own - which is what the processor measures the declaration against.
+     *
+     * @param target the type the builder nests in
+     * @param executable the annotated constructor or static factory, or {@code null} when the
+     *     annotation is on the type
      * @param declared the builder it declares
      * @param names the resolved builder-member names
      * @return the diagnostic, or {@code null} when the shape is usable or unjudged
      */
     public static @Nullable String mergeRejection(@NotNull PsiClass target,
+                                                  @Nullable PsiMethod executable,
                                                   @NotNull PsiClass declared,
                                                   @NotNull BuilderScheme names) {
-        ChainRole role = chainRoleOf(target);
+        ChainRole role = executable != null ? ChainRole.STANDALONE : chainRoleOf(target);
         if (role.isChained()) return null;
         String declaredName = declared.getName();
         String targetName = target.getName();
         if (declaredName == null || targetName == null) return null;
         DeclaredBuilderFacts facts = declaredBuilderFacts(declared, names.build());
-        RoleExpectation expectation = roleExpectation(target, role, List.of(), null);
+        RoleExpectation expectation = roleExpectation(target,
+            typeParameterSource(target, executable), role, List.of(), null);
         DeclaredBuilderRejection rejection = DeclaredBuilderShape.check(role, facts, expectation);
         return rejection == null
             ? null
@@ -566,21 +581,43 @@ public final class ClassBuilderConstants {
     }
 
     /**
+     * The type parameters a builder for this site re-declares.
+     *
+     * <p>A {@code static} factory's own, since it cannot name the enclosing
+     * type's; the enclosing type's everywhere else, a constructor running under
+     * exactly those. The processor makes the same choice when it reads the
+     * annotated member.
+     *
+     * @param owner the type the builder nests in
+     * @param executable the annotated constructor or static factory, or {@code null} when the
+     *     annotation is on the type
+     * @return the parameters, in declaration order
+     */
+    public static PsiTypeParameter[] typeParameterSource(@NotNull PsiClass owner,
+                                                                  @Nullable PsiMethod executable) {
+        return executable != null && !executable.isConstructor()
+            ? executable.getTypeParameters()
+            : owner.getTypeParameters();
+    }
+
+    /**
      * What the role requires of a declared builder, expressed the way the
      * processor expresses it.
      *
-     * @param target the annotated type
+     * @param target the type the builder nests in
+     * @param typeParameters the parameters the builder re-declares, from {@link #typeParameterSource}
      * @param role its position in a chain
      * @param selfNames the two trailing parameter names a self-typed role appends
      * @param superBuilderType the erased builder type of the nearest annotated ancestor, or null
      * @return the expectation to measure the declaration against
      */
     public static @NotNull RoleExpectation roleExpectation(@NotNull PsiClass target,
+                                                           PsiTypeParameter[] typeParameters,
                                                            @NotNull ChainRole role,
                                                            @NotNull List<String> selfNames,
                                                            @Nullable String superBuilderType) {
         List<String> targetParameters = new ArrayList<>();
-        for (PsiTypeParameter parameter : target.getTypeParameters()) {
+        for (PsiTypeParameter parameter : typeParameters) {
             targetParameters.add(parameter.getName() == null ? "" : parameter.getName());
         }
         String targetName = target.getName() == null ? "" : target.getName();
