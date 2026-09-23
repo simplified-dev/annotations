@@ -1664,6 +1664,20 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
             errors().contains("Cannot resolve method 'builder' in 'Order'"));
     }
 
+    /**
+     * A constructor taking another concrete parameterisation of the seed's
+     * generic type is not one javac can call with the seed, so the editor
+     * withholds {@code builder(seed)} as javac skips it. The erasures matched,
+     * and the editor offered it green over a generated line javac refused.
+     */
+    public void testMergeOnASeedWhoseBuilderTakesAnotherParameterisation_offersNoEntryPoint() {
+        configureSeededOrder("java.util.List<String>",
+            "Builder(java.util.List<Integer> codes) { this.origin = new java.util.ArrayList<>(); }",
+            "java.util.List.of(\"web\")");
+        assertTrue("javac emits no builder(List<String>): " + errors(),
+            errors().contains("Cannot resolve method 'builder' in 'Order'"));
+    }
+
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------

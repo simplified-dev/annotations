@@ -2,6 +2,7 @@ package dev.simplified.classbuilder.editor;
 
 import com.intellij.psi.JavaRecursiveElementWalkingVisitor;
 import com.intellij.psi.PsiAnnotation;
+import com.intellij.psi.PsiAssignmentExpression;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiClassInitializer;
 import com.intellij.psi.PsiCodeBlock;
@@ -32,11 +33,14 @@ import com.intellij.psi.controlFlow.ControlFlowFactory;
 import com.intellij.psi.controlFlow.ControlFlowUtil;
 import com.intellij.psi.controlFlow.LocalsOrMyInstanceFieldsControlFlowPolicy;
 import com.intellij.psi.impl.source.PsiExtensibleClass;
+import com.intellij.psi.util.PsiUtil;
 import dev.simplified.accessor.inspect.AccessorConstants;
+import dev.simplified.args.inspect.ArgsConstants;
 import dev.simplified.classbuilder.apt.AccessorScheme;
 import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.InstanceDefaults;
 import dev.simplified.classbuilder.apt.SetterScheme;
+import dev.simplified.classbuilder.apt.SetterShape;
 import dev.simplified.classbuilder.apt.SlotHolding;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.shared.psi.WrittenAnnotations;
@@ -46,6 +50,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -90,9 +95,10 @@ public final class MergedSlotStorage {
      * set of names judged is the set the merge assigns - the target's fields or
      * record components, or the annotated member's parameters. A {@code final}
      * field is judged by {@link DeclaredBuilderShape#finalSlot} over the keys of
-     * the setters synthesised for its slot and of the author's own methods, the
-     * ones the augment provider compares. Not for use from an augment provider:
-     * the slot types are rendered through their canonical text, which resolves.
+     * the setters synthesised for its slot, each with its shape, and of the
+     * author's own methods, the ones the augment provider compares. Not for use
+     * from an augment provider: the slot types are rendered through their
+     * canonical text, which resolves.
      *
      * @param target the type the builder nests in
      * @param executable the annotated constructor or static factory, or {@code null} when the
@@ -122,7 +128,7 @@ public final class MergedSlotStorage {
         GeneratedMemberFactory.EditorBuilderConfig config =
             GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(annotation);
         boolean retainInit = config.retainInit();
-        Map<String, List<PsiMethod>> slotSetters = null;
+        Map<String, List<GeneratedMemberFactory.SlotSetter>> slotSetters = null;
         Set<String> authorKeys = null;
         List<Mistyped> out = new ArrayList<>();
         for (PsiField field : ownFields(declared)) {
@@ -137,11 +143,11 @@ public final class MergedSlotStorage {
                             new BuilderSite(target, executable, annotation), config, declared);
                         authorKeys = authorKeys(declared);
                     }
-                    List<String> setterKeys = new ArrayList<>();
-                    for (PsiMethod setter : slotSetters.getOrDefault(slot.name, List.of()))
-                        setterKeys.add(generatedKey(setter));
-                    String finalSlot = DeclaredBuilderShape.finalSlot(declaredName, slot.name, setterKeys,
-                        authorKeys);
+                    Map<String, SetterShape> generated = new LinkedHashMap<>();
+                    for (GeneratedMemberFactory.SlotSetter setter : slotSetters.getOrDefault(slot.name, List.of()))
+                        generated.put(generatedKey(setter.method()), setter.shape());
+                    String finalSlot = DeclaredBuilderShape.finalSlot(declaredName, slot.name, generated,
+                        slot.append, authorKeys);
                     if (finalSlot != null) {
                         out.add(new Mistyped(field, finalSlot));
                         continue;
@@ -180,10 +186,11 @@ public final class MergedSlotStorage {
      * <p>The rule and its wording are
      * {@link DeclaredBuilderShape#setterWithOtherTypeArguments}, asked of the
      * author's parameter types as written and the synthesised setter's
-     * presentable ones - the keys the augment provider compares - and of the copy
-     * entry points {@link GeneratedMemberFactory#copyEntryPoints} names. Not for
-     * use from an augment provider: the setters are synthesised, which resolves
-     * the slot types.
+     * presentable ones - the keys the augment provider compares - of the
+     * setter's shape, which decides whether the copy entry points call it, and
+     * of the copy entry points {@link GeneratedMemberFactory#copyEntryPoints}
+     * names. Not for use from an augment provider: the setters are synthesised,
+     * which resolves the slot types.
      *
      * @param target the type the builder nests in
      * @param executable the annotated constructor or static factory, or {@code null} when the
@@ -203,9 +210,11 @@ public final class MergedSlotStorage {
         List<String> copyEntryPoints = GeneratedMemberFactory.copyEntryPoints(site, config);
         if (copyEntryPoints.isEmpty()) return List.of();
 
-        Map<String, PsiMethod> generated = new HashMap<>();
-        for (List<PsiMethod> setters : GeneratedMemberFactory.settersBySlot(site, config, declared).values()) {
-            for (PsiMethod setter : setters) generated.putIfAbsent(generatedKey(setter), setter);
+        Map<String, GeneratedMemberFactory.SlotSetter> generated = new HashMap<>();
+        for (List<GeneratedMemberFactory.SlotSetter> setters
+            : GeneratedMemberFactory.settersBySlot(site, config, declared).values()) {
+            for (GeneratedMemberFactory.SlotSetter setter : setters)
+                generated.putIfAbsent(generatedKey(setter.method()), setter);
         }
         List<String> typeParameters = new ArrayList<>();
         for (PsiTypeParameter parameter : declared.getTypeParameters()) typeParameters.add(parameter.getName());
@@ -213,10 +222,11 @@ public final class MergedSlotStorage {
         List<CoveringMethod> out = new ArrayList<>();
         for (PsiMethod own : GeneratedMemberFactory.ownMethods(declared)) {
             if (own.isConstructor()) continue;
-            PsiMethod covered = generated.get(writtenKey(own));
+            GeneratedMemberFactory.SlotSetter covered = generated.get(writtenKey(own));
             if (covered == null) continue;
             String message = DeclaredBuilderShape.setterWithOtherTypeArguments(declaredName, own.getName(),
-                writtenTypes(own), presentableTypes(covered), typeParameters, copyEntryPoints);
+                covered.shape(), writtenTypes(own), presentableTypes(covered.method()), typeParameters,
+                copyEntryPoints);
             if (message != null) out.add(new CoveringMethod(own, message));
         }
         return out;
@@ -274,8 +284,9 @@ public final class MergedSlotStorage {
      * A seed the merge appends as a {@code final} field and the declared builder
      * assigns other than exactly once, with where to report it.
      *
-     * @param anchor the constructor that leaves it unassigned or assigns it again, or the
-     *     builder's name when it declares no constructor at all
+     * @param anchor the constructor that leaves it unassigned or assigns it after an instance
+     *     initializer, the assignment javac reports as a second one, or the builder's name when it
+     *     declares no constructor at all or an appended constructor leaves the seed unassigned
      * @param message the diagnostic text
      */
     public record MisassignedSeed(@NotNull PsiElement anchor, @NotNull String message) { }
@@ -317,22 +328,33 @@ public final class MergedSlotStorage {
 
     /**
      * Reports each seed the merge appends into a declared builder that a
-     * constructor there leaves unassigned, or assigns after an instance
-     * initializer may already have.
+     * constructor there leaves unassigned, or may assign where it is already
+     * assigned.
      *
      * <p>The merge appends a seed as a {@code final} field and never appends the
-     * constructor that assigns it, so the author's constructors have to, each
+     * constructor that assigns it, so the builder's constructors have to, each
      * exactly once. javac refuses one that does not assign it - and the implicit
-     * default of a class declaring none - and one that assigns it where an
-     * instance initializer may already have, on a line the author wrote; the
-     * platform's own check reads only fields written in source, so without this
-     * the editor is green over both. Assignment is answered by the platform's
-     * definite-assignment flow over each constructor body and each instance
-     * initializer, which run before every constructor body: one that definitely
-     * assigns the seed leaves no constructor responsible for it, and one that may
-     * assign it leaves no constructor free to. A constructor delegating through
-     * {@code this(..)} is left to the one it calls. A seed the author declares a
-     * field for is the platform's to check, that field being written in source.
+     * default of a class declaring none - and one that may assign it a second
+     * time, on a line the author wrote; the platform's own check reads only
+     * fields written in source, so without this the editor is green over both.
+     * Assignment is answered by the platform's definite-assignment flow over
+     * each constructor body and each instance initializer, which run before
+     * every constructor body: one that definitely assigns the seed leaves no
+     * constructor responsible for it, and one that may assign it leaves no
+     * constructor free to. A constructor delegating through {@code this(..)} has
+     * the seed assigned by the one it calls, so any assignment of its own is a
+     * second one, and a constructor may assign it twice itself - on two paths
+     * that meet, or inside a loop - both reported on the assignment javac
+     * reports. A seed the author declares a field for is the platform's to
+     * check, that field being written in source. Wherever a flow cannot be
+     * built, nothing is reported.
+     *
+     * <p>A constructor a constructor annotation appends onto the builder is one
+     * of its constructors too. The constructor pass runs before the merge, so it
+     * takes the builder's fields as they stand then and never the seed, and
+     * javac refuses it on the builder's line wherever no instance initializer
+     * assigns the seed; it is read through {@link ArgsConstants#appended}, as the
+     * entry-point gate reads it, and reported on the builder's name.
      *
      * <p>Not for use from an augment provider: it reads the builder's fields
      * through the augment-aware lookup, which is what finds the appended ones.
@@ -355,6 +377,7 @@ public final class MergedSlotStorage {
         for (PsiMethod own : extensible.getOwnMethods()) {
             if (own.isConstructor()) constructors.add(own);
         }
+        List<ArgsConstants.AppendedConstructor> appendedConstructors = ArgsConstants.appended(declared);
 
         List<MisassignedSeed> out = new ArrayList<>();
         for (PsiParameter parameter : executable.getParameterList().getParameters()) {
@@ -365,27 +388,112 @@ public final class MergedSlotStorage {
             PsiField appended = declared.findFieldByName(seed, false);
             if (appended == null) continue;
             boolean initialized = assignedByAnInitializer(initializers, appended);
-            if (constructors.isEmpty()) {
+            if (constructors.isEmpty() && appendedConstructors.isEmpty()) {
                 if (!initialized) {
                     out.add(new MisassignedSeed(nameAnchor,
                         DeclaredBuilderShape.unassignedSeed(declaredName, seed, false)));
                 }
                 continue;
             }
+            if (!initialized) {
+                for (ArgsConstants.AppendedConstructor constructor : appendedConstructors) {
+                    List<String> types = new ArrayList<>();
+                    for (PsiField field : constructor.parameters()) {
+                        String written = writtenTypeText(field);
+                        types.add(written == null ? "" : written);
+                    }
+                    out.add(new MisassignedSeed(nameAnchor, DeclaredBuilderShape.unassignedByAppendedConstructor(
+                        declaredName, seed, constructor.mode().annotationName(), types)));
+                }
+            }
             boolean mayBeInitialized = mayBeAssignedByAnInitializer(initializers, appended);
             for (PsiMethod constructor : constructors) {
                 PsiCodeBlock body = constructor.getBody();
-                if (body == null || delegates(body)) continue;
+                if (body == null) continue;
+                if (delegates(body)) {
+                    PsiReferenceExpression write = definitelyLeavesUnassigned(body, appended)
+                        ? null
+                        : firstWrite(body, appended);
+                    if (write != null) {
+                        out.add(new MisassignedSeed(write, DeclaredBuilderShape.reassignedSeed(declaredName, seed,
+                            DeclaredBuilderShape.PriorAssignment.DELEGATED_CONSTRUCTOR)));
+                    }
+                    continue;
+                }
                 PsiElement anchor = constructor.getNameIdentifier();
                 if (anchor == null) anchor = constructor;
                 if (mayBeInitialized && !definitelyLeavesUnassigned(body, appended)) {
-                    out.add(new MisassignedSeed(anchor, DeclaredBuilderShape.reassignedSeed(declaredName, seed)));
-                } else if (!initialized && !definitelyAssigns(body, appended)) {
+                    out.add(new MisassignedSeed(anchor, DeclaredBuilderShape.reassignedSeed(declaredName, seed,
+                        DeclaredBuilderShape.PriorAssignment.INSTANCE_INITIALIZER)));
+                    continue;
+                }
+                PsiReferenceExpression again = assignedAgain(body, appended);
+                if (again != null) {
+                    out.add(new MisassignedSeed(again, DeclaredBuilderShape.reassignedSeed(declaredName, seed,
+                        DeclaredBuilderShape.PriorAssignment.SAME_CONSTRUCTOR)));
+                }
+                if (!initialized && !definitelyAssigns(body, appended)) {
                     out.add(new MisassignedSeed(anchor,
                         DeclaredBuilderShape.unassignedSeed(declaredName, seed, true)));
                 }
             }
         }
+        return out;
+    }
+
+    /**
+     * The first assignment to the field a block spells, in source order.
+     *
+     * @param body the block to read
+     * @param field the field it may assign
+     * @return the assigned reference, or {@code null} when the block spells none
+     */
+    private static @Nullable PsiReferenceExpression firstWrite(PsiCodeBlock body, PsiField field) {
+        List<PsiReferenceExpression> writes = writesOf(body, field);
+        return writes.isEmpty() ? null : writes.get(0);
+    }
+
+    /**
+     * The assignment to the field that a block may make where it has already
+     * assigned it - a second assignment on a path through an earlier one, which
+     * javac reports as possibly already assigned, or one inside a loop, which it
+     * reports as possibly assigned in the loop.
+     *
+     * @param body the constructor body to analyse
+     * @param field the appended seed field
+     * @return the first such assignment, or {@code null} when there is none or the analysis cannot finish
+     */
+    private static @Nullable PsiReferenceExpression assignedAgain(PsiCodeBlock body, PsiField field) {
+        ControlFlow flow = flowOf(body);
+        if (flow == null) return null;
+        List<PsiReferenceExpression> writes = writesOf(body, field);
+        for (ControlFlowUtil.VariableInfo twice : ControlFlowUtil.getInitializedTwice(flow)) {
+            PsiElement element = twice.expression instanceof PsiAssignmentExpression assignment
+                ? assignment.getLExpression()
+                : twice.expression;
+            if (element instanceof PsiReferenceExpression reference && writes.contains(reference)) return reference;
+        }
+        for (PsiReferenceExpression write : writes)
+            if (ControlFlowUtil.isVariableAssignedInLoop(write, field)) return write;
+        return null;
+    }
+
+    /**
+     * Every assignment to the field a block spells, in source order.
+     *
+     * @param body the block to read
+     * @param field the field it may assign
+     * @return each assigned reference to the field
+     */
+    private static List<PsiReferenceExpression> writesOf(PsiCodeBlock body, PsiField field) {
+        List<PsiReferenceExpression> out = new ArrayList<>();
+        body.accept(new JavaRecursiveElementWalkingVisitor() {
+            @Override
+            public void visitReferenceExpression(@NotNull PsiReferenceExpression expression) {
+                super.visitReferenceExpression(expression);
+                if (PsiUtil.isAccessedForWriting(expression) && expression.isReferenceTo(field)) out.add(expression);
+            }
+        });
         return out;
     }
 

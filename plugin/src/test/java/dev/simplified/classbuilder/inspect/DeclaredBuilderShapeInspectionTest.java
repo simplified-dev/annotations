@@ -912,6 +912,183 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
         assertEquals("reported on the constructor that assigns it again", List.of("Builder@10"), anchors);
     }
 
+    /**
+     * A seed one constructor may assign twice is refused by javac on the second
+     * assignment, the merge appending it {@code final}. The seed rule asked
+     * only whether an instance initializer assigned it first, and the
+     * platform's check never sees the appended field, so the editor was green.
+     */
+    public void testASeedAConstructorMayAssignTwice_isReportedOnTheSecondAssignment() {
+        addBuilderSeedAnnotation();
+        myFixture.configureByText("Slip.java",
+            """
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Slip {
+                private final String item;
+                @ClassBuilder
+                Slip(@BuilderSeed String origin, String item) { this.item = origin + ":" + item; }
+                public String getItem() { return item; }
+                public static class Builder {
+                    public Builder(String origin) {
+                        this.origin = origin;
+                        if (origin.isEmpty()) this.origin = "desk";
+                    }
+                }
+            }
+            """);
+        assertEquals("the shared wording",
+            "@ClassBuilder merged into 'Builder' appends the seed 'origin' as a final field, and this "
+                + "constructor may assign it more than once",
+            theOnlyError());
+        assertEquals("reported where javac reports it", List.of("this.origin@11"), seedAnchors());
+    }
+
+    /**
+     * A seed assigned inside a loop may be assigned on every pass, and javac
+     * refuses that assignment. The editor was green over it.
+     */
+    public void testASeedAConstructorAssignsInALoop_isReportedOnThatAssignment() {
+        addBuilderSeedAnnotation();
+        myFixture.configureByText("Slip.java",
+            """
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Slip {
+                private final String item;
+                @ClassBuilder
+                Slip(@BuilderSeed String origin, String item) { this.item = origin + ":" + item; }
+                public String getItem() { return item; }
+                public static class Builder {
+                    public Builder(String origin) {
+                        do { this.origin = origin; } while (origin.isEmpty());
+                    }
+                }
+            }
+            """);
+        assertEquals("the shared wording",
+            "@ClassBuilder merged into 'Builder' appends the seed 'origin' as a final field, and this "
+                + "constructor may assign it more than once",
+            theOnlyError());
+        assertEquals("reported where javac reports it", List.of("this.origin@10"), seedAnchors());
+    }
+
+    /**
+     * A constructor delegating through {@code this(..)} has the seed assigned by
+     * the one it calls, so javac refuses it assigning the seed again. Every
+     * delegating constructor was left unread.
+     */
+    public void testASeedADelegatingConstructorAssignsAgain_isReportedOnThatAssignment() {
+        addBuilderSeedAnnotation();
+        myFixture.configureByText("Slip.java",
+            """
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Slip {
+                private final String item;
+                @ClassBuilder
+                Slip(@BuilderSeed String origin, String item) { this.item = origin + ":" + item; }
+                public String getItem() { return item; }
+                public static class Builder {
+                    public Builder(String origin) { this.origin = origin; }
+                    public Builder(int copies) { this("desk"); this.origin = String.valueOf(copies); }
+                }
+            }
+            """);
+        assertEquals("the shared wording",
+            "@ClassBuilder merged into 'Builder' appends the seed 'origin' as a final field, and this "
+                + "constructor assigns it after the constructor it delegates to already has",
+            theOnlyError());
+        assertEquals("reported where javac reports it", List.of("this.origin@10"), seedAnchors());
+    }
+
+    /** A seed each constructor assigns exactly once, one of them by delegating, draws nothing. */
+    public void testASeedEachConstructorAssignsOnce_isNotReported() {
+        addBuilderSeedAnnotation();
+        myFixture.configureByText("Slip.java",
+            """
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Slip {
+                private final String item;
+                @ClassBuilder
+                Slip(@BuilderSeed String origin, String item) { this.item = origin + ":" + item; }
+                public String getItem() { return item; }
+                public static class Builder {
+                    public Builder(String origin) {
+                        if (origin.isEmpty()) this.origin = "desk";
+                        else this.origin = origin;
+                    }
+                    public Builder(int copies) { this(String.valueOf(copies)); }
+                }
+            }
+            """);
+        assertTrue("javac accepts this: " + errors(), errors().isEmpty());
+    }
+
+    /**
+     * A constructor {@code @AllArgsConstructor} appends onto the declared builder
+     * takes the fields the builder has before the merge, so it leaves an
+     * appended seed unassigned, and javac refuses it on the builder's line. The
+     * editor read the author's constructors alone and said the builder declares
+     * none; it now names the appended one, on the builder's name.
+     */
+    public void testASeedAnAppendedArgsConstructorLeavesUnassigned_isReportedOnTheBuildersName() {
+        addBuilderSeedAnnotation();
+        addArgsConstructorAnnotation("AllArgsConstructor");
+        myFixture.configureByText("Order.java",
+            """
+            import dev.simplified.annotations.AllArgsConstructor;
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Order {
+                private final String item;
+                @ClassBuilder
+                Order(@BuilderSeed String origin, String item) { this.item = origin + ":" + item; }
+                @AllArgsConstructor
+                public static final class Builder {
+                    private final String code;
+                }
+            }
+            """);
+        assertEquals("the condition javac reports",
+            "@ClassBuilder merged into 'Builder' appends the seed 'origin' as a final field, and the "
+                + "constructor Builder(String) that @AllArgsConstructor appends leaves it unassigned",
+            theOnlyError());
+        assertEquals("reported on the builder, where javac reports it", List.of("Builder@9"), seedAnchors());
+    }
+
+    /**
+     * Beside an author constructor that assigns the seed, the appended one still
+     * leaves it unassigned and javac still refuses it. The editor read the
+     * author's constructor alone and was green.
+     */
+    public void testASeedAnAppendedArgsConstructorLeavesUnassignedBesideAnAssigningOne_isReported() {
+        addBuilderSeedAnnotation();
+        addArgsConstructorAnnotation("AllArgsConstructor");
+        myFixture.configureByText("Order.java",
+            """
+            import dev.simplified.annotations.AllArgsConstructor;
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Order {
+                private final String item;
+                @ClassBuilder
+                Order(@BuilderSeed String origin, String item) { this.item = origin + ":" + item; }
+                @AllArgsConstructor
+                public static final class Builder {
+                    private final int code;
+                    public Builder(String origin) { this.origin = origin; this.code = 1; }
+                }
+            }
+            """);
+        assertEquals("the condition javac reports",
+            "@ClassBuilder merged into 'Builder' appends the seed 'origin' as a final field, and the "
+                + "constructor Builder(int) that @AllArgsConstructor appends leaves it unassigned",
+            theOnlyError());
+        assertEquals("reported on the builder, where javac reports it", List.of("Builder@9"), seedAnchors());
+    }
+
     // ------------------------------------------------------------------
     // Chain roles
     //
@@ -1443,6 +1620,95 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
         assertEquals("javac accepts it: " + errors(), 0, errors().size());
     }
 
+    /**
+     * {@code from(T)} and {@code mutate()} call only the setter taking the
+     * slot's own type, so an author method covering the singular add with
+     * another parameterisation is never passed the slot, and javac accepts it.
+     * The rule judged every covered setter and reported it.
+     */
+    public void testAnAuthorMethodCoveringASetterTheCopyNeverCalls_isNotReported() {
+        addCollectorAnnotation();
+        myFixture.configureByText("Bag.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Collector;
+            import java.util.ArrayList;
+            import java.util.List;
+            @ClassBuilder
+            public class Bag {
+                @Collector(singular = true) List<List<String>> items;
+                public static class Builder {
+                    public Builder addItem(List<Integer> codes) {
+                        List<String> item = new ArrayList<>();
+                        for (Integer code : codes) item.add("#" + code);
+                        this.items.add(item);
+                        return this;
+                    }
+                }
+            }
+            """);
+        assertEquals("javac accepts it: " + errors(), 0, errors().size());
+    }
+
+    /**
+     * A {@code final} collected field whose generated setters all append into
+     * the container is assigned by nothing the merge appends, so javac accepts
+     * it. Every generated setter counted as assigning the field, and the editor
+     * reported it.
+     */
+    public void testAFinalCollectedSlotWhoseSettersAllAppend_isNotReported() {
+        addCollectorAnnotation();
+        myFixture.configureByText("Crate.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Collector;
+            import java.util.ArrayList;
+            import java.util.List;
+            @ClassBuilder
+            public class Crate {
+                @Collector(append = true) List<String> tags;
+                public static class Builder {
+                    private final List<String> tags = new ArrayList<>();
+                }
+            }
+            """);
+        assertEquals("javac accepts it: " + errors(), 0, errors().size());
+    }
+
+    /**
+     * Where the author spells both replacing bulk setters, the singular add and
+     * the clear the merge appends only mutate the container, so javac accepts
+     * the {@code final} field.
+     */
+    public void testAFinalCollectedSlotWhoseReplacingSettersTheAuthorSpells_isNotReported() {
+        addCollectorAnnotation();
+        myFixture.configureByText("Crate.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Collector;
+            import java.util.ArrayList;
+            import java.util.List;
+            @ClassBuilder
+            public class Crate {
+                @Collector(singular = true, clearable = true) List<String> tags;
+                public static class Builder {
+                    private final List<String> tags = new ArrayList<>();
+                    public Builder tags(String... tags) {
+                        this.tags.clear();
+                        for (String tag : tags) this.tags.add(tag);
+                        return this;
+                    }
+                    public Builder tags(Iterable<String> tags) {
+                        this.tags.clear();
+                        tags.forEach(this.tags::add);
+                        return this;
+                    }
+                }
+            }
+            """);
+        assertEquals("javac accepts it: " + errors(), 0, errors().size());
+    }
+
     // ------------------------------------------------------------------
     // Reviewed reproductions: the constructor and factory path
     // ------------------------------------------------------------------
@@ -1565,6 +1831,53 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
             public @interface BuilderSeed {
             }
             """);
+    }
+
+    private void addCollectorAnnotation() {
+        myFixture.addFileToProject("dev/simplified/annotations/Collector.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS)
+            @Target({ElementType.FIELD, ElementType.PARAMETER})
+            public @interface Collector {
+                String singularMethodName() default "";
+                boolean singular() default false;
+                boolean clearable() default false;
+                boolean compute() default false;
+                boolean append() default false;
+                boolean removable() default false;
+            }
+            """);
+    }
+
+    /** Adds a constructor annotation of the given simple name. */
+    private void addArgsConstructorAnnotation(String name) {
+        myFixture.addFileToProject("dev/simplified/annotations/" + name + ".java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS)
+            @Target(ElementType.TYPE)
+            public @interface %s {
+                AccessLevel access() default AccessLevel.PUBLIC;
+                boolean force() default false;
+            }
+            """.formatted(name));
+    }
+
+    /** Where each seed diagnostic sits, as its highlighted text and its one-based line. */
+    private List<String> seedAnchors() {
+        List<String> anchors = new ArrayList<>();
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            String description = info.getDescription();
+            if (info.getSeverity() == HighlightSeverity.ERROR && description != null
+                && description.contains("appends the seed")) {
+                int line = myFixture.getEditor().getDocument().getLineNumber(info.getStartOffset());
+                anchors.add(info.getText() + "@" + (line + 1));
+            }
+        }
+        return anchors;
     }
 
     private void addLazyAnnotation() {

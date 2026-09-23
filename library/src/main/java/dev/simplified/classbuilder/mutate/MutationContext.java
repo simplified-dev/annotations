@@ -13,6 +13,7 @@ import dev.simplified.annotations.BuildFlag;
 import dev.simplified.classbuilder.apt.BuilderConfig;
 import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.classbuilder.apt.SetterShape;
 import dev.simplified.shared.javac.ContractAnnotations;
 import dev.simplified.shared.javac.GeneratedAnnotations;
 import dev.simplified.shared.javac.JavacBridge;
@@ -57,7 +58,7 @@ public final class MutationContext {
     private final String selfBuilderName;
     private final ExecutableElement executable;
     private final List<? extends TypeParameterElement> typeParameters;
-    private final Map<JCMethodDecl, String> setterSlots = new IdentityHashMap<>();
+    private final Map<JCMethodDecl, SetterTag> setterTags = new IdentityHashMap<>();
     private final List<DeclaredBuilderMerge.CoveredSetter> coveredSetters = new ArrayList<>();
 
     public MutationContext(JavacBridge bridge,
@@ -146,17 +147,18 @@ public final class MutationContext {
     }
 
     /**
-     * Records the slot each of these setters was generated for, so a merge
-     * handed the whole member list can tell which of them assign which slot.
+     * Records the slot a setter was generated for and its shape, so a merge
+     * handed the whole member list can tell which setters belong to which slot
+     * and what each of them does.
      *
-     * @param slot the slot the setters assign
-     * @param setters the setters generated for it
-     * @return the same setters
+     * @param slot the slot the setter is generated for
+     * @param shape the setter's shape
+     * @param setter the setter
+     * @return the same setter
      */
-    com.sun.tools.javac.util.List<JCMethodDecl> recordSetters(FieldSpec slot,
-                                                              com.sun.tools.javac.util.List<JCMethodDecl> setters) {
-        for (JCMethodDecl setter : setters) setterSlots.put(setter, slot.name);
-        return setters;
+    JCMethodDecl recordSetter(FieldSpec slot, SetterShape shape, JCMethodDecl setter) {
+        setterTags.put(setter, new SetterTag(slot.name, shape));
+        return setter;
     }
 
     /**
@@ -166,8 +168,28 @@ public final class MutationContext {
      * @return the slot's name, or {@code null} when the member is no slot's setter
      */
     @Nullable String setterSlot(JCTree member) {
-        return member instanceof JCMethodDecl method ? setterSlots.get(method) : null;
+        SetterTag tag = member instanceof JCMethodDecl method ? setterTags.get(method) : null;
+        return tag == null ? null : tag.slot();
     }
+
+    /**
+     * The shape of a generated setter.
+     *
+     * @param member a member the builder producers generated
+     * @return its shape, or {@code null} when the member is no slot's setter
+     */
+    @Nullable SetterShape setterShape(JCTree member) {
+        SetterTag tag = member instanceof JCMethodDecl method ? setterTags.get(method) : null;
+        return tag == null ? null : tag.shape();
+    }
+
+    /**
+     * What {@link #recordSetter} records of one setter.
+     *
+     * @param slot the name of the slot it is generated for
+     * @param shape its shape
+     */
+    private record SetterTag(String slot, SetterShape shape) { }
 
     /**
      * Records a generated setter the merge left out because an author method

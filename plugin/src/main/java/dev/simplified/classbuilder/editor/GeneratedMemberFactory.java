@@ -37,6 +37,7 @@ import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
 import dev.simplified.classbuilder.apt.BuilderScheme;
 import dev.simplified.classbuilder.apt.ChainRole;
 import dev.simplified.classbuilder.apt.SetterScheme;
+import dev.simplified.classbuilder.apt.SetterShape;
 import dev.simplified.classbuilder.apt.SlotHolding;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.shared.psi.AnnotatedLightModifierList;
@@ -44,6 +45,7 @@ import dev.simplified.shared.psi.DocProxyingLightMethodBuilder;
 import dev.simplified.shared.psi.GeneratedLightMethod;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
 import dev.simplified.shared.psi.WrittenAnnotations;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
@@ -721,17 +723,18 @@ public final class GeneratedMemberFactory {
 
     /**
      * The setters generated for each slot, as {@link #synthesizeBuilderMethods}
-     * builds them - what tells the setters a merge appends for one slot from the
-     * rest. A seed has none and is absent.
+     * builds them, each with its {@link SetterShape} - what tells the setters a
+     * merge appends for one slot from the rest, and what each of them does. A
+     * seed has none and is absent.
      *
      * @param site the annotated site
      * @param config the resolved configuration
      * @param builder the builder the members are declared in
      * @return each slot's name with its setters, in slot order
      */
-    static Map<String, List<PsiMethod>> settersBySlot(BuilderSite site, EditorBuilderConfig config,
-                                                      PsiClass builder) {
-        Map<String, List<PsiMethod>> out = new LinkedHashMap<>();
+    static Map<String, List<SlotSetter>> settersBySlot(BuilderSite site, EditorBuilderConfig config,
+                                                       PsiClass builder) {
+        Map<String, List<SlotSetter>> out = new LinkedHashMap<>();
         synthesize(site, config, builder, out);
         return out;
     }
@@ -771,7 +774,7 @@ public final class GeneratedMemberFactory {
      * @return every method, in emission order
      */
     private static List<PsiMethod> synthesize(BuilderSite site, EditorBuilderConfig config, PsiClass builder,
-                                              @Nullable Map<String, List<PsiMethod>> settersBySlot) {
+                                              @Nullable Map<String, List<SlotSetter>> settersBySlot) {
         PsiClass target = site.owner();
         Project project = target.getProject();
         PsiManager psiManager = PsiManager.getInstance(project);
@@ -827,8 +830,8 @@ public final class GeneratedMemberFactory {
             // A seeded slot is supplied to builder(...) and is final from there
             // on, so every setter shape would write over a committed value.
             if (field.seed) continue;
-            List<PsiMethod> setters = settersFor(ctx, field);
-            methods.addAll(setters);
+            List<SlotSetter> setters = settersFor(ctx, field);
+            for (SlotSetter setter : setters) methods.add(setter.method());
             if (settersBySlot != null) settersBySlot.put(field.name, setters);
         }
 
@@ -1062,55 +1065,71 @@ public final class GeneratedMemberFactory {
         SetterCtx ctx = new SetterCtx(target.getManager(), elements, target, builder,
             elements.createType(builder), config);
         List<String> out = new ArrayList<>();
-        for (PsiMethod setter : settersFor(ctx, slot)) out.add(setter.getName());
+        for (SlotSetter setter : settersFor(ctx, slot)) out.add(setter.method().getName());
         return out;
     }
 
     /**
-     * Mirrors the dispatch in {@code FieldMutators.setters}: picks one or
-     * more shape-specific setter methods per field.
+     * A setter synthesised for a slot, with the shape the processor tags the
+     * same setter with.
+     *
+     * @param method the light setter
+     * @param shape its shape, which says whether it assigns the slot and whether the copy entry points call it
      */
-    private static List<PsiMethod> settersFor(SetterCtx ctx, PsiFieldShape field) {
-        List<PsiMethod> out = new ArrayList<>();
+    record SlotSetter(@NotNull PsiMethod method, @NotNull SetterShape shape) { }
+
+    /**
+     * Mirrors the dispatch in {@code FieldMutators.setters}: picks one or
+     * more shape-specific setter methods per field, each tagged with the
+     * {@link SetterShape} the processor tags it with.
+     */
+    private static List<SlotSetter> settersFor(SetterCtx ctx, PsiFieldShape field) {
+        List<SlotSetter> out = new ArrayList<>();
         if (field.lazy) {
-            out.add(lazyValueSetter(ctx, field));
-            out.add(lazySupplierSetter(ctx, field));
+            out.add(new SlotSetter(lazyValueSetter(ctx, field), SetterShape.LAZY_VALUE));
+            out.add(new SlotSetter(lazySupplierSetter(ctx, field), SetterShape.LAZY_SUPPLIER));
             return out;
         }
         if (field.isBoolean) {
             // Typed setter is the ordinary `set` role; the zero-arg form is the
             // separate `flag` role and drops out when a style suppresses it.
-            if (field.setters.emitsFlag()) out.add(booleanZeroArg(ctx, field, field.name, false));
-            out.add(booleanTyped(ctx, field, field.name));
+            if (field.setters.emitsFlag())
+                out.add(new SlotSetter(booleanZeroArg(ctx, field, field.name, false), SetterShape.FLAG));
+            out.add(new SlotSetter(booleanTyped(ctx, field, field.name), SetterShape.BOOLEAN));
             if (field.negateName != null && !field.negateName.isEmpty()) {
-                if (field.setters.emitsFlag()) out.add(booleanZeroArg(ctx, field, field.negateName, true));
-                out.add(booleanTyped(ctx, field, field.negateName));
+                if (field.setters.emitsFlag())
+                    out.add(new SlotSetter(booleanZeroArg(ctx, field, field.negateName, true), SetterShape.FLAG));
+                out.add(new SlotSetter(booleanTyped(ctx, field, field.negateName), SetterShape.NEGATED));
             }
         } else if (field.isOptional) {
-            out.add(optionalNullableRaw(ctx, field));
-            out.add(optionalWrapped(ctx, field));
-            if (field.formattable && field.isOptionalString) {
-                out.add(optionalFormattable(ctx, field));
-            }
+            out.add(new SlotSetter(optionalNullableRaw(ctx, field), SetterShape.OPTIONAL_VALUE));
+            out.add(new SlotSetter(optionalWrapped(ctx, field), SetterShape.OPTIONAL));
+            if (field.formattable && field.isOptionalString)
+                out.add(new SlotSetter(optionalFormattable(ctx, field), SetterShape.FORMAT));
         } else if (field.isArray) {
-            out.add(arrayVarargs(ctx, field));
+            out.add(new SlotSetter(arrayVarargs(ctx, field), SetterShape.ARRAY));
         } else if ((field.isListLike || field.isMap) && field.collector) {
             if (field.isMap) {
-                out.add(singularMapReplace(ctx, field));
-                if (field.singular && field.setters.emitsPut()) out.add(singularMapPut(ctx, field));
-                if (field.compute && field.setters.emitsCompute()) out.add(singularMapPutIfAbsent(ctx, field));
+                out.add(new SlotSetter(singularMapReplace(ctx, field), SetterShape.BULK_MAP));
+                if (field.singular && field.setters.emitsPut())
+                    out.add(new SlotSetter(singularMapPut(ctx, field), SetterShape.PUT));
+                if (field.compute && field.setters.emitsCompute())
+                    out.add(new SlotSetter(singularMapPutIfAbsent(ctx, field), SetterShape.PUT_IF_ABSENT));
             } else {
-                out.add(singularCollectionVarargsReplace(ctx, field));
-                out.add(singularCollectionIterableReplace(ctx, field));
-                if (field.singular && field.setters.emitsAdd()) out.add(singularCollectionAdd(ctx, field));
+                out.add(new SlotSetter(singularCollectionVarargsReplace(ctx, field), SetterShape.BULK_VARARGS));
+                out.add(new SlotSetter(singularCollectionIterableReplace(ctx, field), SetterShape.BULK_ITERABLE));
+                if (field.singular && field.setters.emitsAdd())
+                    out.add(new SlotSetter(singularCollectionAdd(ctx, field), SetterShape.ADD));
             }
-            if (field.clearable && field.setters.emitsClear()) out.add(singularClear(ctx, field));
-            if (field.removable && field.setters.emitsRemove()) out.add(singularRemove(ctx, field));
+            if (field.clearable && field.setters.emitsClear())
+                out.add(new SlotSetter(singularClear(ctx, field), SetterShape.CLEAR));
+            if (field.removable && field.setters.emitsRemove())
+                out.add(new SlotSetter(singularRemove(ctx, field), SetterShape.REMOVE));
         } else if (field.isString && field.formattable) {
-            out.add(plainSetter(ctx, field));
-            out.add(stringFormattable(ctx, field));
+            out.add(new SlotSetter(plainSetter(ctx, field), SetterShape.PLAIN));
+            out.add(new SlotSetter(stringFormattable(ctx, field), SetterShape.FORMAT));
         } else {
-            out.add(plainSetter(ctx, field));
+            out.add(new SlotSetter(plainSetter(ctx, field), SetterShape.PLAIN));
         }
         appendAssignViaOverloads(ctx, field, out);
         return out;
@@ -1124,14 +1143,14 @@ public final class GeneratedMemberFactory {
      * rejecting that pairing outright.
      */
     private static void appendAssignViaOverloads(SetterCtx ctx, PsiFieldShape field,
-                                                 List<PsiMethod> out) {
+                                                 List<SlotSetter> out) {
         if (field.collector) return;
         for (PsiFieldShape.AssignTransform transform : field.assignVia) {
             if (transform.direct()) continue;
             LightMethodBuilder m = newSetter(ctx, field,
                 field.setters.setName(field.name, field.isBoolean));
             m.addParameter(buildParam(m, field.name, transform.paramType(), false));
-            out.add(m);
+            out.add(new SlotSetter(m, SetterShape.ASSIGN_VIA));
         }
     }
 

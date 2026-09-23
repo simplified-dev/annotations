@@ -116,7 +116,7 @@ final class BootstrapMethodFactory {
     private boolean builderCanBeInstantiated() {
         if (mergedInto == null) return true;
         return DeclaredBuilderShape.instantiable(constructorSignatures(false), constructorSignatures(true),
-            seedTypes());
+            seedTypes(), DeclaredBuilderMerge.declaredParameterNames(mergedInto));
     }
 
     /**
@@ -159,8 +159,10 @@ final class BootstrapMethodFactory {
      *
      * <p>The rule and its wording are
      * {@link DeclaredBuilderShape#setterWithOtherTypeArguments}, which the
-     * editor's inspection asks of the same types read out of PSI; what is known
-     * only here is which copy entry points are emitted.
+     * editor's inspection asks of the same types read out of PSI and which
+     * judges only the setter shape the copy entry points call - the one
+     * {@link #fromFactory} and {@link #mutateMethod} pass each slot to; what is
+     * known only here is which copy entry points are emitted.
      *
      * @param copyEntryPoints the names of the copy entry points about to be emitted
      */
@@ -169,7 +171,7 @@ final class BootstrapMethodFactory {
         java.util.List<String> typeParameters = DeclaredBuilderMerge.declaredParameterNames(mergedInto);
         for (DeclaredBuilderMerge.CoveredSetter covered : ctx.coveredSetters()) {
             String message = DeclaredBuilderShape.setterWithOtherTypeArguments(mergedInto.name.toString(),
-                covered.name(), covered.writtenTypes(), covered.generatedTypes(), typeParameters,
+                covered.name(), covered.shape(), covered.writtenTypes(), covered.generatedTypes(), typeParameters,
                 copyEntryPoints);
             if (message != null) messager.printMessage(Diagnostic.Kind.ERROR, message, ctx.targetElement());
         }
@@ -193,7 +195,7 @@ final class BootstrapMethodFactory {
         java.util.List<String> seedNames = new ArrayList<>();
         for (FieldSpec seed : ctx.seeds()) seedNames.add(seed.name);
         boolean throwsClause = DeclaredBuilderShape.skippedForAThrowsClause(constructorSignatures(false),
-            constructorSignatures(true), seedTypes());
+            constructorSignatures(true), seedTypes(), DeclaredBuilderMerge.declaredParameterNames(mergedInto));
         return DeclaredBuilderShape.entryPointsSkipped(mergedInto.name.toString(), ctx.config().names(),
             ctx.isExecutableTarget(), seedNames, throwsClause);
     }

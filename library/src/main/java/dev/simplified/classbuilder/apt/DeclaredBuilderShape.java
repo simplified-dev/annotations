@@ -8,6 +8,7 @@ import java.util.Collection;
 import java.util.ConcurrentModificationException;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -728,31 +729,35 @@ public final class DeclaredBuilderShape {
      * Reports a declared builder field under a slot's name that is
      * {@code final} where a member the merge appends assigns it.
      *
-     * <p>What the merge appends to assign a slot is its generated setters, so
-     * the field is reported exactly when one of them is not covered by an author
-     * method under {@link #methodKey} - that setter is appended and assigns it on
-     * a line the author never wrote. Where the author spells every one, nothing
-     * generated assigns the field and the author's own members are javac's to
-     * judge. A seed has no setter, and the constructor that would assign it as
-     * one is never appended into a declared builder, so a seed's field is never
+     * <p>What the merge appends to assign a slot is its generated setters, and
+     * not all of them assign it: {@link SetterShape#assigns} names the shapes
+     * that call a method on the container the field holds, or hand the value on
+     * to another setter, instead. The field is reported exactly when a setter
+     * that assigns it is not covered by an author method under
+     * {@link #methodKey} - that setter is appended and assigns it on a line the
+     * author never wrote. Where the author spells every one, nothing generated
+     * assigns the field and the author's own members are javac's to judge. A
+     * seed has no setter, and the constructor that would assign it as one is
+     * never appended into a declared builder, so a seed's field is never
      * reported.
-     *
-     * <p>A setter shape that only mutates the slot's container - an add, a put
-     * or a clear - counts as assigning it, since neither half reads a body the
-     * editor's members do not have.
      *
      * @param declaredName the declared builder's simple name
      * @param slotName the slot's name, which the declared field shares
-     * @param generatedSetterKeys the {@link #methodKey} of each setter generated for the slot
+     * @param generatedSetters the {@link #methodKey} of each setter generated for the slot, with its shape
+     * @param append whether the slot's bulk setters append rather than replace, per {@code @Collector(append)}
      * @param authorMethodKeys the {@link #methodKey} of each method the author declared on the builder
      * @return the diagnostic text both halves report, or {@code null} when nothing appended assigns the field
      */
     public static @Nullable String finalSlot(@NotNull String declaredName, @NotNull String slotName,
-                                             @NotNull Collection<String> generatedSetterKeys,
+                                             @NotNull Map<String, SetterShape> generatedSetters, boolean append,
                                              @NotNull Collection<String> authorMethodKeys) {
-        if (authorMethodKeys.containsAll(generatedSetterKeys)) return null;
-        return "@ClassBuilder merged into '" + declaredName + "' finds '" + slotName
-            + "' declared final, and the generated setter assigns it";
+        for (Map.Entry<String, SetterShape> setter : generatedSetters.entrySet()) {
+            if (setter.getValue().assigns(append) && !authorMethodKeys.contains(setter.getKey())) {
+                return "@ClassBuilder merged into '" + declaredName + "' finds '" + slotName
+                    + "' declared final, and the generated setter assigns it";
+            }
+        }
+        return null;
     }
 
     /**
@@ -760,10 +765,12 @@ public final class DeclaredBuilderShape {
      * {@link #methodKey} while taking another parameterisation of the same
      * generic type, which the copy entry points then pass the slot's own type.
      *
-     * <p>{@code from(T)} and {@code mutate()} seed each slot through its setter,
-     * so a covered setter's call lands on the author's method. Two distinct
-     * concrete parameterisations of one generic type are never assignable to
-     * each other, so javac rejects that call on a generated line exactly when a
+     * <p>{@code from(T)} and {@code mutate()} seed each slot through the one
+     * setter {@link SetterShape#copied} names, so where that setter is covered
+     * the call lands on the author's method; a covered setter of any other
+     * shape is never passed the slot and is not judged. Two distinct concrete
+     * parameterisations of one generic type are never assignable to each other,
+     * so javac rejects the copy's call on a generated line exactly when a
      * parameter pair carries type arguments on both sides, neither holds a
      * wildcard or one of the declared builder's own type parameters - either
      * of which can accept the slot's type - and the arguments differ by simple
@@ -772,6 +779,7 @@ public final class DeclaredBuilderShape {
      *
      * @param declaredName the declared builder's simple name
      * @param methodName the method's name, which the author's and the generated one share
+     * @param shape the covered setter's shape
      * @param writtenTypes each parameter type of the author's method as written, in order
      * @param generatedTypes each parameter type of the generated setter as either model renders it, in order
      * @param builderTypeParameters the declared builder's own type parameter names
@@ -780,11 +788,13 @@ public final class DeclaredBuilderShape {
      */
     public static @Nullable String setterWithOtherTypeArguments(@NotNull String declaredName,
                                                                 @NotNull String methodName,
+                                                                @NotNull SetterShape shape,
                                                                 @NotNull List<String> writtenTypes,
                                                                 @NotNull List<String> generatedTypes,
                                                                 @NotNull Collection<String> builderTypeParameters,
                                                                 @NotNull List<String> copyEntryPoints) {
-        if (copyEntryPoints.isEmpty() || writtenTypes.size() != generatedTypes.size()) return null;
+        if (!shape.copied() || copyEntryPoints.isEmpty() || writtenTypes.size() != generatedTypes.size())
+            return null;
         if (!methodKey(methodName, writtenTypes).equals(methodKey(methodName, generatedTypes))) return null;
         for (int i = 0; i < writtenTypes.size(); i++) {
             String written = typeText(writtenTypes.get(i).replace("...", "[]"));
@@ -891,6 +901,35 @@ public final class DeclaredBuilderShape {
      * only known unchecked types leaves the selected constructor callable, and
      * any other name does not, the answer that never emits a call javac refuses.
      *
+     * <p>An erasure match is not taken where the seed and the parameter are two
+     * distinct concrete parameterisations of one generic type - both carrying
+     * type arguments, neither a wildcard nor one of the declared builder's own
+     * type parameters, and the arguments differing by simple name at some
+     * depth - which are never assignable to each other, the rule
+     * {@link #setterWithOtherTypeArguments} applies to a covered setter.
+     *
+     * @param declaredConstructors the parameter types of each constructor the builder declares, as
+     *     either model renders them
+     * @param callableConstructors the parameter types of each of those whose throws clause
+     *     {@link #throwsNothingChecked} accepts
+     * @param seedTypes the type of each seed the entry points pass, in parameter order
+     * @param builderTypeParameters the declared builder's own type parameter names
+     * @return whether a constructor the entry points can call exists
+     */
+    public static boolean instantiable(@NotNull List<List<String>> declaredConstructors,
+                                       @NotNull List<List<String>> callableConstructors,
+                                       @NotNull List<String> seedTypes,
+                                       @NotNull Collection<String> builderTypeParameters) {
+        if (declaredConstructors.isEmpty()) return seedTypes.isEmpty();
+        List<String> selected = selectedConstructor(declaredConstructors, seedTypes, builderTypeParameters);
+        return selected != null && sameKeyAsOneOf(selected, callableConstructors);
+    }
+
+    /**
+     * Decides whether the entry points can instantiate a declared builder that
+     * declares no type parameters of its own, as
+     * {@link #instantiable(List, List, List, Collection)} decides it.
+     *
      * @param declaredConstructors the parameter types of each constructor the builder declares, as
      *     either model renders them
      * @param callableConstructors the parameter types of each of those whose throws clause
@@ -901,9 +940,7 @@ public final class DeclaredBuilderShape {
     public static boolean instantiable(@NotNull List<List<String>> declaredConstructors,
                                        @NotNull List<List<String>> callableConstructors,
                                        @NotNull List<String> seedTypes) {
-        if (declaredConstructors.isEmpty()) return seedTypes.isEmpty();
-        List<String> selected = selectedConstructor(declaredConstructors, seedTypes);
-        return selected != null && sameKeyAsOneOf(selected, callableConstructors);
+        return instantiable(declaredConstructors, callableConstructors, seedTypes, List.of());
     }
 
     /**
@@ -946,13 +983,33 @@ public final class DeclaredBuilderShape {
      * @param callableConstructors the parameter types of each of those whose throws clause
      *     {@link #throwsNothingChecked} accepts
      * @param seedTypes the type of each seed the entry points pass, in parameter order
+     * @param builderTypeParameters the declared builder's own type parameter names
+     * @return whether a constructor is selected and it is not callable
+     */
+    public static boolean skippedForAThrowsClause(@NotNull List<List<String>> declaredConstructors,
+                                                  @NotNull List<List<String>> callableConstructors,
+                                                  @NotNull List<String> seedTypes,
+                                                  @NotNull Collection<String> builderTypeParameters) {
+        List<String> selected = selectedConstructor(declaredConstructors, seedTypes, builderTypeParameters);
+        return selected != null && !sameKeyAsOneOf(selected, callableConstructors);
+    }
+
+    /**
+     * Whether the entry points into a declared builder that declares no type
+     * parameters of its own are skipped only for a throws clause, as
+     * {@link #skippedForAThrowsClause(List, List, List, Collection)} decides it.
+     *
+     * @param declaredConstructors the parameter types of each constructor the builder declares, as
+     *     either model renders them
+     * @param callableConstructors the parameter types of each of those whose throws clause
+     *     {@link #throwsNothingChecked} accepts
+     * @param seedTypes the type of each seed the entry points pass, in parameter order
      * @return whether a constructor is selected and it is not callable
      */
     public static boolean skippedForAThrowsClause(@NotNull List<List<String>> declaredConstructors,
                                                   @NotNull List<List<String>> callableConstructors,
                                                   @NotNull List<String> seedTypes) {
-        List<String> selected = selectedConstructor(declaredConstructors, seedTypes);
-        return selected != null && !sameKeyAsOneOf(selected, callableConstructors);
+        return skippedForAThrowsClause(declaredConstructors, callableConstructors, seedTypes, List.of());
     }
 
     /**
@@ -960,7 +1017,8 @@ public final class DeclaredBuilderShape {
      * tell.
      *
      * <p>A seed reaches a parameter of its own type - equal under the erasure
-     * {@link #methodKey} keys a parameter under - of a wider primitive
+     * {@link #methodKey} keys a parameter under, and not another concrete
+     * parameterisation of it - of a wider primitive
      * (JLS 5.1.2), of its box or of its primitive, and, a reference seed, of
      * {@code Object} or {@code java.lang.Object}. javac selects in phases, a
      * constructor reached without boxing before one needing it, and within a
@@ -979,22 +1037,24 @@ public final class DeclaredBuilderShape {
      *
      * @param constructors the parameter types of each constructor, as either model renders them
      * @param seedTypes the type of each seed, in parameter order
+     * @param typeParameters the declared builder's own type parameter names
      * @return the selected constructor's parameter types, or {@code null} when names select none
      */
     private static @Nullable List<String> selectedConstructor(List<List<String>> constructors,
-                                                              List<String> seedTypes) {
+                                                              List<String> seedTypes,
+                                                              Collection<String> typeParameters) {
         List<ParameterKey> seeds = keysOf(seedTypes);
         List<Candidate> placed = new ArrayList<>();
         int earliestUnplaced = Integer.MAX_VALUE;
         for (List<String> constructor : constructors) {
             if (constructor.size() != seeds.size()) continue;
             List<ParameterKey> parameters = keysOf(constructor);
-            if (sameKeys(parameters, seeds)) return constructor;
+            if (sameKeys(parameters, seeds, typeParameters)) return constructor;
             int phase = 1;
             boolean counted = true;
             boolean applicable = true;
             for (int i = 0; i < seeds.size() && applicable; i++) {
-                int reach = reach(seeds.get(i), parameters.get(i));
+                int reach = reach(seeds.get(i), parameters.get(i), typeParameters);
                 if (reach == UNREACHABLE) applicable = false;
                 else {
                     counted &= reach > 0;
@@ -1030,8 +1090,9 @@ public final class DeclaredBuilderShape {
      * @param erased the erased simple name with its array dimensions, as {@link #methodKey} keys it
      * @param javaLang whether the type is written unqualified or qualified by {@code java.lang}, which
      *     is what lets a box or {@code Object} of that name be taken for the real one
+     * @param text the whole type in the spelling {@link #typeText} gives it, its type arguments kept
      */
-    private record ParameterKey(@NotNull String erased, boolean javaLang) {
+    private record ParameterKey(@NotNull String erased, boolean javaLang, @NotNull String text) {
 
         /** Whether this is a primitive type. */
         boolean primitive() {
@@ -1076,17 +1137,41 @@ public final class DeclaredBuilderShape {
             String raw = (generics < 0 ? bare : bare.substring(0, generics)).trim();
             String simple = erasedName(raw);
             out.add(new ParameterKey(simple + "[]".repeat(dimensions(text)),
-                raw.equals(simple) || raw.equals("java.lang." + simple)));
+                raw.equals(simple) || raw.equals("java.lang." + simple), text));
         }
         return out;
     }
 
-    /** Whether two key lists name the same types under the erasure. */
-    private static boolean sameKeys(List<ParameterKey> one, List<ParameterKey> other) {
+    /**
+     * Whether two key lists name the same types under the erasure, no pair of
+     * them being another concrete parameterisation of the other.
+     *
+     * @param one the one list
+     * @param other the other list
+     * @param typeParameters the declared builder's own type parameter names
+     * @return whether each pair is the same type as far as names can tell
+     */
+    private static boolean sameKeys(List<ParameterKey> one, List<ParameterKey> other,
+                                    Collection<String> typeParameters) {
         if (one.size() != other.size()) return false;
         for (int i = 0; i < one.size(); i++)
-            if (!one.get(i).erased().equals(other.get(i).erased())) return false;
+            if (!sameType(one.get(i), other.get(i), typeParameters)) return false;
         return true;
+    }
+
+    /**
+     * Whether two keys are the same type as far as names can tell - equal under
+     * the erasure, and not two distinct concrete parameterisations of it, which
+     * are never assignable to each other.
+     *
+     * @param one the one type
+     * @param other the other type
+     * @param typeParameters the declared builder's own type parameter names
+     * @return whether they are the same type
+     */
+    private static boolean sameType(ParameterKey one, ParameterKey other, Collection<String> typeParameters) {
+        return one.erased().equals(other.erased())
+            && !otherParameterisation(one.text(), other.text(), typeParameters);
     }
 
     /**
@@ -1099,10 +1184,14 @@ public final class DeclaredBuilderShape {
      *
      * @param seed the seed's type
      * @param parameter the parameter's type
+     * @param typeParameters the declared builder's own type parameter names
      * @return the phase, signed by whether the conversion is counted, or {@link #UNREACHABLE}
      */
-    private static int reach(ParameterKey seed, ParameterKey parameter) {
-        if (seed.erased().equals(parameter.erased())) return 1;
+    private static int reach(ParameterKey seed, ParameterKey parameter, Collection<String> typeParameters) {
+        // Two concrete parameterisations of one type are never assignable, so
+        // no conversion joins them.
+        if (seed.erased().equals(parameter.erased()))
+            return sameType(seed, parameter, typeParameters) ? 1 : UNREACHABLE;
         if (seed.primitive()) {
             if (parameter.primitive()) return widens(seed.erased(), parameter.erased()) ? 1 : UNREACHABLE;
             String box = boxOf(seed.erased());
@@ -1314,21 +1403,70 @@ public final class DeclaredBuilderShape {
     }
 
     /**
-     * Reports a constructor of a declared builder that assigns a seed an
-     * instance initializer may already have assigned.
+     * Renders the diagnostic for a seed the merge appends as a {@code final}
+     * field that a constructor appended by a constructor annotation on the
+     * declared builder leaves unassigned.
      *
-     * <p>The seed field is appended {@code final}, and the builder's instance
-     * initializers run before every constructor body, so javac refuses a
-     * constructor that assigns it again - the counterpart of
-     * {@link #unassignedSeed}, which reports the one that assigns it nowhere.
+     * <p>The constructor pass runs before the merge, so the constructor it
+     * appends takes the builder's fields as they stand then, never the seed's,
+     * and assigns nothing else; javac refuses it with its own flow error, on the
+     * builder's line, where no author constructor stands to name.
      *
      * @param declaredName the declared builder's simple name
      * @param seedName the seeded slot's name, which the appended field carries
+     * @param annotationName the constructor annotation that appends the constructor, with its {@code @}
+     * @param parameterTypes the appended constructor's parameter types, as either model renders them
      * @return the diagnostic text
      */
-    public static @NotNull String reassignedSeed(@NotNull String declaredName, @NotNull String seedName) {
+    public static @NotNull String unassignedByAppendedConstructor(@NotNull String declaredName,
+                                                                  @NotNull String seedName,
+                                                                  @NotNull String annotationName,
+                                                                  @NotNull List<String> parameterTypes) {
         return "@ClassBuilder merged into '" + declaredName + "' appends the seed '" + seedName
-            + "' as a final field, and this constructor assigns it after an instance initializer already has";
+            + "' as a final field, and the constructor " + signature(declaredName, parameterTypes) + " that "
+            + annotationName + " appends leaves it unassigned";
+    }
+
+    /** What may already have assigned a seed that a constructor of the declared builder assigns. */
+    public enum PriorAssignment {
+
+        /** An instance initializer, which runs before every constructor body. */
+        INSTANCE_INITIALIZER("assigns it after an instance initializer already has"),
+
+        /** The constructor this one delegates to through {@code this(..)}, which assigns every seed. */
+        DELEGATED_CONSTRUCTOR("assigns it after the constructor it delegates to already has"),
+
+        /** The same constructor, on an earlier path through its body. */
+        SAME_CONSTRUCTOR("may assign it more than once");
+
+        private final @NotNull String clause;
+
+        PriorAssignment(@NotNull String clause) {
+            this.clause = clause;
+        }
+
+    }
+
+    /**
+     * Reports a constructor of a declared builder that may assign a seed which
+     * is already assigned.
+     *
+     * <p>The seed field is appended {@code final}, so javac refuses a
+     * constructor that may assign it a second time - after an instance
+     * initializer, which runs before every constructor body, after the
+     * {@code this(..)} call it delegates through, or twice itself. The
+     * counterpart of {@link #unassignedSeed}, which reports the one that
+     * assigns it nowhere.
+     *
+     * @param declaredName the declared builder's simple name
+     * @param seedName the seeded slot's name, which the appended field carries
+     * @param prior what may have assigned it first
+     * @return the diagnostic text
+     */
+    public static @NotNull String reassignedSeed(@NotNull String declaredName, @NotNull String seedName,
+                                                 @NotNull PriorAssignment prior) {
+        return "@ClassBuilder merged into '" + declaredName + "' appends the seed '" + seedName
+            + "' as a final field, and this constructor " + prior.clause;
     }
 
     /** Quoted names joined as a sentence reads them - {@code 'a', 'b' and 'c'}. */

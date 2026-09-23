@@ -32,7 +32,8 @@ one. A builder that declares no constructor at all keeps its implicit default,
 which serves them. On a constructor or static factory target the one entry
 point is <code>builder(..)</code>, and it needs the constructor javac would call
 with the seeds, in parameter order, as far as names can tell: one taking the
-seeds' own types, compared by erasure and simple name; otherwise one taking each
+seeds' own types, compared by erasure and simple name, a distinct concrete
+parameterisation of a seed's generic type never being its own; otherwise one taking each
 seed as its box or primitive, a wider primitive or, for a reference seed,
 <code>Object</code>, chosen as javac chooses - without boxing before with it,
 then the most specific. A constructor reached only through another supertype

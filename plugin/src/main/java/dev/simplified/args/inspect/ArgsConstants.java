@@ -160,13 +160,35 @@ public final class ArgsConstants {
      */
     public static List<List<PsiField>> appendedConstructors(PsiClass target) {
         List<List<PsiField>> out = new ArrayList<>();
+        for (AppendedConstructor appended : appended(target)) out.add(appended.parameters());
+        return out;
+    }
+
+    /**
+     * A constructor the written constructor annotations append to a class.
+     *
+     * @param mode the policy of the annotation that appends it
+     * @param parameters the fields it takes, in declaration order
+     */
+    public record AppendedConstructor(ArgsMode mode, List<PsiField> parameters) { }
+
+    /**
+     * Each constructor the written constructor annotations append to the class,
+     * with the annotation appending it - the constructors whose parameters
+     * {@link #appendedConstructors} lists.
+     *
+     * @param target the class the annotations are written on
+     * @return the appended constructors, in the order the processor appends them
+     */
+    public static List<AppendedConstructor> appended(PsiClass target) {
+        List<AppendedConstructor> out = new ArrayList<>();
         if (target.isRecord() || target.isInterface()) return out;
         for (PsiAnnotation annotation : written(target)) {
             ArgsMode mode = modeOf(annotation);
             if (mode == null || mode == ArgsMode.BUILDER) continue;
             if (accessKeyword(annotation, mode) == null) continue;
             if (mode == ArgsMode.NONE && !force(annotation) && !unassignedFinals(target).isEmpty()) continue;
-            out.add(select(target, mode, List.of()));
+            out.add(new AppendedConstructor(mode, select(target, mode, List.of())));
         }
         return out;
     }

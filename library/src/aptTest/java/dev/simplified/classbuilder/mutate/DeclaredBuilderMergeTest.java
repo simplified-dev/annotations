@@ -3540,4 +3540,299 @@ public class DeclaredBuilderMergeTest {
         assertEquals(2, runGo(c, "demo.UseTags"));
     }
 
+    /**
+     * A seed one constructor of the declared builder may assign twice is refused
+     * by javac on the second assignment, the merge appending it {@code final}.
+     * The editor reported a reassignment only after an instance initializer;
+     * {@code DeclaredBuilderShapeInspectionTest} reports this one on the same
+     * line.
+     */
+    @Test
+    public void merge_onASeededConstructor_whoseBuilderConstructorAssignsTheSeedTwice_fails() {
+        JavaFileObject slip = JavaFileObjects.forSourceLines("demo.Slip",
+            "package demo;",
+            "import dev.simplified.annotations.BuilderSeed;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "public final class Slip {",
+            "    private final String item;",
+            "    @ClassBuilder",
+            "    Slip(@BuilderSeed String origin, String item) { this.item = origin + \":\" + item; }",
+            "    public String getItem() { return item; }",
+            "    public static class Builder {",
+            "        public Builder(String origin) {",
+            "            this.origin = origin;",
+            "            if (origin.isEmpty()) this.origin = \"desk\";",
+            "        }",
+            "    }",
+            "}");
+        Compilation c = compile(slip);
+        assertThat(c).failed();
+        assertThat(c).hadErrorCount(1);
+        assertThat(c).hadErrorContaining("variable origin might already have been assigned")
+            .inFile(slip).onLine(12);
+    }
+
+    /**
+     * A seed assigned inside a loop may be assigned on every pass, which javac
+     * refuses on that assignment.
+     */
+    @Test
+    public void merge_onASeededConstructor_whoseBuilderConstructorAssignsTheSeedInALoop_fails() {
+        JavaFileObject slip = JavaFileObjects.forSourceLines("demo.Slip",
+            "package demo;",
+            "import dev.simplified.annotations.BuilderSeed;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "public final class Slip {",
+            "    private final String item;",
+            "    @ClassBuilder",
+            "    Slip(@BuilderSeed String origin, String item) { this.item = origin + \":\" + item; }",
+            "    public String getItem() { return item; }",
+            "    public static class Builder {",
+            "        public Builder(String origin) {",
+            "            do { this.origin = origin; } while (origin.isEmpty());",
+            "        }",
+            "    }",
+            "}");
+        Compilation c = compile(slip);
+        assertThat(c).failed();
+        assertThat(c).hadErrorCount(1);
+        assertThat(c).hadErrorContaining("variable origin might be assigned in loop").inFile(slip).onLine(11);
+    }
+
+    /**
+     * A constructor delegating through {@code this(..)} has the seed assigned by
+     * the one it calls, so assigning it again is refused on that assignment.
+     */
+    @Test
+    public void merge_onASeededConstructor_whoseDelegatingBuilderConstructorAssignsTheSeedAgain_fails() {
+        JavaFileObject slip = JavaFileObjects.forSourceLines("demo.Slip",
+            "package demo;",
+            "import dev.simplified.annotations.BuilderSeed;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "public final class Slip {",
+            "    private final String item;",
+            "    @ClassBuilder",
+            "    Slip(@BuilderSeed String origin, String item) { this.item = origin + \":\" + item; }",
+            "    public String getItem() { return item; }",
+            "    public static class Builder {",
+            "        public Builder(String origin) { this.origin = origin; }",
+            "        public Builder(int copies) { this(\"desk\"); this.origin = String.valueOf(copies); }",
+            "    }",
+            "}");
+        Compilation c = compile(slip);
+        assertThat(c).failed();
+        assertThat(c).hadErrorCount(1);
+        assertThat(c).hadErrorContaining("variable origin might already have been assigned")
+            .inFile(slip).onLine(11);
+    }
+
+    /**
+     * A constructor {@code @AllArgsConstructor} appends onto the declared builder
+     * takes the builder's fields as they stand before the merge, so it leaves an
+     * appended seed unassigned, and javac refuses it on the builder's line.
+     * {@code DeclaredBuilderShapeInspectionTest} reports the same constructor
+     * on the builder's name.
+     */
+    @Test
+    public void merge_onASeededConstructor_whoseAllArgsBuilderLeavesTheSeedUnassigned_fails() {
+        JavaFileObject order = JavaFileObjects.forSourceLines("demo.Order",
+            "package demo;",
+            "import dev.simplified.annotations.AllArgsConstructor;",
+            "import dev.simplified.annotations.BuilderSeed;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "public final class Order {",
+            "    private final String item;",
+            "    @ClassBuilder",
+            "    Order(@BuilderSeed String origin, String item) { this.item = origin + \":\" + item; }",
+            "    @AllArgsConstructor",
+            "    public static final class Builder {",
+            "        private final String code;",
+            "    }",
+            "}");
+        Compilation c = compile(order);
+        assertThat(c).failed();
+        assertThat(c).hadErrorCount(1);
+        assertThat(c).hadErrorContaining("variable origin might not have been initialized")
+            .inFile(order).onLine(10);
+    }
+
+    /**
+     * Beside an author constructor that assigns the seed, the appended one still
+     * leaves it unassigned, and javac still refuses it on the builder's line.
+     */
+    @Test
+    public void merge_onASeededConstructor_whoseAllArgsBuilderLeavesTheSeedUnassignedBesideAnAssigningOne_fails() {
+        JavaFileObject order = JavaFileObjects.forSourceLines("demo.Order",
+            "package demo;",
+            "import dev.simplified.annotations.AllArgsConstructor;",
+            "import dev.simplified.annotations.BuilderSeed;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "public final class Order {",
+            "    private final String item;",
+            "    @ClassBuilder",
+            "    Order(@BuilderSeed String origin, String item) { this.item = origin + \":\" + item; }",
+            "    @AllArgsConstructor",
+            "    public static final class Builder {",
+            "        private final int code;",
+            "        public Builder(String origin) { this.origin = origin; this.code = 1; }",
+            "    }",
+            "}");
+        Compilation c = compile(order);
+        assertThat(c).failed();
+        assertThat(c).hadErrorCount(1);
+        assertThat(c).hadErrorContaining("variable origin might not have been initialized")
+            .inFile(order).onLine(10);
+    }
+
+    /**
+     * {@code from(T)} and {@code mutate()} call only the setter taking the
+     * slot's own type, so an author method covering the singular add with
+     * another parameterisation is one they never call, and the builder compiles
+     * and copies. It was refused because the rule judged every covered setter.
+     * {@code DeclaredBuilderShapeInspectionTest} reports nothing on it either.
+     */
+    @Test
+    public void merge_anAuthorMethodCoveringASetterTheCopyNeverCalls_compiles() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Bag",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import dev.simplified.annotations.Collector;",
+                "import java.util.ArrayList;",
+                "import java.util.List;",
+                "@ClassBuilder",
+                "public class Bag {",
+                "    @Collector(singular = true) List<List<String>> items;",
+                "    public static class Builder {",
+                "        public Builder addItem(List<Integer> codes) {",
+                "            List<String> item = new ArrayList<>();",
+                "            for (Integer code : codes) item.add(\"#\" + code);",
+                "            this.items.add(item);",
+                "            return this;",
+                "        }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseBag",
+                "package demo;",
+                "public class UseBag {",
+                "    public static Object go() {",
+                "        return Bag.from(Bag.builder().addItem(java.util.List.of(1)).build()).build().items;",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals(List.of(List.of("#1")), runGo(c, "demo.UseBag"));
+    }
+
+    /**
+     * Two distinct concrete parameterisations of one generic type are never
+     * assignable, so a builder constructor taking {@code List<Integer>} is not
+     * one {@code builder(seed)} can call with a {@code List<String>} seed, and
+     * the entry point is skipped with the note. The seed match compared
+     * erasures, took the constructor for the seed's own type, and javac failed
+     * on the generated {@code builder(..)}.
+     */
+    @Test
+    public void merge_onASeedWhoseBuilderTakesAnotherParameterisation_skipsTheEntryPointWithTheNote() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Order",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderSeed;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import java.util.ArrayList;",
+                "import java.util.List;",
+                "public final class Order {",
+                "    private final List<String> origin;",
+                "    private final String item;",
+                "    @ClassBuilder",
+                "    Order(@BuilderSeed List<String> origin, String item) { this.origin = origin; this.item = item; }",
+                "    public static final class Builder {",
+                "        Builder(List<Integer> codes) {",
+                "            this.origin = new ArrayList<>();",
+                "            for (Integer code : codes) this.origin.add(\"#\" + code);",
+                "        }",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining(SEED_SKIPPED);
+    }
+
+    /**
+     * A {@code final} collected field whose setters all append rather than
+     * replace is assigned by nothing the merge appends - each generated bulk
+     * setter adds into the container the field holds - so it is merged into and
+     * the builder collects into the author's list. It was refused because every
+     * generated setter counted as assigning the field.
+     * {@code DeclaredBuilderShapeInspectionTest} accepts it too.
+     */
+    @Test
+    public void merge_ontoAFinalCollectedSlotWhoseSettersAllAppend_isMergedInto() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Crate",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import dev.simplified.annotations.Collector;",
+                "import java.util.ArrayList;",
+                "import java.util.List;",
+                "@ClassBuilder",
+                "public class Crate {",
+                "    @Collector(append = true) List<String> tags;",
+                "    public static class Builder {",
+                "        private final List<String> tags = new ArrayList<>();",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseCrate",
+                "package demo;",
+                "public class UseCrate {",
+                "    public static Object go() {",
+                "        return Crate.from(Crate.builder().tags(\"a\", \"b\").build()).tags(\"c\").build().tags;",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals(List.of("a", "b", "c"), runGo(c, "demo.UseCrate"));
+    }
+
+    /**
+     * Where the author spells both replacing bulk setters of a {@code final}
+     * collected field, what the merge appends - the singular add and the clear -
+     * only mutates the container, so the field is merged into.
+     */
+    @Test
+    public void merge_ontoAFinalCollectedSlotWhoseReplacingSettersTheAuthorSpells_isMergedInto()
+        throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Crate",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import dev.simplified.annotations.Collector;",
+                "import java.util.ArrayList;",
+                "import java.util.List;",
+                "@ClassBuilder",
+                "public class Crate {",
+                "    @Collector(singular = true, clearable = true) List<String> tags;",
+                "    public static class Builder {",
+                "        private final List<String> tags = new ArrayList<>();",
+                "        public Builder tags(String... tags) {",
+                "            this.tags.clear();",
+                "            for (String tag : tags) this.tags.add(tag);",
+                "            return this;",
+                "        }",
+                "        public Builder tags(Iterable<String> tags) {",
+                "            this.tags.clear();",
+                "            tags.forEach(this.tags::add);",
+                "            return this;",
+                "        }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseCrate",
+                "package demo;",
+                "public class UseCrate {",
+                "    public static Object go() {",
+                "        return Crate.builder().tags(\"a\").addTag(\"b\").build().tags + \"/\"",
+                "            + Crate.builder().addTag(\"x\").clearTags().addTag(\"y\").build().tags;",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("[a, b]/[y]", runGo(c, "demo.UseCrate"));
+    }
+
 }

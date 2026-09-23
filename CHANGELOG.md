@@ -229,12 +229,16 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
     `@Collector` slot whose default reads the instance, or rename it;
   - a boxed field over a primitive slot - declare the primitive, an unset box reaching the
     constructor as `null`;
-  - a field sharing a slot's name declared `final` where a generated setter of the slot is appended -
-    drop `final`, or write every setter of the slot yourself;
-  - a method of a generated setter's name and erased parameter types taking another
-    parameterisation of the slot's generic type, `items(List<Integer>)` beside a `List<String>`
-    slot, where `from(T)` or `mutate()` is emitted to pass it the slot - take the slot's type,
-    rename it, or name both copy entry points `NONE`;
+  - a field sharing a slot's name declared `final` where a generated setter of the slot that assigns
+    it is appended - a singular add, put, remove or clear, and every bulk setter of an
+    `@Collector(append = true)` slot, only add into or take from the container it holds and do not
+    count - drop `final`, or write every setter of the slot that assigns it yourself;
+  - a method of the name and erased parameter types of the setter `from(T)` and `mutate()` call for
+    a slot - the one taking the slot's own type - taking another parameterisation of the slot's
+    generic type, `items(List<Integer>)` beside a `List<String>` slot, where either is emitted to pass
+    it the slot - take the slot's type, rename it, or name both copy entry points `NONE`. A method
+    standing in for another setter of the slot, a singular `addItem(List<Integer>)` beside a
+    `List<List<String>>` slot among them, is never passed the slot and is left alone;
   - on a chain root, a builder that is not abstract or not self-typed - declare it
     `abstract static class Builder<T extends Target, B extends Builder<T, B>>`;
   - below a chain root, a missing or wrong `extends` clause or the wrong arguments to it - extend
@@ -243,8 +247,10 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   - on a chain, a build method returning something other than the built type - return that type, or
     on a root the root itself;
   - on a constructor or factory target, a `@BuilderSeed` a constructor of the builder leaves
-    unassigned, or assigns where an instance initializer may already have - assign it in exactly one
-    of the two, the merge appending it as a `final` field.
+    unassigned - one a constructor annotation on the builder appends among them - or may assign
+    where it is already assigned, by an instance initializer, by the constructor it delegates to or
+    by an earlier assignment of its own - assign it exactly once on every path, the merge appending it
+    as a `final` field.
 
   A declared builder whose constructors all take parameters keeps its setters and loses only the
   entry points, with a note; declaring a no-argument constructor restores them. So does one whose
@@ -279,7 +285,9 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   A static factory inside an interface is one such target, merging into the class the interface body
   declares. `builder(..)` passes each `@BuilderSeed` to the builder's constructor, so it is emitted
   only where names alone single out the constructor javac calls with the seeds, in parameter order:
-  one taking the seeds' own types, compared by erasure and simple name, always; otherwise one
+  one taking the seeds' own types, compared by erasure and simple name, always - a distinct concrete
+  parameterisation of a seed's generic type, `List<Integer>` for a `List<String>` seed, never being
+  its own and never reaching it; otherwise one
   reaching each seed as its box or primitive, a wider primitive (JLS 5.1.2) or, for a reference
   seed, `Object`, selected as javac selects - no boxing before boxing, then the most specific. A
   constructor reached only through another supertype is not counted, nor is one of two javac could
@@ -291,7 +299,13 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   the builder's name when it declares none, where javac refuses the same declaration - an instance
   initializer assigning the seed assigning it for every constructor, as javac finds - and a
   constructor assigning the seed where an instance initializer may already have, which javac
-  refuses as `variable ... might already have been assigned`. The editor
+  refuses as `variable ... might already have been assigned`. So is one assigning it after the
+  `this(..)` call it delegates through, or twice itself - on two paths that meet, or inside a loop -
+  each reported on the assignment javac reports. A constructor an `@AllArgsConstructor`,
+  `@RequiredArgsConstructor` or `@NoArgsConstructor` on the builder appends takes the builder's
+  fields as they stand before the merge and leaves the seed unassigned, which javac refuses on the
+  builder's line as `variable ... might not have been initialized`; the editor names that appended
+  constructor there, the flow error's own words being javac's. The editor
   judges only the annotation the processor builds from: an instance or `void` method, or a member
   beside an annotated type, is refused by the build and gets none of the merge's diagnostics.
 

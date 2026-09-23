@@ -4,6 +4,7 @@ import org.junit.Test;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -497,7 +498,8 @@ public class DeclaredBuilderShapeTest {
     public void finalSlotAndThrowingConstructor_renderTheSharedSentences() {
         assertEquals("@ClassBuilder merged into 'Builder' finds 'items' declared final, and the generated "
                 + "setter assigns it",
-            DeclaredBuilderShape.finalSlot("Builder", "items", List.of("items(List)"), List.of()));
+            DeclaredBuilderShape.finalSlot("Builder", "items", Map.of("items(List)", SetterShape.PLAIN), false,
+                List.of()));
         List<List<String>> noArgument = List.of(List.of());
         assertFalse("a throwing constructor serves nothing",
             DeclaredBuilderShape.instantiable(noArgument, List.of(), List.of()));
@@ -521,13 +523,43 @@ public class DeclaredBuilderShapeTest {
     @Test
     public void finalSlot_isReportedOnlyWhereAGeneratedSetterIsLeftToAssignIt() {
         assertNull("every setter spelled", DeclaredBuilderShape.finalSlot("Builder", "port",
-            List.of("port(int)"), List.of("port(int)", "build()")));
+            Map.of("port(int)", SetterShape.PLAIN), false, List.of("port(int)", "build()")));
         assertNull("a seed has no setter", DeclaredBuilderShape.finalSlot("Builder", "origin",
-            List.of(), List.of()));
+            Map.of(), false, List.of()));
         assertNotNull("one of two left generated", DeclaredBuilderShape.finalSlot("Builder", "on",
-            List.of("on()", "on(boolean)"), List.of("on(boolean)")));
+            Map.of("on()", SetterShape.FLAG, "on(boolean)", SetterShape.BOOLEAN), false, List.of("on(boolean)")));
         assertNotNull("an overload beside it is no cover", DeclaredBuilderShape.finalSlot("Builder", "port",
-            List.of("port(int)"), List.of("port(String)")));
+            Map.of("port(int)", SetterShape.PLAIN), false, List.of("port(String)")));
+    }
+
+    /**
+     * Only a generated setter that assigns the field makes a {@code final} one
+     * unusable: a singular add, put, put-if-absent, remove or clear, and a bulk
+     * setter of an appending slot, mutate the container the field holds, and an
+     * {@code Optional} slot's inner-type setter hands the value on. Every
+     * generated setter counted as assigning it, so a builder whose field only
+     * those reach was refused though it compiles.
+     */
+    @Test
+    public void finalSlot_countsOnlyTheGeneratedSettersThatAssignTheField() {
+        assertNull("the container-mutating shapes left generated", DeclaredBuilderShape.finalSlot("Builder",
+            "tags", Map.of("tags(String[])", SetterShape.BULK_VARARGS, "tags(Iterable)", SetterShape.BULK_ITERABLE,
+                "addTag(String)", SetterShape.ADD, "clearTags()", SetterShape.CLEAR,
+                "removeTag(String)", SetterShape.REMOVE), false,
+            List.of("tags(String[])", "tags(Iterable)")));
+        assertNull("a map's put and put-if-absent", DeclaredBuilderShape.finalSlot("Builder", "counts",
+            Map.of("counts(Map)", SetterShape.BULK_MAP, "putCount(String,Integer)", SetterShape.PUT,
+                "putCountIfAbsent(String,Supplier)", SetterShape.PUT_IF_ABSENT), false,
+            List.of("counts(Map)")));
+        assertNull("every bulk setter of an appending slot", DeclaredBuilderShape.finalSlot("Builder", "tags",
+            Map.of("tags(String[])", SetterShape.BULK_VARARGS, "tags(Iterable)", SetterShape.BULK_ITERABLE),
+            true, List.of()));
+        assertNotNull("but a replacing one", DeclaredBuilderShape.finalSlot("Builder", "tags",
+            Map.of("tags(String[])", SetterShape.BULK_VARARGS, "tags(Iterable)", SetterShape.BULK_ITERABLE),
+            false, List.of("tags(Iterable)")));
+        assertNull("an Optional slot's inner-type setter", DeclaredBuilderShape.finalSlot("Builder", "note",
+            Map.of("note(String)", SetterShape.OPTIONAL_VALUE, "note(Optional)", SetterShape.OPTIONAL), false,
+            List.of("note(Optional)")));
     }
 
     /**
@@ -568,32 +600,54 @@ public class DeclaredBuilderShapeTest {
     @Test
     public void setterWithOtherTypeArguments_isReportedOnlyWhereJavacRejectsTheCopy() {
         List<String> copies = List.of("from", "mutate");
+        SetterShape plain = SetterShape.PLAIN;
         assertEquals("@ClassBuilder merged into 'Builder' finds items(List<Integer>) standing in for the "
                 + "generated items(List<String>), and 'from' and 'mutate' pass it the slot's List<String>, "
                 + "which its List<Integer> parameter cannot take",
-            DeclaredBuilderShape.setterWithOtherTypeArguments("Builder", "items", List.of("List<Integer>"),
+            DeclaredBuilderShape.setterWithOtherTypeArguments("Builder", "items", plain, List.of("List<Integer>"),
                 List.of("java.util.List<java.lang.String>"), List.of(), copies));
         assertEquals("one entry point named alone",
             "@ClassBuilder merged into 'Builder' finds items(List<Integer>) standing in for the generated "
                 + "items(List<String>), and 'mutate' passes it the slot's List<String>, which its "
                 + "List<Integer> parameter cannot take",
-            DeclaredBuilderShape.setterWithOtherTypeArguments("Builder", "items", List.of("List<Integer>"),
+            DeclaredBuilderShape.setterWithOtherTypeArguments("Builder", "items", plain, List.of("List<Integer>"),
                 List.of("List<String>"), List.of(), List.of("mutate")));
         assertNull("the same arguments in another spelling", DeclaredBuilderShape.setterWithOtherTypeArguments(
-            "Builder", "items", List.of("List<String>"), List.of("java.util.List<java.lang.String>"),
+            "Builder", "items", plain, List.of("List<String>"), List.of("java.util.List<java.lang.String>"),
             List.of(), copies));
         assertNull("no copy entry point emitted", DeclaredBuilderShape.setterWithOtherTypeArguments(
-            "Builder", "items", List.of("List<Integer>"), List.of("List<String>"), List.of(), List.of()));
-        assertNull("a raw side", DeclaredBuilderShape.setterWithOtherTypeArguments("Builder", "items",
+            "Builder", "items", plain, List.of("List<Integer>"), List.of("List<String>"), List.of(), List.of()));
+        assertNull("a raw side", DeclaredBuilderShape.setterWithOtherTypeArguments("Builder", "items", plain,
             List.of("List"), List.of("List<String>"), List.of(), copies));
-        assertNull("a wildcard", DeclaredBuilderShape.setterWithOtherTypeArguments("Builder", "items",
+        assertNull("a wildcard", DeclaredBuilderShape.setterWithOtherTypeArguments("Builder", "items", plain,
             List.of("List<? extends CharSequence>"), List.of("List<String>"), List.of(), copies));
         assertNull("a builder type parameter", DeclaredBuilderShape.setterWithOtherTypeArguments("Builder",
-            "items", List.of("List<T>"), List.of("List<String>"), List.of("T"), copies));
+            "items", plain, List.of("List<T>"), List.of("List<String>"), List.of("T"), copies));
         assertNull("another erasure is no cover", DeclaredBuilderShape.setterWithOtherTypeArguments("Builder",
-            "items", List.of("Set<Integer>"), List.of("List<String>"), List.of(), copies));
+            "items", plain, List.of("Set<Integer>"), List.of("List<String>"), List.of(), copies));
         assertNotNull("a nested argument", DeclaredBuilderShape.setterWithOtherTypeArguments("Builder", "index",
-            List.of("Map<String, List<Integer>>"), List.of("Map<String, List<String>>"), List.of(), copies));
+            plain, List.of("Map<String, List<Integer>>"), List.of("Map<String, List<String>>"), List.of(), copies));
+    }
+
+    /**
+     * {@code from(T)} and {@code mutate()} pass each slot to one setter - the
+     * one taking the slot's own type - so an author method covering any other
+     * shape is never handed the slot and compiles. Every covered setter was
+     * judged, and a singular add over a slot of lists was refused.
+     */
+    @Test
+    public void setterWithOtherTypeArguments_judgesOnlyTheSetterTheCopyCalls() {
+        List<String> copies = List.of("from", "mutate");
+        assertNull("a singular add", DeclaredBuilderShape.setterWithOtherTypeArguments("Builder", "addItem",
+            SetterShape.ADD, List.of("List<Integer>"), List.of("List<String>"), List.of(), copies));
+        assertNull("a varargs bulk form", DeclaredBuilderShape.setterWithOtherTypeArguments("Builder", "items",
+            SetterShape.BULK_VARARGS, List.of("List<Integer>..."), List.of("List<String>..."), List.of(), copies));
+        assertNull("an Optional slot's inner-type setter", DeclaredBuilderShape.setterWithOtherTypeArguments(
+            "Builder", "note", SetterShape.OPTIONAL_VALUE, List.of("List<Integer>"), List.of("List<String>"),
+            List.of(), copies));
+        assertNotNull("the Iterable bulk form the copy calls", DeclaredBuilderShape.setterWithOtherTypeArguments(
+            "Builder", "items", SetterShape.BULK_ITERABLE, List.of("Iterable<List<Integer>>"),
+            List.of("Iterable<List<String>>"), List.of(), copies));
     }
 
     /**
@@ -776,6 +830,35 @@ public class DeclaredBuilderShapeTest {
             DeclaredBuilderShape.skippedForAThrowsClause(crossed, List.of(), List.of("int", "int")));
     }
 
+    /**
+     * Two distinct concrete parameterisations of one generic type are never
+     * assignable, so a constructor taking one is never selected for a seed of
+     * the other, and a constructor beside it that javac does call is. Every
+     * other shape keeps the erasure's answer: the same arguments in another
+     * spelling, a raw side, a wildcard and a type parameter of the builder's
+     * own. The erasures were compared alone, and {@code Builder(List<Integer>)}
+     * was taken for a {@code List<String>} seed's own type.
+     */
+    @Test
+    public void instantiable_neverTakesAnotherParameterisationOfTheSeedsType() {
+        assertFalse("another parameterisation", instantiableOver(List.of("List<Integer>"), "List<String>"));
+        assertFalse("at depth", instantiableOver(List.of("java.util.Map<String, List<Integer>>"),
+            "Map<String,List<String>>"));
+        List<List<String>> beside = List.of(List.of("List<Integer>"), List.of("Object"));
+        assertTrue("Object is what javac calls then",
+            DeclaredBuilderShape.instantiable(beside, beside, List.of("List<String>")));
+        assertTrue("the same arguments in another spelling",
+            instantiableOver(List.of("java.util.List<java.lang.String>"), "List<String>"));
+        assertTrue("a raw side", instantiableOver(List.of("List"), "List<String>"));
+        assertTrue("a wildcard", instantiableOver(List.of("List<? extends CharSequence>"), "List<String>"));
+        List<List<String>> generic = List.of(List.of("List<T>"));
+        assertTrue("a type parameter of the builder's own",
+            DeclaredBuilderShape.instantiable(generic, generic, List.of("List<String>"), List.of("T")));
+        assertFalse("and nothing is selected to word a throws note by",
+            DeclaredBuilderShape.skippedForAThrowsClause(List.of(List.of("List<Integer>")), List.of(),
+                List.of("List<String>"), List.of()));
+    }
+
     /** Whether a builder whose one throw-free constructor takes {@code parameters} serves the seeds. */
     private static boolean instantiableOver(List<String> parameters, String... seedTypes) {
         List<List<String>> constructors = List.of(parameters);
@@ -895,15 +978,45 @@ public class DeclaredBuilderShapeTest {
     }
 
     /**
-     * A seed an instance initializer assigns cannot be assigned again by a
-     * constructor, the field being {@code final}; javac refuses the
-     * constructor, and the editor reports it in this sentence.
+     * A seed already assigned cannot be assigned again by a constructor, the
+     * field being {@code final}; javac refuses the constructor, and the editor
+     * reports it in this sentence, named by what assigned it first - an
+     * instance initializer, the constructor delegated to, or the constructor
+     * itself. Only the instance initializer was named.
      */
     @Test
-    public void reassignedSeed_namesTheSeedAndTheInitializer() {
+    public void reassignedSeed_namesWhatAssignedTheSeedFirst() {
         assertEquals("@ClassBuilder merged into 'Builder' appends the seed 'origin' as a final field, "
                 + "and this constructor assigns it after an instance initializer already has",
-            DeclaredBuilderShape.reassignedSeed("Builder", "origin"));
+            DeclaredBuilderShape.reassignedSeed("Builder", "origin",
+                DeclaredBuilderShape.PriorAssignment.INSTANCE_INITIALIZER));
+        assertEquals("@ClassBuilder merged into 'Builder' appends the seed 'origin' as a final field, "
+                + "and this constructor assigns it after the constructor it delegates to already has",
+            DeclaredBuilderShape.reassignedSeed("Builder", "origin",
+                DeclaredBuilderShape.PriorAssignment.DELEGATED_CONSTRUCTOR));
+        assertEquals("@ClassBuilder merged into 'Builder' appends the seed 'origin' as a final field, "
+                + "and this constructor may assign it more than once",
+            DeclaredBuilderShape.reassignedSeed("Builder", "origin",
+                DeclaredBuilderShape.PriorAssignment.SAME_CONSTRUCTOR));
+    }
+
+    /**
+     * A constructor a constructor annotation appends leaves an appended seed
+     * unassigned, and the sentence names that constructor and the annotation,
+     * its parameter types in either model's spelling. The editor had no
+     * sentence for it and said the builder declares no constructor.
+     */
+    @Test
+    public void unassignedByAppendedConstructor_namesTheConstructorAndItsAnnotation() {
+        assertEquals("@ClassBuilder merged into 'Builder' appends the seed 'origin' as a final field, "
+                + "and the constructor Builder(String, List<Integer>) that @AllArgsConstructor appends leaves "
+                + "it unassigned",
+            DeclaredBuilderShape.unassignedByAppendedConstructor("Builder", "origin", "@AllArgsConstructor",
+                List.of("java.lang.String", "java.util.List<java.lang.Integer>")));
+        assertEquals("@ClassBuilder merged into 'Builder' appends the seed 'origin' as a final field, "
+                + "and the constructor Builder() that @NoArgsConstructor appends leaves it unassigned",
+            DeclaredBuilderShape.unassignedByAppendedConstructor("Builder", "origin", "@NoArgsConstructor",
+                List.of()));
     }
 
 }

@@ -17,6 +17,7 @@ import dev.simplified.classbuilder.apt.DeclaredBuilderRejection;
 import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.classbuilder.apt.RoleExpectation;
+import dev.simplified.classbuilder.apt.SetterShape;
 import dev.simplified.classbuilder.apt.SlotHolding;
 import dev.simplified.shared.apt.AnnotationLookup;
 import dev.simplified.shared.javac.AstMarkers;
@@ -31,6 +32,7 @@ import javax.tools.Diagnostic;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -145,8 +147,9 @@ final class DeclaredBuilderMerge {
                 JCMethodDecl author = methods.get(key(method));
                 if (author != null) {
                     skipped.add(signature(method));
-                    if (ctx.setterSlot(method) != null) {
-                        ctx.recordCoveredSetter(new CoveredSetter(method.name.toString(),
+                    SetterShape shape = ctx.setterShape(method);
+                    if (shape != null) {
+                        ctx.recordCoveredSetter(new CoveredSetter(method.name.toString(), shape,
                             parameterTypes(author), parameterTypes(method)));
                     }
                     continue;
@@ -333,10 +336,12 @@ final class DeclaredBuilderMerge {
      *
      * <p>A field declared {@code final} is reported too, through
      * {@link DeclaredBuilderShape#finalSlot}, whatever its type, where a setter
-     * generated for its slot is left to be appended - the author spelling no
-     * method under its key - since that setter assigns it. The setters are told
-     * apart in the member list by the slot {@link MutationContext#setterSlot}
-     * recorded for each, and keyed as the collision rule keys them.
+     * generated for its slot that assigns it is left to be appended - the
+     * author spelling no method under its key. The setters are told apart in
+     * the member list by the slot {@link MutationContext#setterSlot} recorded
+     * for each, keyed as the collision rule keys them, and each carries the
+     * shape {@link MutationContext#setterShape} recorded, which says whether it
+     * assigns the field.
      *
      * <p>The merge continues after a report, so javac also refuses the generated
      * member that assigns the slot - the report is what says why on a line the
@@ -358,7 +363,7 @@ final class DeclaredBuilderMerge {
                 String finalSlot = (field.mods.flags & Flags.FINAL) == 0
                     ? null
                     : DeclaredBuilderShape.finalSlot(declared.name.toString(), name,
-                        setterKeys(members, name), authorKeys);
+                        setters(members, name), slot.append, authorKeys);
                 if (finalSlot != null) {
                     messager.printMessage(Diagnostic.Kind.ERROR, finalSlot, anchor);
                     continue;
@@ -436,17 +441,17 @@ final class DeclaredBuilderMerge {
 
     /**
      * The {@link DeclaredBuilderShape#methodKey} of each setter generated for a
-     * slot.
+     * slot, with its shape.
      *
      * @param members the generated members being merged
      * @param slotName the slot's name
-     * @return the keys, in emission order
+     * @return each key with its setter's shape, in emission order
      */
-    private List<String> setterKeys(List<JCTree> members, String slotName) {
-        List<String> out = new ArrayList<>();
+    private Map<String, SetterShape> setters(List<JCTree> members, String slotName) {
+        Map<String, SetterShape> out = new LinkedHashMap<>();
         for (JCTree member : members) {
             if (member instanceof JCMethodDecl method && slotName.equals(ctx.setterSlot(method)))
-                out.add(key(method));
+                out.put(key(method), ctx.setterShape(method));
         }
         return out;
     }
@@ -454,13 +459,15 @@ final class DeclaredBuilderMerge {
     /**
      * A setter the merge leaves out because an author method covers it under
      * {@link DeclaredBuilderShape#methodKey}, which the copy entry points pass the
-     * slot to instead.
+     * slot to instead where its shape is the one they call.
      *
      * @param name the method name the two share
+     * @param shape the covered setter's shape
      * @param writtenTypes each parameter type of the author's method as written
      * @param generatedTypes each parameter type of the generated setter as rendered
      */
-    record CoveredSetter(String name, List<String> writtenTypes, List<String> generatedTypes) { }
+    record CoveredSetter(String name, SetterShape shape, List<String> writtenTypes,
+                         List<String> generatedTypes) { }
 
     /**
      * Whether the author wrote the declared builder a constructor.

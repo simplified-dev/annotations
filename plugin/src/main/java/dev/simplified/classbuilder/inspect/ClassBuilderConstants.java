@@ -403,7 +403,20 @@ public final class ClassBuilderConstants {
         PsiClass declared = declaredBuilderOf(target, builderName);
         return declared != null
             && !DeclaredBuilderShape.instantiable(constructorSignatures(declared, false),
-                constructorSignatures(declared, true), seedTypes);
+                constructorSignatures(declared, true), seedTypes, typeParameterNames(declared));
+    }
+
+    /**
+     * The names of the type parameters a declared builder declares, which the
+     * seed match reads a parameter spelling one of as able to take the seed.
+     *
+     * @param declared the builder the author wrote
+     * @return the names, in declaration order
+     */
+    private static @NotNull List<String> typeParameterNames(@NotNull PsiClass declared) {
+        List<String> out = new ArrayList<>();
+        for (PsiTypeParameter parameter : declared.getTypeParameters()) out.add(parameter.getName());
+        return out;
     }
 
     /**
@@ -419,7 +432,7 @@ public final class ClassBuilderConstants {
      */
     public static boolean skippedForAThrowsClause(@NotNull PsiClass declared, @NotNull List<String> seedTypes) {
         return DeclaredBuilderShape.skippedForAThrowsClause(constructorSignatures(declared, false),
-            constructorSignatures(declared, true), seedTypes);
+            constructorSignatures(declared, true), seedTypes, typeParameterNames(declared));
     }
 
     /**

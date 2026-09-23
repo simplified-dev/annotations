@@ -477,6 +477,63 @@ public class DeclaredBuilderSkipsEntryPointsInspectionTest extends BasePlatformT
     }
 
     /**
+     * A constructor taking another concrete parameterisation of the seed's
+     * generic type is not one {@code builder(seed)} can call, so javac skips it
+     * with the note. The erasures matched and the editor warned of nothing,
+     * while javac emitted the entry point and failed on the class line.
+     */
+    public void testOnASeedWhoseBuilderTakesAnotherParameterisation_isWarned() {
+        myFixture.configureByText("Order.java",
+            """
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            import java.util.ArrayList;
+            import java.util.List;
+            public final class Order {
+                private final List<String> origin;
+                private final String item;
+                @ClassBuilder
+                Order(@BuilderSeed List<String> origin, String item) { this.origin = origin; this.item = item; }
+                public static final class Builder {
+                    Builder(List<Integer> codes) {
+                        this.origin = new ArrayList<>();
+                        for (Integer code : codes) this.origin.add("#" + code);
+                    }
+                }
+            }
+            """);
+        assertEquals(SEED_SKIPPED, theOnlyWarning());
+    }
+
+    /**
+     * A constructor taking a wildcard parameterisation of the seed's type may
+     * accept it, which names cannot rule out, so it keeps the answer the erasure
+     * gives and the entry point is emitted.
+     */
+    public void testOnASeedWhoseBuilderTakesAWildcardParameterisation_isNotWarned() {
+        myFixture.configureByText("Order.java",
+            """
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            import java.util.ArrayList;
+            import java.util.List;
+            public final class Order {
+                private final List<String> origin;
+                private final String item;
+                @ClassBuilder
+                Order(@BuilderSeed List<String> origin, String item) { this.origin = origin; this.item = item; }
+                public static final class Builder {
+                    Builder(List<? extends CharSequence> names) {
+                        this.origin = new ArrayList<>();
+                        for (CharSequence name : names) this.origin.add(name.toString());
+                    }
+                }
+            }
+            """);
+        assertEquals("javac emits builder(List<String>): " + weakWarningTexts(), 0, weakWarnings().size());
+    }
+
+    /**
      * A primitive seed reaches a constructor taking its box, as javac's own call
      * does, so the entry point is emitted and there is no skip to report. Only
      * equal types were counted, and the warning fired over a call that compiles.

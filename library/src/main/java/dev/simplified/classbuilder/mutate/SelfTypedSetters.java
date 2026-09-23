@@ -15,6 +15,7 @@ import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.classbuilder.apt.SetterScheme;
+import dev.simplified.classbuilder.apt.SetterShape;
 import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.ContractAnnotations;
 import dev.simplified.shared.javac.JavacBridge;
@@ -77,66 +78,73 @@ final class SelfTypedSetters {
 
     /**
      * Mirrors {@link FieldMutators#setters} but always with {@code return self();},
-     * each setter recorded on the context as the field's.
+     * each setter recorded on the context as the field's with its
+     * {@link SetterShape}.
      *
      * @param field the slot
      * @return its setters, in emission order
      */
     List<JCMethodDecl> setters(FieldSpec field) {
-        return ctx.recordSetters(field, shapes(field));
-    }
-
-    /** Every setter shape the field emits, in emission order. */
-    private List<JCMethodDecl> shapes(FieldSpec field) {
         ListBuffer<JCMethodDecl> out = new ListBuffer<>();
         if (field.lazy) {
-            out.append(lazyValueSetter(field));
-            out.append(lazySupplierSetter(field));
+            out.append(tag(field, SetterShape.LAZY_VALUE, lazyValueSetter(field)));
+            out.append(tag(field, SetterShape.LAZY_SUPPLIER, lazySupplierSetter(field)));
             return out.toList();
         }
         if (field.isBoolean) {
             // Typed setter is the ordinary `set` role; the zero-arg form is the
             // separate `flag` role and drops out when a style suppresses it.
-            if (field.setters.emitsFlag()) out.append(booleanZeroArg(field, field.name, false));
-            out.append(booleanTyped(field, field.name, false));
+            if (field.setters.emitsFlag())
+                out.append(tag(field, SetterShape.FLAG, booleanZeroArg(field, field.name, false)));
+            out.append(tag(field, SetterShape.BOOLEAN, booleanTyped(field, field.name, false)));
             if (field.negateName != null && !field.negateName.isEmpty()) {
-                if (field.setters.emitsFlag()) out.append(booleanZeroArg(field, field.negateName, true));
-                out.append(booleanTyped(field, field.negateName, true));
+                if (field.setters.emitsFlag())
+                    out.append(tag(field, SetterShape.FLAG, booleanZeroArg(field, field.negateName, true)));
+                out.append(tag(field, SetterShape.NEGATED, booleanTyped(field, field.negateName, true)));
             }
         } else if (field.isOptional) {
-            out.append(optionalNullableRaw(field));
-            out.append(optionalWrapped(field));
-            if (field.formattable && field.isOptionalString) {
-                out.append(optionalFormattable(field));
-            }
+            out.append(tag(field, SetterShape.OPTIONAL_VALUE, optionalNullableRaw(field)));
+            out.append(tag(field, SetterShape.OPTIONAL, optionalWrapped(field)));
+            if (field.formattable && field.isOptionalString)
+                out.append(tag(field, SetterShape.FORMAT, optionalFormattable(field)));
         } else if (field.isArray) {
-            out.append(arrayVarargs(field));
+            out.append(tag(field, SetterShape.ARRAY, arrayVarargs(field)));
         } else if ((field.isListLike || field.isMap) && field.collector) {
             if (field.isCustomContainer && !hasInit(field)) {
                 // Custom container with @Collector but no captured initializer -
                 // degrade to a plain replace setter (processor emits a NOTE).
-                out.append(plainSetter(field));
+                out.append(tag(field, SetterShape.PLAIN, plainSetter(field)));
             } else {
                 if (field.isMap) {
-                    out.append(singularMapReplace(field));
-                    if (field.singular && field.setters.emitsPut()) out.append(singularMapPut(field));
-                    if (field.compute && field.setters.emitsCompute()) out.append(singularMapPutIfAbsent(field));
+                    out.append(tag(field, SetterShape.BULK_MAP, singularMapReplace(field)));
+                    if (field.singular && field.setters.emitsPut())
+                        out.append(tag(field, SetterShape.PUT, singularMapPut(field)));
+                    if (field.compute && field.setters.emitsCompute())
+                        out.append(tag(field, SetterShape.PUT_IF_ABSENT, singularMapPutIfAbsent(field)));
                 } else {
-                    out.append(singularCollectionVarargsReplace(field));
-                    out.append(singularCollectionIterableReplace(field));
-                    if (field.singular && field.setters.emitsAdd()) out.append(singularCollectionAdd(field));
+                    out.append(tag(field, SetterShape.BULK_VARARGS, singularCollectionVarargsReplace(field)));
+                    out.append(tag(field, SetterShape.BULK_ITERABLE, singularCollectionIterableReplace(field)));
+                    if (field.singular && field.setters.emitsAdd())
+                        out.append(tag(field, SetterShape.ADD, singularCollectionAdd(field)));
                 }
-                if (field.clearable && field.setters.emitsClear()) out.append(singularClear(field));
-                if (field.removable && field.setters.emitsRemove()) out.append(singularRemove(field));
+                if (field.clearable && field.setters.emitsClear())
+                    out.append(tag(field, SetterShape.CLEAR, singularClear(field)));
+                if (field.removable && field.setters.emitsRemove())
+                    out.append(tag(field, SetterShape.REMOVE, singularRemove(field)));
             }
         } else if (field.isString && field.formattable) {
-            out.append(plainSetter(field));
-            out.append(stringFormattable(field));
+            out.append(tag(field, SetterShape.PLAIN, plainSetter(field)));
+            out.append(tag(field, SetterShape.FORMAT, stringFormattable(field)));
         } else {
-            out.append(plainSetter(field));
+            out.append(tag(field, SetterShape.PLAIN, plainSetter(field)));
         }
         appendAssignViaOverloads(field, out);
         return out.toList();
+    }
+
+    /** Records a setter on the context as the slot's, in the given shape. */
+    private JCMethodDecl tag(FieldSpec field, SetterShape shape, JCMethodDecl setter) {
+        return ctx.recordSetter(field, shape, setter);
     }
 
     // ------------------------------------------------------------------
@@ -631,7 +639,7 @@ final class SelfTypedSetters {
         if (field.collector) return;
         for (FieldSpec.AssignTransform transform : field.assignVia) {
             if (transform.direct() || !transform.resolved()) continue;
-            out.append(assignViaOverload(field, transform));
+            out.append(tag(field, SetterShape.ASSIGN_VIA, assignViaOverload(field, transform)));
         }
     }
 

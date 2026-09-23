@@ -70,11 +70,12 @@ import java.lang.annotation.Target;
  * point, {@code builder(..)}, passes each {@link BuilderSeed} to the builder's
  * constructor, so it is emitted only where names alone single out the
  * constructor javac calls with the seeds in parameter order - one taking their
- * own types, compared by erasure and simple name, or else one taking each as
- * its box or primitive, a wider primitive or, for a reference seed,
- * {@code Object} - and is skipped with a note otherwise, a constructor reached
- * through any other supertype included. A seed is
- * appended as a {@code final} field that the author's constructors assign. A
+ * own types, compared by erasure and simple name, a distinct concrete
+ * parameterisation of a seed's generic type never being its own, or else one
+ * taking each as its box or primitive, a wider primitive or, for a reference
+ * seed, {@code Object} - and is skipped with a note otherwise, a constructor
+ * reached through any other supertype included. A seed is appended as a
+ * {@code final} field that the builder's constructors assign exactly once. A
  * static factory inside an interface is such a target too, and merges into the
  * class the interface body declares.
  *
