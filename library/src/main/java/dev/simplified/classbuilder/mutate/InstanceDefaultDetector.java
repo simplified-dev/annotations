@@ -6,12 +6,14 @@ import com.sun.tools.javac.tree.JCTree.JCIdent;
 import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.TreeScanner;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.classbuilder.apt.InstanceDefaults;
 
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.util.Elements;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -33,6 +35,10 @@ import java.util.Set;
  * costs nothing but a slightly later evaluation, because the constructor path
  * handles static-safe expressions correctly too - it is the more general of
  * two working choices, never the wrong one.
+ *
+ * <p>The rule itself is {@link InstanceDefaults#readsInstanceState}, which the
+ * editor asks of the names it lists out of PSI; what lives here is listing them
+ * from the tree and naming the target's instance members.
  */
 final class InstanceDefaultDetector {
 
@@ -76,26 +82,23 @@ final class InstanceDefaultDetector {
     }
 
     private static boolean readsInstanceState(JCTree tree, Set<String> instanceMembers) {
-        Detector detector = new Detector(instanceMembers);
-        tree.accept(detector);
-        return detector.found;
+        SpelledNames spelled = new SpelledNames();
+        tree.accept(spelled);
+        return InstanceDefaults.readsInstanceState(spelled.names, instanceMembers);
     }
 
-    private static final class Detector extends TreeScanner {
+    /**
+     * Lists every name an initializer spells without a qualifier, and
+     * {@code this} for each qualified {@code Outer.this}, which is what
+     * {@link InstanceDefaults#readsInstanceState} is asked of.
+     */
+    private static final class SpelledNames extends TreeScanner {
 
-        private final Set<String> instanceMembers;
-        private boolean found;
-
-        Detector(Set<String> instanceMembers) {
-            this.instanceMembers = instanceMembers;
-        }
+        private final List<String> names = new ArrayList<>();
 
         @Override
         public void visitIdent(JCIdent tree) {
-            String name = tree.name.toString();
-            if (name.equals("this") || name.equals("super") || instanceMembers.contains(name)) {
-                found = true;
-            }
+            names.add(tree.name.toString());
             super.visitIdent(tree);
         }
 
@@ -104,7 +107,7 @@ final class InstanceDefaultDetector {
             // Qualified forms such as Outer.this.field. The selected expression
             // is scanned by super, which reaches any this/super ident, so only
             // the selected name itself needs checking here.
-            if (tree.name.toString().equals("this")) found = true;
+            if (tree.name.toString().equals("this")) names.add("this");
             super.visitSelect(tree);
         }
     }

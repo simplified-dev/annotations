@@ -446,12 +446,13 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
                 out.add(generated);
             }
             // The processor retypes javac's default to builderConstructorAccess
-            // on a builder that declares no constructor, on the roles the
-            // attribute reaches. PSI carries no default to retype, so the
-            // retyped one is contributed; elsewhere PSI's implicit default is
-            // javac's, at the class's access.
+            // on a builder left with no other constructor - neither the
+            // author's nor one a constructor annotation on it appends - on the
+            // roles the attribute reaches. PSI carries no default to retype, so
+            // the retyped one is contributed; elsewhere PSI's implicit default
+            // is javac's, at the class's access.
             if (BuilderConstructorAccess.appliesTo(GeneratedMemberFactory.roleOf(merge.site()))
-                && !ClassBuilderConstants.declaresConstructor(declared)) {
+                && ClassBuilderConstants.keepsOnlyTheDefaultConstructor(declared)) {
                 out.add(GeneratedMemberFactory.retypedDefaultConstructor(declared, merge.config()));
             }
             return out;

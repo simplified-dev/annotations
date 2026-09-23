@@ -43,6 +43,28 @@ public enum SlotHolding {
     }
 
     /**
+     * Classifies a slot from the three facts its storage follows from, in the
+     * order the builder's field emitter decides them.
+     *
+     * <p>A collected instance default is a scratch container even when it is
+     * lazy, the setters needing something real to mutate; otherwise a lazy slot
+     * and an instance default are each a supplier, and everything else is held
+     * as declared.
+     *
+     * @param lazy whether the field carries {@code @Lazy}
+     * @param collected whether the field is a {@code @Collector} list, set or map
+     * @param instanceDefault whether its captured initializer reads instance state, per
+     *     {@link InstanceDefaults#readsInstanceState}
+     * @return how the slot is held
+     */
+    public static @NotNull SlotHolding of(boolean lazy, boolean collected, boolean instanceDefault) {
+        if (instanceDefault && collected) return COLLECTED_SCRATCH;
+        if (lazy) return LAZY;
+        if (instanceDefault) return INSTANCE_DEFAULT;
+        return DECLARED;
+    }
+
+    /**
      * The sentence a mistyped-slot diagnostic ends with, explaining why the
      * storage type is not the declared one.
      *

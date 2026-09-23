@@ -7,6 +7,7 @@ import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -204,6 +205,34 @@ public class DeclaredBuilderShapeTest {
             standaloneExpectation()));
     }
 
+    /**
+     * A root's build method returning the root is overridden by every link's,
+     * each link being a subtype of the root, so it stands in for the generated
+     * one as the self type would. It was refused for naming the root.
+     */
+    @Test
+    public void check_onARootsBuildMethodReturningTheRoot_isNull() {
+        DeclaredBuilderFacts facts = facts(true, true, List.of("T", "B"),
+            List.of("Shape", "Builder<T, B>"), null, new DeclaredBuildMethod("Shape", true));
+        assertNull(DeclaredBuilderShape.check(ChainRole.ABSTRACT_ROOT, facts,
+            DeclaredBuilderShape.expectation(ChainRole.ABSTRACT_ROOT, "Shape", "Builder", List.of(),
+                facts.typeParameterNames(), null, List.of())));
+    }
+
+    /**
+     * A link's build method has to return the link: the root's it overrides
+     * returns the link's self type, which the root is not.
+     */
+    @Test
+    public void check_onALinksBuildMethodReturningItsRoot_isBuildReturnType() {
+        DeclaredBuilderFacts facts = new DeclaredBuilderFacts(true, false, List.of(), List.of(),
+            "Shape.Builder", List.of("Circle", "Builder"), new DeclaredBuildMethod("Shape", false));
+        assertEquals(DeclaredBuilderRejection.BUILD_RETURN_TYPE,
+            DeclaredBuilderShape.check(ChainRole.CONCRETE_LINK, facts,
+                DeclaredBuilderShape.expectation(ChainRole.CONCRETE_LINK, "Circle", "Builder",
+                    List.of(), List.of(), "Shape", List.of())));
+    }
+
     // ------------------------------------------------------------------
     // The wording both halves render
     // ------------------------------------------------------------------
@@ -385,13 +414,46 @@ public class DeclaredBuilderShapeTest {
                 DeclaredBuilderShape.supplierOf("java.lang.String"), SlotHolding.LAZY));
     }
 
-    /** Erasure decides, so a qualified or differently-spaced spelling of the storage passes. */
+    /** Simple names decide, so a qualified or differently-spaced spelling of the storage passes. */
     @Test
     public void mistypedSlot_acceptsTheStorageTypeInAnySpelling() {
         assertNull(DeclaredBuilderShape.mistypedSlot("Builder", "note", "Supplier<String>",
             "java.util.function.Supplier<java.lang.String>", SlotHolding.LAZY));
         assertNull(DeclaredBuilderShape.mistypedSlot("Builder", "size", "int", "int",
             SlotHolding.DECLARED));
+        assertNull(DeclaredBuilderShape.mistypedSlot("Builder", "index", "Map<String, List<Integer>>",
+            "java.util.Map<java.lang.String,java.util.List<java.lang.Integer>>", SlotHolding.DECLARED));
+    }
+
+    /**
+     * The field has to hold the storage type exactly - the setter assigns into
+     * it and {@code build()} reads it back out - so a type argument that differs
+     * at any depth is reported. The erasure alone was compared, and passed both.
+     */
+    @Test
+    public void mistypedSlot_readsTheTypeArguments() {
+        assertEquals("@ClassBuilder merged into 'Builder' finds 'tags' declared as List<Integer>, and "
+                + "the slot it stands for is java.util.List<java.lang.String> - the generated setter has "
+                + "nothing to assign it to",
+            DeclaredBuilderShape.mistypedSlot("Builder", "tags", "List<Integer>",
+                "java.util.List<java.lang.String>", SlotHolding.DECLARED));
+        assertNotNull("a nested argument", DeclaredBuilderShape.mistypedSlot("Builder", "index",
+            "Map<String, List<String>>", "java.util.Map<java.lang.String, java.util.List<java.lang.Integer>>",
+            SlotHolding.DECLARED));
+        assertNotNull("a wildcard", DeclaredBuilderShape.mistypedSlot("Builder", "tags",
+            "List<? extends CharSequence>", "java.util.List<java.lang.String>", SlotHolding.DECLARED));
+    }
+
+    /**
+     * A raw spelling on either side assigns and reads back with an unchecked
+     * warning rather than an error, so it is not reported.
+     */
+    @Test
+    public void mistypedSlot_acceptsARawSpellingOfEitherSide() {
+        assertNull(DeclaredBuilderShape.mistypedSlot("Builder", "tags", "List",
+            "java.util.List<java.lang.String>", SlotHolding.DECLARED));
+        assertNull(DeclaredBuilderShape.mistypedSlot("Builder", "tags", "List<String>",
+            "java.util.List", SlotHolding.DECLARED));
     }
 
     /**

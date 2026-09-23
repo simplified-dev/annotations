@@ -288,9 +288,8 @@ final class DeclaredBuilderMerge {
      * <p>The comparison and its wording are
      * {@link DeclaredBuilderShape#mistypedSlot}, which the editor's inspection
      * asks of the same strings read out of PSI. What is left here is classifying
-     * each slot's storage from the tree, which is where the processor knows more
-     * than the editor: whether a retained initializer reads instance state is a
-     * question only this side answers.
+     * each slot's storage from the tree, through {@link SlotHolding#of}, which
+     * the editor asks of the same facts.
      *
      * <p>The merge continues after a report, so javac also refuses the generated
      * member that assigns the slot - the report is what says why on a line the
@@ -325,10 +324,7 @@ final class DeclaredBuilderMerge {
      * @return how the slot is held
      */
     private SlotHolding holdingOf(FieldSpec slot) {
-        if (ctx.isCollectedInstanceDefault(slot)) return SlotHolding.COLLECTED_SCRATCH;
-        if (slot.lazy) return SlotHolding.LAZY;
-        if (ctx.isInstanceDefault(slot.name)) return SlotHolding.INSTANCE_DEFAULT;
-        return SlotHolding.DECLARED;
+        return SlotHolding.of(slot.lazy, MutationContext.isCollected(slot), ctx.isInstanceDefault(slot.name));
     }
 
     /**

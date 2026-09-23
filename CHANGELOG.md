@@ -62,9 +62,12 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   generated setters can assign, and accepted the natural one, which then failed on a line the author
   never wrote. The editor reports the same error in the same sentence on the field's type, and both
   halves print a type in one spelling, so a generic slot's `Map<String, Integer>` and a lazy
-  primitive's `Supplier<java.lang.Integer>` read alike in the build and in the editor. A non-lazy slot
-  whose field carries an initializer is not judged in the editor, whether the builder holds it as a
-  supplier depending on what the initializer reads.
+  primitive's `Supplier<java.lang.Integer>` read alike in the build and in the editor. The types are
+  compared argument by argument, so `List<Integer>` beside a `List<String>` slot is refused on the
+  author's field rather than passing on its erasure and failing inside the generated setter; a raw
+  spelling on either side still passes. The editor classifies an initialised slot as the build does -
+  as a supplier where its kept initializer names `this`, `super` or an instance member, from one rule
+  both halves ask of the names the initializer spells - and judges its field the same way.
 
 - **A chain whose ancestor declares a builder the extends clause cannot name is refused rather than
   emitted.** A link's builder extends the ancestor's and passes it the ancestor's arguments plus the
@@ -82,19 +85,21 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
 
 - **A merged builder's slot fields resolve in the editor.** The merge appends them and the editor
   contributed none, so an author's own verb inside that class referencing a slot was red over source
-  that builds - which lands on exactly the hand-written verb the merge exists to allow. One shape is
-  still left out: on a class or record target, a non-lazy slot whose field carries an initializer,
-  which the builder may hold as a supplier depending on what the initializer reads - a question the
-  editor does not answer, so a reference to that slot inside the builder stays unresolved rather
-  than resolving to a type that may be wrong. Renaming a slot now follows through to the setters
-  contributed there, which it silently skipped.
+  that builds - which lands on exactly the hand-written verb the merge exists to allow. Each slot is
+  contributed as the type the builder holds it in, an initialised one included: a supplier where its
+  kept initializer reads the instance, its declared type otherwise. The one shape left out is a
+  `@Collector` slot whose default reads the instance, held in a scratch container the editor does not
+  render. Renaming a slot now follows through to the setters contributed there, which it silently
+  skipped.
 
 - **The entry points a merged builder has no constructor for are skipped with a note.** Every entry
   point instantiates the builder with one argument per `@BuilderSeed`, and a declared builder's
   constructors are the author's, so one declaring constructors and none of that arity left the entry
   points with nothing to call. Both halves withhold them together, and the note names only the entry
   points the path emits - `builder(..)` alone on a constructor or factory target, and never one
-  named `NONE`; with every entry point named `NONE` there is nothing to skip and no note.
+  named `NONE`; with every entry point named `NONE` there is nothing to skip and no note. The note
+  sits on the member the annotation is written on, the constructor or factory on that path, where the
+  editor's weak warning sits.
 
 - **A declared builder with no constructor takes `builderConstructorAccess`.** javac's implicit
   default takes the builder class's own access, `public` on the usual shape, so a merged builder
@@ -103,7 +108,9 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   generated-constructor flag is cleared, so on a class or record target and on a constructor or
   factory target the default is retyped to the attribute, `PACKAGE` unless written, and the editor
   contributes the matching constructor. A declared builder with a constructor of its own keeps it as
-  written, and a chain role keeps javac's default, no chain builder being given a constructor at all.
+  written, and so does one given a constructor by `@NoArgsConstructor` or a sibling written on it,
+  where the editor had contributed the retyped one beside it; a chain role keeps javac's default, no
+  chain builder being given a constructor at all.
 
 - **`builderConstructorAccess = NONE` is one error on the annotation.** It reached a switch with no
   case for it and failed the build with `Failed to generate builder for ...: AccessLevel.NONE has no
@@ -122,6 +129,15 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   editor's constructor carried no modifier for package-private access, and the platform's access
   check reads a modifier list with no access keyword as `public`, so a cross-package
   `new Target.Builder()` resolved in the editor while javac refused it.
+
+- **A second processor run over one compilation adds nothing.** Every pass leaves its marks where a
+  second `ClassBuilderProcessor` handed the same trees sees them, and the builder passes stopped only
+  at a builder they had generated. Over a declared builder they merged again and reported their own
+  members as the author's, and on a class target appended a second `from(T)` - `method from(T) is
+  already defined` - since the element model the collision test reads cannot see a method appended
+  to the tree; on every class target they reported the all-args constructor they had appended as one
+  a written annotation generates. Each target and each annotated constructor or factory is now
+  mutated once.
 
 - **The expansion stopped documenting a chain's members as each other.** A self-typed builder's
   setters and its self accessor return the builder's own self type rather than its name, so the owner
@@ -149,14 +165,16 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   - the wrong type parameters on a generic target - re-declare the target's, in order, or on a
     static factory the factory's own;
   - `abstract` where the entry points instantiate it - drop `abstract`;
-  - a field sharing a slot's name whose type the generated setter cannot assign - give it the slot's
-    type, or `Supplier<T>` for a `@Lazy` slot, or rename it;
+  - a field sharing a slot's name whose type the generated setter cannot assign, type arguments
+    included - give it the slot's type, or `Supplier<T>` for a `@Lazy` slot or one whose kept
+    initializer reads the instance, or rename it;
   - on a chain root, a builder that is not abstract or not self-typed - declare it
     `abstract static class Builder<T extends Target, B extends Builder<T, B>>`;
   - below a chain root, a missing or wrong `extends` clause or the wrong arguments to it - extend
     the ancestor's builder as `Ancestor.Builder<Link, Builder>` on a concrete link, or forward the
     builder's own self-typed pair on a chained abstract;
-  - on a chain, a build method returning something other than the built type - return that type;
+  - on a chain, a build method returning something other than the built type - return that type, or
+    on a root the root itself;
   - on a constructor or factory target, a `@BuilderSeed` a constructor of the builder leaves
     unassigned - assign it there, the merge appending it as a `final` field.
 
@@ -190,7 +208,8 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   `builder(..)` passes each `@BuilderSeed` to the builder's constructor, so it is emitted only where
   the author declares a constructor taking exactly the seeds; a seed is appended as a `final` field,
   and the editor reports a constructor of the builder that leaves it unassigned, or the builder's name
-  when it declares none, where javac refuses the same declaration.
+  when it declares none, where javac refuses the same declaration - an instance initializer assigning
+  the seed assigning it for every constructor, as javac finds.
 
 - **An inspection for a declared builder the merge cannot append to.** Non-static, the wrong type
   parameters, or declared abstract where the entry points instantiate it. The processor refuses these

@@ -44,8 +44,9 @@ import org.jetbrains.annotations.NotNull;
  * <p>On a shape the merge accepts, a declared field sharing a slot's name and
  * holding a type the generated setters cannot assign is reported on that field's
  * type, again in the processor's sentence. The slot's storage is classified by
- * {@link MergedSlotStorage}, which leaves unjudged a slot whose storage depends
- * on what its initializer reads.
+ * {@link MergedSlotStorage}, as the processor classifies it - an initialised
+ * slot included, held as a supplier where its kept initializer reads the
+ * instance.
  *
  * <p>On a class or record target and on a constructor or factory target, a
  * {@code builderConstructorAccess} written on the annotation while the declared
@@ -55,8 +56,9 @@ import org.jetbrains.annotations.NotNull;
  * <p>On a constructor or factory target, a seed the merge appends as a
  * {@code final} field and a constructor of the declared builder leaves
  * unassigned is reported on that constructor, or on the builder's name when it
- * declares none. javac refuses both shapes in its own words; the platform's
- * definite-assignment check reads only fields written in source.
+ * declares none, unless an instance initializer assigns it. javac refuses both
+ * shapes in its own words; the platform's definite-assignment check reads only
+ * fields written in source.
  */
 public class DeclaredBuilderShapeInspection extends LocalInspectionTool {
 

@@ -32,6 +32,9 @@ import java.util.List;
  */
 public final class BuilderMutator {
 
+    /** This pass's idempotency key. */
+    private static final String PASS = "classbuilder";
+
     private final JavacBridge bridge;
     private final Messager messager;
 
@@ -74,6 +77,16 @@ public final class BuilderMutator {
                           List<FieldSpec> allFields) {
         JCClassDecl target = bridge.treeOf(targetElement);
         if (target == null) return false;
+
+        // A second run over a tree this pass already rewrote finds its own
+        // output everywhere: the all-args constructor it appended, which it
+        // would report as one a written annotation generates, and a declared
+        // builder it merged into, on any role, which it would merge into again
+        // and report its own members as the author's - appending a second
+        // from(T) on a class target, since the element model the collision test
+        // reads cannot see a method appended to the tree.
+        if (AstMarkers.isPassMarked(target, PASS)) return true;
+        AstMarkers.markPass(target, PASS);
 
         MutationContext ctx = new MutationContext(bridge, targetElement, target, config, fields);
 

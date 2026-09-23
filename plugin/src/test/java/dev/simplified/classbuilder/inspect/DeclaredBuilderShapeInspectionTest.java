@@ -42,6 +42,7 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
             @Retention(RetentionPolicy.CLASS)
             @Target({ElementType.TYPE, ElementType.CONSTRUCTOR, ElementType.METHOD})
             public @interface ClassBuilder {
+                boolean retainInit() default true;
                 AccessLevel builderConstructorAccess() default AccessLevel.PACKAGE;
             }
             """);
@@ -347,6 +348,101 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
     }
 
     /**
+     * A field differing from its slot in a type argument alone cannot take what
+     * the generated setter assigns. Both halves compared erasures and passed it,
+     * javac then failing on the generated setter with nothing on the author's
+     * field; the sentence is the one the apt twin asserts.
+     */
+    public void testASlotDifferingInATypeArgument_isReportedOnTheField() {
+        myFixture.configureByText("Tagged.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import java.util.List;
+            @ClassBuilder
+            public class Tagged {
+                private List<String> tags;
+                public static class Builder {
+                    private List<Integer> tags;
+                }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder merged into 'Builder' finds 'tags' declared as "
+                + "List<Integer>, and the slot it stands for is java.util.List<java.lang.String> - the "
+                + "generated setter has nothing to assign it to"));
+    }
+
+    /**
+     * An initialised slot whose initializer reads nothing of the instance is
+     * held as declared, and the processor judges its field as it judges any
+     * other. The editor left every initialised slot unjudged, so the field was
+     * green over source javac refuses on it.
+     */
+    public void testAMistypedSlotWithALiteralInitializer_isReported() {
+        myFixture.configureByText("Titled.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Titled {
+                private String name = "untitled";
+                public static class Builder {
+                    private int name;
+                }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder merged into 'Builder' finds 'name' declared as int, "
+                + "and the slot it stands for is java.lang.String - the generated setter has nothing to "
+                + "assign it to"));
+    }
+
+    /**
+     * An initializer reading the instance holds its slot as a supplier, so the
+     * slot's declared type is the spelling the merge cannot assign - the
+     * sentence the apt twin asserts, reason included.
+     */
+    public void testAMistypedSlotWhoseInitializerReadsTheInstance_namesTheSupplier() {
+        myFixture.configureByText("Labelled.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Labelled {
+                private String name;
+                private String label = name + "!";
+                public static class Builder {
+                    private String label;
+                }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder merged into 'Builder' finds 'label' declared as "
+                + "String, and the slot it stands for is java.util.function.Supplier<java.lang.String> - "
+                + "the generated setter has nothing to assign it to. A slot whose retained initializer "
+                + "reads instance state is held in the builder as a supplier of its declared type"));
+    }
+
+    /**
+     * With {@code retainInit = false} no initializer is kept, so a slot is held
+     * as declared whatever its initializer reads, and a field of the declared
+     * type is the right one.
+     */
+    public void testASlotWhoseInitializerIsNotRetained_isHeldAsDeclared() {
+        myFixture.configureByText("Labelled.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(retainInit = false)
+            public class Labelled {
+                private String name;
+                private String label = name + "!";
+                public static class Builder {
+                    private String label;
+                }
+            }
+            """);
+        assertTrue("held as declared: " + errors(), errors().isEmpty());
+    }
+
+    /**
      * A lazy slot is held as a supplier of its declared type, so its natural
      * spelling is the one the merge cannot assign - the same sentence the apt
      * twin asserts, storage type and reason included.
@@ -571,6 +667,51 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
                 + "a final field, and 'Builder' declares no constructor to assign it"));
     }
 
+    /**
+     * An instance initializer that assigns nothing of the seed leaves each
+     * constructor as responsible for it, and javac refuses the one that does
+     * not assign it. A builder with any instance initializer was left unjudged.
+     */
+    public void testASeedLeftUnassignedBesideAnInstanceInitializer_isReported() {
+        addBuilderSeedAnnotation();
+        myFixture.configureByText("Slip.java",
+            """
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Slip {
+                @ClassBuilder
+                Slip(@BuilderSeed String origin, String item) { }
+                public static class Builder {
+                    private int count;
+                    { count = 1; }
+                    public Builder(String origin) { }
+                }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder merged into 'Builder' appends the seed 'origin' as "
+                + "a final field, and this constructor leaves it unassigned"));
+    }
+
+    /** An instance initializer assigning the seed assigns it for every constructor, as javac finds. */
+    public void testASeedAnInstanceInitializerAssigns_isNotReported() {
+        addBuilderSeedAnnotation();
+        myFixture.configureByText("Slip.java",
+            """
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Slip {
+                @ClassBuilder
+                Slip(@BuilderSeed String origin, String item) { }
+                public static class Builder {
+                    { origin = "desk"; }
+                    public Builder(String ignored) { }
+                }
+            }
+            """);
+        assertTrue("javac accepts this: " + errors(), errors().isEmpty());
+    }
+
     // ------------------------------------------------------------------
     // Chain roles
     //
@@ -694,6 +835,26 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
             theOnlyError().contains("@ClassBuilder cannot merge into 'Builder' - its build method "
                 + "returns Object where this role builds Link, so it cannot stand in for the "
                 + "generated one"));
+    }
+
+    /**
+     * A root's build method returning the root is overridden by every link's,
+     * so it stands in for the generated one; the processor merges it and the
+     * program runs. Both halves refused it for not naming the self type.
+     */
+    public void testARootWhoseBuildReturnsTheRoot_isNotReported() {
+        myFixture.configureByText("Shape.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Shape {
+                private String name;
+                public abstract static class Builder<T extends Shape, B extends Builder<T, B>> {
+                    public abstract Shape build();
+                }
+            }
+            """);
+        assertTrue("the hand-written equivalent compiles: " + errors(), errors().isEmpty());
     }
 
     /**

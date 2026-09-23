@@ -36,7 +36,9 @@ import dev.simplified.annotations.NamingStyle;
 import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
 import dev.simplified.classbuilder.apt.BuilderScheme;
 import dev.simplified.classbuilder.apt.ChainRole;
+import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.SetterScheme;
+import dev.simplified.classbuilder.apt.SlotHolding;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.shared.psi.AnnotatedLightModifierList;
 import dev.simplified.shared.psi.DocProxyingLightMethodBuilder;
@@ -830,13 +832,13 @@ public final class GeneratedMemberFactory {
      * source that builds - which lands on exactly the hand-written verb the
      * merge exists to allow.
      *
-     * <p>A lazy slot is held as a supplier rather than as its declared type, the
-     * slot needing a value that means "never set" without that value being a
-     * legal one. The third shape the processor knows - a slot whose retained
-     * initializer reads instance state, which is also held as a supplier -
-     * cannot be told apart here, initializer flow being something the editor
-     * does not analyse, so on a class or record target a non-lazy slot whose
-     * field carries an initializer is not contributed at all.
+     * <p>Each slot is contributed as the type the processor holds it in, which
+     * {@link MergedSlotStorage#holdingOf} reads: a lazy slot, and one whose
+     * retained initializer reads instance state, as a supplier of the declared
+     * type - the slot needing a value that means "never set" without that value
+     * being a legal one - and every other as declared. A collected slot whose
+     * default reads instance state is held in a scratch container the editor
+     * does not render, and is not contributed.
      *
      * @param site the annotated site
      * @param config the resolved configuration
@@ -856,21 +858,19 @@ public final class GeneratedMemberFactory {
 
         List<PsiField> out = new ArrayList<>();
         for (PsiFieldShape slot : slotsOf(site, toBuilder, config.setters())) {
-            // A slot whose retained initializer reads instance state is held as
-            // a supplier, and whether an initializer does that is a flow
-            // question the editor does not answer. Contributing such a slot with
-            // its declared type made a reference to it resolve green over source
-            // javac rejects - the very shape this contribution exists to
-            // prevent - so a slot carrying any initializer is left out unless it
-            // is lazy, which is held as a supplier whatever its initializer says.
-            // Absent leaves a reference unresolved; present and mistyped would
-            // resolve it to the wrong type, which is worse. On an executable
-            // site the slot is a parameter, which has no initializer, and a
-            // field of the enclosing type sharing its name is no part of it.
-            if (!site.isExecutable() && !slot.lazy && hasInitializer(target, slot.name)) continue;
-            PsiType type = slot.lazy
+            // Contributed as the type the processor holds it in, since a slot
+            // contributed with its declared type where the processor holds a
+            // supplier resolves a reference to it green over source javac
+            // rejects. On an executable site the slot is a parameter, which has
+            // no initializer, and a field of the enclosing type sharing its name
+            // is no part of it.
+            SlotHolding holding = site.isExecutable()
+                ? SlotHolding.DECLARED
+                : MergedSlotStorage.holdingOf(target, slot, config.retainInit());
+            if (holding == null) continue;
+            PsiType type = holding.isSupplier()
                 ? elements.createTypeFromText(
-                    "java.util.function.Supplier<" + slot.type.getCanonicalText() + ">", builder)
+                    DeclaredBuilderShape.supplierOf(slot.type.getCanonicalText()), builder)
                 : slot.type;
             LightFieldBuilder field = new LightFieldBuilder(psiManager, slot.name, type);
             field.setContainingClass(builder);
@@ -886,21 +886,6 @@ public final class GeneratedMemberFactory {
             out.add(field);
         }
         return out;
-    }
-
-    /**
-     * Whether the target declares that field with an initializer.
-     *
-     * <p>Read off the written declaration rather than resolved - the question is
-     * whether an expression is there, not what it evaluates to.
-     *
-     * @param target the annotated type
-     * @param name the slot's name
-     * @return whether the field carries an initializer
-     */
-    static boolean hasInitializer(PsiClass target, String name) {
-        PsiField field = ownField(target, name);
-        return field != null && field.hasInitializer();
     }
 
     private static List<PsiFieldShape> slotsOf(BuilderSite site, PsiSubstitutor toBuilder,
@@ -1427,7 +1412,8 @@ public final class GeneratedMemberFactory {
                                String access, String constructorAccess,
                                String builderConstructorAccess,
                                boolean generateCopyConstructor,
-                               String factoryMethod) {
+                               String factoryMethod,
+                               boolean retainInit) {
         static EditorBuilderConfig fromAnnotation(PsiAnnotation annotation) {
             NamingStyle style = ClassBuilderConstants.namingStyle(annotation);
             String access = ClassBuilderConstants.accessKeyword(annotation);
@@ -1447,11 +1433,15 @@ public final class GeneratedMemberFactory {
                 ClassBuilderConstants.ATTR_GENERATE_COPY_CONSTRUCTOR, true);
             String factoryMethod = ClassBuilderConstants.stringAttr(annotation,
                 ClassBuilderConstants.ATTR_FACTORY_METHOD, "");
+            // Decides which initialised slots are instance defaults, and so the
+            // type a merged builder holds them as.
+            boolean retainInit = ClassBuilderConstants.booleanAttr(annotation,
+                ClassBuilderConstants.ATTR_RETAIN_INIT, true);
             return new EditorBuilderConfig(
                 ClassBuilderConstants.builderScheme(annotation, style, targetSimpleName(annotation)),
                 ClassBuilderConstants.setterScheme(annotation, style),
                 access, constructorAccess, builderConstructorAccess,
-                generateCopyConstructor, factoryMethod);
+                generateCopyConstructor, factoryMethod, retainInit);
         }
 
         /**

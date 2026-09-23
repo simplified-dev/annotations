@@ -151,8 +151,12 @@ final class BootstrapMethodFactory {
         // generate-flag to consult.
         int seeds = ctx.seeds().size();
         if (!builderCanBeInstantiated(seeds)) {
+            // On the member the annotation is written on, where the editor's
+            // weak warning sits: the annotated constructor or factory on that
+            // path, the type on every other.
+            Element anchor = ctx.isExecutableTarget() ? ctx.executable() : ctx.targetElement();
             String note = uninstantiableNote();
-            if (note != null) messager.printMessage(Diagnostic.Kind.NOTE, note, ctx.targetElement());
+            if (note != null) messager.printMessage(Diagnostic.Kind.NOTE, note, anchor);
             return;
         }
         if (!builderMethod.isEmpty())

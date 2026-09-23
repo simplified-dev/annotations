@@ -1,6 +1,7 @@
 package dev.simplified.classbuilder.mutate;
 
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
+import com.sun.tools.javac.tree.JCTree;
 import dev.simplified.classbuilder.apt.BuilderConfig;
 import dev.simplified.classbuilder.apt.ChainRole;
 import dev.simplified.classbuilder.apt.FieldSpec;
@@ -38,6 +39,9 @@ import java.util.List;
  */
 public final class ExecutableBuilderMutator {
 
+    /** This pass's idempotency key, marked on the annotated member's tree. */
+    private static final String PASS = "classbuilder.executable";
+
     private final JavacBridge bridge;
     private final Messager messager;
 
@@ -60,6 +64,15 @@ public final class ExecutableBuilderMutator {
                           BuilderConfig config, List<FieldSpec> slots) {
         JCClassDecl target = bridge.treeOf(enclosing);
         if (target == null) return false;
+
+        // A second run over a member this pass already served would merge into
+        // the declared builder it merged into, reporting every member it
+        // appended as one the author spells and the entry point it appended as
+        // one the author declared. Marked on the member rather than the type,
+        // which can carry more than one annotated constructor or factory.
+        JCTree member = (JCTree) bridge.trees().getTree(executable);
+        if (AstMarkers.isPassMarked(member, PASS)) return true;
+        AstMarkers.markPass(member, PASS);
 
         MutationContext ctx =
             new MutationContext(bridge, enclosing, target, config, slots, executable);

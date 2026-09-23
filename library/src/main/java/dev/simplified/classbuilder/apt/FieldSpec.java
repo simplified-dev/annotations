@@ -607,13 +607,13 @@ public final class FieldSpec {
         // class-wide policy and has nothing to retain.
         AnnotationMirror declaredDefault =
             lookup.findMirror(element, "dev.simplified.annotations.BuilderDefault");
+        b.builderDefault = InstanceDefaults.builderDefault(
+            declaredDefault == null ? null : lookup.booleanAttr(declaredDefault, "value", true),
+            classRetainInit);
         if (declaredDefault != null) {
-            b.builderDefault = lookup.booleanAttr(declaredDefault, "value", true);
             b.builderDefaultExplicit = b.builderDefault;
             String provider = lookup.stringAttr(declaredDefault, "provider", "");
             b.defaultProvider = provider.isEmpty() ? null : provider;
-        } else {
-            b.builderDefault = classRetainInit;
         }
 
         AnnotationMirror via = lookup.findMirror(element, "dev.simplified.annotations.ObtainVia");
@@ -630,7 +630,8 @@ public final class FieldSpec {
         // @Collector on a custom (non-java.util) container has no
         // `new ArrayList<>()`-style fallback and must build fresh instances
         // from the field's own factory.
-        boolean needsInitializer = b.builderDefault || (b.collector && b.isCustomContainer);
+        boolean needsInitializer =
+            InstanceDefaults.captures(b.builderDefault, b.collector && b.isCustomContainer);
         if (needsInitializer && introspector != null) {
             SourceIntrospector.InitializerInfo info = introspector.readFieldInitializer(element);
             if (info != null) {

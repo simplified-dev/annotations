@@ -1,18 +1,25 @@
 package dev.simplified.classbuilder.editor;
 
+import com.intellij.psi.JavaRecursiveElementWalkingVisitor;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiClassInitializer;
 import com.intellij.psi.PsiCodeBlock;
 import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiExpression;
 import com.intellij.psi.PsiExpressionStatement;
 import com.intellij.psi.PsiField;
+import com.intellij.psi.PsiJavaCodeReferenceElement;
+import com.intellij.psi.PsiMember;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiMethodCallExpression;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiParameter;
+import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiStatement;
 import com.intellij.psi.PsiSubstitutor;
+import com.intellij.psi.PsiSuperExpression;
+import com.intellij.psi.PsiThisExpression;
 import com.intellij.psi.PsiTypeElement;
 import com.intellij.psi.controlFlow.AnalysisCanceledException;
 import com.intellij.psi.controlFlow.ControlFlow;
@@ -21,13 +28,16 @@ import com.intellij.psi.controlFlow.ControlFlowUtil;
 import com.intellij.psi.controlFlow.LocalsOrMyInstanceFieldsControlFlowPolicy;
 import com.intellij.psi.impl.source.PsiExtensibleClass;
 import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
+import dev.simplified.classbuilder.apt.InstanceDefaults;
 import dev.simplified.classbuilder.apt.SetterScheme;
 import dev.simplified.classbuilder.apt.SlotHolding;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
+import dev.simplified.shared.psi.WrittenAnnotations;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -37,12 +47,12 @@ import java.util.Set;
  * and an appended seed field no constructor assigns.
  *
  * <p>The comparison and the sentence are {@link DeclaredBuilderShape#mistypedSlot},
- * the one the processor reports; what lives here is classifying a slot's storage
- * from PSI the way the processor classifies it from the tree. The processor
- * knows one thing this side does not - whether a retained initializer reads
- * instance state, which holds the slot as a supplier or as a scratch container.
- * That is a flow question the editor does not analyse, so a slot whose field
- * carries an initializer and whose storage depends on it is left unjudged: a
+ * the one the processor reports, and the classification is {@link SlotHolding#of}
+ * over the rule {@link InstanceDefaults} states; what lives here is reading the
+ * facts both ask of from PSI the way the processor reads them from the tree - the
+ * names a field's initializer spells, and the instance members the target
+ * declares and inherits. A collected slot whose default reads instance state is
+ * held in a scratch container this side does not render, and is left unjudged: a
  * missed error rather than a false one.
  */
 public final class MergedSlotStorage {
@@ -94,6 +104,8 @@ public final class MergedSlotStorage {
                 : PsiFieldShapeExtractor.fromClass(target, excluded, setters);
         }
 
+        boolean retainInit =
+            GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(annotation).retainInit();
         List<Mistyped> out = new ArrayList<>();
         for (PsiField field : ownFields(declared)) {
             PsiTypeElement written = field.getTypeElement();
@@ -105,7 +117,7 @@ public final class MergedSlotStorage {
                 // sharing its name is no part of it.
                 SlotHolding holding = executable != null
                     ? SlotHolding.DECLARED
-                    : holdingOf(target, slot);
+                    : holdingOf(target, slot, retainInit);
                 if (holding == null) continue;
                 String declaredType = slot.type.getCanonicalText();
                 String storage = holding.isSupplier()
@@ -155,11 +167,11 @@ public final class MergedSlotStorage {
      * none - on a line the author wrote; the platform's own check reads only
      * fields written in source, so without this the editor is green over it.
      * Assignment is answered by the platform's definite-assignment flow over each
-     * constructor body. A constructor delegating through {@code this(..)} is left
-     * to the one it calls, and a builder with an instance initializer is not
-     * judged, the flow of one body not covering it - a missed error rather than a
-     * false one. A seed the author declares a field for is the platform's to
-     * check, that field being written in source.
+     * constructor body, and over each instance initializer - one that definitely
+     * assigns the seed assigns it before every constructor body runs, so no
+     * constructor is then responsible for it. A constructor delegating through
+     * {@code this(..)} is left to the one it calls. A seed the author declares a
+     * field for is the platform's to check, that field being written in source.
      *
      * <p>Not for use from an augment provider: it reads the builder's fields
      * through the augment-aware lookup, which is what finds the appended ones.
@@ -174,8 +186,9 @@ public final class MergedSlotStorage {
         PsiElement nameAnchor = declared.getNameIdentifier();
         if (declaredName == null || nameAnchor == null) return List.of();
         if (!(declared instanceof PsiExtensibleClass extensible)) return List.of();
+        List<PsiCodeBlock> initializers = new ArrayList<>();
         for (PsiClassInitializer initializer : declared.getInitializers()) {
-            if (!initializer.hasModifierProperty(PsiModifier.STATIC)) return List.of();
+            if (!initializer.hasModifierProperty(PsiModifier.STATIC)) initializers.add(initializer.getBody());
         }
         List<PsiMethod> constructors = new ArrayList<>();
         for (PsiMethod own : extensible.getOwnMethods()) {
@@ -189,7 +202,7 @@ public final class MergedSlotStorage {
             String seed = parameter.getName();
             if (declaresField(extensible, seed)) continue;
             PsiField appended = declared.findFieldByName(seed, false);
-            if (appended == null) continue;
+            if (appended == null || assignedByAnInitializer(initializers, appended)) continue;
             if (constructors.isEmpty()) {
                 out.add(new UnassignedSeed(nameAnchor,
                     DeclaredBuilderShape.unassignedSeed(declaredName, seed, false)));
@@ -214,6 +227,23 @@ public final class MergedSlotStorage {
     }
 
     /**
+     * Whether an instance initializer leaves the field definitely assigned.
+     *
+     * <p>The initializers run in order before every constructor body, so the
+     * field is assigned once any one of them assigns it.
+     *
+     * @param initializers the bodies of the builder's instance initializers, in declaration order
+     * @param field the appended seed field
+     * @return whether one of them assigns it
+     */
+    private static boolean assignedByAnInitializer(List<PsiCodeBlock> initializers, PsiField field) {
+        for (PsiCodeBlock body : initializers) {
+            if (definitelyAssigns(body, field)) return true;
+        }
+        return false;
+    }
+
+    /**
      * Whether the constructor leaves the field definitely assigned, as javac's
      * flow analysis would find it.
      *
@@ -231,8 +261,20 @@ public final class MergedSlotStorage {
             && "this".equals(call.getMethodExpression().getReferenceName())) {
             return true;
         }
+        return definitelyAssigns(body, field);
+    }
+
+    /**
+     * Whether a block leaves the field definitely assigned, by the platform's
+     * definite-assignment flow.
+     *
+     * @param body the block to analyse
+     * @param field the field it may assign
+     * @return whether it assigns the field on every path, and {@code true} when the analysis cannot finish
+     */
+    private static boolean definitelyAssigns(PsiCodeBlock body, PsiField field) {
         try {
-            ControlFlow flow = ControlFlowFactory.getInstance(constructor.getProject())
+            ControlFlow flow = ControlFlowFactory.getInstance(body.getProject())
                 .getControlFlow(body, LocalsOrMyInstanceFieldsControlFlowPolicy.getInstance());
             return ControlFlowUtil.isVariableDefinitelyAssigned(field, flow);
         } catch (AnalysisCanceledException e) {
@@ -241,28 +283,136 @@ public final class MergedSlotStorage {
     }
 
     /**
-     * How the merge holds the slot, where that can be read without asking what
-     * an initializer reads.
+     * How the merge holds a slot of a class or record target, as the processor
+     * classifies it.
      *
-     * <p>A lazy slot is a supplier whatever its initializer says, unless it is
-     * also collected - a collected slot whose default reads instance state is a
-     * scratch container instead, and which of the two applies is the flow
-     * question. A slot with no initializer has no default to compute and is held
-     * as declared; one with an initializer may be held as a supplier, and is not
-     * classified.
+     * <p>The classification is {@link SlotHolding#of}, asked of the flags the
+     * processor asks it of. The instance-default flag is
+     * {@link InstanceDefaults#readsInstanceState}, asked of the names the field's
+     * initializer spells and of the instance members the target declares and
+     * inherits, and only where {@link InstanceDefaults#captures} says the
+     * initializer is kept at all. Nothing here resolves a reference, which is
+     * what lets the augment provider ask it: the names are read as written and
+     * the members off each type's own declarations.
      *
      * @param target the annotated type
      * @param slot the slot to classify
-     * @return how the slot is held, or {@code null} when that depends on what its initializer reads
+     * @param retainInit the class-wide policy written on {@code @ClassBuilder}
+     * @return how the slot is held, or {@code null} for a collected slot whose default reads instance
+     *     state, held in a scratch container this side does not render
      */
-    private static @Nullable SlotHolding holdingOf(PsiClass target, PsiFieldShape slot) {
-        boolean initialised = GeneratedMemberFactory.hasInitializer(target, slot.name);
+    static @Nullable SlotHolding holdingOf(@NotNull PsiClass target, @NotNull PsiFieldShape slot,
+                                           boolean retainInit) {
         boolean collected = slot.collector && (slot.isListLike || slot.isMap);
-        if (slot.lazy) return collected && initialised ? null : SlotHolding.LAZY;
-        return initialised ? null : SlotHolding.DECLARED;
+        SlotHolding holding = SlotHolding.of(slot.lazy, collected, instanceDefault(target, slot, retainInit));
+        return holding == SlotHolding.COLLECTED_SCRATCH ? null : holding;
     }
 
-    /** The declared builder's own fields, without anything a provider contributed. */
+    /**
+     * Whether the slot's field keeps an initializer that reads instance state.
+     *
+     * @param target the annotated type
+     * @param slot the slot to classify
+     * @param retainInit the class-wide policy written on {@code @ClassBuilder}
+     * @return whether the slot's default is computed on the instance
+     */
+    private static boolean instanceDefault(PsiClass target, PsiFieldShape slot, boolean retainInit) {
+        PsiField field = null;
+        for (PsiField own : ownFields(target)) {
+            if (slot.name.equals(own.getName())) field = own;
+        }
+        PsiExpression initializer = field == null ? null : field.getInitializer();
+        if (initializer == null) return false;
+        PsiAnnotation written = WrittenAnnotations.findOnMember(field, ClassBuilderConstants.BUILDER_DEFAULT_FQN);
+        boolean builderDefault = InstanceDefaults.builderDefault(
+            written == null ? null : ClassBuilderConstants.booleanAttr(written, "value", true), retainInit);
+        if (!InstanceDefaults.captures(builderDefault, slot.collector && slot.isCustomContainer)) return false;
+        return InstanceDefaults.readsInstanceState(spelledNames(initializer), instanceMemberNames(target));
+    }
+
+    /**
+     * Lists every name an initializer spells without a qualifier, and
+     * {@code this} for each {@code this} expression, qualified or not - the
+     * names the processor lists from the tree.
+     *
+     * @param initializer the field's initializer
+     * @return the names, in source order
+     */
+    private static List<String> spelledNames(PsiExpression initializer) {
+        List<String> out = new ArrayList<>();
+        initializer.accept(new JavaRecursiveElementWalkingVisitor() {
+            @Override
+            public void visitReferenceElement(@NotNull PsiJavaCodeReferenceElement reference) {
+                String name = reference.getReferenceName();
+                if (reference.getQualifier() == null && name != null) out.add(name);
+                super.visitReferenceElement(reference);
+            }
+
+            @Override
+            public void visitReferenceExpression(@NotNull PsiReferenceExpression expression) {
+                visitReferenceElement(expression);
+            }
+
+            @Override
+            public void visitThisExpression(@NotNull PsiThisExpression expression) {
+                out.add("this");
+                super.visitThisExpression(expression);
+            }
+
+            @Override
+            public void visitSuperExpression(@NotNull PsiSuperExpression expression) {
+                // A qualified super is a select on the tree, whose name the
+                // processor does not list.
+                if (expression.getQualifier() == null) out.add("super");
+                super.visitSuperExpression(expression);
+            }
+        });
+        return out;
+    }
+
+    /**
+     * Names every non-static field and method the target declares, and every
+     * one its supertypes declare that it inherits, as the processor's element
+     * model lists them.
+     *
+     * @param target the annotated type
+     * @return the member names
+     */
+    private static Set<String> instanceMemberNames(PsiClass target) {
+        Set<String> names = new HashSet<>();
+        collectInstanceMembers(target, true, names, new HashSet<>());
+        return names;
+    }
+
+    /**
+     * Adds a type's instance members to the set, then its supertypes'.
+     *
+     * @param type the type to read
+     * @param own whether it is the target itself, whose private members count too
+     * @param names the set being filled
+     * @param visited the types already read
+     */
+    private static void collectInstanceMembers(PsiClass type, boolean own, Set<String> names,
+                                               Set<PsiClass> visited) {
+        if (!visited.add(type)) return;
+        for (PsiField field : ownFields(type)) {
+            if (instanceMember(field, own)) names.add(field.getName());
+        }
+        for (PsiMethod method : GeneratedMemberFactory.ownMethods(type)) {
+            if (!method.isConstructor() && instanceMember(method, own)) names.add(method.getName());
+        }
+        PsiClass superClass = type.getSuperClass();
+        if (superClass != null) collectInstanceMembers(superClass, false, names, visited);
+        for (PsiClass implemented : type.getInterfaces()) collectInstanceMembers(implemented, false, names, visited);
+    }
+
+    /** Whether the member is one the target sees on an instance - its own, or an inherited non-private one. */
+    private static boolean instanceMember(PsiMember member, boolean own) {
+        if (member.hasModifierProperty(PsiModifier.STATIC)) return false;
+        return own || !member.hasModifierProperty(PsiModifier.PRIVATE);
+    }
+
+    /** The class's own fields, without anything a provider contributed. */
     private static List<PsiField> ownFields(PsiClass declared) {
         return declared instanceof PsiExtensibleClass extensible
             ? extensible.getOwnFields()

@@ -161,7 +161,31 @@ public final class DeclaredBuilderShape {
             expectedTypeParameters(role, targetTypeParameters, pair),
             expectedSuperType(role, ancestorName == null ? null : ancestorName + "." + builderName),
             expectedBuildReturnType(role, targetName, pair.get(0)),
-            expectedSuperTypeArguments(role, superArguments, targetName, builderName, pair));
+            expectedSuperTypeArguments(role, superArguments, targetName, builderName, pair),
+            acceptedBuildReturnTypes(role, targetName, pair.get(0)));
+    }
+
+    /**
+     * Names every type a declared build method may return on a role and still
+     * stand in for the generated one.
+     *
+     * <p>The one the role builds, and on an abstract root the root itself too:
+     * nothing above a root declares a build method it has to override, and the
+     * one each concrete link generates returns the link, a subtype of the root,
+     * so it overrides a root's build method returning the root. Below a root the
+     * build method a role declares overrides the self-typed one it inherits, and
+     * only the type that self type is bound to can.
+     *
+     * @param role the position the target holds in a builder chain
+     * @param targetType the erased target type
+     * @param builtTypeName the name a self-typed role binds to the type it builds
+     * @return the erased return types accepted, the one the role builds first
+     */
+    public static @NotNull List<String> acceptedBuildReturnTypes(@NotNull ChainRole role,
+                                                                 @NotNull String targetType,
+                                                                 @NotNull String builtTypeName) {
+        String built = expectedBuildReturnType(role, targetType, builtTypeName);
+        return role == ChainRole.ABSTRACT_ROOT ? List.of(built, targetType) : List.of(built);
     }
 
     /**
@@ -225,14 +249,14 @@ public final class DeclaredBuilderShape {
             }
         }
         // Asked only where a generated member depends on the answer. On a chain
-        // the build method a link inherits has to be the one its role declares,
-        // so a different return type cannot stand in for it. Standing alone
-        // nothing generated calls build() at all - the author's is simply kept
-        // and reported as kept - so rejecting one there refuses source javac
-        // accepts.
+        // the build method a link inherits has to be one every link's generated
+        // build() overrides, so a return type outside the accepted ones cannot
+        // stand in for it. Standing alone nothing generated calls build() at
+        // all - the author's is simply kept and reported as kept - so rejecting
+        // one there refuses source javac accepts.
         DeclaredBuildMethod build = facts.buildMethod();
         if (role.isChained() && build != null
-            && !expectation.buildReturnType().equals(build.returnType())) {
+            && !expectation.buildReturnTypes().contains(build.returnType())) {
             return DeclaredBuilderRejection.BUILD_RETURN_TYPE;
         }
         return null;
@@ -387,12 +411,15 @@ public final class DeclaredBuilderShape {
      * the generated setters can assign, and accepts the natural one, which then
      * fails on a generated line.
      *
-     * <p>Compared on the erased simple name of each rendered type, which is what
-     * both halves can read without a resolve. Two types sharing an erasure and
-     * differing in their arguments therefore pass - a missed diagnostic, never a
-     * false one, javac still refusing the assignment. Both types are rendered
-     * through {@link #typeText} before they are compared or printed, so the
-     * sentence does not depend on which model spelled them.
+     * <p>Compared on simple names at every level - the type's own and each of
+     * its type arguments', recursively - which is what both halves can read
+     * without a resolve. The field has to hold the storage type exactly, since
+     * the generated setter assigns into it and {@code build()} reads it back out,
+     * so an argument differing at any depth is reported, a wildcard among them.
+     * A raw spelling on either side is not, assigning and reading back with an
+     * unchecked warning rather than an error. Both types are rendered through
+     * {@link #typeText} before they are compared or printed, so the sentence does
+     * not depend on which model spelled them.
      *
      * @param declaredName the declared builder's simple name
      * @param slotName the slot's name, which the declared field shares
@@ -408,7 +435,7 @@ public final class DeclaredBuilderShape {
                                                 @NotNull SlotHolding holding) {
         String written = typeText(writtenType);
         String storage = typeText(storageType);
-        if (erasedName(written).equals(erasedName(storage))) return null;
+        if (sameSimpleType(written, storage)) return null;
         return "@ClassBuilder merged into '" + declaredName + "' finds '" + slotName
             + "' declared as " + written + ", and the slot it stands for is " + storage
             + " - the generated setter has nothing to assign it to" + holding.clause();
@@ -604,6 +631,84 @@ public final class DeclaredBuilderShape {
         String raw = (generics < 0 ? type : type.substring(0, generics)).trim();
         int dot = raw.lastIndexOf('.');
         return dot < 0 ? raw : raw.substring(dot + 1);
+    }
+
+    /**
+     * Whether two rendered types name the same type by simple names at every
+     * level.
+     *
+     * <p>The type itself, its array dimensions and each type argument are
+     * compared, an argument recursively and a wildcard by its keyword and bound.
+     * A side with no arguments at all is a raw spelling, which matches whatever
+     * the other side passes.
+     *
+     * @param written the one type, in the spelling {@link #typeText} gives it
+     * @param storage the other, in the same spelling
+     * @return whether the two are the same type as far as simple names can tell
+     */
+    private static boolean sameSimpleType(String written, String storage) {
+        boolean writtenWildcard = written.startsWith("?");
+        if (writtenWildcard || storage.startsWith("?")) {
+            return writtenWildcard && storage.startsWith("?")
+                && sameWildcard(written.substring(1).trim(), storage.substring(1).trim());
+        }
+        if (dimensions(written) != dimensions(storage)) return false;
+        String writtenType = withoutDimensions(written);
+        String storageType = withoutDimensions(storage);
+        if (!erasedName(writtenType).equals(erasedName(storageType))) return false;
+        if (writtenType.indexOf('<') < 0 || storageType.indexOf('<') < 0) return true;
+        List<String> writtenArguments = typeArguments(writtenType);
+        List<String> storageArguments = typeArguments(storageType);
+        if (writtenArguments.size() != storageArguments.size()) return false;
+        for (int i = 0; i < writtenArguments.size(); i++) {
+            if (!sameSimpleType(writtenArguments.get(i), storageArguments.get(i))) return false;
+        }
+        return true;
+    }
+
+    /** Whether two wildcard bounds, each read after its {@code ?}, are the same bound. */
+    private static boolean sameWildcard(String written, String storage) {
+        if (written.isEmpty() || storage.isEmpty()) return written.isEmpty() && storage.isEmpty();
+        int writtenSpace = written.indexOf(' ');
+        int storageSpace = storage.indexOf(' ');
+        if (writtenSpace < 0 || storageSpace < 0) return false;
+        return written.substring(0, writtenSpace).equals(storage.substring(0, storageSpace))
+            && sameSimpleType(written.substring(writtenSpace + 1).trim(),
+                storage.substring(storageSpace + 1).trim());
+    }
+
+    /** How many array dimensions trail the rendered type. */
+    private static int dimensions(String type) {
+        int count = 0;
+        for (String rest = type; rest.endsWith("[]"); rest = rest.substring(0, rest.length() - 2)) count++;
+        return count;
+    }
+
+    /** The rendered type with its trailing array dimensions removed. */
+    private static String withoutDimensions(String type) {
+        String rest = type;
+        while (rest.endsWith("[]")) rest = rest.substring(0, rest.length() - 2);
+        return rest;
+    }
+
+    /** The top-level type arguments of a rendered type, each trimmed, in order. */
+    private static List<String> typeArguments(String type) {
+        List<String> out = new ArrayList<>();
+        int open = type.indexOf('<');
+        int depth = 0;
+        int start = open + 1;
+        for (int i = open; i < type.length(); i++) {
+            char c = type.charAt(i);
+            if (c == '<') depth++;
+            if (c == '>') depth--;
+            boolean closes = c == '>' && depth == 0;
+            if (closes || (c == ',' && depth == 1)) {
+                out.add(type.substring(start, i).trim());
+                start = i + 1;
+            }
+            if (closes) break;
+        }
+        return out;
     }
 
     /**

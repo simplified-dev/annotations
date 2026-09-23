@@ -384,6 +384,153 @@ public class DeclaredBuilderMergeTest {
     }
 
     /**
+     * A declared field sharing its slot's erasure and differing in a type
+     * argument cannot take what the generated setter assigns either. The check
+     * compared erasures alone and passed it, so javac failed on the generated
+     * setter - reported on the class, a line the author never wrote - and the
+     * author's field carried nothing. {@code DeclaredBuilderShapeInspectionTest}
+     * reports the same sentence on the field.
+     */
+    @Test
+    public void merge_ontoASlotDifferingInATypeArgument_isRejected() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Tagged",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import java.util.List;",
+                "@ClassBuilder(validate = false)",
+                "public class Tagged {",
+                "    private List<String> tags;",
+                "    public List<String> getTags() { return tags; }",
+                "    public static class Builder {",
+                "        private List<Integer> tags;",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds 'tags' declared as "
+            + "List<Integer>, and the slot it stands for is java.util.List<java.lang.String> - the "
+            + "generated setter has nothing to assign it to");
+    }
+
+    /**
+     * A raw field takes the parameterised value the setter assigns and hands it
+     * back to {@code build()} with no more than an unchecked warning, so a field
+     * written without its slot's arguments is merged into as written.
+     */
+    @Test
+    public void merge_ontoARawSlotField_isAccepted() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Tagged",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import java.util.List;",
+                "@ClassBuilder(validate = false)",
+                "public class Tagged {",
+                "    private List<String> tags;",
+                "    public List<String> getTags() { return tags; }",
+                "    public static class Builder {",
+                "        @SuppressWarnings(\"rawtypes\") private List tags;",
+                "        public int count() { return this.tags == null ? 0 : this.tags.size(); }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseTagged",
+                "package demo;",
+                "public class UseTagged {",
+                "    public static Object go() {",
+                "        return Tagged.builder().tags(java.util.List.of(\"a\", \"b\")).count();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals(2, runGo(c, "demo.UseTagged"));
+    }
+
+    /**
+     * An initialised slot whose initializer reads nothing of the instance is
+     * held as declared, and its field is judged as any other slot's.
+     * {@code DeclaredBuilderShapeInspectionTest} asserts the same sentence at the
+     * same shape.
+     */
+    @Test
+    public void merge_ontoAMistypedSlotWithALiteralInitializer_isRejected() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Titled",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Titled {",
+                "    private String name = \"untitled\";",
+                "    public String getName() { return name; }",
+                "    public static class Builder {",
+                "        private int name;",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds 'name' declared as "
+            + "int, and the slot it stands for is java.lang.String - the generated setter has nothing to "
+            + "assign it to");
+    }
+
+    /**
+     * A slot whose retained initializer reads instance state is held as a
+     * supplier, so a declared field of the slot's declared type is refused in
+     * the sentence naming the supplier. {@code DeclaredBuilderShapeInspectionTest}
+     * asserts the same sentence at the same shape.
+     */
+    @Test
+    public void merge_ontoASlotWhoseInitializerReadsTheInstance_namesTheSupplier() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Labelled",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Labelled {",
+                "    private String name;",
+                "    private String label = name + \"!\";",
+                "    public String getLabel() { return label; }",
+                "    public static class Builder {",
+                "        private String label;",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds 'label' declared as "
+            + "String, and the slot it stands for is java.util.function.Supplier<java.lang.String> - the "
+            + "generated setter has nothing to assign it to. A slot whose retained initializer reads "
+            + "instance state is held in the builder as a supplier of its declared type");
+    }
+
+    /**
+     * The merged slot of an initializer that reads instance state is a
+     * supplier, and an author's verb assigning one compiles and wins over the
+     * default. {@code DeclaredBuilderMergeParityTest} resolves the same verb.
+     */
+    @Test
+    public void merge_aSlotWhoseInitializerReadsTheInstance_isASupplierToAnAuthorVerb() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Labelled",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Labelled {",
+                "    private String name;",
+                "    private String label = name + \"!\";",
+                "    public String getLabel() { return label; }",
+                "    public static class Builder {",
+                "        public Builder preset() { this.label = () -> \"preset\"; return this; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseLabelled",
+                "package demo;",
+                "public class UseLabelled {",
+                "    public static String go() {",
+                "        return Labelled.builder().name(\"n\").preset().build().getLabel() + \"/\"",
+                "            + Labelled.builder().name(\"n\").build().getLabel();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("preset/n!", runGo(c, "demo.UseLabelled"));
+    }
+
+    /**
      * Every entry point instantiates the builder, and a declared builder's
      * constructors are the author's throughout. One that declares constructors
      * and no nullary one leaves all three with nothing to call - which used to
@@ -1106,6 +1253,64 @@ public class DeclaredBuilderMergeTest {
     }
 
     /**
+     * An instance initializer that assigns nothing of the seed leaves the
+     * constructor as responsible for it as it was, and javac refuses that
+     * constructor. {@code DeclaredBuilderShapeInspectionTest} reports the same
+     * constructor.
+     */
+    @Test
+    public void merge_onASeededConstructor_leavingTheSeedUnassignedBesideAnInitializer_fails() {
+        JavaFileObject slip = JavaFileObjects.forSourceLines("demo.Slip",
+            "package demo;",
+            "import dev.simplified.annotations.BuilderSeed;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "public final class Slip {",
+            "    @ClassBuilder",
+            "    Slip(@BuilderSeed String origin, String item) { }",
+            "    public static class Builder {",
+            "        private int count;",
+            "        { count = 1; }",
+            "        public Builder(String origin) { }",
+            "    }",
+            "}");
+        Compilation c = compile(slip);
+        assertThat(c).failed();
+        assertThat(c).hadErrorCount(1);
+        assertThat(c).hadErrorContaining("variable origin might not have been initialized")
+            .inFile(slip).onLine(10);
+    }
+
+    /**
+     * An instance initializer that assigns the seed assigns it for every
+     * constructor, so a constructor that does not is accepted.
+     */
+    @Test
+    public void merge_onASeededConstructor_whoseInitializerAssignsTheSeed_compiles() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Slip",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderSeed;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public final class Slip {",
+                "    private final String item;",
+                "    @ClassBuilder",
+                "    Slip(@BuilderSeed String origin, String item) { this.item = origin + \":\" + item; }",
+                "    public String getItem() { return item; }",
+                "    public static class Builder {",
+                "        { origin = \"desk\"; }",
+                "        public Builder(String ignored) { }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseSlip",
+                "package demo;",
+                "public class UseSlip {",
+                "    public static String go() { return Slip.builder(\"x\").item(\"tea\").build().getItem(); }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("desk:tea", runGo(c, "demo.UseSlip"));
+    }
+
+    /**
      * A builder declaring no constructor has javac's default retyped rather than
      * replaced, and that constructor assigns nothing, so the seed is reported
      * unassigned on it. Before the retype javac reported the same failure as
@@ -1148,6 +1353,32 @@ public class DeclaredBuilderMergeTest {
         assertThat(c).hadErrorContaining("@ClassBuilder cannot merge into 'Builder' - an inner class "
                 + "captures the enclosing instance, so builder() has nothing to create it from")
             .inFile(hook).onLine(6);
+    }
+
+    /**
+     * The note for an entry point the declared builder cannot serve sits on the
+     * constructor the author annotated, where the editor's weak warning sits and
+     * every other diagnostic on that path is reported. It used to land on the
+     * enclosing type's declaration.
+     */
+    @Test
+    public void merge_onAConstructorTarget_notesTheSkippedEntryPointOnTheConstructor() {
+        JavaFileObject gate = JavaFileObjects.forSourceLines("demo.Gate",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "public final class Gate {",
+            "    private final String key;",
+            "    @ClassBuilder",
+            "    Gate(String key) { this.key = key; }",
+            "    public static class Builder {",
+            "        public Builder(String preset) { this.key = preset; }",
+            "    }",
+            "}");
+        Compilation c = compile(gate);
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("@ClassBuilder merged into 'Builder' but every constructor it "
+                + "declares takes parameters, so 'builder' was not added")
+            .inFile(gate).onLine(6);
     }
 
     // ------------------------------------------------------------------
@@ -1407,6 +1638,47 @@ public class DeclaredBuilderMergeTest {
             countDeclared(Class.forName("demo.Shape$Builder", false, loader), "build"));
         assertEquals("and one on the link's", 1,
             countDeclared(Class.forName("demo.Circle$Builder", false, loader), "build"));
+    }
+
+    /**
+     * A root's {@code build()} returning the root itself is one every link's
+     * generated {@code build()} overrides, each link being a subtype of the
+     * root, so it stands in for the generated one. The shape check refused it
+     * for not returning the self type, over a merge the hand-written equivalent
+     * of which compiles.
+     */
+    @Test
+    public void merge_onARootDeclaringBuildReturningTheRoot_isMergedInto() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public abstract class Shape {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "    public abstract static class Builder<T extends Shape, B extends Builder<T, B>> {",
+                "        public abstract Shape build();",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.Circle",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Circle extends Shape {",
+                "    private int radius;",
+                "    public int getRadius() { return radius; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseShape",
+                "package demo;",
+                "public class UseShape {",
+                "    public static String go() {",
+                "        Circle c = Circle.builder().name(\"a\").radius(2).build();",
+                "        return c.getName() + \"/\" + c.getRadius();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("a/2", runGo(c, "demo.UseShape"));
     }
 
     /**

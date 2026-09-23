@@ -79,7 +79,8 @@ public enum DeclaredBuilderRejection {
 
     /**
      * A build method the author wrote has to be the one the role's callers get,
-     * which means returning what the role's build method returns.
+     * which means returning what the role's build method returns - or, on an
+     * abstract root, the root itself, which every link's build method overrides.
      */
     BUILD_RETURN_TYPE("@ClassBuilder cannot merge into '%s' - its build method returns %s where "
         + "this role builds %s, so it cannot stand in for the generated one");

@@ -232,6 +232,49 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
     }
 
     /**
+     * A root's build method returning the root is merged into, and a link's
+     * builder chains the root's setters into its own {@code build()}, as the
+     * processor's twin runs it. The shape check refused the root, which took
+     * the root's merged members with it.
+     */
+    public void testAMergedRootWhoseBuildReturnsTheRoot_offersItsMembersToALink() {
+        myFixture.addFileToProject("demo/Shape.java",
+            """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Shape {
+                private String name;
+                public String getName() { return name; }
+                public abstract static class Builder<T extends Shape, B extends Builder<T, B>> {
+                    public abstract Shape build();
+                }
+            }
+            """);
+        myFixture.addFileToProject("demo/Circle.java",
+            """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Circle extends Shape {
+                private int radius;
+                public int getRadius() { return radius; }
+            }
+            """);
+        myFixture.configureByText("UseShape.java",
+            """
+            import demo.Circle;
+            public class UseShape {
+                String go() {
+                    Circle c = Circle.builder().name("a").radius(2).build();
+                    return c.getName() + "/" + c.getRadius();
+                }
+            }
+            """);
+        assertNoErrors();
+    }
+
+    /**
      * The chain's copy constructor takes the builder javac emits, which on a
      * root declaring its own is the author's class - so a hand-written subclass
      * passing that class to {@code super(b)} resolves.
@@ -381,6 +424,49 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
                         this.size = this.size + 1;
                         return this;
                     }
+                }
+            }
+            """);
+        assertNoErrors();
+    }
+
+    /**
+     * An initialised slot whose initializer reads nothing of the instance is
+     * merged as its declared type, and the processor's build runs the author's
+     * verb over it. The editor left every initialised slot out, so the verb was
+     * red over source that builds.
+     */
+    public void testMergedBuilder_anInitialisedSlotResolvesInsideAnAuthorVerb() {
+        myFixture.configureByText("Titled.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Titled {
+                private String name = "untitled";
+                public String getName() { return name; }
+                public static class Builder {
+                    public Builder shout() { this.name = this.name.toUpperCase(); return this; }
+                }
+            }
+            """);
+        assertNoErrors();
+    }
+
+    /**
+     * An initializer reading the instance holds its slot as a supplier, and an
+     * author's verb assigning one compiles, as the apt twin runs it.
+     */
+    public void testMergedBuilder_aSlotWhoseInitializerReadsTheInstanceIsASupplier() {
+        myFixture.configureByText("Labelled.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Labelled {
+                private String name;
+                private String label = name + "!";
+                public String getLabel() { return label; }
+                public static class Builder {
+                    public Builder preset() { this.label = () -> "preset"; return this; }
                 }
             }
             """);
@@ -610,6 +696,38 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
         PsiMethod[] constructors = nestedOf(((PsiJavaFile) file).getClasses()[0], "Builder").getConstructors();
         assertEquals("the author's alone: " + constructors.length, 1, constructors.length);
         assertTrue(constructors[0].hasModifierProperty(PsiModifier.PUBLIC));
+    }
+
+    /**
+     * {@code @NoArgsConstructor} written on the declared builder appends a
+     * constructor before the merge runs, and the processor retypes javac's
+     * default only beside no other constructor, so the builder javac emits has
+     * exactly one no-argument constructor. The editor read only the author's
+     * constructors and contributed the retyped one beside the annotation's.
+     */
+    public void testADeclaredBuilderWithANoArgsConstructorAnnotation_hasOneNullaryConstructor() {
+        addNoArgsConstructorAnnotation();
+        PsiFile file = myFixture.configureByText("Held.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.NoArgsConstructor;
+            @ClassBuilder
+            public class Held {
+                private String name;
+                public String getName() { return name; }
+                @NoArgsConstructor
+                public static class Builder { }
+                static String go() {
+                    return new Held.Builder().name("a").build().getName() + Held.builder().name("b").build().getName();
+                }
+            }
+            """);
+        List<String> nullary = new ArrayList<>();
+        for (PsiMethod ctor : nestedOf(((PsiJavaFile) file).getClasses()[0], "Builder").getConstructors()) {
+            if (ctor.getParameterList().isEmpty()) nullary.add(ctor.getModifierList().getText());
+        }
+        assertEquals("javac emits one public Builder(): " + nullary, 1, nullary.size());
+        assertNoErrors();
     }
 
     /** A constructor target's declared builder is retyped as a type target's is. */
@@ -992,6 +1110,21 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+
+    private void addNoArgsConstructorAnnotation() {
+        myFixture.addFileToProject("dev/simplified/annotations/NoArgsConstructor.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS)
+            @Target(ElementType.TYPE)
+            public @interface NoArgsConstructor {
+                AccessLevel access() default AccessLevel.PUBLIC;
+                boolean force() default false;
+                boolean emitGenerated() default true;
+            }
+            """);
+    }
 
     private void assertNoErrors() {
         List<String> errors = errors();

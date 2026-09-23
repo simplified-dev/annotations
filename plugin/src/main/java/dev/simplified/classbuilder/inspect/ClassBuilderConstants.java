@@ -15,6 +15,8 @@ import com.intellij.psi.PsiTypeElement;
 import com.intellij.psi.PsiTypeParameter;
 import com.intellij.psi.impl.source.PsiExtensibleClass;
 import dev.simplified.annotations.NamingStyle;
+import dev.simplified.args.apt.ArgsMode;
+import dev.simplified.args.inspect.ArgsConstants;
 import dev.simplified.classbuilder.apt.BuilderScheme;
 import dev.simplified.classbuilder.apt.ChainRole;
 import dev.simplified.classbuilder.apt.DeclaredBuildMethod;
@@ -118,6 +120,7 @@ public final class ClassBuilderConstants {
     public static final @NotNull String ATTR_BUILDER_CONSTRUCTOR_ACCESS = "builderConstructorAccess";
     public static final @NotNull String ATTR_FACTORY_METHOD = "factoryMethod";
     public static final @NotNull String ATTR_GENERATE_COPY_CONSTRUCTOR = "generateCopyConstructor";
+    public static final @NotNull String ATTR_RETAIN_INIT = "retainInit";
 
     /** Attribute names of {@code @SetterNames}, in declaration order. */
     public static final @NotNull String[] SETTER_ROLES =
@@ -414,8 +417,8 @@ public final class ClassBuilderConstants {
     }
 
     /**
-     * Whether the author wrote the declared builder a constructor, which is what
-     * decides whether {@code builderConstructorAccess} reaches it.
+     * Whether the author wrote the declared builder a constructor, beside which
+     * {@code builderConstructorAccess} changes nothing.
      *
      * <p>Read through {@link PsiExtensibleClass#getOwnMethods()}, so a light
      * constructor this plugin contributes is never taken for the author's.
@@ -425,6 +428,31 @@ public final class ClassBuilderConstants {
      */
     public static boolean declaresConstructor(@NotNull PsiClass declared) {
         return !declaredConstructorArities(declared).isEmpty();
+    }
+
+    /**
+     * Whether the declared builder is left with javac's default constructor and
+     * no other, which is the constructor the processor retypes to
+     * {@code builderConstructorAccess}.
+     *
+     * <p>The constructor pass runs before the merge, so a constructor annotation
+     * written on the declared builder has appended its constructor by the time
+     * the processor looks, and the retype declines beside that one as beside the
+     * author's. Here that constructor is the args provider's light one, which
+     * {@link #declaresConstructor} does not see, so the annotations are read as
+     * written; one at {@code AccessLevel.NONE} appends nothing.
+     *
+     * @param declared the builder the author wrote
+     * @return whether no constructor but javac's default is there to call
+     */
+    public static boolean keepsOnlyTheDefaultConstructor(@NotNull PsiClass declared) {
+        if (declaresConstructor(declared)) return false;
+        for (PsiAnnotation annotation : ArgsConstants.written(declared)) {
+            ArgsMode mode = ArgsConstants.modeOf(annotation);
+            if (mode == null || mode == ArgsMode.BUILDER) continue;
+            if (ArgsConstants.accessKeyword(annotation, mode) != null) return false;
+        }
+        return true;
     }
 
     // ------------------------------------------------------------------

@@ -14,18 +14,34 @@ import java.util.List;
  *
  * @param typeParameterNames the parameter names the declared builder has to re-declare, in order
  * @param superType the builder type the extends clause has to name, qualified by the ancestor's simple name, or null when the role requires none
- * @param buildReturnType the erased type the build method has to return
+ * @param buildReturnType the erased type the role's generated build method returns
  * @param superTypeArguments the erased simple names the extends clause has to pass, in order, empty when none are required
+ * @param buildReturnTypes every erased type a declared build method may return and still stand in for the generated one, {@code buildReturnType} first
  */
 public record RoleExpectation(List<String> typeParameterNames,
                               @Nullable String superType,
                               String buildReturnType,
-                              List<String> superTypeArguments) {
+                              List<String> superTypeArguments,
+                              List<String> buildReturnTypes) {
 
     /** Defensive copies of lists the caller still owns. */
     public RoleExpectation {
         typeParameterNames = List.copyOf(typeParameterNames);
         superTypeArguments = List.copyOf(superTypeArguments);
+        buildReturnTypes = List.copyOf(buildReturnTypes);
+    }
+
+    /**
+     * An expectation whose build method may return only the type the role builds.
+     *
+     * @param typeParameterNames the parameter names the declared builder has to re-declare, in order
+     * @param superType the builder type the extends clause has to name, or null when the role requires none
+     * @param buildReturnType the erased type the build method has to return
+     * @param superTypeArguments the erased simple names the extends clause has to pass, in order
+     */
+    public RoleExpectation(List<String> typeParameterNames, @Nullable String superType,
+                           String buildReturnType, List<String> superTypeArguments) {
+        this(typeParameterNames, superType, buildReturnType, superTypeArguments, List.of(buildReturnType));
     }
 
     /**
