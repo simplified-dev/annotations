@@ -607,6 +607,48 @@ public final class DeclaredBuilderShape {
         return "java.util.function.Supplier<" + (boxed == null ? type : boxed) + ">";
     }
 
+    /**
+     * Names the {@code java.util} interface a collected slot gathers into while
+     * its default reads instance state - {@link SlotHolding#COLLECTED_SCRATCH}.
+     *
+     * @param map whether the slot is a map
+     * @param set whether the slot is a set, and not a map
+     * @return the interface's qualified name
+     */
+    public static @NotNull String scratchContainerName(boolean map, boolean set) {
+        return map ? "java.util.Map" : set ? "java.util.Set" : "java.util.List";
+    }
+
+    /**
+     * Renders the scratch container a collected slot is held in when its
+     * {@link SlotHolding} is {@link SlotHolding#COLLECTED_SCRATCH}.
+     *
+     * <p>Typed off the arguments of the {@code java.util} supertype the slot's
+     * declared type was matched through, so a {@code LinkedHashMap<K, V>} slot
+     * is held as {@code Map<K, V>}; an argument neither model can read, a raw
+     * container's, is {@code Object}. Rendered through {@link #typeText}, so
+     * both halves print it in one spelling.
+     *
+     * @param map whether the slot is a map
+     * @param set whether the slot is a set, and not a map
+     * @param element a list's or set's element type, or {@code null} when unread
+     * @param key a map's key type, or {@code null} when unread
+     * @param value a map's value type, or {@code null} when unread
+     * @return the scratch container's type
+     */
+    public static @NotNull String scratchContainerOf(boolean map, boolean set, @Nullable String element,
+                                                     @Nullable String key, @Nullable String value) {
+        String arguments = map
+            ? argumentOrObject(key) + ", " + argumentOrObject(value)
+            : argumentOrObject(element);
+        return typeText(scratchContainerName(map, set) + "<" + arguments + ">");
+    }
+
+    /** A type argument as read, or {@code Object} where none could be. */
+    private static String argumentOrObject(@Nullable String argument) {
+        return argument == null ? "java.lang.Object" : argument;
+    }
+
     /** The qualified box of a primitive, or {@code null} when the type is not one. */
     private static @Nullable String boxOf(String type) {
         return switch (type) {
@@ -872,6 +914,24 @@ public final class DeclaredBuilderShape {
         return declaresConstructor
             ? appended + "and this constructor leaves it unassigned"
             : appended + "and '" + declaredName + "' declares no constructor to assign it";
+    }
+
+    /**
+     * Reports a constructor of a declared builder that assigns a seed an
+     * instance initializer may already have assigned.
+     *
+     * <p>The seed field is appended {@code final}, and the builder's instance
+     * initializers run before every constructor body, so javac refuses a
+     * constructor that assigns it again - the counterpart of
+     * {@link #unassignedSeed}, which reports the one that assigns it nowhere.
+     *
+     * @param declaredName the declared builder's simple name
+     * @param seedName the seeded slot's name, which the appended field carries
+     * @return the diagnostic text
+     */
+    public static @NotNull String reassignedSeed(@NotNull String declaredName, @NotNull String seedName) {
+        return "@ClassBuilder merged into '" + declaredName + "' appends the seed '" + seedName
+            + "' as a final field, and this constructor assigns it after an instance initializer already has";
     }
 
     /** Quoted names joined as a sentence reads them - {@code 'a', 'b' and 'c'}. */

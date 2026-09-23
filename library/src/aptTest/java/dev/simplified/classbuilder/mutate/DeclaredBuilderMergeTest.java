@@ -2844,4 +2844,245 @@ public class DeclaredBuilderMergeTest {
         assertEquals("sq02", runGo(c, "demo.UseShape"));
     }
 
+    /**
+     * A {@code @Collector} slot whose default reads the instance is held in a
+     * plain {@code java.util} scratch container, which an author's verb adds to
+     * before the constructor folds it onto the default.
+     * {@code DeclaredBuilderMergeParityTest} resolves the same verb against the
+     * same container.
+     */
+    @Test
+    public void merge_aCollectedSlotWhoseInitializerReadsTheInstance_isItsScratchContainerToAnAuthorVerb()
+        throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Tagged",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import dev.simplified.annotations.Collector;",
+                "import java.util.ArrayList;",
+                "import java.util.List;",
+                "@ClassBuilder(validate = false)",
+                "public class Tagged {",
+                "    private String name;",
+                "    @Collector private ArrayList<String> tags = new ArrayList<>(List.of(String.valueOf(name)));",
+                "    public List<String> getTags() { return tags; }",
+                "    public static class Builder {",
+                "        public Builder foo() { this.tags.add(\"foo\"); return this; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseTagged",
+                "package demo;",
+                "public class UseTagged {",
+                "    public static Object go() {",
+                "        return Tagged.builder().name(\"n\").foo().build().getTags().toString();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("[n, foo]", runGo(c, "demo.UseTagged"));
+    }
+
+    /**
+     * A declared field of the collected slot's declared type is not the scratch
+     * container the merge holds it in, and is refused in the sentence naming the
+     * container - a list's and a map's. {@code DeclaredBuilderShapeInspectionTest}
+     * asserts the same sentences.
+     */
+    @Test
+    public void merge_ontoACollectedSlotWhoseInitializerReadsTheInstance_namesTheScratchContainer() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Tagged",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import dev.simplified.annotations.Collector;",
+                "import java.util.ArrayList;",
+                "import java.util.LinkedHashMap;",
+                "import java.util.List;",
+                "@ClassBuilder(validate = false)",
+                "public class Tagged {",
+                "    private String name;",
+                "    @Collector private ArrayList<String> tags = new ArrayList<>(List.of(String.valueOf(name)));",
+                "    @Collector private LinkedHashMap<String, Integer> counts = seed(name);",
+                "    private static LinkedHashMap<String, Integer> seed(String name) {",
+                "        return new LinkedHashMap<>();",
+                "    }",
+                "    public static class Builder {",
+                "        private ArrayList<String> tags;",
+                "        private LinkedHashMap<String, Integer> counts;",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds 'tags' declared as "
+            + "ArrayList<String>, and the slot it stands for is java.util.List<java.lang.String> - the "
+            + "generated setter has nothing to assign it to");
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds 'counts' declared as "
+            + "LinkedHashMap<String, Integer>, and the slot it stands for is "
+            + "java.util.Map<java.lang.String, java.lang.Integer> - the generated setter has nothing to "
+            + "assign it to");
+    }
+
+    /**
+     * An initializer calling a getter {@code @Getter} generates reads the
+     * instance, so its slot is a supplier and a declared field of the slot's
+     * declared type is refused in the sentence naming it. The detector listed
+     * only the members the target declared before the accessor pass ran, so the
+     * default was hoisted into the static provider and javac refused the class
+     * with {@code non-static method getName() cannot be referenced from a static
+     * context}. {@code DeclaredBuilderShapeInspectionTest} asserts the same
+     * sentence.
+     */
+    @Test
+    public void merge_ontoASlotWhoseInitializerCallsAGeneratedGetter_namesTheSupplier() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Named",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import dev.simplified.annotations.Getter;",
+                "@ClassBuilder(validate = false)",
+                "@Getter",
+                "public class Named {",
+                "    private String name;",
+                "    private String label = getName() + \"!\";",
+                "    public static class Builder {",
+                "        private String label;",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorCount(1);
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds 'label' declared as "
+            + "String, and the slot it stands for is java.util.function.Supplier<java.lang.String> - the "
+            + "generated setter has nothing to assign it to. A slot whose retained initializer reads "
+            + "instance state is held in the builder as a supplier of its declared type");
+    }
+
+    /**
+     * A setter {@code @Setter} generates and a getter {@code @Lazy} generates
+     * are instance methods too, each named through the scheme its annotation
+     * writes, so an initializer calling either holds its slot as a supplier. The
+     * detector listed neither, and javac refused each hoisted default with
+     * {@code non-static method ... cannot be referenced from a static context}.
+     * {@code DeclaredBuilderShapeInspectionTest} asserts the same sentences.
+     */
+    @Test
+    public void merge_ontoSlotsWhoseInitializersCallAGeneratedSetterOrLazyGetter_nameTheSupplier() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Named",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import dev.simplified.annotations.Lazy;",
+                "import dev.simplified.annotations.Setter;",
+                "@ClassBuilder(validate = false)",
+                "public class Named {",
+                "    @Setter private String name;",
+                "    @Lazy(name = \"load{}\") private String heavy = compute();",
+                "    private Runnable reset = () -> setName(\"x\");",
+                "    private String label = loadHeavy() + \"!\";",
+                "    private static String compute() { return \"h\"; }",
+                "    public static class Builder {",
+                "        private Runnable reset;",
+                "        private String label;",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorCount(2);
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds 'reset' declared as "
+            + "Runnable, and the slot it stands for is java.util.function.Supplier<java.lang.Runnable> - the "
+            + "generated setter has nothing to assign it to. A slot whose retained initializer reads "
+            + "instance state is held in the builder as a supplier of its declared type");
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds 'label' declared as "
+            + "String, and the slot it stands for is java.util.function.Supplier<java.lang.String> - the "
+            + "generated setter has nothing to assign it to. A slot whose retained initializer reads "
+            + "instance state is held in the builder as a supplier of its declared type");
+    }
+
+    /**
+     * The same slot is a supplier to an author's verb, and an unset one takes
+     * the default the generated getter computes on the built instance.
+     * {@code DeclaredBuilderMergeParityTest} resolves the same verb.
+     */
+    @Test
+    public void merge_aSlotWhoseInitializerCallsAGeneratedGetter_isASupplierToAnAuthorVerb() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Named",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import dev.simplified.annotations.Getter;",
+                "@ClassBuilder(validate = false)",
+                "@Getter",
+                "public class Named {",
+                "    private String name;",
+                "    private String label = getName() + \"!\";",
+                "    public static class Builder {",
+                "        public Builder preset() { this.label = () -> \"preset\"; return this; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseNamed",
+                "package demo;",
+                "public class UseNamed {",
+                "    public static String go() {",
+                "        return Named.builder().name(\"n\").preset().build().getLabel() + \"/\"",
+                "            + Named.builder().name(\"n\").build().getLabel();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("preset/n!", runGo(c, "demo.UseNamed"));
+    }
+
+    /**
+     * A seed an instance initializer assigns cannot be assigned again by the
+     * author's constructor, the merge appending it {@code final}, and javac
+     * refuses that constructor. {@code DeclaredBuilderShapeInspectionTest}
+     * reports the same constructor.
+     */
+    @Test
+    public void merge_onASeededConstructor_whoseInitializerAndConstructorBothAssignTheSeed_fails() {
+        JavaFileObject slip = JavaFileObjects.forSourceLines("demo.Slip",
+            "package demo;",
+            "import dev.simplified.annotations.BuilderSeed;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "public final class Slip {",
+            "    private final String item;",
+            "    @ClassBuilder",
+            "    Slip(@BuilderSeed String origin, String item) { this.item = origin + \":\" + item; }",
+            "    public String getItem() { return item; }",
+            "    public static class Builder {",
+            "        { origin = \"desk\"; }",
+            "        public Builder(String origin) { this.origin = origin; }",
+            "    }",
+            "}");
+        Compilation c = compile(slip);
+        assertThat(c).failed();
+        assertThat(c).hadErrorCount(1);
+        assertThat(c).hadErrorContaining("variable origin might already have been assigned")
+            .inFile(slip).onLine(11);
+    }
+
+    /**
+     * A varargs parameter's merged slot is an array field, so an author's verb
+     * reads its length and assigns it to an array local.
+     * {@code DeclaredBuilderMergeParityTest} resolves the same verb against the
+     * same array type.
+     */
+    @Test
+    public void merge_aVarargsParameterSlot_isAnArrayToAnAuthorVerb() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Tags",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public final class Tags {",
+                "    private final String[] values;",
+                "    @ClassBuilder",
+                "    Tags(String... values) { this.values = values; }",
+                "    public static final class Builder {",
+                "        public int size() { String[] copy = this.values; return copy.length; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseTags",
+                "package demo;",
+                "public class UseTags {",
+                "    public static int go() { return Tags.builder().values(\"a\", \"b\").size(); }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals(2, runGo(c, "demo.UseTags"));
+    }
+
 }

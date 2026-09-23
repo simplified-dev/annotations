@@ -1,5 +1,6 @@
 package dev.simplified.classbuilder.apt;
 
+import dev.simplified.annotations.NamingStyle;
 import org.junit.Test;
 
 import java.util.List;
@@ -70,6 +71,41 @@ public class InstanceDefaultsTest {
         assertEquals(SlotHolding.INSTANCE_DEFAULT, SlotHolding.of(false, false, true));
         assertEquals(SlotHolding.DECLARED, SlotHolding.of(false, true, false));
         assertEquals(SlotHolding.DECLARED, SlotHolding.of(false, false, false));
+    }
+
+    /**
+     * The accessors another pass generates from a field's written annotations
+     * are instance methods of the target, spelled by the scheme the annotation
+     * writes. Neither half could list them: the processor reads the target
+     * before the accessor and {@code @Lazy} passes append anything, and the
+     * editor reads each type's own declarations. An initializer calling one was
+     * hoisted into the static provider, and javac refused it there.
+     */
+    @Test
+    public void generatedAccessorNames_areTheWrittenAnnotationsSchemesNames() {
+        AccessorScheme simplified = AccessorScheme.of(NamingStyle.SIMPLIFIED);
+        assertEquals(List.of("getName"),
+            InstanceDefaults.generatedAccessorNames("name", false, false, simplified, null, null));
+        assertEquals(List.of("setName"),
+            InstanceDefaults.generatedAccessorNames("name", false, false, null, simplified, null));
+        assertEquals("a boolean's read accessor, and a lazy getter",
+            List.of("isActive", "setActive", "isActive"),
+            InstanceDefaults.generatedAccessorNames("active", true, false, simplified, simplified, simplified));
+        assertEquals("a written name pattern", List.of("fetchName"),
+            InstanceDefaults.generatedAccessorNames("name", false, false,
+                AccessorScheme.resolve(NamingStyle.SIMPLIFIED, "fetch{}"), null, null));
+        assertEquals("a fluent scheme", List.of("name", "name"),
+            InstanceDefaults.generatedAccessorNames("name", false, false,
+                AccessorScheme.of(NamingStyle.FLUENT), AccessorScheme.of(NamingStyle.FLUENT), null));
+    }
+
+    /** A static field's accessor is static, and a field no annotation reaches has none. */
+    @Test
+    public void generatedAccessorNames_areNoneOnAStaticOrUnannotatedField() {
+        AccessorScheme simplified = AccessorScheme.of(NamingStyle.SIMPLIFIED);
+        assertEquals(List.of(),
+            InstanceDefaults.generatedAccessorNames("name", false, true, simplified, simplified, simplified));
+        assertEquals(List.of(), InstanceDefaults.generatedAccessorNames("name", false, false, null, null, null));
     }
 
 }

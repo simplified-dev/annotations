@@ -50,7 +50,7 @@ import java.util.Objects;
  * is reported on that field's type, again in the processor's sentence. The slot's storage is classified by
  * {@link MergedSlotStorage}, as the processor classifies it - an initialised
  * slot included, held as a supplier where its kept initializer reads the
- * instance.
+ * instance, and a collected one in its {@code java.util} scratch container.
  *
  * <p>On a class or record target and on a constructor or factory target, a
  * {@code builderConstructorAccess} written on the annotation while the declared
@@ -65,9 +65,10 @@ import java.util.Objects;
  * <p>On a constructor or factory target, a seed the merge appends as a
  * {@code final} field and a constructor of the declared builder leaves
  * unassigned is reported on that constructor, or on the builder's name when it
- * declares none, unless an instance initializer assigns it. javac refuses both
- * shapes in its own words; the platform's definite-assignment check reads only
- * fields written in source.
+ * declares none, unless an instance initializer assigns it; and a constructor
+ * assigning it where an instance initializer may already have is reported on
+ * that constructor. javac refuses each shape in its own words; the platform's
+ * definite-assignment check reads only fields written in source.
  */
 public class DeclaredBuilderShapeInspection extends LocalInspectionTool {
 
@@ -150,12 +151,14 @@ public class DeclaredBuilderShapeInspection extends LocalInspectionTool {
                 }
 
                 // A seed is appended final and only the author's constructors can
-                // assign it. javac refuses one that does not, and the platform's
-                // own check never sees a field it did not read from source.
+                // assign it, each exactly once. javac refuses one that does not
+                // and one that assigns it after an instance initializer, and the
+                // platform's own check never sees a field it did not read from
+                // source.
                 if (member == null) return;
-                for (MergedSlotStorage.UnassignedSeed unassigned
-                    : MergedSlotStorage.unassignedSeeds(member, declared)) {
-                    holder.registerProblem(unassigned.anchor(), unassigned.message(),
+                for (MergedSlotStorage.MisassignedSeed misassigned
+                    : MergedSlotStorage.misassignedSeeds(member, declared)) {
+                    holder.registerProblem(misassigned.anchor(), misassigned.message(),
                         ProblemHighlightType.GENERIC_ERROR);
                 }
             }

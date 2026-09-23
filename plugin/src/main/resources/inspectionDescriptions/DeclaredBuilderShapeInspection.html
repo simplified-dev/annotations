@@ -76,12 +76,16 @@ field written C-style, <code>String tags[]</code>, is read with its brackets,
 and a varargs parameter's slot is the array it is.
 That is the field's declared type, except for a
 <code>@Lazy</code> field and a field whose kept initializer reads the instance -
-names <code>this</code>, <code>super</code> or an instance member - which the
-builder holds as a <code>Supplier</code> of it: so <code>private String
-note;</code> beside a <code>@Lazy String note</code> is reported, and
-<code>private Supplier&lt;String&gt; note;</code> is not. A <code>@Collector</code>
-slot whose initializer reads the instance is held in a scratch container and is
-not checked here. A field under a slot's name declared <code>final</code> is
+names <code>this</code>, <code>super</code> or an instance member, a getter or
+setter <code>@Getter</code>, <code>@Setter</code> or <code>@Lazy</code>
+generates among them - which the builder holds as a <code>Supplier</code> of it:
+so <code>private String note;</code> beside a <code>@Lazy String note</code> is
+reported, and <code>private Supplier&lt;String&gt; note;</code> is not. A
+<code>@Collector</code> slot whose initializer reads the instance is held in a
+plain <code>java.util</code> container of its elements - <code>List</code>,
+<code>Set</code> or <code>Map</code> - so <code>private List&lt;String&gt;
+tags;</code> holds an <code>ArrayList&lt;String&gt; tags</code> slot and
+<code>private ArrayList&lt;String&gt; tags;</code> is reported. A field under a slot's name declared <code>final</code> is
 reported whatever its type, the generated setter assigning it; a
 <code>@BuilderSeed</code> is the exception, appended <code>final</code> itself.
 </p>
@@ -92,7 +96,9 @@ parameter is appended to the declared builder as a <code>final</code> field,
 and only the author's constructors can assign it. A constructor that leaves it
 unassigned is reported, as is a builder declaring no constructor at all -
 javac refuses both - unless an instance initializer of the builder assigns
-it, which assigns it for every constructor.
+it, which assigns it for every constructor. A constructor that assigns it
+where an instance initializer may already have is reported too, the field
+being <code>final</code>.
 </p>
 
 <p>

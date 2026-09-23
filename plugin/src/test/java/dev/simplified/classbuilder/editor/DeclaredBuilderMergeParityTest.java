@@ -471,6 +471,87 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
     }
 
     /**
+     * A {@code @Collector} slot whose default reads the instance is held in a
+     * plain {@code java.util} scratch container, which the apt twin's author
+     * verb adds to. The editor contributed no field for it, so the verb was red
+     * over source that builds.
+     */
+    public void testMergedBuilder_aCollectedSlotWhoseInitializerReadsTheInstanceIsItsScratchContainer() {
+        addCollectorAnnotation();
+        PsiFile file = myFixture.configureByText("Tagged.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Collector;
+            import java.util.ArrayList;
+            import java.util.List;
+            @ClassBuilder
+            public class Tagged {
+                private String name;
+                @Collector private ArrayList<String> tags = new ArrayList<>(List.of(String.valueOf(name)));
+                public List<String> getTags() { return tags; }
+                public static class Builder {
+                    public Builder foo() { this.tags.add("foo"); return this; }
+                }
+            }
+            """);
+        assertNoErrors();
+        PsiField tags = nestedOf(((PsiJavaFile) file).getClasses()[0], "Builder").findFieldByName("tags", false);
+        assertNotNull("the scratch slot is contributed", tags);
+        assertEquals("held in the java.util container, not the declared type",
+            "java.util.List<java.lang.String>", tags.getType().getCanonicalText());
+    }
+
+    /**
+     * An initializer calling a getter {@code @Getter} generates reads the
+     * instance, so its slot is a supplier, as the apt twin runs it. Both halves
+     * held it as declared, and javac refused the class for the static provider
+     * the default was hoisted into while the editor was green.
+     */
+    public void testMergedBuilder_aSlotWhoseInitializerCallsAGeneratedGetterIsASupplier() {
+        addGetterAnnotation();
+        myFixture.configureByText("Named.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Getter;
+            @ClassBuilder
+            @Getter
+            public class Named {
+                private String name;
+                private String label = getName() + "!";
+                public static class Builder {
+                    public Builder preset() { this.label = () -> "preset"; return this; }
+                }
+            }
+            """);
+        assertNoErrors();
+    }
+
+    /**
+     * A varargs parameter's merged slot is the array javac declares, so an
+     * author's verb reads its length and assigns it to an array local, as the
+     * apt twin runs it. The field was contributed with the parameter's ellipsis
+     * type.
+     */
+    public void testMergeOnAVarargsParameter_theSlotFieldIsAnArray() {
+        PsiFile file = myFixture.configureByText("Tags.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Tags {
+                private final String[] values;
+                @ClassBuilder
+                Tags(String... values) { this.values = values; }
+                public static final class Builder {
+                    public int size() { String[] copy = this.values; return copy.length; }
+                }
+            }
+            """);
+        assertNoErrors();
+        PsiField values = nestedOf(((PsiJavaFile) file).getClasses()[0], "Builder").findFieldByName("values", false);
+        assertNotNull("the slot is contributed", values);
+        assertEquals("the array javac declares", "String[]", values.getType().getPresentableText());
+    }
+
+    /**
      * The processor skips all three entry points where the declared builder has
      * constructors and no nullary one, every entry point instantiating it. An
      * editor still offering them would be the same divergence in a narrower
@@ -1419,6 +1500,38 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
                 AccessLevel access() default AccessLevel.PUBLIC;
                 boolean force() default false;
                 boolean emitGenerated() default true;
+            }
+            """);
+    }
+
+    private void addCollectorAnnotation() {
+        myFixture.addFileToProject("dev/simplified/annotations/Collector.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS)
+            @Target({ElementType.FIELD, ElementType.PARAMETER})
+            public @interface Collector {
+                String singularMethodName() default "";
+                boolean singular() default false;
+                boolean clearable() default false;
+                boolean compute() default false;
+            }
+            """);
+    }
+
+    private void addGetterAnnotation() {
+        myFixture.addFileToProject("dev/simplified/annotations/Getter.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS)
+            @Target({ElementType.TYPE, ElementType.FIELD})
+            public @interface Getter {
+                AccessLevel value() default AccessLevel.PUBLIC;
+                NamingStyle style() default NamingStyle.SIMPLIFIED;
+                String name() default "";
+                String[] exclude() default {};
             }
             """);
     }

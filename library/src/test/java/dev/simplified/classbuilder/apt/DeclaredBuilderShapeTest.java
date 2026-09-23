@@ -693,4 +693,40 @@ public class DeclaredBuilderShapeTest {
             DeclaredBuilderShape.namesOwnBuilder("Builder[]", "Link", "Builder"));
     }
 
+    /**
+     * A collected slot whose default reads the instance is held in a plain
+     * {@code java.util} container of the matched supertype's arguments, in
+     * the one spelling both halves print. The editor had no rendering of it, so
+     * it neither contributed the slot nor judged a declared field against it.
+     */
+    @Test
+    public void scratchContainerOf_isTheJavaUtilInterfaceOfTheMatchedArguments() {
+        assertEquals("java.util.List<java.lang.String>",
+            DeclaredBuilderShape.scratchContainerOf(false, false, "java.lang.String", null, null));
+        assertEquals("java.util.Set<java.lang.String>",
+            DeclaredBuilderShape.scratchContainerOf(false, true, "java.lang.String", null, null));
+        assertEquals("either model's argument separator",
+            "java.util.Map<java.lang.String, java.util.List<java.lang.Integer>>",
+            DeclaredBuilderShape.scratchContainerOf(true, false, null, "java.lang.String",
+                "java.util.List<java.lang.Integer>"));
+        assertEquals("a raw container's arguments are Object",
+            "java.util.Map<java.lang.Object, java.lang.Object>",
+            DeclaredBuilderShape.scratchContainerOf(true, false, null, null, null));
+        assertEquals("java.util.Map", DeclaredBuilderShape.scratchContainerName(true, false));
+        assertEquals("java.util.Set", DeclaredBuilderShape.scratchContainerName(false, true));
+        assertEquals("java.util.List", DeclaredBuilderShape.scratchContainerName(false, false));
+    }
+
+    /**
+     * A seed an instance initializer assigns cannot be assigned again by a
+     * constructor, the field being {@code final}; javac refuses the
+     * constructor, and the editor reports it in this sentence.
+     */
+    @Test
+    public void reassignedSeed_namesTheSeedAndTheInitializer() {
+        assertEquals("@ClassBuilder merged into 'Builder' appends the seed 'origin' as a final field, "
+                + "and this constructor assigns it after an instance initializer already has",
+            DeclaredBuilderShape.reassignedSeed("Builder", "origin"));
+    }
+
 }

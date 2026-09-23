@@ -71,7 +71,10 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   varargs parameter's slot is the array it is, so a `String[]` field holds a `String...` slot. The editor
   classifies an initialised slot as the build does -
   as a supplier where its kept initializer names `this`, `super` or an instance member, from one rule
-  both halves ask of the names the initializer spells - and judges its field the same way.
+  both halves ask of the names the initializer spells - and judges its field the same way. A
+  `@Collector` slot whose default reads the instance is judged against the plain `java.util` `List`,
+  `Set` or `Map` it gathers into, rendered by both halves through one function, so an
+  `ArrayList<String>` field over such a slot is refused in the editor as the build refuses it.
 
 - **A chain whose ancestor declares a builder the extends clause cannot name is refused rather than
   emitted.** A link's builder extends the ancestor's and passes it the ancestor's arguments plus the
@@ -112,10 +115,10 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   contributed none, so an author's own verb inside that class referencing a slot was red over source
   that builds - which lands on exactly the hand-written verb the merge exists to allow. Each slot is
   contributed as the type the builder holds it in, an initialised one included: a supplier where its
-  kept initializer reads the instance, its declared type otherwise. The one shape left out is a
-  `@Collector` slot whose default reads the instance, held in a scratch container the editor does not
-  render. Renaming a slot now follows through to the setters contributed there, which it silently
-  skipped.
+  kept initializer reads the instance, the plain `java.util` container a `@Collector` slot whose
+  default reads the instance gathers into, and its declared type otherwise - a varargs parameter's
+  as the array javac declares rather than its ellipsis type. Renaming a slot now follows through to
+  the setters contributed there, which it silently skipped.
 
 - **The entry points a merged builder has no constructor for are skipped with a note.** Every entry
   point instantiates the builder with one argument per `@BuilderSeed`, and a declared builder's
@@ -167,6 +170,16 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   a written annotation generates. Each target and each annotated constructor or factory is now
   mutated once.
 
+- **An initializer calling a generated accessor is computed on the instance.** A retained default
+  reading instance state is computed where the built instance exists, and whether it does was asked
+  of the members the target declared before the accessor and `@Lazy` passes ran - so
+  `String label = getName() + "!"` beside a `@Getter`, or a default calling a `@Setter`'s setter or a
+  `@Lazy` field's getter, was hoisted into the static provider evaluated when the builder is created
+  and failed with `non-static method getName() cannot be referenced from a static context` on the
+  class line, while the editor showed nothing. Both halves now name the accessors those annotations
+  generate, through the scheme each annotation writes, and count them as instance members; the slot
+  is then held as a supplier, in the build and in the editor alike.
+
 - **The expansion stopped documenting a chain's members as each other.** A self-typed builder's
   setters and its self accessor return the builder's own self type rather than its name, so the owner
   test answered no for every member of every chain and each fell through to a sentence written for
@@ -203,7 +216,8 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   - `abstract` where the entry points instantiate it - drop `abstract`;
   - a field sharing a slot's name whose type the generated setter cannot assign, type arguments
     included - give it the slot's type, or `Supplier<T>` for a `@Lazy` slot or one whose kept
-    initializer reads the instance, or rename it;
+    initializer reads the instance, or the `java.util` `List`, `Set` or `Map` of its elements for a
+    `@Collector` slot whose default reads the instance, or rename it;
   - a field sharing a slot's name declared `final` - drop `final`, the generated setter assigning it;
   - on a chain root, a builder that is not abstract or not self-typed - declare it
     `abstract static class Builder<T extends Target, B extends Builder<T, B>>`;
@@ -213,7 +227,8 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   - on a chain, a build method returning something other than the built type - return that type, or
     on a root the root itself;
   - on a constructor or factory target, a `@BuilderSeed` a constructor of the builder leaves
-    unassigned - assign it there, the merge appending it as a `final` field.
+    unassigned, or assigns where an instance initializer may already have - assign it in exactly one
+    of the two, the merge appending it as a `final` field.
 
   A declared builder whose constructors all take parameters keeps its setters and loses only the
   entry points, with a note; declaring a no-argument constructor restores them. So does one whose
@@ -251,7 +266,9 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   method of the seed count wins, and none is offered or emitted beside it. A seed is appended as a
   `final` field, and the editor reports a constructor of the builder that leaves it unassigned, or
   the builder's name when it declares none, where javac refuses the same declaration - an instance
-  initializer assigning the seed assigning it for every constructor, as javac finds. The editor
+  initializer assigning the seed assigning it for every constructor, as javac finds - and a
+  constructor assigning the seed where an instance initializer may already have, which javac
+  refuses as `variable ... might already have been assigned`. The editor
   judges only the annotation the processor builds from: an instance or `void` method, or a member
   beside an annotated type, is refused by the build and gets none of the merge's diagnostics.
 

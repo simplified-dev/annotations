@@ -234,6 +234,37 @@ public class RetainedInitExpressionTest {
         assertEquals("Expr", buildAndGet(c, "getF"));
     }
 
+    /**
+     * A getter {@code @Getter} generates is an instance method of the target as
+     * much as a written one, but the accessor pass runs after the builder's and
+     * the detector never listed it, so the initializer was hoisted into the
+     * static provider and javac refused it there with {@code non-static method
+     * getBase() cannot be referenced from a static context} while the editor
+     * was green.
+     */
+    @Test
+    public void initializerCallingAGeneratedGetter_isComputedOnTheInstance() throws Exception {
+        Compilation c = compile(
+            "  @dev.simplified.annotations.Getter String base = \"b\";",
+            "  String f = getBase() + \"x\";",
+            "  public String f() { return f; }");
+        assertThat(c).succeeded();
+
+        assertEquals("bx", buildAndGet(c, "f"));
+    }
+
+    /** A getter spelled by a written name pattern is named through the same scheme. */
+    @Test
+    public void initializerCallingAGetterByItsWrittenPattern_isComputedOnTheInstance() throws Exception {
+        Compilation c = compile(
+            "  @dev.simplified.annotations.Getter(name = \"read{}\") String base = \"b\";",
+            "  String f = readBase() + \"x\";",
+            "  public String f() { return f; }");
+        assertThat(c).succeeded();
+
+        assertEquals("bx", buildAndGet(c, "f"));
+    }
+
     /** An explicit setter still beats a constructor-computed default. */
     @Test
     public void instanceDefault_isOverriddenByTheSetter() throws Exception {

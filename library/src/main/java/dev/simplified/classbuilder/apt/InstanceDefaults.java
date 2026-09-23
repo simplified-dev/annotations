@@ -3,6 +3,8 @@ package dev.simplified.classbuilder.apt;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -64,7 +66,8 @@ public final class InstanceDefaults {
      *
      * @param spelled every name the initializer spells without a qualifier, with {@code this} once
      *     more for each qualified {@code Outer.this}
-     * @param instanceMembers the names of every non-static field and method visible on the target
+     * @param instanceMembers the names of every non-static field and method visible on the target,
+     *     the accessors {@link #generatedAccessorNames} lists included
      * @return whether the default has to be computed on the instance
      */
     public static boolean readsInstanceState(@NotNull Iterable<String> spelled,
@@ -73,6 +76,46 @@ public final class InstanceDefaults {
             if (name.equals("this") || name.equals("super") || instanceMembers.contains(name)) return true;
         }
         return false;
+    }
+
+    /**
+     * Names the instance accessors another pass generates on a type from one
+     * field's written annotations, which belong among the instance members
+     * {@link #readsInstanceState} is asked of.
+     *
+     * <p>Neither half can list them off its model: the processor reads the
+     * target before the accessor and {@code @Lazy} passes append anything, and
+     * the editor reads each type's own declarations, which leave out every
+     * member a provider contributes. So both derive them from the annotations as
+     * written, each named through the scheme the annotation writes - a
+     * {@code @Getter}'s read accessor, a {@code @Setter}'s write accessor, and a
+     * {@code @Lazy} field's getter. Over-eager in the way the rule already is:
+     * an access level of {@code NONE}, a {@code final} field's setter or an
+     * excluded field still lists its name, which costs a slot computed on the
+     * instance and nothing else. A static field's accessors are static, and are
+     * none of them.
+     *
+     * @param fieldName the field's name
+     * @param isBoolean whether the field's declared type is {@code boolean}
+     * @param isStatic whether the field is {@code static}
+     * @param getter the scheme of the {@code @Getter} written on the field, or failing that on
+     *     its type, or {@code null} when neither carries one
+     * @param setter the same for {@code @Setter}
+     * @param lazy the scheme of the {@code @Lazy} written on the field, or {@code null} when it
+     *     carries none
+     * @return the generated instance accessors' names, getter then setter then lazy getter
+     */
+    public static @NotNull List<String> generatedAccessorNames(@NotNull String fieldName, boolean isBoolean,
+                                                               boolean isStatic,
+                                                               @Nullable AccessorScheme getter,
+                                                               @Nullable AccessorScheme setter,
+                                                               @Nullable AccessorScheme lazy) {
+        if (isStatic) return List.of();
+        List<String> out = new ArrayList<>(3);
+        if (getter != null) out.add(getter.readName(fieldName, isBoolean));
+        if (setter != null) out.add(setter.writeName(fieldName, isBoolean));
+        if (lazy != null) out.add(lazy.readName(fieldName, isBoolean));
+        return out;
     }
 
 }

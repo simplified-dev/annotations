@@ -11,6 +11,7 @@ import com.sun.tools.javac.util.Names;
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.BuildFlag;
 import dev.simplified.classbuilder.apt.BuilderConfig;
+import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.shared.javac.ContractAnnotations;
 import dev.simplified.shared.javac.GeneratedAnnotations;
@@ -153,17 +154,20 @@ public final class MutationContext {
      * the initializer returns rather than something reconstructed from the
      * declared type.
      *
+     * <p>The interface is {@link DeclaredBuilderShape#scratchContainerName},
+     * which the editor asks too when it renders the slot.
+     *
      * @param field the collected field
      * @return the scratch slot's declared type
      */
     public JCExpression collectedSlotType(FieldSpec field) {
         TreeMaker make = make();
+        String fqn = DeclaredBuilderShape.scratchContainerName(field.isMap, field.isSet);
         if (field.isMap) {
-            return make.TypeApply(types.qualIdent("java.util.Map"),
+            return make.TypeApply(types.qualIdent(fqn),
                 com.sun.tools.javac.util.List.of(
                     types.parseType(field.mapKey), types.parseType(field.mapValue)));
         }
-        String fqn = field.isSet ? "java.util.Set" : "java.util.List";
         return make.TypeApply(types.qualIdent(fqn),
             com.sun.tools.javac.util.List.of(types.parseType(field.collectionElement)));
     }

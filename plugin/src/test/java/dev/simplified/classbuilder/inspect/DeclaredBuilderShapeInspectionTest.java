@@ -422,6 +422,165 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
     }
 
     /**
+     * A {@code @Collector} slot whose default reads the instance is held in a
+     * plain {@code java.util} scratch container, so a field of the slot's
+     * declared type is refused - the list's and the map's sentences the apt twin
+     * asserts. Such a slot was left unjudged.
+     */
+    public void testAMistypedCollectedSlotWhoseInitializerReadsTheInstance_namesTheScratchContainer() {
+        myFixture.addFileToProject("dev/simplified/annotations/Collector.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS)
+            @Target({ElementType.FIELD, ElementType.PARAMETER})
+            public @interface Collector { }
+            """);
+        myFixture.configureByText("Tagged.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Collector;
+            import java.util.ArrayList;
+            import java.util.LinkedHashMap;
+            import java.util.List;
+            @ClassBuilder
+            public class Tagged {
+                private String name;
+                @Collector private ArrayList<String> tags = new ArrayList<>(List.of(String.valueOf(name)));
+                @Collector private LinkedHashMap<String, Integer> counts = seed(name);
+                private static LinkedHashMap<String, Integer> seed(String name) {
+                    return new LinkedHashMap<>();
+                }
+                public static class Builder {
+                    private ArrayList<String> tags;
+                    private LinkedHashMap<String, Integer> counts;
+                }
+            }
+            """);
+        assertEquals("the shared wording",
+            List.of("@ClassBuilder merged into 'Builder' finds 'tags' declared as ArrayList<String>, and the "
+                    + "slot it stands for is java.util.List<java.lang.String> - the generated setter has "
+                    + "nothing to assign it to",
+                "@ClassBuilder merged into 'Builder' finds 'counts' declared as LinkedHashMap<String, "
+                    + "Integer>, and the slot it stands for is java.util.Map<java.lang.String, "
+                    + "java.lang.Integer> - the generated setter has nothing to assign it to"),
+            errors());
+    }
+
+    /**
+     * An initializer calling a getter {@code @Getter} generates reads the
+     * instance, so its slot is a supplier and a field of the declared type is
+     * refused, in the sentence the apt twin asserts. Neither half counted a
+     * generated getter as an instance member.
+     */
+    public void testAMistypedSlotWhoseInitializerCallsAGeneratedGetter_namesTheSupplier() {
+        myFixture.addFileToProject("dev/simplified/annotations/NamingStyle.java",
+            """
+            package dev.simplified.annotations;
+            public enum NamingStyle { SIMPLIFIED, LOMBOK, BEAN, FLUENT }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/Getter.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS)
+            @Target({ElementType.TYPE, ElementType.FIELD})
+            public @interface Getter {
+                AccessLevel value() default AccessLevel.PUBLIC;
+                NamingStyle style() default NamingStyle.SIMPLIFIED;
+                String name() default "";
+                String[] exclude() default {};
+            }
+            """);
+        myFixture.configureByText("Named.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Getter;
+            @ClassBuilder
+            @Getter
+            public class Named {
+                private String name;
+                private String label = getName() + "!";
+                public static class Builder {
+                    private String label;
+                }
+            }
+            """);
+        assertEquals("the shared wording",
+            "@ClassBuilder merged into 'Builder' finds 'label' declared as String, and the slot it stands "
+                + "for is java.util.function.Supplier<java.lang.String> - the generated setter has nothing to "
+                + "assign it to. A slot whose retained initializer reads instance state is held in the "
+                + "builder as a supplier of its declared type",
+            theOnlyError());
+    }
+
+    /**
+     * A setter {@code @Setter} generates and a getter {@code @Lazy} generates,
+     * each named through the scheme its annotation writes, are instance methods
+     * an initializer can call, so both slots are suppliers - the sentences the
+     * apt twin asserts.
+     */
+    public void testMistypedSlotsWhoseInitializersCallAGeneratedSetterOrLazyGetter_nameTheSupplier() {
+        myFixture.addFileToProject("dev/simplified/annotations/NamingStyle.java",
+            """
+            package dev.simplified.annotations;
+            public enum NamingStyle { SIMPLIFIED, LOMBOK, BEAN, FLUENT }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/Setter.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS)
+            @Target({ElementType.TYPE, ElementType.FIELD})
+            public @interface Setter {
+                AccessLevel value() default AccessLevel.PUBLIC;
+                NamingStyle style() default NamingStyle.SIMPLIFIED;
+                String name() default "";
+                String[] exclude() default {};
+            }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/Lazy.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS)
+            @Target(ElementType.FIELD)
+            public @interface Lazy {
+                NamingStyle style() default NamingStyle.SIMPLIFIED;
+                String name() default "";
+            }
+            """);
+        myFixture.configureByText("Named.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Lazy;
+            import dev.simplified.annotations.Setter;
+            @ClassBuilder
+            public class Named {
+                @Setter private String name;
+                @Lazy(name = "load{}") private String heavy = compute();
+                private Runnable reset = () -> setName("x");
+                private String label = loadHeavy() + "!";
+                private static String compute() { return "h"; }
+                public static class Builder {
+                    private Runnable reset;
+                    private String label;
+                }
+            }
+            """);
+        assertEquals("the shared wording",
+            List.of("@ClassBuilder merged into 'Builder' finds 'reset' declared as Runnable, and the slot it "
+                    + "stands for is java.util.function.Supplier<java.lang.Runnable> - the generated setter has "
+                    + "nothing to assign it to. A slot whose retained initializer reads instance state is held "
+                    + "in the builder as a supplier of its declared type",
+                "@ClassBuilder merged into 'Builder' finds 'label' declared as String, and the slot it stands "
+                    + "for is java.util.function.Supplier<java.lang.String> - the generated setter has nothing "
+                    + "to assign it to. A slot whose retained initializer reads instance state is held in the "
+                    + "builder as a supplier of its declared type"),
+            errors());
+    }
+
+    /**
      * With {@code retainInit = false} no initializer is kept, so a slot is held
      * as declared whatever its initializer reads, and a field of the declared
      * type is the right one.
@@ -710,6 +869,47 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
             }
             """);
         assertTrue("javac accepts this: " + errors(), errors().isEmpty());
+    }
+
+    /**
+     * A seed an instance initializer assigns is assigned again by a constructor
+     * that writes it too, and javac refuses that constructor with {@code
+     * variable origin might already have been assigned}. The platform's check
+     * never saw the appended field and the seed rule looked only for a missing
+     * assignment, so the editor was green over it.
+     */
+    public void testASeedAnInstanceInitializerAndAConstructorBothAssign_isReportedOnThatConstructor() {
+        addBuilderSeedAnnotation();
+        myFixture.configureByText("Slip.java",
+            """
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Slip {
+                private final String item;
+                @ClassBuilder
+                Slip(@BuilderSeed String origin, String item) { this.item = origin + ":" + item; }
+                public String getItem() { return item; }
+                public static class Builder {
+                    { origin = "desk"; }
+                    public Builder(String origin) { this.origin = origin; }
+                    public Builder(int ignored) { }
+                }
+            }
+            """);
+        assertEquals("the shared wording",
+            "@ClassBuilder merged into 'Builder' appends the seed 'origin' as a final field, and this "
+                + "constructor assigns it after an instance initializer already has",
+            theOnlyError());
+        List<String> anchors = new ArrayList<>();
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            String description = info.getDescription();
+            if (info.getSeverity() == HighlightSeverity.ERROR && description != null
+                && description.contains("appends the seed")) {
+                int line = myFixture.getEditor().getDocument().getLineNumber(info.getStartOffset());
+                anchors.add(info.getText() + "@" + (line + 1));
+            }
+        }
+        assertEquals("reported on the constructor that assigns it again", List.of("Builder@10"), anchors);
     }
 
     // ------------------------------------------------------------------

@@ -373,12 +373,20 @@ final class DeclaredBuilderMerge {
     /**
      * The type the generated builder declares the slot as.
      *
+     * <p>A scratch container is rendered through
+     * {@link DeclaredBuilderShape#scratchContainerOf} over the same arguments
+     * {@link MutationContext#collectedSlotType} builds it from, which is the
+     * rendering the editor asks of the arguments it reads out of PSI.
+     *
      * @param slot the slot being merged
      * @param holding how the slot is held
      * @return the storage type, rendered
      */
     private String storageType(FieldSpec slot, SlotHolding holding) {
-        if (holding == SlotHolding.COLLECTED_SCRATCH) return ctx.collectedSlotType(slot).toString();
+        if (holding == SlotHolding.COLLECTED_SCRATCH) {
+            return DeclaredBuilderShape.scratchContainerOf(slot.isMap, slot.isSet, slot.collectionElement,
+                slot.mapKey, slot.mapValue);
+        }
         if (holding.isSupplier()) return DeclaredBuilderShape.supplierOf(slot.typeDisplay);
         return slot.typeDisplay;
     }

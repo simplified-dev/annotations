@@ -36,7 +36,6 @@ import dev.simplified.annotations.NamingStyle;
 import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
 import dev.simplified.classbuilder.apt.BuilderScheme;
 import dev.simplified.classbuilder.apt.ChainRole;
-import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.SetterScheme;
 import dev.simplified.classbuilder.apt.SlotHolding;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
@@ -837,14 +836,6 @@ public final class GeneratedMemberFactory {
     }
 
     /**
-     * The slots the builder is built from - the target's fields or record
-     * components, or the annotated member's parameters.
-     *
-     * @param site where the annotation is written
-     * @param toBuilder mapping into the synth Builder's own type parameters
-     * @return the slot shapes, in declaration order
-     */
-    /**
      * The slot fields the merge appends into a builder the author declared.
      *
      * <p>Contributed because the merge writes them and the editor wrote none, so
@@ -853,12 +844,14 @@ public final class GeneratedMemberFactory {
      * merge exists to allow.
      *
      * <p>Each slot is contributed as the type the processor holds it in, which
-     * {@link MergedSlotStorage#holdingOf} reads: a lazy slot, and one whose
-     * retained initializer reads instance state, as a supplier of the declared
-     * type - the slot needing a value that means "never set" without that value
-     * being a legal one - and every other as declared. A collected slot whose
-     * default reads instance state is held in a scratch container the editor
-     * does not render, and is not contributed.
+     * {@link MergedSlotStorage#holdingOf} reads and
+     * {@link MergedSlotStorage#storageTypeText} renders: a lazy slot, and one
+     * whose retained initializer reads instance state, as a supplier of the
+     * declared type - the slot needing a value that means "never set" without
+     * that value being a legal one - a collected slot whose default reads
+     * instance state as the {@code java.util} scratch container it gathers
+     * into, and every other as declared, a varargs parameter's as the array it
+     * is.
      *
      * @param site the annotated site
      * @param config the resolved configuration
@@ -887,11 +880,9 @@ public final class GeneratedMemberFactory {
             SlotHolding holding = site.isExecutable()
                 ? SlotHolding.DECLARED
                 : MergedSlotStorage.holdingOf(target, slot, config.retainInit());
-            if (holding == null) continue;
-            PsiType type = holding.isSupplier()
-                ? elements.createTypeFromText(
-                    DeclaredBuilderShape.supplierOf(slot.type.getCanonicalText()), builder)
-                : slot.type;
+            PsiType type = holding == SlotHolding.DECLARED
+                ? MergedSlotStorage.declaredType(slot)
+                : elements.createTypeFromText(MergedSlotStorage.storageTypeText(slot, holding), builder);
             LightFieldBuilder field = new LightFieldBuilder(psiManager, slot.name, type);
             field.setContainingClass(builder);
             // A seed is appended final, as the builder the generator writes whole
@@ -908,6 +899,15 @@ public final class GeneratedMemberFactory {
         return out;
     }
 
+    /**
+     * The slots the builder is built from - the target's fields or record
+     * components, or the annotated member's parameters.
+     *
+     * @param site where the annotation is written
+     * @param toBuilder mapping into the synth Builder's own type parameters
+     * @param setters the setter naming the slots carry
+     * @return the slot shapes, in declaration order
+     */
     private static List<PsiFieldShape> slotsOf(BuilderSite site, PsiSubstitutor toBuilder,
                                                SetterScheme setters) {
         if (site.isExecutable()) {
