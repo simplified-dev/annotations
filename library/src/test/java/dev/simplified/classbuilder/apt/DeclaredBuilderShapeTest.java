@@ -1019,4 +1019,81 @@ public class DeclaredBuilderShapeTest {
                 List.of()));
     }
 
+    /**
+     * An inherited method under a generated setter's name and erased parameter
+     * types that is {@code final}, or returns a type the builder cannot stand
+     * in for, is reported in one sentence naming the method and the supertype
+     * declaring it. Neither half read past the declared builder's own members,
+     * and javac refused the appended setter on the target's line.
+     */
+    @Test
+    public void unoverridableInheritedMethod_namesTheMethodAndItsSupertype() {
+        assertEquals("@ClassBuilder merged into 'Builder' finds tag(String) inherited from Fluent declared "
+                + "final, so the generated setter of that signature cannot override it",
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "tag", List.of("String"),
+                List.of(new InheritedMethod("tag", List.of("java.lang.String"), "Fluent", "B", true, true))));
+        assertEquals("@ClassBuilder merged into 'Builder' finds tag(String) inherited from Fluent returning "
+                + "void, which the generated setter returning Builder cannot override",
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "tag", List.of("java.lang.String"),
+                List.of(new InheritedMethod("tag", List.of("java.lang.String"), "Fluent", "void", false,
+                    false))));
+        assertEquals("@ClassBuilder merged into 'Builder' finds count(int) inherited from Counter returning "
+                + "Integer, which the generated setter returning Builder cannot override",
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "count", List.of("int"),
+                List.of(new InheritedMethod("count", List.of("int"), "Counter", "java.lang.Integer", false,
+                    false))));
+        assertEquals("the first inherited method that blocks the setter is named",
+            "@ClassBuilder merged into 'Builder' finds wait(long) inherited from Object declared final, so "
+                + "the generated setter of that signature cannot override it",
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "wait", List.of("long"),
+                List.of(new InheritedMethod("wait", List.of("long"), "Fluent", "B", false, true),
+                    new InheritedMethod("wait", List.of("long"), "Object", "void", true, false))));
+    }
+
+    /**
+     * An inherited method the generated setter overrides legally, and one of
+     * the setter's name taking other parameter types, are left to javac, which
+     * accepts both.
+     */
+    @Test
+    public void unoverridableInheritedMethod_leavesAnOverrideAndAnOverload() {
+        assertNull("a non-final method returning a supertype of the builder is overridden",
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "tag", List.of("String"),
+                List.of(new InheritedMethod("tag", List.of("java.lang.String"), "Fluent", "B", false, true))));
+        assertNull("another parameter type is an overload",
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "tag", List.of("String"),
+                List.of(new InheritedMethod("tag", List.of("int"), "Fluent", "void", true, false))));
+        assertNull("the erasure is compared, not the arguments",
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "tags", List.of("java.util.List<String>"),
+                List.of(new InheritedMethod("tags", List.of("java.util.List"), "Fluent", "B", false, true))));
+        assertNotNull("under the same erasure it is the same key",
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "tags", List.of("java.util.List<String>"),
+                List.of(new InheritedMethod("tags", List.of("java.util.List"), "Fluent", "B", true, true))));
+        assertNull("nothing inherited",
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "tag", List.of("String"), List.of()));
+    }
+
+    /**
+     * The all-args constructor is withheld exactly where the declared builder
+     * spells a no-argument method of the build method's configured name, which
+     * the merge keeps in place of the generated one - unless
+     * {@code @BuilderArgsConstructor} is written, which asks for it by name.
+     * It was emitted beside the author's {@code build()} regardless, and a
+     * {@code build()} calling {@code new Target()} failed.
+     */
+    @Test
+    public void withholdsAllArgsConstructor_whereTheAuthorsBuildSurvivesTheMerge() {
+        assertTrue(DeclaredBuilderShape.withholdsAllArgsConstructor("build", List.of("x(int)", "build()"), false));
+        assertTrue("the configured name, after a rename",
+            DeclaredBuilderShape.withholdsAllArgsConstructor("make", List.of("make()"), false));
+        assertFalse("a build() beside a renamed build method is only a method",
+            DeclaredBuilderShape.withholdsAllArgsConstructor("make", List.of("build()"), false));
+        assertFalse("a build method taking arguments covers nothing",
+            DeclaredBuilderShape.withholdsAllArgsConstructor("build", List.of("build(int)"), false));
+        assertFalse("no declared build method leaves the generated one",
+            DeclaredBuilderShape.withholdsAllArgsConstructor("build", List.of(), false));
+        assertFalse("a written @BuilderArgsConstructor keeps it",
+            DeclaredBuilderShape.withholdsAllArgsConstructor("build", List.of("build()"), true));
+    }
+
 }

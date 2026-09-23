@@ -24,6 +24,7 @@ import dev.simplified.args.apt.ArgsMode;
 import dev.simplified.args.editor.ArgsInference;
 import dev.simplified.args.inspect.ArgsConstants;
 import dev.simplified.classbuilder.apt.BlankFinalLift;
+import dev.simplified.classbuilder.editor.ClassBuilderAugmentProvider;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.equality.inspect.WholeObjectConstants;
 import org.jetbrains.annotations.NotNull;
@@ -109,7 +110,9 @@ public final class GeneratedFieldAccess {
      * constructor, and that is the shape this exists for - unless one of those
      * constructors assigns the field nowhere, which {@link BlankFinalLift}
      * decides from the written constructors as the processor does, and the
-     * field then keeps its initializer.
+     * field then keeps its initializer. So does every field of a target whose
+     * all-args constructor is withheld beside an author's own {@code build()},
+     * nothing generated being left to assign it.
      *
      * @param field the field a report landed on
      * @return whether the field is a lifted blank final
@@ -121,7 +124,8 @@ public final class GeneratedFieldAccess {
         if (owner == null) return false;
         if (owner.getAnnotation(ClassBuilderConstants.ANNOTATION_FQN) == null) return false;
         List<PsiField> selected = ArgsConstants.select(owner, ArgsMode.BUILDER, builderExclude(owner));
-        return names(selected, field) && BlankFinalLift.lifts(field.getName(), writtenConstructors(owner));
+        return names(selected, field) && BlankFinalLift.lifts(field.getName(), writtenConstructors(owner),
+            ClassBuilderAugmentProvider.withholdsAllArgsConstructor(owner));
     }
 
     /**

@@ -54,7 +54,11 @@ import java.util.Objects;
  * instance, and a collected one in its {@code java.util} scratch container. An
  * author method covering a generated setter with another parameterisation of
  * the same generic type is reported on its name where {@code from(T)} or
- * {@code mutate()} is emitted to pass it the slot's own type.
+ * {@code mutate()} is emitted to pass it the slot's own type. A generated setter
+ * the merge appends that a method the builder inherits keeps from overriding it
+ * - a {@code final} one, or one returning a type the builder cannot stand in for
+ * - is reported on the builder's name, the supertypes resolved here as the
+ * processor reads them from the element model.
  *
  * <p>On a class or record target and on a constructor or factory target, a
  * {@code builderConstructorAccess} written on the annotation while the declared
@@ -162,6 +166,17 @@ public class DeclaredBuilderShapeInspection extends LocalInspectionTool {
                     PsiElement anchor = covering.method().getNameIdentifier();
                     holder.registerProblem(anchor == null ? covering.method() : anchor,
                         covering.message(), ProblemHighlightType.GENERIC_ERROR);
+                }
+
+                // The processor reads the declared builder's supertypes from the
+                // element model and reports on the builder each appended setter an
+                // inherited method keeps from overriding it. The augment provider
+                // stays names-only and keeps contributing the setter.
+                for (String message
+                    : MergedSlotStorage.unoverridableInheritedMethods(target, member, declared, annotation)) {
+                    PsiElement anchor = declared.getNameIdentifier();
+                    holder.registerProblem(anchor == null ? declared : anchor, message,
+                        ProblemHighlightType.GENERIC_ERROR);
                 }
 
                 // A seed is appended final and only the author's constructors can

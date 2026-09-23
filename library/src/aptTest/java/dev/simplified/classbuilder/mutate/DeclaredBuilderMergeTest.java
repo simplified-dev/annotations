@@ -7,6 +7,7 @@ import dev.simplified.classbuilder.BuilderParityFixture;
 import dev.simplified.classbuilder.apt.ClassBuilderProcessor;
 import org.junit.Test;
 
+import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -3833,6 +3834,311 @@ public class DeclaredBuilderMergeTest {
                 "}"));
         assertThat(c).succeeded();
         assertEquals("[a, b]/[y]", runGo(c, "demo.UseCrate"));
+    }
+
+    // ------------------------------------------------------------------
+    // An inherited member a generated setter cannot override
+    // ------------------------------------------------------------------
+
+    /** The sentence reported where {@code Fluent.tag(String)} is final. */
+    private static final String INHERITED_FINAL = "@ClassBuilder merged into 'Builder' finds tag(String) "
+        + "inherited from Fluent declared final, so the generated setter of that signature cannot override it";
+
+    /**
+     * An {@code Item} whose declared builder extends {@code Fluent<Builder>},
+     * which declares {@code fluentMethod} beside a {@code tag} field, used from
+     * a third file.
+     */
+    private static JavaFileObject[] itemOver(String fluentMethod) {
+        return new JavaFileObject[]{
+            fluent(fluentMethod),
+            JavaFileObjects.forSourceLines("demo.Item",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public class Item {",
+                "    String tag;",
+                "    public static class Builder extends Fluent<Builder> {",
+                "        @Override",
+                "        protected Builder self() { return this; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseItem",
+                "package demo;",
+                "public class UseItem {",
+                "    public static String go() { return Item.builder().tag(\"x\").build().tag; }",
+                "}")
+        };
+    }
+
+    /** The self-typed supertype the probe's declared builder extends. */
+    private static JavaFileObject fluent(String fluentMethod) {
+        return JavaFileObjects.forSourceLines("demo.Fluent",
+            "package demo;",
+            "public abstract class Fluent<B> {",
+            "    protected String tag;",
+            "    " + fluentMethod,
+            "    protected abstract B self();",
+            "}");
+    }
+
+    /**
+     * An inherited {@code final} method under a generated setter's name and
+     * erased parameter types is reported on the declared builder, the
+     * supertype being a source file of the same round - the element model
+     * reads its written members. Only javac's refusal of the appended setter
+     * was reported, on the target's line - a line the author never wrote -
+     * while the editor stayed green. An error from the processor ends the
+     * compilation ahead of attribution, so that refusal is no longer reached
+     * and the report on the builder is the only one.
+     */
+    @Test
+    public void merge_underAnInheritedFinalMethodOfASetterSignature_isRejectedOnTheBuilder() {
+        JavaFileObject[] sources = itemOver("public final B tag(String t) { this.tag = t; return self(); }");
+        Compilation c = compile(sources);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(INHERITED_FINAL).inFile(sources[1]).onLine(6);
+        assertEquals("the report on the builder is the only error: " + c.errors(), 1, c.errors().size());
+    }
+
+    /**
+     * An inherited method returning {@code void} under a setter's signature is
+     * reported on the declared builder, naming its return type.
+     */
+    @Test
+    public void merge_underAnInheritedVoidMethodOfASetterSignature_isRejectedOnTheBuilder() {
+        JavaFileObject[] sources = itemOver("public void tag(String t) { this.tag = t; }");
+        Compilation c = compile(sources);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds tag(String) inherited from "
+            + "Fluent returning void, which the generated setter returning Builder cannot override")
+            .inFile(sources[1]).onLine(6);
+    }
+
+    /**
+     * An inherited method returning the self type {@code B}, which the
+     * declared builder binds to itself, is overridden by the generated setter
+     * and compiles.
+     */
+    @Test
+    public void merge_underAnInheritedSelfTypedMethodOfASetterSignature_compiles() throws Exception {
+        Compilation c = compile(itemOver("public B tag(String t) { this.tag = t; return self(); }"));
+        assertThat(c).succeeded();
+        assertEquals("x", runGo(c, "demo.UseItem"));
+    }
+
+    /** A final inherited method of the setter's name taking another type is an overload. */
+    @Test
+    public void merge_underAnInheritedFinalMethodOfAnotherParameterType_compiles() throws Exception {
+        Compilation c = compile(itemOver("public final B tag(int t) { this.tag = \"#\" + t; return self(); }"));
+        assertThat(c).succeeded();
+        assertEquals("x", runGo(c, "demo.UseItem"));
+    }
+
+    /**
+     * A supertype compiled before the round, read off the classpath, is read
+     * the same way.
+     */
+    @Test
+    public void merge_underACompiledSupertypesFinalMethod_isRejectedOnTheBuilder() throws Exception {
+        Compilation ancestor = compile(fluent("public final B tag(String t) { this.tag = t; return self(); }"));
+        assertThat(ancestor).succeeded();
+        JavaFileObject[] sources = itemOver("");
+        Compilation c = Compiler.javac()
+            .withProcessors(new ClassBuilderProcessor())
+            .withClasspath(runtimeClasspathPlus(classesOf(ancestor)))
+            .compile(sources[1], sources[2]);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(INHERITED_FINAL).inFile(sources[1]).onLine(6);
+    }
+
+    /**
+     * {@code Object} is on every declared builder's chain, and its final
+     * {@code wait(long)} is what the setter of a {@code long} slot named
+     * {@code wait} would override. javac refused it on the target's line with
+     * {@code wait(long) in demo.Waiter.Builder cannot override wait(long) in
+     * java.lang.Object}; the merge reports it on the builder instead, and that
+     * report ends the compilation ahead of javac's.
+     */
+    @Test
+    public void merge_aLongSlotNamedWait_isRejectedForObjectsFinalWait() {
+        JavaFileObject waiter = JavaFileObjects.forSourceLines("demo.Waiter",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder",
+            "public class Waiter {",
+            "    long wait;",
+            "    public static class Builder { }",
+            "}");
+        Compilation c = compile(waiter);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds wait(long) inherited from "
+            + "Object declared final, so the generated setter of that signature cannot override it")
+            .inFile(waiter).onLine(6);
+        assertEquals("the report on the builder is the only error: " + c.errors(), 1, c.errors().size());
+    }
+
+    // ------------------------------------------------------------------
+    // The all-args constructor beside an author's own build()
+    // ------------------------------------------------------------------
+
+    /**
+     * A {@code Point} whose declared builder spells its own {@code build}
+     * method under {@code buildName}, calling the no-argument constructor,
+     * with {@code annotation} on the target and {@code extra} among its
+     * members.
+     */
+    private static JavaFileObject point(String annotation, String extra, String buildName, String buildBody) {
+        return JavaFileObjects.forSourceLines("demo.Point",
+            "package demo;",
+            "import dev.simplified.annotations.AllArgsConstructor;",
+            "import dev.simplified.annotations.BuilderArgsConstructor;",
+            "import dev.simplified.annotations.BuilderNames;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            annotation,
+            "public class Point {",
+            "    private int x;",
+            "    private int y;",
+            "    " + extra,
+            "    public String describe() { return x + \",\" + y; }",
+            "    public static class Builder {",
+            "        private int x;",
+            "        private int y;",
+            "        public Builder x(int x) { this.x = x; return this; }",
+            "        public Builder y(int y) { this.y = y; return this; }",
+            "        public Point " + buildName + "() { " + buildBody + " }",
+            "    }",
+            "}");
+    }
+
+    /** A consumer building a point through {@code buildName}. */
+    private static JavaFileObject usePoint(String buildName, String tail) {
+        return JavaFileObjects.forSourceLines("demo.UsePoint",
+            "package demo;",
+            "public class UsePoint {",
+            "    public static String go() { return Point.builder().x(1).y(2)." + buildName + "()" + tail + "; }",
+            "}");
+    }
+
+    /** The author's {@code build()} over javac's no-argument default. */
+    private static final String NO_ARG_BUILD = "Point p = new Point(); p.x = x; p.y = y; return p;";
+
+    /**
+     * The author's {@code build()} survives the merge and calls javac's
+     * no-argument default, so the all-args constructor is withheld and the
+     * default stays. It was emitted all the same, removing the default, and
+     * the author's {@code new Point()} failed with {@code constructor Point in
+     * class demo.Point cannot be applied to given types}.
+     */
+    @Test
+    public void merge_besideAnAuthorBuildCallingTheNoArgConstructor_compilesAndRuns() throws Exception {
+        Compilation c = compile(point("@ClassBuilder", "", "build", NO_ARG_BUILD),
+            usePoint("build", ".describe()"));
+        assertThat(c).succeeded();
+        assertEquals("1,2", runGo(c, "demo.UsePoint"));
+    }
+
+    /**
+     * The build method is matched by its configured name: under
+     * {@code @BuilderNames(build = "make")} the author's {@code make()} is the
+     * one that survives.
+     */
+    @Test
+    public void merge_besideARenamedAuthorBuild_compilesAndRuns() throws Exception {
+        Compilation c = compile(
+            point("@ClassBuilder(builder = @BuilderNames(build = \"make\"))", "", "make", NO_ARG_BUILD),
+            usePoint("make", ".describe()"));
+        assertThat(c).succeeded();
+        assertEquals("1,2", runGo(c, "demo.UsePoint"));
+    }
+
+    /**
+     * With the all-args constructor withheld nothing assigns a {@code final}
+     * field in its place, so its initializer stays on it and javac's default
+     * constructor leaves nothing unassigned.
+     */
+    @Test
+    public void merge_besideAnAuthorBuild_keepsAFinalInitializerTheDefaultConstructorLeaves() throws Exception {
+        Compilation c = compile(
+            point("@ClassBuilder", "private final String label = \"p\"; public String label() { return label; }",
+                "build", NO_ARG_BUILD),
+            usePoint("build", ".label()"));
+        assertThat(c).succeeded();
+        assertEquals("p", runGo(c, "demo.UsePoint"));
+    }
+
+    /**
+     * A write to that {@code final} field is javac's to refuse as a write to an
+     * initialized final, which the editor reports in its own words.
+     */
+    @Test
+    public void merge_besideAnAuthorBuild_refusesAWriteToAnInitializedFinal() {
+        JavaFileObject source = point("@ClassBuilder", "private final String label = \"p\"; { label = \"q\"; }",
+            "build", NO_ARG_BUILD);
+        Compilation c = compile(source);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("cannot assign a value to final variable label").inFile(source).onLine(10);
+    }
+
+    /**
+     * An author {@code build()} that wants the all-args form asks for it with
+     * {@code @AllArgsConstructor}, whose constructor is the one it calls - the
+     * builder emits none beside it, and so reports none.
+     */
+    @Test
+    public void merge_besideAnAuthorBuildWithAllArgsConstructorWritten_callsIt() throws Exception {
+        Compilation c = compile(point("@ClassBuilder @AllArgsConstructor", "", "build", "return new Point(x, y);"),
+            usePoint("build", ".describe()"));
+        assertThat(c).succeeded();
+        assertEquals("1,2", runGo(c, "demo.UsePoint"));
+        for (Diagnostic<? extends JavaFileObject> note : c.notes()) {
+            assertFalse("the builder emits no constructor of its own: " + note.getMessage(null),
+                note.getMessage(null).contains("used the constructor a written annotation already generates"));
+        }
+    }
+
+    /**
+     * {@code @BuilderArgsConstructor} names the constructor the builder pass
+     * emits, so writing it keeps that constructor beside an author's own
+     * {@code build()}.
+     */
+    @Test
+    public void merge_besideAnAuthorBuildWithBuilderArgsConstructorWritten_keepsIt() throws Exception {
+        Compilation c = compile(point("@ClassBuilder @BuilderArgsConstructor", "", "build", "return new Point(x, y);"),
+            usePoint("build", ".describe()"));
+        assertThat(c).succeeded();
+        assertEquals("1,2", runGo(c, "demo.UsePoint"));
+    }
+
+    /**
+     * A declared builder that leaves {@code build()} to the generator keeps the
+     * all-args constructor the generated one calls, which a same-package
+     * {@code new Point(1, 2)} reaches.
+     */
+    @Test
+    public void merge_whoseDeclaredBuilderLeavesBuildToTheGenerator_keepsTheAllArgsConstructor() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Point",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public class Point {",
+                "    private int x;",
+                "    private int y;",
+                "    public String describe() { return x + \",\" + y; }",
+                "    public static class Builder {",
+                "        public Builder origin() { return x(0).y(0); }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UsePoint",
+                "package demo;",
+                "public class UsePoint {",
+                "    public static String go() {",
+                "        return new Point(3, 4).describe() + \"/\" + Point.builder().origin().x(5).build().describe();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("3,4/5,0", runGo(c, "demo.UsePoint"));
     }
 
 }

@@ -208,9 +208,14 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   A bare declared builder, which 2.6.x left alone, now gains the generated slot fields, setters and
   `build()` it does not spell, and its target gains the entry points `builder()`, `from(T)` and
   `mutate()`, typed against the declared class. A target that declares no constructor also gains the
-  all-args constructor the generated `build()` calls, and gains it beside an author's own `build()`
-  too, where it takes the place of javac's no-argument default: a `build()` calling `new Target()`
-  on such a target stops compiling - declare the no-argument constructor it calls. Each skipped
+  all-args constructor the generated `build()` calls. Beside an author's own `build()` - a
+  no-argument method of the build method's name, after any `@BuilderNames(build)` rename - nothing
+  generated calls it, and it is withheld so javac's no-argument default stays for a `build()`
+  calling `new Target()`, a `final` field keeping its initializer; `@BuilderArgsConstructor` written
+  on the target keeps it. **Migration for
+  2.6.x code that wrote `mergeDeclaredBuilder = true` and whose own `build()` calls
+  `new Target(a, b)`: write `@AllArgsConstructor` (or `@BuilderArgsConstructor`) on the target**,
+  since the constructor 2.6.x emitted there is no longer emitted unasked. Each skipped
   member the author already spells is listed in one note - a method counting as spelled where it has
   the generated one's name and erased parameter types, so an author's `port(String)` beside an
   `int port` slot is an overload and the generated `port(int)` that `from(T)` and `mutate()` call is
@@ -246,6 +251,12 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
     builder's own self-typed pair on a chained abstract;
   - on a chain, a build method returning something other than the built type - return that type, or
     on a root the root itself;
+  - a method the builder inherits - from a superclass up to and including `Object`, or a
+    superinterface - under an appended setter's name and erased parameter types that is `final`, or
+    returns `void`, a primitive or a type the builder is not assignable to, reported on the builder
+    naming the method and the supertype declaring it where javac refused the override on the
+    target's line, `Object`'s final `wait(long)` meeting the setter of a `long wait` slot - drop
+    `final` or return a supertype of the builder there, or rename the slot or its setter;
   - on a constructor or factory target, a `@BuilderSeed` a constructor of the builder leaves
     unassigned - one a constructor annotation on the builder appends among them - or may assign
     where it is already assigned, by an instance initializer, by the constructor it delegates to or

@@ -44,8 +44,14 @@ import java.lang.annotation.Target;
  * when it spells no method of that name and those erased parameter types - an
  * author method of a setter's name taking another type is an overload beside
  * the generated setter rather than a replacement for it. Everything skipped
- * is reported in one compiler note rather than left silent. The target still
- * gets the all-args constructor {@code build()} calls, and still gets the three
+ * is reported in one compiler note rather than left silent. The target gets
+ * the all-args constructor the generated {@code build()} calls; where the
+ * declared builder spells its own {@code build()} - under the configured build
+ * method name - that is the one kept, nothing generated calls the constructor,
+ * and it is withheld so javac's no-argument default stays, unless
+ * {@link BuilderArgsConstructor} is written on the target. An author
+ * {@code build()} wanting the all-args form writes that, or
+ * {@link AllArgsConstructor}. The target still gets the three
  * entry points unless the declared builder has no constructor they can call -
  * none of the arity they pass, or only ones declaring a throws clause that
  * names an exception other than {@link RuntimeException}, {@link Error} and
@@ -61,7 +67,9 @@ import java.lang.annotation.Target;
  * generated setter cannot assign or a boxed one over a primitive slot, a
  * {@code final} slot field a generated setter assigns, an author method taking
  * the place of a setter with another parameterisation of the slot's generic
- * type while {@code from(T)} or {@code mutate()} passes it the slot - is a
+ * type while {@code from(T)} or {@code mutate()} passes it the slot, a method
+ * the builder inherits that an appended setter cannot override because it is
+ * {@code final} or returns a type the builder cannot stand in for - is a
  * compile error.
  *
  * <p>A constructor or static factory target merges the same way into the class

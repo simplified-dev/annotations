@@ -1892,6 +1892,99 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
             """);
     }
 
+    // ------------------------------------------------------------------
+    // An inherited member a generated setter cannot override
+    // ------------------------------------------------------------------
+
+    /**
+     * An {@code Item} whose declared builder extends {@code Fluent<Builder>},
+     * which declares {@code fluentMethod} beside a {@code tag} field.
+     */
+    private void configureItemOver(String fluentMethod) {
+        myFixture.addFileToProject("Fluent.java",
+            """
+            public abstract class Fluent<B> {
+                protected String tag;
+                %s
+                protected abstract B self();
+            }
+            """.formatted(fluentMethod));
+        myFixture.configureByText("Item.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Item {
+                String tag;
+                public static class Builder extends Fluent<Builder> {
+                    @Override
+                    protected Builder self() { return this; }
+                }
+            }
+            """);
+    }
+
+    /** Where each inherited-method diagnostic sits, as its highlighted text and its one-based line. */
+    private List<String> inheritedAnchors() {
+        List<String> anchors = new ArrayList<>();
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            String description = info.getDescription();
+            if (info.getSeverity() == HighlightSeverity.ERROR && description != null
+                && description.contains(" inherited from ")) {
+                int line = myFixture.getEditor().getDocument().getLineNumber(info.getStartOffset());
+                anchors.add(info.getText() + "@" + (line + 1));
+            }
+        }
+        return anchors;
+    }
+
+    /**
+     * An inherited {@code final} method under a generated setter's name and
+     * erased parameter types is reported on the declared builder's name, in
+     * the processor's sentence. javac refuses the appended setter and the
+     * editor was green in every file.
+     */
+    public void testAnInheritedFinalMethodOfASetterSignature_isReportedOnTheBuildersName() {
+        configureItemOver("public final B tag(String t) { this.tag = t; return self(); }");
+        assertEquals("@ClassBuilder merged into 'Builder' finds tag(String) inherited from Fluent declared final, "
+            + "so the generated setter of that signature cannot override it", theOnlyError());
+        assertEquals(List.of("Builder@5"), inheritedAnchors());
+    }
+
+    /** An inherited method returning {@code void} under a setter's signature is reported the same way. */
+    public void testAnInheritedVoidMethodOfASetterSignature_isReportedOnTheBuildersName() {
+        configureItemOver("public void tag(String t) { this.tag = t; }");
+        assertEquals("@ClassBuilder merged into 'Builder' finds tag(String) inherited from Fluent returning void, "
+            + "which the generated setter returning Builder cannot override", theOnlyError());
+        assertEquals(List.of("Builder@5"), inheritedAnchors());
+    }
+
+    /** An inherited method returning the self type the builder binds to itself is overridden legally. */
+    public void testAnInheritedSelfTypedMethodOfASetterSignature_isNotReported() {
+        configureItemOver("public B tag(String t) { this.tag = t; return self(); }");
+        assertEquals(List.of(), errors());
+    }
+
+    /** A final inherited method of the setter's name taking another type is an overload. */
+    public void testAnInheritedFinalMethodOfAnotherParameterType_isNotReported() {
+        configureItemOver("public final B tag(int t) { this.tag = \"#\" + t; return self(); }");
+        assertEquals(List.of(), errors());
+    }
+
+    /** {@code Object}'s final {@code wait(long)} blocks the setter of a {@code long} slot named {@code wait}. */
+    public void testALongSlotNamedWait_isReportedForObjectsFinalWait() {
+        myFixture.configureByText("Waiter.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Waiter {
+                long wait;
+                public static class Builder { }
+            }
+            """);
+        assertEquals("@ClassBuilder merged into 'Builder' finds wait(long) inherited from Object declared final, "
+            + "so the generated setter of that signature cannot override it", theOnlyError());
+    }
+
     private String theOnlyError() {
         List<String> errors = errors();
         assertEquals("expected exactly one highlight, got: " + errors, 1, errors.size());

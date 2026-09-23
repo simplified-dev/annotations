@@ -77,4 +77,24 @@ public final class BlankFinalLift {
         return true;
     }
 
+    /**
+     * Decides whether the field's initializer is lifted off it, where the
+     * all-args constructor may be withheld.
+     *
+     * <p>Beside an author's own {@code build()} the target is left without the
+     * all-args constructor, and it has no author constructor either, or it
+     * would not have been owed one. What stands is javac's no-argument default
+     * or a constructor an args annotation appends, and none of those assigns a
+     * {@code final} field that carries an initializer, so the initializer stays.
+     *
+     * @param field the field's name
+     * @param authorConstructors the target's author-written constructors
+     * @param allArgsConstructorWithheld whether the all-args constructor is withheld beside an author's
+     *     {@code build()}
+     * @return whether the field is left a blank final
+     */
+    public static boolean lifts(String field, List<Writes> authorConstructors, boolean allArgsConstructorWithheld) {
+        return !allArgsConstructorWithheld && lifts(field, authorConstructors);
+    }
+
 }

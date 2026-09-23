@@ -108,6 +108,19 @@ its name wherever either copy entry point is emitted.
 </p>
 
 <p>
+A generated setter the merge appends overrides whatever the builder inherits
+under its name and erased parameter types. Where that inherited method is
+<code>final</code>, or returns <code>void</code>, a primitive or a type the
+builder is not assignable to, javac refuses the override on the target's line;
+the builder's name is reported instead, naming the method and the supertype
+that declares it. The supertypes are the builder's superclasses up to and
+including <code>java.lang.Object</code> - a <code>long wait</code> slot's setter
+meets its final <code>wait(long)</code> - and its superinterfaces. An inherited
+method the setter can override, one returning the builder's own self type among
+them, and one taking other parameter types, are left alone.
+</p>
+
+<p>
 On a constructor or static factory target, a <code>@BuilderSeed</code>
 parameter is appended to the declared builder as a <code>final</code> field,
 and only the author's constructors can assign it. A constructor that leaves it

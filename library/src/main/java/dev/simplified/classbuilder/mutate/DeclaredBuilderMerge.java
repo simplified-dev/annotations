@@ -16,6 +16,7 @@ import dev.simplified.classbuilder.apt.DeclaredBuilderFacts;
 import dev.simplified.classbuilder.apt.DeclaredBuilderRejection;
 import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.classbuilder.apt.InheritedMethod;
 import dev.simplified.classbuilder.apt.RoleExpectation;
 import dev.simplified.classbuilder.apt.SetterShape;
 import dev.simplified.classbuilder.apt.SlotHolding;
@@ -26,8 +27,17 @@ import org.jetbrains.annotations.Nullable;
 import javax.annotation.processing.Messager;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
+import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.ExecutableType;
+import javax.lang.model.type.TypeKind;
+import javax.lang.model.type.TypeMirror;
+import javax.lang.model.util.ElementFilter;
+import javax.lang.model.util.Elements;
+import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -120,6 +130,7 @@ final class DeclaredBuilderMerge {
         if (!rejectUnusableShape(anchor, declared, role, annotatedSuper)) return false;
         Map<String, JCMethodDecl> methods = declaredMethodKeys(declared);
         rejectMistypedSlots(anchor, declared, members, methods.keySet());
+        rejectUnoverridableInheritedMethods(declared, members, methods.keySet());
 
         Set<String> fields = declaredFieldNames(declared);
         boolean authorOwnsConstruction = declaresConstructor(declared);
@@ -377,6 +388,115 @@ final class DeclaredBuilderMerge {
     }
 
     /**
+     * Reports each generated setter the merge appends that a method the
+     * declared builder inherits keeps from overriding it.
+     *
+     * <p>The decision and its wording are
+     * {@link DeclaredBuilderShape#unoverridableInheritedMethod}, which the
+     * editor's inspection asks of the same facts read out of resolved PSI. What
+     * is left here is reading the inherited methods from the element model -
+     * see {@link #inheritedMethods} - and asking it for every setter no author
+     * method covers, the ones that are appended.
+     *
+     * <p>Reported on the declared builder, where the author declared the
+     * supertype. The merge continues, as after a mistyped slot, so javac also
+     * refuses the appended setter; the report is what says why on a line the
+     * author wrote.
+     *
+     * @param declared the builder the author wrote
+     * @param members the generated members being merged
+     * @param authorKeys the {@link DeclaredBuilderShape#methodKey} of each method the author declared
+     */
+    private void rejectUnoverridableInheritedMethods(JCClassDecl declared, List<JCTree> members,
+                                                     Set<String> authorKeys) {
+        TypeElement builder = declared.sym;
+        if (builder == null) return;
+        List<InheritedMethod> inherited = null;
+        for (JCTree member : members) {
+            if (!(member instanceof JCMethodDecl method) || ctx.setterSlot(method) == null) continue;
+            if (authorKeys.contains(key(method))) continue;
+            if (inherited == null) inherited = inheritedMethods(builder);
+            String message = DeclaredBuilderShape.unoverridableInheritedMethod(declared.name.toString(),
+                method.name.toString(), parameterTypes(method), inherited);
+            if (message != null) messager.printMessage(Diagnostic.Kind.ERROR, message, builder);
+        }
+    }
+
+    /**
+     * The methods a declared builder inherits, read from the element model.
+     *
+     * <p>Its supertypes are walked depth first, each superclass ahead of the
+     * interfaces beside it, with {@code java.lang.Object} read last; a private
+     * or static method, and a package-private one declared in another package,
+     * is not inherited and is left out. Each method is read as a member of the
+     * builder, so a self-typed supertype's {@code B} is the builder itself, and
+     * its return type accepts the builder where the builder is assignable to it
+     * or to its erasure.
+     *
+     * <p>The element model holds what the supertype's source declares: a
+     * supertype compiled in the same round is read through the members written
+     * in it, and one compiled before it through its class file. A member this
+     * processor appends to a supertype in the round is not yet entered and is
+     * not read.
+     *
+     * @param builder the declared builder's element
+     * @return the inherited methods, in the order the supertypes are walked
+     */
+    private List<InheritedMethod> inheritedMethods(TypeElement builder) {
+        Types types = ctx.bridge().processingEnvironment().getTypeUtils();
+        Elements elements = ctx.bridge().processingEnvironment().getElementUtils();
+        DeclaredType builderType = (DeclaredType) builder.asType();
+        PackageElement home = elements.getPackageOf(builder);
+
+        List<TypeElement> supertypes = new ArrayList<>();
+        collectSupertypes(types, builderType, supertypes, new HashSet<>());
+        TypeElement object = elements.getTypeElement(Object.class.getName());
+        if (object != null) supertypes.add(object);
+
+        List<InheritedMethod> out = new ArrayList<>();
+        for (TypeElement supertype : supertypes) {
+            boolean samePackage = elements.getPackageOf(supertype).equals(home);
+            for (ExecutableElement method : ElementFilter.methodsIn(supertype.getEnclosedElements())) {
+                Set<Modifier> modifiers = method.getModifiers();
+                if (modifiers.contains(Modifier.PRIVATE) || modifiers.contains(Modifier.STATIC)) continue;
+                if (!samePackage && !modifiers.contains(Modifier.PUBLIC) && !modifiers.contains(Modifier.PROTECTED))
+                    continue;
+                ExecutableType member = (ExecutableType) types.asMemberOf(builderType, method);
+                List<String> parameters = new ArrayList<>();
+                for (TypeMirror parameter : member.getParameterTypes()) parameters.add(types.erasure(parameter).toString());
+                TypeMirror returned = member.getReturnType();
+                boolean accepts = returned.getKind() != TypeKind.VOID && !returned.getKind().isPrimitive()
+                    && (types.isAssignable(builderType, returned)
+                        || types.isAssignable(builderType, types.erasure(returned)));
+                out.add(new InheritedMethod(method.getSimpleName().toString(), parameters,
+                    supertype.getSimpleName().toString(), method.getReturnType().toString(),
+                    modifiers.contains(Modifier.FINAL), accepts));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Collects every supertype of a type but {@code java.lang.Object}, depth
+     * first, each once.
+     *
+     * @param types the type utilities
+     * @param type the type whose supertypes are collected
+     * @param out the supertypes collected so far, appended to
+     * @param seen the qualified names already collected
+     */
+    private static void collectSupertypes(Types types, TypeMirror type, List<TypeElement> out, Set<String> seen) {
+        for (TypeMirror direct : types.directSupertypes(type)) {
+            if (!(direct instanceof DeclaredType declaredType)
+                || !(declaredType.asElement() instanceof TypeElement element)) continue;
+            String name = element.getQualifiedName().toString();
+            if (Object.class.getName().equals(name) || !seen.add(name)) continue;
+            out.add(element);
+            collectSupertypes(types, direct, out, seen);
+        }
+    }
+
+    /**
      * The form the generated builder holds the slot in, which is not always the
      * type the field is declared with.
      *
@@ -430,7 +550,7 @@ final class DeclaredBuilderMerge {
      * @param declared the builder the author wrote
      * @return each key with the first method declared under it
      */
-    private static Map<String, JCMethodDecl> declaredMethodKeys(JCClassDecl declared) {
+    static Map<String, JCMethodDecl> declaredMethodKeys(JCClassDecl declared) {
         Map<String, JCMethodDecl> out = new HashMap<>();
         for (JCTree def : declared.defs) {
             if (def instanceof JCMethodDecl method && !method.name.contentEquals("<init>"))

@@ -64,13 +64,28 @@ final class RetainedInitFactory {
     private final Names names;
     private final JavacTypeFactory types;
     private final Messager messager;
+    private final boolean allArgsConstructorWithheld;
 
     RetainedInitFactory(MutationContext ctx, Messager messager) {
+        this(ctx, messager, false);
+    }
+
+    /**
+     * Creates the factory for a target whose all-args constructor may be
+     * withheld beside an author's own {@code build()}.
+     *
+     * @param ctx the per-target mutation context
+     * @param messager the processor's messager
+     * @param allArgsConstructorWithheld whether the all-args constructor is withheld, which leaves every
+     *     {@code final} initializer on its field
+     */
+    RetainedInitFactory(MutationContext ctx, Messager messager, boolean allArgsConstructorWithheld) {
         this.ctx = ctx;
         this.make = ctx.make();
         this.names = ctx.names();
         this.types = ctx.types();
         this.messager = messager;
+        this.allArgsConstructorWithheld = allArgsConstructorWithheld;
     }
 
     /** The convention-named static provider for a field's retained initializer. */
@@ -155,7 +170,10 @@ final class RetainedInitFactory {
             // A constructor the author wrote answers for itself: where one
             // assigns the field nowhere the initializer stays, since lifting
             // it would leave that constructor a blank final it never assigns.
-            if (BlankFinalLift.lifts(f.name, authored)) stripToBlankFinal(target, f.name);
+            // Beside an author's own build() no generated constructor assigns
+            // it either, and the initializer stays on the field.
+            if (BlankFinalLift.lifts(f.name, authored, allArgsConstructorWithheld))
+                stripToBlankFinal(target, f.name);
         }
     }
 

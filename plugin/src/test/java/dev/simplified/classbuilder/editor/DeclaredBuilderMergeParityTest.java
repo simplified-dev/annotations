@@ -1679,6 +1679,147 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
     }
 
     // ------------------------------------------------------------------
+    // The all-args constructor beside an author's own build()
+    // ------------------------------------------------------------------
+
+    /**
+     * A {@code Point} whose declared builder spells its own {@code build}
+     * method under {@code buildName} with {@code buildBody}, carrying
+     * {@code annotations} and {@code extra} among its members.
+     */
+    private PsiClass configurePoint(String annotations, String extra, String buildName, String buildBody) {
+        PsiFile file = myFixture.configureByText("Point.java",
+            """
+            import dev.simplified.annotations.*;
+            %s
+            public class Point {
+                private int x;
+                private int y;
+                %s
+                public String describe() { return x + "," + y; }
+                public static class Builder {
+                    private int x;
+                    private int y;
+                    public Builder x(int x) { this.x = x; return this; }
+                    public Builder y(int y) { this.y = y; return this; }
+                    public Point %s() { %s }
+                }
+            }
+            """.formatted(annotations, extra, buildName, buildBody));
+        return ((PsiJavaFile) file).getClasses()[0];
+    }
+
+    /** The author's {@code build()} over javac's no-argument default. */
+    private static final String NO_ARG_BUILD = "Point p = new Point(); p.x = x; p.y = y; return p;";
+
+    /**
+     * The processor withholds the all-args constructor beside an author's
+     * {@code build()} the merge keeps, so javac's default stays and the
+     * author's {@code new Point()} resolves. Both halves contributed the
+     * constructor and reported {@code Expected 2 arguments but found 0}.
+     */
+    public void testBesideAnAuthorBuildCallingTheNoArgConstructor_contributesNoAllArgsConstructor() {
+        PsiClass point = configurePoint("@ClassBuilder", "", "build", NO_ARG_BUILD);
+        assertNoErrors();
+        assertEquals("no constructor is contributed", 0, point.getConstructors().length);
+    }
+
+    /** Under {@code @BuilderNames(build = "make")} the author's {@code make()} is the build method kept. */
+    public void testBesideARenamedAuthorBuild_contributesNoAllArgsConstructor() {
+        PsiClass point = configurePoint("@ClassBuilder(builder = @BuilderNames(build = \"make\"))", "", "make",
+            NO_ARG_BUILD);
+        assertNoErrors();
+        assertEquals("no constructor is contributed", 0, point.getConstructors().length);
+    }
+
+    /**
+     * With the constructor withheld a {@code final} field keeps its initializer
+     * on both halves, so a write to it in an instance initializer is the error
+     * javac reports. The editor read the field as lifted and cleared it, green
+     * over source javac refuses.
+     */
+    public void testBesideAnAuthorBuild_aWriteToAnInitializedFinalStaysRed() {
+        configurePoint("@ClassBuilder", "private final String label = \"p\"; { label = \"q\"; }", "build",
+            NO_ARG_BUILD);
+        assertTrue("javac's cannot assign a value to final variable label: " + errors(),
+            errors().contains("Cannot assign a value to final variable 'label'"));
+    }
+
+    /**
+     * {@code @AllArgsConstructor} written on the target is the constructor an
+     * author {@code build()} calling {@code new Point(x, y)} reaches, and the
+     * only one there.
+     */
+    public void testBesideAnAuthorBuildWithAllArgsConstructorWritten_resolvesItsConstructor() {
+        addArgsConstructorAnnotation("AllArgsConstructor");
+        PsiClass point = configurePoint("@ClassBuilder @AllArgsConstructor", "", "build", "return new Point(x, y);");
+        assertNoErrors();
+        assertEquals("the one @AllArgsConstructor appends", 1, point.getConstructors().length);
+    }
+
+    /** {@code @BuilderArgsConstructor} written keeps the constructor the builder pass emits. */
+    public void testBesideAnAuthorBuildWithBuilderArgsConstructorWritten_keepsItsConstructor() {
+        addArgsConstructorAnnotation("BuilderArgsConstructor");
+        PsiClass point = configurePoint("@ClassBuilder @BuilderArgsConstructor", "", "build",
+            "return new Point(x, y);");
+        assertNoErrors();
+        assertEquals("the one the builder pass emits", 1, point.getConstructors().length);
+    }
+
+    /** A declared builder that leaves {@code build()} to the generator keeps the all-args constructor. */
+    public void testADeclaredBuilderLeavingBuildToTheGenerator_keepsTheAllArgsConstructor() {
+        PsiFile file = myFixture.configureByText("Point.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Point {
+                private int x;
+                private int y;
+                public String describe() { return x + "," + y; }
+                public static class Builder {
+                    public Builder origin() { return x(0).y(0); }
+                }
+                static String go() {
+                    return new Point(3, 4).describe() + "/" + Point.builder().origin().x(5).build().describe();
+                }
+            }
+            """);
+        assertNoErrors();
+        assertEquals(1, ((PsiJavaFile) file).getClasses()[0].getConstructors().length);
+    }
+
+    /**
+     * The augment provider stays names-only over a declared builder's
+     * supertypes and keeps contributing the setter an inherited {@code final}
+     * method blocks, as javac appends it before refusing it; the shape
+     * inspection is what reports it.
+     */
+    public void testASetterAnInheritedFinalMethodBlocks_isStillContributed() {
+        myFixture.addFileToProject("Fluent.java",
+            """
+            public abstract class Fluent<B> {
+                protected String tag;
+                public final B tag(String t) { this.tag = t; return self(); }
+                protected abstract B self();
+            }
+            """);
+        List<String> names = declaredBuilderMethodsOf("Item",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Item {
+                String tag;
+                public static class Builder extends Fluent<Builder> {
+                    @Override
+                    protected Builder self() { return this; }
+                }
+            }
+            """);
+        assertEquals("the generated tag(String) over the inherited one: " + names, 1, count(names, "tag"));
+        assertTrue("and build(): " + names, names.contains("build"));
+    }
+
+    // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
 

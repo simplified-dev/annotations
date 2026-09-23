@@ -1,10 +1,13 @@
 package dev.simplified.classbuilder.editor;
 
+import com.intellij.psi.CommonClassNames;
+import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.JavaRecursiveElementWalkingVisitor;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAssignmentExpression;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiClassInitializer;
+import com.intellij.psi.PsiClassType;
 import com.intellij.psi.PsiCodeBlock;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiEllipsisType;
@@ -17,6 +20,7 @@ import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiMethodCallExpression;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiParameter;
+import com.intellij.psi.PsiPrimitiveType;
 import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiStatement;
 import com.intellij.psi.PsiSubstitutor;
@@ -33,11 +37,14 @@ import com.intellij.psi.controlFlow.ControlFlowFactory;
 import com.intellij.psi.controlFlow.ControlFlowUtil;
 import com.intellij.psi.controlFlow.LocalsOrMyInstanceFieldsControlFlowPolicy;
 import com.intellij.psi.impl.source.PsiExtensibleClass;
+import com.intellij.psi.util.PsiTypesUtil;
 import com.intellij.psi.util.PsiUtil;
+import com.intellij.psi.util.TypeConversionUtil;
 import dev.simplified.accessor.inspect.AccessorConstants;
 import dev.simplified.args.inspect.ArgsConstants;
 import dev.simplified.classbuilder.apt.AccessorScheme;
 import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
+import dev.simplified.classbuilder.apt.InheritedMethod;
 import dev.simplified.classbuilder.apt.InstanceDefaults;
 import dev.simplified.classbuilder.apt.SetterScheme;
 import dev.simplified.classbuilder.apt.SetterShape;
@@ -230,6 +237,123 @@ public final class MergedSlotStorage {
             if (message != null) out.add(new CoveringMethod(own, message));
         }
         return out;
+    }
+
+    /**
+     * Reports each generated setter the merge appends into a declared builder
+     * that a method the builder inherits keeps from overriding it.
+     *
+     * <p>The rule and its wording are
+     * {@link DeclaredBuilderShape#unoverridableInheritedMethod}, asked of every
+     * synthesised setter no author method covers under
+     * {@link DeclaredBuilderShape#methodKey} - the setters the augment provider
+     * contributes - and of the methods the builder inherits, read as the
+     * processor reads them from the element model: see
+     * {@link #inheritedMethods}. Not for use from an augment provider: the
+     * supertypes are resolved.
+     *
+     * @param target the type the builder nests in
+     * @param executable the annotated constructor or static factory, or {@code null} when the
+     *     annotation is on the type
+     * @param declared the builder it declares
+     * @param annotation the {@code @ClassBuilder}, wherever it is written
+     * @return the diagnostic text for each blocked setter, in synthesis order
+     */
+    public static @NotNull List<String> unoverridableInheritedMethods(@NotNull PsiClass target,
+                                                                      @Nullable PsiMethod executable,
+                                                                      @NotNull PsiClass declared,
+                                                                      @NotNull PsiAnnotation annotation) {
+        String declaredName = declared.getName();
+        if (declaredName == null) return List.of();
+        BuilderSite site = new BuilderSite(target, executable, annotation);
+        GeneratedMemberFactory.EditorBuilderConfig config =
+            GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(annotation);
+        Set<String> authorKeys = authorKeys(declared);
+        List<InheritedMethod> inherited = null;
+        List<String> out = new ArrayList<>();
+        for (List<GeneratedMemberFactory.SlotSetter> setters
+            : GeneratedMemberFactory.settersBySlot(site, config, declared).values()) {
+            for (GeneratedMemberFactory.SlotSetter setter : setters) {
+                PsiMethod method = setter.method();
+                if (authorKeys.contains(generatedKey(method))) continue;
+                if (inherited == null) inherited = inheritedMethods(declared);
+                String message = DeclaredBuilderShape.unoverridableInheritedMethod(declaredName, method.getName(),
+                    presentableTypes(method), inherited);
+                if (message != null) out.add(message);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * The methods a declared builder inherits, read as the processor reads them.
+     *
+     * <p>Its supertypes are walked depth first, each superclass ahead of the
+     * interfaces beside it, with {@code java.lang.Object} read last; a private
+     * or static method, and a package-private one declared in another package,
+     * is not inherited and is left out. Each method is read as a member of the
+     * builder through the supertype's substitutor, so a self-typed supertype's
+     * {@code B} is the builder itself, and its return type accepts the builder
+     * where the builder is assignable to it or to its erasure. A supertype's own
+     * methods are read without the augment pass, as the element model holds
+     * only what a supertype compiled in the same round declares in source.
+     *
+     * @param declared the builder the author wrote
+     * @return the inherited methods, in the order the supertypes are walked
+     */
+    private static List<InheritedMethod> inheritedMethods(PsiClass declared) {
+        JavaPsiFacade facade = JavaPsiFacade.getInstance(declared.getProject());
+        List<PsiClass> supertypes = new ArrayList<>();
+        collectSupertypes(declared, supertypes, new HashSet<>());
+        PsiClass object = facade.findClass(CommonClassNames.JAVA_LANG_OBJECT, declared.getResolveScope());
+        if (object != null) supertypes.add(object);
+        PsiClassType builderType = PsiTypesUtil.getClassType(declared);
+
+        List<InheritedMethod> out = new ArrayList<>();
+        for (PsiClass supertype : supertypes) {
+            boolean samePackage = facade.arePackagesTheSame(supertype, declared);
+            PsiSubstitutor substitutor =
+                TypeConversionUtil.getSuperClassSubstitutor(supertype, declared, PsiSubstitutor.EMPTY);
+            for (PsiMethod method : GeneratedMemberFactory.ownMethods(supertype)) {
+                PsiType declaredReturn = method.getReturnType();
+                if (method.isConstructor() || declaredReturn == null) continue;
+                if (method.hasModifierProperty(PsiModifier.PRIVATE) || method.hasModifierProperty(PsiModifier.STATIC))
+                    continue;
+                if (!samePackage && !method.hasModifierProperty(PsiModifier.PUBLIC)
+                    && !method.hasModifierProperty(PsiModifier.PROTECTED)) continue;
+                List<String> parameters = new ArrayList<>();
+                for (PsiParameter parameter : method.getParameterList().getParameters()) {
+                    PsiType member = substitutor.substitute(parameter.getType());
+                    parameters.add(TypeConversionUtil.erasure(member == null ? parameter.getType() : member)
+                        .getCanonicalText());
+                }
+                PsiType returned = substitutor.substitute(declaredReturn);
+                boolean accepts = returned != null && !(returned instanceof PsiPrimitiveType)
+                    && (returned.isAssignableFrom(builderType)
+                        || TypeConversionUtil.erasure(returned).isAssignableFrom(builderType));
+                out.add(new InheritedMethod(method.getName(), parameters, String.valueOf(supertype.getName()),
+                    declaredReturn.getCanonicalText(), method.hasModifierProperty(PsiModifier.FINAL), accepts));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Collects every supertype of a class but {@code java.lang.Object}, depth
+     * first, each once.
+     *
+     * @param type the class whose supertypes are collected
+     * @param out the supertypes collected so far, appended to
+     * @param seen the classes already collected
+     */
+    private static void collectSupertypes(PsiClass type, List<PsiClass> out, Set<PsiClass> seen) {
+        for (PsiClassType direct : type.getSuperTypes()) {
+            PsiClass resolved = direct.resolve();
+            if (resolved == null || CommonClassNames.JAVA_LANG_OBJECT.equals(resolved.getQualifiedName())) continue;
+            if (!seen.add(resolved)) continue;
+            out.add(resolved);
+            collectSupertypes(resolved, out, seen);
+        }
     }
 
     /**

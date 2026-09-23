@@ -57,4 +57,21 @@ public class BlankFinalLiftTest {
             Set.of("retries"), qualified.assigned());
     }
 
+    /**
+     * Beside an author's own {@code build()} the all-args constructor is
+     * withheld, and what is left - javac's no-argument default, or a
+     * constructor an args annotation appends - assigns no initialized
+     * {@code final}. The field was lifted all the same, and the default
+     * constructor failed with {@code variable label not initialized in the
+     * default constructor}.
+     */
+    @Test
+    public void aWithheldAllArgsConstructor_keepsTheInitializer() {
+        assertFalse(BlankFinalLift.lifts("retries", List.of(), true));
+        assertTrue("the constructor build() reaches assigns it",
+            BlankFinalLift.lifts("retries", List.of(), false));
+        assertFalse("the author's constructors still answer for themselves",
+            BlankFinalLift.lifts("retries", List.of(writing("name")), false));
+    }
+
 }

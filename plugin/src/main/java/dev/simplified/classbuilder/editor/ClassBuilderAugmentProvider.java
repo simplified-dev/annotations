@@ -13,6 +13,7 @@ import com.intellij.psi.util.CachedValueProvider;
 import com.intellij.psi.util.CachedValuesManager;
 import com.intellij.psi.util.PsiModificationTracker;
 import com.intellij.util.IdempotenceChecker;
+import dev.simplified.args.inspect.ArgsConstants;
 import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
 import dev.simplified.classbuilder.apt.ChainRole;
 import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
@@ -661,17 +662,35 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      * so the editor surfaces a constructor exactly when javac will inject one.
      * Records keep their canonical constructor, a set {@code factoryMethod} means
      * {@code build()} never calls {@code new}, and any author-declared
-     * constructor suppresses synthesis outright. A declared nested builder never
-     * does, whichever {@code build()} it keeps: the generated one merged into it
-     * calls {@code new Target(..)}, and beside an author's own {@code build()}
-     * the constructor is emitted all the same, taking the place of javac's
-     * no-argument default.
+     * constructor suppresses synthesis outright.
+     *
+     * <p>A declared nested builder spelling its own {@code build()}, which the
+     * merge keeps, withholds it too, through
+     * {@link DeclaredBuilderShape#withholdsAllArgsConstructor} - the rule the
+     * processor asks - over the names that builder's own methods are written
+     * with and whether {@code @BuilderArgsConstructor} is written on the target.
+     * javac's no-argument default then stays for an author {@code build()}
+     * calling {@code new Target()}. A declared builder leaving {@code build()}
+     * to the generator keeps the constructor, which the generated one calls.
      *
      * <p>Reads {@code getOwnMethods()} rather than {@code getConstructors()}:
      * the latter is augment-aware and would recurse back into this provider.
      */
     private static boolean needsAllArgsConstructor(PsiClass target,
                                                    GeneratedMemberFactory.EditorBuilderConfig config) {
+        return owesAllArgsConstructor(target, config) && !authorBuildSurvives(target, config);
+    }
+
+    /**
+     * Whether the target's shape calls for the all-args constructor at all,
+     * before the declared builder is asked.
+     *
+     * @param target the annotated type
+     * @param config the resolved configuration for it
+     * @return whether the target is owed the constructor
+     */
+    private static boolean owesAllArgsConstructor(PsiClass target,
+                                                  GeneratedMemberFactory.EditorBuilderConfig config) {
         if (target.isRecord() || target.isInterface() || target.isEnum()) return false;
         if (target.hasModifierProperty(PsiModifier.ABSTRACT)) return false;
         if (!config.factoryMethod().isEmpty()) return false;
@@ -685,6 +704,48 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             }
         }
         return true;
+    }
+
+    /**
+     * Whether the declared builder's own build method survives the merge, as
+     * {@link DeclaredBuilderShape#withholdsAllArgsConstructor} answers it from
+     * names alone.
+     *
+     * <p>The builder's methods are read through {@code getOwnMethods()}, keyed
+     * by the parameter types as written, and the constructor annotation by the
+     * name it is written with - nothing here resolves.
+     *
+     * @param target the annotated type
+     * @param config the resolved configuration for it
+     * @return whether the all-args constructor is withheld for it
+     */
+    private static boolean authorBuildSurvives(PsiClass target,
+                                               GeneratedMemberFactory.EditorBuilderConfig config) {
+        PsiClass declared = ClassBuilderConstants.declaredBuilderOf(target, config.builderName());
+        if (declared == null) return false;
+        Set<String> keys = new HashSet<>();
+        for (PsiMethod own : GeneratedMemberFactory.ownMethods(declared)) keys.add(MergedSlotStorage.writtenKey(own));
+        return DeclaredBuilderShape.withholdsAllArgsConstructor(config.buildMethodName(), keys,
+            WrittenAnnotations.find(target, ArgsConstants.BUILDER_ARGS_FQN) != null);
+    }
+
+    /**
+     * Whether the all-args constructor this target is otherwise owed is
+     * withheld beside an author's own {@code build()}.
+     *
+     * <p>Every {@code final} initializer then stays on its field on both halves,
+     * nothing generated being left to assign it, which is what the blank-final
+     * lift has to know.
+     *
+     * @param target the class to test
+     * @return whether the constructor is withheld
+     */
+    public static boolean withholdsAllArgsConstructor(@NotNull PsiClass target) {
+        PsiAnnotation annotation = findClassBuilderAnnotation(target);
+        if (annotation == null) return false;
+        GeneratedMemberFactory.EditorBuilderConfig config =
+            GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(annotation);
+        return owesAllArgsConstructor(target, config) && authorBuildSurvives(target, config);
     }
 
     /**

@@ -875,6 +875,72 @@ public final class DeclaredBuilderShape {
     }
 
     /**
+     * Reports an inherited method of the declared builder's supertypes that a
+     * generated setter appended into it cannot override.
+     *
+     * <p>The merge appends a setter wherever the declared builder itself spells
+     * nothing under its {@link #methodKey}, and a method the builder inherits
+     * under that key is then overridden by it. javac refuses the override where
+     * the inherited method is {@code final}, or where the setter's return type -
+     * the builder itself - is not one the inherited method's return type
+     * accepts: {@code void}, a primitive, or a reference type the builder is not
+     * assignable to. It refuses it on the target's line, a line the author
+     * never wrote, so the report names the method and the supertype declaring
+     * it instead. The first inherited method under the key that blocks the
+     * setter is reported; an inherited method taking other parameter types is
+     * an overload beside the setter and is left alone.
+     *
+     * @param declaredName the declared builder's simple name
+     * @param setterName the appended setter's name
+     * @param setterParameterTypes each parameter type of the appended setter as either model renders it, in order
+     * @param inherited the methods the declared builder inherits, in the order its supertypes are read
+     * @return the diagnostic text both halves report, or {@code null} when the setter overrides nothing it cannot
+     */
+    public static @Nullable String unoverridableInheritedMethod(@NotNull String declaredName,
+                                                                @NotNull String setterName,
+                                                                @NotNull List<String> setterParameterTypes,
+                                                                @NotNull List<InheritedMethod> inherited) {
+        String key = methodKey(setterName, setterParameterTypes);
+        for (InheritedMethod method : inherited) {
+            if (!method.isFinal() && method.acceptsBuilderReturn()) continue;
+            if (!methodKey(method.name(), method.parameterTypes()).equals(key)) continue;
+            String opening = "@ClassBuilder merged into '" + declaredName + "' finds "
+                + signature(setterName, setterParameterTypes) + " inherited from " + method.declaringType();
+            if (method.isFinal())
+                return opening + " declared final, so the generated setter of that signature cannot override it";
+            return opening + " returning " + unqualified(typeText(method.returnType()))
+                + ", which the generated setter returning " + declaredName + " cannot override";
+        }
+        return null;
+    }
+
+    /**
+     * Decides whether the all-args constructor is withheld from a target
+     * because the author's own build method survives the merge.
+     *
+     * <p>The merge keeps an author method in place of every generated member
+     * under the same {@link #methodKey}, so the declared builder's own
+     * no-argument method of the build method's configured name - after any
+     * {@code @BuilderNames(build)} rename - is the {@code build()} callers get.
+     * Nothing generated then calls the all-args constructor, and emitting it
+     * would remove javac's no-argument default that an author {@code build()}
+     * calling {@code new Target()} relies on. {@code @BuilderArgsConstructor}
+     * written on the target names that constructor, so it is emitted all the
+     * same; {@code @AllArgsConstructor} appends its own.
+     *
+     * @param buildMethodName the build method's configured name
+     * @param authorMethodKeys the {@link #methodKey} of each method the declared builder declares, empty when the
+     *     target declares none
+     * @param builderArgsConstructorWritten whether {@code @BuilderArgsConstructor} is written on the target
+     * @return whether the all-args constructor is withheld
+     */
+    public static boolean withholdsAllArgsConstructor(@NotNull String buildMethodName,
+                                                      @NotNull Collection<String> authorMethodKeys,
+                                                      boolean builderArgsConstructorWritten) {
+        return !builderArgsConstructorWritten && authorMethodKeys.contains(methodKey(buildMethodName, List.of()));
+    }
+
+    /**
      * Decides whether the entry points can instantiate a declared builder.
      *
      * <p>Every entry point calls the builder's constructor with the seeds, in
