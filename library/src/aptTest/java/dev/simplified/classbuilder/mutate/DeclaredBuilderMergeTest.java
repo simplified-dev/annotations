@@ -1738,6 +1738,76 @@ public class DeclaredBuilderMergeTest {
     }
 
     /**
+     * A link declaring its builder and its own copy constructor, spelled
+     * {@code Link.Builder} as a migrated {@code @SuperBuilder} class writes it,
+     * keeps that constructor alone. The processor matched only the simple
+     * spelling and appended a second, and javac reported
+     * {@code constructor Link(demo.Link.Builder) is already defined}.
+     */
+    @Test
+    public void merge_onAConcreteLink_keepsAQualifiedCopyConstructorAlone() throws Exception {
+        Compilation c = compile(base(),
+            JavaFileObjects.forSourceLines("demo.Link",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Link extends Base {",
+                "    private String extra;",
+                "    public String getExtra() { return extra; }",
+                "    protected Link(Link.Builder b) { super(b); this.extra = b.extra + \"!\"; }",
+                "    public static class Builder extends Base.Builder<Link, Builder> { }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseLink",
+                "package demo;",
+                "public class UseLink {",
+                "    public static String go() {",
+                "        Link link = Link.builder().label(\"l\").extra(\"x\").build();",
+                "        return link.getLabel() + \"/\" + link.getExtra();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("l/x!", runGo(c, "demo.UseLink"));
+    }
+
+    /**
+     * The same on a root declaring its builder, whose copy constructor takes
+     * the wildcard form {@code Shape.Builder<?, ?>}. javac reported
+     * {@code constructor Shape(demo.Shape.Builder<?,?>) is already defined}.
+     */
+    @Test
+    public void merge_onAnAbstractRoot_keepsAQualifiedCopyConstructorAlone() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public abstract class Shape {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "    protected Shape(Shape.Builder<?, ?> b) { this.name = b.name + \"!\"; }",
+                "    public abstract static class Builder<T extends Shape, B extends Builder<T, B>> { }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.Circle",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Circle extends Shape {",
+                "    private int radius;",
+                "    public int getRadius() { return radius; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseShape",
+                "package demo;",
+                "public class UseShape {",
+                "    public static String go() {",
+                "        Circle c = Circle.builder().name(\"c\").radius(1).build();",
+                "        return c.getName() + \"/\" + c.getRadius();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("c!/1", runGo(c, "demo.UseShape"));
+    }
+
+    /**
      * A chained abstract keeps its builder abstract and is given the setters
      * only - {@code self()} and {@code build()} stay the root's, inherited, so
      * the declared class carries neither.

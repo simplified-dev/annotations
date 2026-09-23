@@ -87,6 +87,16 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   `generateCopyConstructor`, and the author's own builder-taking constructor - rather than on the
   chain role alone.
 
+- **A hand-written copy constructor naming the builder through its target is kept alone.** The
+  author's `protected Link(Link.Builder b)` or `protected Shape(Shape.Builder<?, ?> b)` - the spelling
+  a migrated `@SuperBuilder` class carries - was not recognised as their copy constructor, because
+  only the simple `Builder` spelling was. The processor appended a second of the same erasure, which
+  javac reported as already defined on the class line, and the editor contributed one beside it,
+  reported on the author's constructor instead. Both halves now read the parameter type through one
+  rule: the builder by its simple name, or qualified through the target and whatever encloses it. A
+  constructor taking an ancestor's `Base.Builder` shares the simple name but not the erasure, and
+  still gets the generated copy constructor beside it.
+
 - **A merged builder's slot fields resolve in the editor.** The merge appends them and the editor
   contributed none, so an author's own verb inside that class referencing a slot was red over source
   that builds - which lands on exactly the hand-written verb the merge exists to allow. Each slot is

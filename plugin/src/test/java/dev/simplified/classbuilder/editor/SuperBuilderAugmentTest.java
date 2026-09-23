@@ -243,6 +243,74 @@ public class SuperBuilderAugmentTest extends LightJavaCodeInsightFixtureTestCase
         assertTrue("and the author's own is untouched: " + types, types.contains("String"));
     }
 
+    /**
+     * An author copy constructor naming the builder through its target -
+     * {@code P.Builder<?, ?>} on the root, {@code q.K.Builder} on the link - is
+     * the author's version as much as the simple spelling is. The editor
+     * matched only the simple spelling and contributed a light constructor of
+     * the same erasure, which the platform reported as already defined on the
+     * author's line.
+     */
+    public void testWhereTheTargetDeclaresItsOwnQualified_isNotOfferedTwice() {
+        myFixture.addFileToProject("q/P.java",
+            """
+            package q;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class P {
+                String t;
+                protected P(P.Builder<?, ?> b) { }
+            }
+            """);
+        myFixture.configureByText("K.java",
+            """
+            package q;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class K extends P {
+                int n;
+                protected K(q.K.Builder b) { super(b); }
+            }
+            """);
+        assertNoErrors();
+        myFixture.configureFromTempProjectFile("q/P.java");
+        assertNoErrors();
+        for (String name : List.of("q.P", "q.K")) {
+            List<String> types = constructorParameterTypesOf(myFixture.findClass(name));
+            assertEquals("the author's version wins and nothing lands beside it on " + name + ": " + types,
+                1, types.stream().filter(t -> t.startsWith("Builder")).count());
+        }
+    }
+
+    /**
+     * A constructor taking an ancestor's builder shares the simple name but not
+     * the erasure, so the link's own copy constructor is still contributed.
+     */
+    public void testWhereTheTargetTakesTheAncestorsBuilder_isStillOffered() {
+        addPlainChain();
+        myFixture.addFileToProject("b/J.java",
+            """
+            package b;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class J extends P {
+                int n;
+                J(P.Builder<?, ?> b) { super(b); }
+            }
+            """);
+        myFixture.configureByText("Use.java", "package b;\npublic class Use { }\n");
+        PsiClass link = myFixture.findClass("b.J");
+        List<String> own = new ArrayList<>();
+        for (PsiMethod method : link.getConstructors()) {
+            PsiParameter[] parameters = method.getParameterList().getParameters();
+            if (parameters.length == 1) own.add(parameters[0].getType().getCanonicalText());
+        }
+        assertTrue("the link's own copy constructor is still missing without this: " + own,
+            own.contains("b.J.Builder"));
+        assertTrue("and the author's is untouched: " + own,
+            own.stream().anyMatch(type -> type.startsWith("b.P.Builder<")));
+    }
+
     public void testRootBuilder_isAbstractAndSelfTyped() {
         myFixture.configureByText("P.java",
             """
@@ -668,6 +736,52 @@ public class SuperBuilderAugmentTest extends LightJavaCodeInsightFixtureTestCase
             }
             """);
         assertNoErrors();
+    }
+
+    /**
+     * A root and a link each declaring their builder and a copy constructor
+     * spelled through the target - {@code Shape.Builder<?, ?>} and
+     * {@code Link.Builder}, as a migrated {@code @SuperBuilder} class writes
+     * them - keep that constructor alone. The editor contributed a second
+     * beside each, reported as {@code 'Link(Builder)' is already defined in
+     * 'u.Link'} on the author's line.
+     */
+    public void testMergeWithAQualifiedCopyConstructor_isNotOfferedTwice() {
+        myFixture.addFileToProject("u/Shape.java",
+            """
+            package u;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Shape {
+                String name;
+                public String getName() { return name; }
+                protected Shape(Shape.Builder<?, ?> b) { this.name = b.name; }
+                public abstract static class Builder<T extends Shape, B extends Builder<T, B>> { }
+            }
+            """);
+        myFixture.configureByText("Link.java",
+            """
+            package u;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Link extends Shape {
+                String extra;
+                public String getExtra() { return extra; }
+                protected Link(Link.Builder b) { super(b); this.extra = b.extra; }
+                public static class Builder extends Shape.Builder<Link, Builder> { }
+            }
+            class Use {
+                String go() { return Link.builder().name("n").extra("x").build().getExtra(); }
+            }
+            """);
+        assertNoErrors();
+        myFixture.configureFromTempProjectFile("u/Shape.java");
+        assertNoErrors();
+        for (String name : List.of("u.Shape", "u.Link")) {
+            List<String> types = constructorParameterTypesOf(myFixture.findClass(name));
+            assertEquals("the author's version wins and nothing lands beside it on " + name + ": " + types,
+                1, types.stream().filter(t -> t.startsWith("Builder")).count());
+        }
     }
 
     /**

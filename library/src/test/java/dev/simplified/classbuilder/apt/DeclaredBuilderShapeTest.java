@@ -670,4 +670,27 @@ public class DeclaredBuilderShapeTest {
             DeclaredBuilderShape.unassignedSeed("Builder", "origin", false));
     }
 
+    /**
+     * The copy-constructor rule reads the builder through its target at any
+     * depth of qualification and in either model's spelling, and refuses an
+     * ancestor's builder of the same simple name.
+     */
+    @Test
+    public void namesOwnBuilder_readsTheQualifierThroughTheTarget() {
+        assertTrue(DeclaredBuilderShape.namesOwnBuilder("Builder", "Link", "Builder"));
+        assertTrue(DeclaredBuilderShape.namesOwnBuilder("Builder<?, ?>", "Shape", "Builder"));
+        assertTrue(DeclaredBuilderShape.namesOwnBuilder("Link.Builder", "Link", "Builder"));
+        assertTrue(DeclaredBuilderShape.namesOwnBuilder("Shape.Builder<?,?>", "Shape", "Builder"));
+        assertTrue(DeclaredBuilderShape.namesOwnBuilder("demo.Outer . Link.Builder", "Link", "Builder"));
+        assertTrue(DeclaredBuilderShape.namesOwnBuilder("Link.Maker", "Link", "Maker"));
+        assertFalse("an ancestor's builder",
+            DeclaredBuilderShape.namesOwnBuilder("Base.Builder<?, ?>", "Link", "Builder"));
+        assertFalse("a type ending in the target's name",
+            DeclaredBuilderShape.namesOwnBuilder("MyLink.Builder", "Link", "Builder"));
+        assertFalse("another name",
+            DeclaredBuilderShape.namesOwnBuilder("Link.Builder", "Link", "Maker"));
+        assertFalse("an array of the builder",
+            DeclaredBuilderShape.namesOwnBuilder("Builder[]", "Link", "Builder"));
+    }
+
 }

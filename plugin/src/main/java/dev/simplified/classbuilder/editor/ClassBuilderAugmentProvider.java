@@ -185,6 +185,12 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      * their own - the inverse of the divergence this closes, and the same class
      * of error.
      *
+     * <p>Whether an author constructor is the copy constructor is answered by
+     * {@link DeclaredBuilderShape#namesOwnBuilder} from the parameter type as
+     * written, the rule the processor applies to the same source, so a
+     * qualified spelling such as {@code Link.Builder} is the author's version
+     * on both halves.
+     *
      * <p>Reads {@code getOwnMethods()} rather than {@code getConstructors()}:
      * the latter is augment-aware and would recurse back into this provider.
      *
@@ -196,6 +202,8 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
                                                 GeneratedMemberFactory.EditorBuilderConfig config) {
         if (!config.generateCopyConstructor()) return false;
         if (!(target instanceof PsiExtensibleClass extensible)) return false;
+        String targetName = target.getName();
+        if (targetName == null) return false;
         String builderName = config.builderName();
         for (PsiMethod own : extensible.getOwnMethods()) {
             if (!own.isConstructor()) continue;
@@ -203,8 +211,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             if (parameters.length != 1) continue;
             PsiTypeElement written = parameters[0].getTypeElement();
             if (written == null) continue;
-            String text = written.getText();
-            if (text.equals(builderName) || text.startsWith(builderName + "<")) return false;
+            if (DeclaredBuilderShape.namesOwnBuilder(written.getText(), targetName, builderName)) return false;
         }
         return true;
     }

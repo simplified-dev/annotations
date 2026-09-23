@@ -1052,6 +1052,27 @@ public final class DeclaredBuilderShape {
         return raw.equals(expected) || raw.endsWith("." + expected);
     }
 
+    /**
+     * Whether a written parameter type names the target's own builder, which is
+     * what makes a one-parameter constructor the author's copy constructor.
+     *
+     * <p>The builder may be spelled by its simple name or through the target,
+     * qualified further by whatever encloses the target and its package. Type
+     * arguments are ignored, since a second constructor would clash on the
+     * erasure. Another type's builder of the same simple name - an ancestor's
+     * {@code Base.Builder} - is not the target's, and a constructor taking it
+     * leaves the copy constructor to be generated.
+     *
+     * @param written the parameter type as written
+     * @param targetName the simple name of the target the constructor is declared in
+     * @param builderName the simple name of the target's builder
+     * @return whether the parameter type is the target's builder
+     */
+    public static boolean namesOwnBuilder(@NotNull String written, @NotNull String targetName,
+                                          @NotNull String builderName) {
+        return rawType(written).equals(builderName) || namesType(written, targetName + "." + builderName);
+    }
+
     /** Each type, rendered and reduced to its erased simple name. */
     private static List<String> erasedNames(List<String> types) {
         List<String> out = new ArrayList<>(types.size());

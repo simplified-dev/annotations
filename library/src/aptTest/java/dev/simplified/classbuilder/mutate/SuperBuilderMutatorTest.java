@@ -178,6 +178,86 @@ public class SuperBuilderMutatorTest {
         assertEquals(2, leafCls.getMethod("getCount").invoke(built));
     }
 
+    /**
+     * A hand-written copy constructor naming the builder through its target -
+     * {@code Base.Builder<?, ?>} on the root, {@code demo.Leaf.Builder} on the
+     * link - is the author's version as much as the simple spelling is. The
+     * processor matched only the simple spelling and appended a second
+     * constructor of the same erasure, which javac reported as already defined
+     * on the class line.
+     */
+    @Test
+    public void userWrittenCopyCtor_spelledWithTheQualifiedBuilder_respected() throws Exception {
+        JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Base",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Base {",
+            "    String name;",
+            "    public String getName() { return name; }",
+            "    protected Base(Base.Builder<?, ?> b) { this.name = b.name + \"!\"; }",
+            "}");
+        JavaFileObject child = JavaFileObjects.forSourceLines("demo.Leaf",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Leaf extends Base {",
+            "    int count;",
+            "    public int getCount() { return count; }",
+            "    protected Leaf(demo.Leaf.Builder b) { super(b); this.count = b.count * 10; }",
+            "}");
+        Compilation c = compile(parent, child);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> baseCls = Class.forName("demo.Base", true, cl);
+        Class<?> leafCls = Class.forName("demo.Leaf", true, cl);
+        Class<?> leafBuilder = nested(leafCls, "Builder");
+        Object b = leafCls.getMethod("builder").invoke(null);
+        leafBuilder.getMethod("name", String.class).invoke(b, "hello");
+        leafBuilder.getMethod("count", int.class).invoke(b, 2);
+        Object built = leafBuilder.getMethod("build").invoke(b);
+        assertEquals("hello!", baseCls.getMethod("getName").invoke(built));
+        assertEquals(20, leafCls.getMethod("getCount").invoke(built));
+    }
+
+    /**
+     * A one-parameter constructor taking an ancestor's builder is not the
+     * target's copy constructor, even though the simple names agree: its
+     * erasure differs, so the generated one lands beside it and is the one
+     * {@code build()} calls.
+     */
+    @Test
+    public void aConstructorTakingTheAncestorsBuilder_isNotTheCopyConstructor() throws Exception {
+        JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Base",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Base {",
+            "    String name;",
+            "    public String getName() { return name; }",
+            "}");
+        JavaFileObject child = JavaFileObjects.forSourceLines("demo.Leaf",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Leaf extends Base {",
+            "    int count;",
+            "    public int getCount() { return count; }",
+            "    Leaf(Base.Builder<?, ?> b) { super(b); this.count = -1; }",
+            "}");
+        Compilation c = compile(parent, child);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> leafCls = Class.forName("demo.Leaf", true, cl);
+        Class<?> leafBuilder = nested(leafCls, "Builder");
+        Object b = leafCls.getMethod("builder").invoke(null);
+        leafBuilder.getMethod("count", int.class).invoke(b, 2);
+        Object built = leafBuilder.getMethod("build").invoke(b);
+        assertEquals(2, leafCls.getMethod("getCount").invoke(built));
+    }
+
     // ------------------------------------------------------------------
     // Abstract target has no static builder() / from() bootstraps
     // ------------------------------------------------------------------
