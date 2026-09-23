@@ -289,6 +289,30 @@ public class ArgsConstructorMutatorTest {
     }
 
     /**
+     * The refused {@code @NoArgsConstructor} appends nothing, so its error is
+     * the only one: a {@code new Tagged()} elsewhere is not reported beside it.
+     */
+    @Test
+    public void noArgs_refusedOverAnUnassignedFinal_isTheOnlyError() {
+        JavaFileObject tagged = JavaFileObjects.forSourceLines("demo.Tagged",
+            "package demo;",
+            "import dev.simplified.annotations.NoArgsConstructor;",
+            "@NoArgsConstructor",
+            "public class Tagged {",
+            "    private final String tag;",
+            "}");
+        JavaFileObject use = JavaFileObjects.forSourceLines("demo.Use",
+            "package demo;",
+            "public class Use {",
+            "    Tagged make() { return new Tagged(); }",
+            "}");
+        Compilation c = compile(tagged, use);
+        assertThat(c).hadErrorContaining("@NoArgsConstructor would leave final field 'tag' unassigned")
+            .inFile(tagged).onLine(4);
+        assertThat(c).hadErrorCount(1);
+    }
+
+    /**
      * {@code force} deliberately violates the type's own nullness contract - the
      * JSON layer fills the fields immediately afterwards, and the alternative is
      * giving up {@code final}.

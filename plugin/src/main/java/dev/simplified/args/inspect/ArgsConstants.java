@@ -185,12 +185,31 @@ public final class ArgsConstants {
         if (target.isRecord() || target.isInterface()) return out;
         for (PsiAnnotation annotation : written(target)) {
             ArgsMode mode = modeOf(annotation);
-            if (mode == null || mode == ArgsMode.BUILDER) continue;
-            if (accessKeyword(annotation, mode) == null) continue;
-            if (mode == ArgsMode.NONE && !force(annotation) && !unassignedFinals(target).isEmpty()) continue;
+            if (!appends(target, annotation, mode)) continue;
             out.add(new AppendedConstructor(mode, select(target, mode, List.of())));
         }
         return out;
+    }
+
+    /**
+     * Whether one written constructor annotation appends a constructor, as the
+     * processor's constructor pass decides it for a class or an enum.
+     *
+     * <p>{@code @BuilderArgsConstructor} is the builder pass's own to emit, an
+     * annotation at {@code AccessLevel.NONE} appends nothing, and
+     * {@code @NoArgsConstructor} appends nothing where it would leave a
+     * {@code final} field unassigned without {@code force} - the processor
+     * reports that and moves on.
+     *
+     * @param target the class the annotation is written on
+     * @param annotation the written annotation
+     * @param mode its mode, or {@code null} when it is not one of the four
+     * @return whether the processor appends its constructor
+     */
+    public static boolean appends(PsiClass target, PsiAnnotation annotation, @Nullable ArgsMode mode) {
+        if (mode == null || mode == ArgsMode.BUILDER) return false;
+        if (accessKeyword(annotation, mode) == null) return false;
+        return mode != ArgsMode.NONE || force(annotation) || unassignedFinals(target).isEmpty();
     }
 
     /**

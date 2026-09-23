@@ -468,10 +468,12 @@ public final class MergedSlotStorage {
      * constructor free to. A constructor delegating through {@code this(..)} has
      * the seed assigned by the one it calls, so any assignment of its own is a
      * second one, and a constructor may assign it twice itself - on two paths
-     * that meet, or inside a loop - both reported on the assignment javac
-     * reports. A seed the author declares a field for is the platform's to
-     * check, that field being written in source. Wherever a flow cannot be
-     * built, nothing is reported.
+     * that meet, or inside a loop. Each reassignment, after an instance
+     * initializer as much as after a delegation or an earlier write, is
+     * reported on the assignment javac reports; a missing one on the
+     * constructor's name. A seed the author declares a field for is the
+     * platform's to check, that field being written in source. Wherever a flow
+     * cannot be built, nothing is reported.
      *
      * <p>A constructor a constructor annotation appends onto the builder is one
      * of its constructors too. The constructor pass runs before the merge, so it
@@ -547,8 +549,10 @@ public final class MergedSlotStorage {
                 PsiElement anchor = constructor.getNameIdentifier();
                 if (anchor == null) anchor = constructor;
                 if (mayBeInitialized && !definitelyLeavesUnassigned(body, appended)) {
-                    out.add(new MisassignedSeed(anchor, DeclaredBuilderShape.reassignedSeed(declaredName, seed,
-                        DeclaredBuilderShape.PriorAssignment.INSTANCE_INITIALIZER)));
+                    PsiReferenceExpression write = firstWrite(body, appended);
+                    out.add(new MisassignedSeed(write == null ? anchor : write,
+                        DeclaredBuilderShape.reassignedSeed(declaredName, seed,
+                            DeclaredBuilderShape.PriorAssignment.INSTANCE_INITIALIZER)));
                     continue;
                 }
                 PsiReferenceExpression again = assignedAgain(body, appended);

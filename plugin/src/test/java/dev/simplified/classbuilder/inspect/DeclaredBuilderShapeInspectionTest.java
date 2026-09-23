@@ -877,8 +877,11 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
      * variable origin might already have been assigned}. The platform's check
      * never saw the appended field and the seed rule looked only for a missing
      * assignment, so the editor was green over it.
+     *
+     * <p>javac reports it on the assignment, a line below the constructor's own
+     * here; the report sat on the constructor's name.
      */
-    public void testASeedAnInstanceInitializerAndAConstructorBothAssign_isReportedOnThatConstructor() {
+    public void testASeedAnInstanceInitializerAndAConstructorBothAssign_isReportedOnTheAssignment() {
         addBuilderSeedAnnotation();
         myFixture.configureByText("Slip.java",
             """
@@ -891,7 +894,10 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
                 public String getItem() { return item; }
                 public static class Builder {
                     { origin = "desk"; }
-                    public Builder(String origin) { this.origin = origin; }
+                    public Builder(String origin) {
+                        String trimmed = origin.trim();
+                        this.origin = trimmed;
+                    }
                     public Builder(int ignored) { }
                 }
             }
@@ -900,16 +906,7 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
             "@ClassBuilder merged into 'Builder' appends the seed 'origin' as a final field, and this "
                 + "constructor assigns it after an instance initializer already has",
             theOnlyError());
-        List<String> anchors = new ArrayList<>();
-        for (HighlightInfo info : myFixture.doHighlighting()) {
-            String description = info.getDescription();
-            if (info.getSeverity() == HighlightSeverity.ERROR && description != null
-                && description.contains("appends the seed")) {
-                int line = myFixture.getEditor().getDocument().getLineNumber(info.getStartOffset());
-                anchors.add(info.getText() + "@" + (line + 1));
-            }
-        }
-        assertEquals("reported on the constructor that assigns it again", List.of("Builder@10"), anchors);
+        assertEquals("reported where javac reports it", List.of("this.origin@12"), seedAnchors());
     }
 
     /**

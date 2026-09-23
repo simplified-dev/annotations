@@ -17,6 +17,10 @@ import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
 import dev.simplified.testutil.JSvgErrorSuppressor;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 /**
  * Behaviour of {@link GeneratedMemberHighlightFilter} over a real highlighting
  * pass: the two compiler-parity errors are gone from the fields a generated
@@ -309,7 +313,9 @@ public class GeneratedMemberHighlightFilterTest extends LightJavaCodeInsightFixt
 
     /**
      * The blank-final lift: {@code retainInit} keeps the initializer as a builder
-     * default and strips it from the field, so each write is the field's first.
+     * default and strips it from the field, so each constructor's write is the
+     * field's first. javac accepts every one of these shapes - through
+     * {@code this}, by the bare name, and parenthesised.
      */
     public void testWritesToALiftedBlankFinalAreCleared() {
         configure(
@@ -321,8 +327,11 @@ public class GeneratedMemberHighlightFilterTest extends LightJavaCodeInsightFixt
                 public Target(int a) {
                     this.a = a;
                 }
-                void reset(int v) {
-                    a = v;
+                public Target(long v) {
+                    a = (int) v;
+                }
+                public Target(short v) {
+                    (this.a) = v;
                 }
             }
             """);
@@ -345,12 +354,112 @@ public class GeneratedMemberHighlightFilterTest extends LightJavaCodeInsightFixt
                 public Target(int a) {
                     this.a = a;
                 }
-                void reset(int v) {
-                    a = v;
-                }
             }
             """);
         assertEquals(0, errorCount(FINAL_ASSIGNMENT));
+    }
+
+    /**
+     * A blank final is assigned only by its own class's constructors, so javac
+     * rejects both method writes with {@code cannot assign a value to final
+     * variable a} on their own lines. The report was dropped because the field
+     * is lifted, whatever the write sat in, which left the editor green over
+     * source javac rejects.
+     */
+    public void testWritesToALiftedBlankFinalInAMethod_keepTheReport() {
+        configure(
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Target {
+                private final int a = 128;
+                public Target(int a) {
+                    this.a = a;
+                }
+                void reset(int v) {
+                    a = v;
+                }
+                void again(int v) {
+                    this.a = v;
+                }
+            }
+            """);
+        assertEquals("javac rejects the two method writes", List.of(9, 12), finalAssignmentLines());
+    }
+
+    /**
+     * A lifted field is assigned by every constructor, so an instance
+     * initializer's write is one more than javac accepts - it reports
+     * {@code variable a might already have been assigned} on the constructor.
+     * The editor keeps its own report on the initializer's write.
+     */
+    public void testAWriteToALiftedBlankFinalInAnInstanceInitializer_keepsTheReport() {
+        configure(
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Target {
+                private final int a = 128;
+                {
+                    a = 5;
+                }
+                public Target(int a) {
+                    this.a = a;
+                }
+            }
+            """);
+        assertEquals("javac rejects the initializer's write", List.of(6), finalAssignmentLines());
+    }
+
+    /**
+     * A compound assignment and an increment read the field as well as write
+     * it, so javac rejects each even in a constructor - here with
+     * {@code variable a might already have been assigned} on the line of each.
+     */
+    public void testACompoundWriteToALiftedBlankFinalInAConstructor_keepsTheReport() {
+        configure(
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Target {
+                private final int a = 128;
+                public Target(int a) {
+                    this.a = a;
+                    this.a += 1;
+                }
+                public Target() {
+                    this.a = 0;
+                    this.a++;
+                }
+            }
+            """);
+        assertEquals("javac rejects the compound write and the increment",
+            List.of(7, 11), finalAssignmentLines());
+    }
+
+    /**
+     * Inside a constructor, a write from a lambda or a local class, or through
+     * any qualifier but a bare {@code this}, is not the constructor assigning
+     * its own field, and javac rejects each.
+     */
+    public void testAConstructorWriteNotToItsOwnField_keepsTheReport() {
+        configure(
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Target {
+                private static Target last;
+                private final int a = 128;
+                public Target(int a) {
+                    this.a = a;
+                    Runnable r = () -> { this.a = 3; };
+                    class Local { void f() { Target.this.a = 1; } }
+                    last.a = 4;
+                }
+            }
+            """);
+        assertEquals("javac rejects the lambda's, the local class's and the other instance's writes",
+            List.of(8, 9, 10), finalAssignmentLines());
     }
 
     /**
@@ -453,6 +562,21 @@ public class GeneratedMemberHighlightFilterTest extends LightJavaCodeInsightFixt
      */
     private boolean reportsFinalAssignment(String name) {
         return reportsError(FINAL_ASSIGNMENT + " '" + name + "'");
+    }
+
+    /**
+     * The one-based lines of every surviving assignment-to-final report, in
+     * source order.
+     *
+     * @return the lines
+     */
+    private List<Integer> finalAssignmentLines() {
+        List<Integer> lines = new ArrayList<>();
+        for (HighlightInfo info : myFixture.doHighlighting())
+            if (describes(info, FINAL_ASSIGNMENT))
+                lines.add(myFixture.getEditor().getDocument().getLineNumber(info.getStartOffset()) + 1);
+        Collections.sort(lines);
+        return lines;
     }
 
     /**

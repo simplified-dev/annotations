@@ -3563,6 +3563,38 @@ public class DeclaredBuilderMergeTest {
     }
 
     /**
+     * On a constructor spanning several lines, javac reports the reassignment
+     * after an instance initializer on the assignment's line, not on the
+     * constructor's. {@code DeclaredBuilderShapeInspectionTest} anchors its
+     * report on the same assignment.
+     */
+    @Test
+    public void merge_onASeededConstructor_whoseInitializerAndALongerConstructorBothAssign_failsOnTheAssignment() {
+        JavaFileObject slip = JavaFileObjects.forSourceLines("demo.Slip",
+            "package demo;",
+            "import dev.simplified.annotations.BuilderSeed;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "public final class Slip {",
+            "    private final String item;",
+            "    @ClassBuilder",
+            "    Slip(@BuilderSeed String origin, String item) { this.item = origin + \":\" + item; }",
+            "    public String getItem() { return item; }",
+            "    public static class Builder {",
+            "        { origin = \"desk\"; }",
+            "        public Builder(String origin) {",
+            "            String trimmed = origin.trim();",
+            "            this.origin = trimmed;",
+            "        }",
+            "    }",
+            "}");
+        Compilation c = compile(slip);
+        assertThat(c).failed();
+        assertThat(c).hadErrorCount(1);
+        assertThat(c).hadErrorContaining("variable origin might already have been assigned")
+            .inFile(slip).onLine(13);
+    }
+
+    /**
      * A varargs parameter's merged slot is an array field, so an author's verb
      * reads its length and assigns it to an array local.
      * {@code DeclaredBuilderMergeParityTest} resolves the same verb against the

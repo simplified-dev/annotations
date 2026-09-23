@@ -255,6 +255,22 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   now names the copy it is declared beside, as javac's generated method declares it, a bound naming
   another parameter of the list included.
 
+- **A write to a lifted `final` field outside a constructor stays red in the editor.** The builder
+  lifts a `final` field's initializer off it, and the editor drops the platform's `Cannot assign a
+  value to final variable` on every write to such a field, since in the class javac emits a
+  constructor's write is the field's first. It dropped it wherever the write sat, so
+  `void reset(int v) { a = v; }` was green while javac rejects it on that line - as it rejects an
+  instance initializer's write beside constructors that all assign the field, a compound assignment
+  or an increment, and a write from a lambda, a local class or through another instance. The report
+  is now dropped only for a plain `=` written directly in a constructor of the field's own class,
+  through the bare name or `this`.
+
+- **A refused `@NoArgsConstructor` contributes no constructor in the editor.** Where it would leave
+  a `final` field unassigned without `force`, the build reports that and appends nothing, and the
+  editor contributed a public no-argument constructor beside the same error. It now contributes
+  what the build appends, so the error on the annotation stands alone; with `force = true` the
+  constructor is contributed as before.
+
 ### Changed
 
 - **BREAKING: `mergeDeclaredBuilder` is removed, and a declared builder is always merged into.** A
@@ -372,8 +388,9 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   initializer assigning the seed assigning it for every constructor, as javac finds - and a
   constructor assigning the seed where an instance initializer may already have, which javac
   refuses as `variable ... might already have been assigned`. So is one assigning it after the
-  `this(..)` call it delegates through, or twice itself - on two paths that meet, or inside a loop -
-  each reported on the assignment javac reports. A constructor an `@AllArgsConstructor`,
+  `this(..)` call it delegates through, or twice itself - on two paths that meet, or inside a loop.
+  Each of these reassignments is reported on the assignment javac reports, and a missing assignment
+  on the constructor's name. A constructor an `@AllArgsConstructor`,
   `@RequiredArgsConstructor` or `@NoArgsConstructor` on the builder appends takes the builder's
   fields as they stand before the merge and leaves the seed unassigned, which javac refuses on the
   builder's line as `variable ... might not have been initialized`; the editor names that appended

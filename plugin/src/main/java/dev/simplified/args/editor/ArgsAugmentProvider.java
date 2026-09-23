@@ -91,9 +91,11 @@ public final class ArgsAugmentProvider extends AbstractRecursionSafeAugmentProvi
         try {
             for (PsiAnnotation annotation : written) {
                 ArgsMode mode = ArgsConstants.modeOf(annotation);
-                if (mode == null || mode == ArgsMode.BUILDER) continue;
+                // What the processor appends and nothing more: a refused
+                // @NoArgsConstructor appends nothing, so no light constructor
+                // sits beside its error.
+                if (!ArgsConstants.appends(target, annotation, mode)) continue;
                 String access = ArgsConstants.accessKeyword(annotation, mode);
-                if (access == null) continue; // AccessLevel.NONE generates nothing
 
                 List<PsiField> fields = ArgsConstants.select(target, mode, List.of());
                 LightMethodBuilder ctor = new GeneratedLightMethod(manager, name)

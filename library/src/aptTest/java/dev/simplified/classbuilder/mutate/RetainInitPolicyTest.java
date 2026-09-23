@@ -337,6 +337,161 @@ public class RetainInitPolicyTest {
         assertThat(c).hadErrorCount(1);
     }
 
+    /**
+     * A lifted field is a blank final, which only a constructor of its own
+     * class assigns: through {@code this}, by its bare name, or parenthesised,
+     * each compiles.
+     */
+    @Test
+    public void liftedFinal_writtenInConstructors_compiles() {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Target",
+            """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Target {
+                private final int a = 128;
+                public Target(int a) {
+                    this.a = a;
+                }
+                public Target(long v) {
+                    a = (int) v;
+                }
+                public Target(short v) {
+                    (this.a) = v;
+                }
+            }
+            """.split("\n"));
+        assertThat(compile(src)).succeeded();
+    }
+
+    /** A method's write to a lifted field, bare or through {@code this}, is rejected on its line. */
+    @Test
+    public void liftedFinal_writtenInAMethod_isRejected() {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Target",
+            """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Target {
+                private final int a = 128;
+                public Target(int a) {
+                    this.a = a;
+                }
+                void reset(int v) {
+                    a = v;
+                }
+                void again(int v) {
+                    this.a = v;
+                }
+            }
+            """.split("\n"));
+        Compilation c = compile(src);
+        assertThat(c).hadErrorContaining("cannot assign a value to final variable a").inFile(src).onLine(10);
+        assertThat(c).hadErrorContaining("cannot assign a value to final variable a").inFile(src).onLine(13);
+        assertThat(c).hadErrorCount(2);
+    }
+
+    /**
+     * Every constructor assigns a lifted field, so an instance initializer's
+     * write is a second assignment, reported on the constructor.
+     */
+    @Test
+    public void liftedFinal_writtenInAnInstanceInitializer_isRejected() {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Target",
+            """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Target {
+                private final int a = 128;
+                {
+                    a = 5;
+                }
+                public Target(int a) {
+                    this.a = a;
+                }
+            }
+            """.split("\n"));
+        Compilation c = compile(src);
+        assertThat(c).hadErrorContaining("variable a might already have been assigned").inFile(src).onLine(10);
+        assertThat(c).hadErrorCount(1);
+    }
+
+    /** A compound assignment and an increment in a constructor read the field too, and are rejected. */
+    @Test
+    public void liftedFinal_compoundWriteInAConstructor_isRejected() {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Target",
+            """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Target {
+                private final int a = 128;
+                public Target(int a) {
+                    this.a = a;
+                    this.a += 1;
+                }
+                public Target() {
+                    this.a = 0;
+                    this.a++;
+                }
+            }
+            """.split("\n"));
+        Compilation c = compile(src);
+        assertThat(c).hadErrorContaining("variable a might already have been assigned").inFile(src).onLine(8);
+        assertThat(c).hadErrorContaining("variable a might already have been assigned").inFile(src).onLine(12);
+        assertThat(c).hadErrorCount(2);
+    }
+
+    /**
+     * Inside a constructor, a lambda's write, a local class's write and a write
+     * to another instance's field are none of them the constructor assigning
+     * its own field, and each is rejected on its line.
+     */
+    @Test
+    public void liftedFinal_writtenFromAConstructorButNotToItsOwnField_isRejected() {
+        JavaFileObject lambda = JavaFileObjects.forSourceLines("demo.Target",
+            """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Target {
+                private final int a = 128;
+                public Target(int a) {
+                    this.a = a;
+                    Runnable r = () -> { this.a = 3; };
+                }
+            }
+            """.split("\n"));
+        Compilation fromLambda = compile(lambda);
+        assertThat(fromLambda).hadErrorContaining("variable a might already have been assigned")
+            .inFile(lambda).onLine(8);
+        assertThat(fromLambda).hadErrorCount(1);
+
+        JavaFileObject qualified = JavaFileObjects.forSourceLines("demo.Target",
+            """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Target {
+                private static Target last;
+                private final int a = 128;
+                public Target(int a) {
+                    this.a = a;
+                    class Local { void f() { Target.this.a = 1; } }
+                    last.a = 4;
+                }
+            }
+            """.split("\n"));
+        Compilation throughQualifier = compile(qualified);
+        assertThat(throughQualifier).hadErrorContaining("cannot assign a value to final variable a")
+            .inFile(qualified).onLine(9);
+        assertThat(throughQualifier).hadErrorContaining("cannot assign a value to final variable a")
+            .inFile(qualified).onLine(10);
+        assertThat(throughQualifier).hadErrorCount(2);
+    }
+
     // ------------------------------------------------------------------
     // Fresh-per-build semantics survive the policy change
     // ------------------------------------------------------------------
