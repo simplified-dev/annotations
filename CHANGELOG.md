@@ -124,12 +124,15 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
 
 - **The entry points a merged builder has no constructor for are skipped with a note.** Every entry
   point instantiates the builder with one argument per `@BuilderSeed`, and a declared builder's
-  constructors are the author's, so one declaring constructors and none of that arity left the entry
-  points with nothing to call. Both halves withhold them together, and the note names only the entry
-  points the path emits - `builder(..)` alone on a constructor or factory target, and never one
-  named `NONE`; with every entry point named `NONE` there is nothing to skip and no note. A
-  constructor of the right arity whose throws clause may name a checked exception serves no entry
-  point either, each of them calling it with nothing to handle what it throws, so they are skipped
+  constructors are the author's and those a constructor annotation written on it appends, so one
+  whose constructors include none the entry points can call left them with nothing to call. The
+  editor counts what `@AllArgsConstructor`, `@RequiredArgsConstructor` and `@NoArgsConstructor` on
+  the declared builder append, derived from the written annotation and the builder's own fields as
+  the processor's constructor pass derives them. Both halves withhold them together, and the note
+  names only the entry points the path emits - `builder(..)` alone on a constructor or factory
+  target, and never one named `NONE`; with every entry point named `NONE` there is nothing to skip
+  and no note. The constructor they would call serves no entry point either where its throws clause
+  may name a checked exception, each of them calling it with nothing to handle what it throws, so they are skipped
   with a note saying so rather than failing as `unreported exception ... in default constructor` on
   the class line. Neither half resolves a thrown name, so a clause naming only `RuntimeException`,
   `Error` and their common subclasses in `java.lang` and `java.util`, by simple or qualified name,
@@ -275,9 +278,14 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   are written in - a static factory's own, the enclosing type's for a constructor, on both halves.
   A static factory inside an interface is one such target, merging into the class the interface body
   declares. `builder(..)` passes each `@BuilderSeed` to the builder's constructor, so it is emitted
-  only where the author declares a constructor taking exactly the seeds - their types in parameter
-  order, compared by erasure and simple name, so a constructor of the seed count taking other types
-  or the seeds swapped is not one - and is skipped with a note otherwise. An author's own `builder`
+  only where names alone single out the constructor javac calls with the seeds, in parameter order:
+  one taking the seeds' own types, compared by erasure and simple name, always; otherwise one
+  reaching each seed as its box or primitive, a wider primitive (JLS 5.1.2) or, for a reference
+  seed, `Object`, selected as javac selects - no boxing before boxing, then the most specific. A
+  constructor reached only through another supertype is not counted, nor is one of two javac could
+  not choose between, nor any where a constructor names cannot place might be chosen first; the
+  entry point is skipped with a note saying what is counted, and where the selected constructor
+  declares a throws clause the throws note is printed instead. An author's own `builder`
   method of the seed count wins, and none is offered or emitted beside it. A seed is appended as a
   `final` field, and the editor reports a constructor of the builder that leaves it unassigned, or
   the builder's name when it declares none, where javac refuses the same declaration - an instance

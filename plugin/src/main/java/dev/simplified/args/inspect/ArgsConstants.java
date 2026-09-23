@@ -143,6 +143,35 @@ public final class ArgsConstants {
     }
 
     /**
+     * The parameters of each constructor the written constructor annotations
+     * append to the class, in the order the processor appends them.
+     *
+     * <p>Decided as the processor's constructor pass decides it, with the field
+     * selection through {@link ArgsSelection}: a record or an interface is given
+     * none, {@code @BuilderArgsConstructor} is the builder pass's own to emit, an
+     * annotation at {@code AccessLevel.NONE} appends nothing, and
+     * {@code @NoArgsConstructor} appends nothing where it would leave a
+     * {@code final} field unassigned without {@code force}. Read off the written
+     * annotations and the class's own fields, never through an augment-aware
+     * call, so an augment provider can ask it of a class it is not augmenting.
+     *
+     * @param target the class the annotations are written on
+     * @return each appended constructor's parameters, in declaration order
+     */
+    public static List<List<PsiField>> appendedConstructors(PsiClass target) {
+        List<List<PsiField>> out = new ArrayList<>();
+        if (target.isRecord() || target.isInterface()) return out;
+        for (PsiAnnotation annotation : written(target)) {
+            ArgsMode mode = modeOf(annotation);
+            if (mode == null || mode == ArgsMode.BUILDER) continue;
+            if (accessKeyword(annotation, mode) == null) continue;
+            if (mode == ArgsMode.NONE && !force(annotation) && !unassignedFinals(target).isEmpty()) continue;
+            out.add(select(target, mode, List.of()));
+        }
+        return out;
+    }
+
+    /**
      * Whether the field carries an annotation of this simple name.
      *
      * <p>Matched on the reference text rather than by resolving it, which is

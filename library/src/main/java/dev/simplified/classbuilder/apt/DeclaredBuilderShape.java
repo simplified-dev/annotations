@@ -868,25 +868,30 @@ public final class DeclaredBuilderShape {
      * Decides whether the entry points can instantiate a declared builder.
      *
      * <p>Every entry point calls the builder's constructor with the seeds, in
-     * parameter order, so it needs a constructor among the ones the author wrote
-     * taking exactly the seeds' types in that order. The types are compared by
-     * erasure and simple name, as {@link #methodKey} compares a method's, which
-     * is what both halves can read without a resolve; a constructor of the seed
-     * count taking other types, or the seeds' types in another order, is not one
-     * the entry points can pass them to. A class declaring none keeps the
-     * implicit default, which takes nothing and so serves only an entry point
-     * passing nothing. On a type target there is no seed, a seed being a
-     * parameter's alone.
+     * parameter order, so it needs the constructor javac selects for that call
+     * among the ones the builder declares - the author's, and any a constructor
+     * annotation written on the builder appends. Which one that is, is decided
+     * from names alone, which is what both halves can read without a resolve: a
+     * seed reaches a parameter of its own type, compared by erasure and simple
+     * name as {@link #methodKey} compares one, of its box or its primitive, of a
+     * wider primitive, or - a reference seed - of {@code Object}, and among the
+     * constructors so reached the one selected is javac's, the earliest phase
+     * and in it the most specific. A constructor needing any other conversion
+     * is never selected, and where one might be applicable as early as the
+     * selected one, or two are ambiguous, none is; with none the entry points
+     * are skipped. A class declaring none keeps the implicit default, which
+     * takes nothing and so serves only an entry point passing nothing. On a type
+     * target there is no seed, a seed being a parameter's alone.
      *
      * <p>A constructor whose throws clause may name a checked exception is not
      * one the entry points can call either: each of them calls it with nothing
      * around the call to handle what it throws. Whether a thrown type is checked
      * is a question of what it resolves to, which neither half asks, so it is
      * answered by name through {@link #throwsNothingChecked} - a clause naming
-     * only known unchecked types leaves the constructor in the count, and any
-     * other name takes it out, the answer that never emits a call javac refuses.
+     * only known unchecked types leaves the selected constructor callable, and
+     * any other name does not, the answer that never emits a call javac refuses.
      *
-     * @param declaredConstructors the parameter types of each constructor the author declared, as
+     * @param declaredConstructors the parameter types of each constructor the builder declares, as
      *     either model renders them
      * @param callableConstructors the parameter types of each of those whose throws clause
      *     {@link #throwsNothingChecked} accepts
@@ -897,7 +902,8 @@ public final class DeclaredBuilderShape {
                                        @NotNull List<List<String>> callableConstructors,
                                        @NotNull List<String> seedTypes) {
         if (declaredConstructors.isEmpty()) return seedTypes.isEmpty();
-        return takesTheSeeds(callableConstructors, seedTypes);
+        List<String> selected = selectedConstructor(declaredConstructors, seedTypes);
+        return selected != null && sameKeyAsOneOf(selected, callableConstructors);
     }
 
     /**
@@ -931,36 +937,237 @@ public final class DeclaredBuilderShape {
     }
 
     /**
-     * Whether the entry points are skipped only because every constructor
-     * taking what they pass declares a throws clause that may name a checked
-     * exception, which decides the note's wording.
+     * Whether the entry points are skipped only because the constructor javac
+     * selects for what they pass declares a throws clause that may name a
+     * checked exception, which decides the note's wording.
      *
-     * @param declaredConstructors the parameter types of each constructor the author declared, as
+     * @param declaredConstructors the parameter types of each constructor the builder declares, as
      *     either model renders them
      * @param callableConstructors the parameter types of each of those whose throws clause
      *     {@link #throwsNothingChecked} accepts
      * @param seedTypes the type of each seed the entry points pass, in parameter order
-     * @return whether a constructor taking the seeds exists and none of them is callable
+     * @return whether a constructor is selected and it is not callable
      */
     public static boolean skippedForAThrowsClause(@NotNull List<List<String>> declaredConstructors,
                                                   @NotNull List<List<String>> callableConstructors,
                                                   @NotNull List<String> seedTypes) {
-        return takesTheSeeds(declaredConstructors, seedTypes)
-            && !takesTheSeeds(callableConstructors, seedTypes);
+        List<String> selected = selectedConstructor(declaredConstructors, seedTypes);
+        return selected != null && !sameKeyAsOneOf(selected, callableConstructors);
     }
 
     /**
-     * Whether one of the constructors takes the seeds' types in seed order, by
-     * the erasure {@link #methodKey} keys a parameter list under.
+     * Selects the constructor javac calls with the seeds, as far as names can
+     * tell.
+     *
+     * <p>A seed reaches a parameter of its own type - equal under the erasure
+     * {@link #methodKey} keys a parameter under - of a wider primitive
+     * (JLS 5.1.2), of its box or of its primitive, and, a reference seed, of
+     * {@code Object} or {@code java.lang.Object}. javac selects in phases, a
+     * constructor reached without boxing before one needing it, and within a
+     * phase the most specific, so this does too: the constructor taking the
+     * seeds' own types always, otherwise the one of the earliest phase more
+     * specific than every other there.
+     *
+     * <p>Any other conversion is one names cannot vouch for - another supertype
+     * of the seed, a primitive seed boxed into {@code Object}, an unboxing
+     * followed by a widening - and a constructor needing one is never selected.
+     * Where such a constructor might still be applicable no later than the
+     * phase selecting, javac may prefer it, so nothing is selected; nor is
+     * anything where two constructors are ambiguous. Selecting nothing skips the
+     * entry points with the note, the answer that never emits a call javac
+     * refuses.
      *
      * @param constructors the parameter types of each constructor, as either model renders them
      * @param seedTypes the type of each seed, in parameter order
-     * @return whether one of them takes exactly those
+     * @return the selected constructor's parameter types, or {@code null} when names select none
      */
-    private static boolean takesTheSeeds(List<List<String>> constructors, List<String> seedTypes) {
-        String seeds = methodKey("<init>", seedTypes);
-        for (List<String> parameters : constructors) {
-            if (methodKey("<init>", parameters).equals(seeds)) return true;
+    private static @Nullable List<String> selectedConstructor(List<List<String>> constructors,
+                                                              List<String> seedTypes) {
+        List<ParameterKey> seeds = keysOf(seedTypes);
+        List<Candidate> placed = new ArrayList<>();
+        int earliestUnplaced = Integer.MAX_VALUE;
+        for (List<String> constructor : constructors) {
+            if (constructor.size() != seeds.size()) continue;
+            List<ParameterKey> parameters = keysOf(constructor);
+            if (sameKeys(parameters, seeds)) return constructor;
+            int phase = 1;
+            boolean counted = true;
+            boolean applicable = true;
+            for (int i = 0; i < seeds.size() && applicable; i++) {
+                int reach = reach(seeds.get(i), parameters.get(i));
+                if (reach == UNREACHABLE) applicable = false;
+                else {
+                    counted &= reach > 0;
+                    phase = Math.max(phase, Math.abs(reach));
+                }
+            }
+            if (!applicable) continue;
+            if (counted) placed.add(new Candidate(constructor, parameters, phase));
+            else earliestUnplaced = Math.min(earliestUnplaced, phase);
+        }
+        for (int phase = 1; phase <= 2; phase++) {
+            if (earliestUnplaced <= phase) return null;
+            List<Candidate> inPhase = new ArrayList<>();
+            for (Candidate candidate : placed)
+                if (candidate.phase() == phase) inPhase.add(candidate);
+            if (inPhase.isEmpty()) continue;
+            Candidate chosen = mostSpecific(inPhase);
+            return chosen == null ? null : chosen.parameterTypes();
+        }
+        return null;
+    }
+
+    /** A seed and parameter pair no conversion joins. */
+    private static final int UNREACHABLE = 0;
+
+    /** The primitive types, by keyword. */
+    private static final Set<String> PRIMITIVES =
+        Set.of("boolean", "byte", "char", "short", "int", "long", "float", "double");
+
+    /**
+     * A parameter or seed type as the selection reads it.
+     *
+     * @param erased the erased simple name with its array dimensions, as {@link #methodKey} keys it
+     * @param javaLang whether the type is written unqualified or qualified by {@code java.lang}, which
+     *     is what lets a box or {@code Object} of that name be taken for the real one
+     */
+    private record ParameterKey(@NotNull String erased, boolean javaLang) {
+
+        /** Whether this is a primitive type. */
+        boolean primitive() {
+            return PRIMITIVES.contains(erased);
+        }
+
+        /** Whether this is {@code Object}. */
+        boolean object() {
+            return javaLang && erased.equals("Object");
+        }
+
+        /** The primitive this box stands for, or {@code null} when it is none. */
+        @Nullable String unboxed() {
+            if (!javaLang) return null;
+            for (String primitive : PRIMITIVES) {
+                String box = boxOf(primitive);
+                if (box != null && erasedName(box).equals(erased)) return primitive;
+            }
+            return null;
+        }
+
+    }
+
+    /**
+     * A constructor the selection can place.
+     *
+     * @param parameterTypes its parameter types, as written
+     * @param keys the same types as the selection reads them
+     * @param phase the invocation phase it is applicable in - 1 without boxing, 2 with
+     */
+    private record Candidate(@NotNull List<String> parameterTypes, @NotNull List<ParameterKey> keys,
+                             int phase) {
+    }
+
+    /** Each rendered type as the selection reads it, in order. */
+    private static List<ParameterKey> keysOf(List<String> types) {
+        List<ParameterKey> out = new ArrayList<>(types.size());
+        for (String type : types) {
+            String text = typeText(type.replace("...", "[]"));
+            String bare = withoutDimensions(text);
+            int generics = bare.indexOf('<');
+            String raw = (generics < 0 ? bare : bare.substring(0, generics)).trim();
+            String simple = erasedName(raw);
+            out.add(new ParameterKey(simple + "[]".repeat(dimensions(text)),
+                raw.equals(simple) || raw.equals("java.lang." + simple)));
+        }
+        return out;
+    }
+
+    /** Whether two key lists name the same types under the erasure. */
+    private static boolean sameKeys(List<ParameterKey> one, List<ParameterKey> other) {
+        if (one.size() != other.size()) return false;
+        for (int i = 0; i < one.size(); i++)
+            if (!one.get(i).erased().equals(other.get(i).erased())) return false;
+        return true;
+    }
+
+    /**
+     * How a seed reaches a parameter.
+     *
+     * <p>A positive answer is a conversion the selection counts, a negative one
+     * a conversion names cannot rule out and do not count, and its magnitude
+     * the earliest invocation phase it could apply in - 1 without boxing, 2
+     * with.
+     *
+     * @param seed the seed's type
+     * @param parameter the parameter's type
+     * @return the phase, signed by whether the conversion is counted, or {@link #UNREACHABLE}
+     */
+    private static int reach(ParameterKey seed, ParameterKey parameter) {
+        if (seed.erased().equals(parameter.erased())) return 1;
+        if (seed.primitive()) {
+            if (parameter.primitive()) return widens(seed.erased(), parameter.erased()) ? 1 : UNREACHABLE;
+            String box = boxOf(seed.erased());
+            if (parameter.javaLang() && box != null && erasedName(box).equals(parameter.erased())) return 2;
+            // A primitive boxes to its own box alone, which is no array and no other box.
+            if (parameter.erased().endsWith("[]") || parameter.unboxed() != null) return UNREACHABLE;
+            return -2;
+        }
+        if (parameter.object()) return 1;
+        String unboxed = seed.unboxed();
+        if (parameter.primitive()) {
+            if (unboxed == null) return -2;
+            if (unboxed.equals(parameter.erased())) return 2;
+            return widens(unboxed, parameter.erased()) ? -2 : UNREACHABLE;
+        }
+        // The boxes are final and unrelated, so no box reaches another.
+        if (unboxed != null && parameter.unboxed() != null) return UNREACHABLE;
+        return -1;
+    }
+
+    /**
+     * The one constructor more specific than every other of its phase, a
+     * parameter type being more specific than another when it is the same, a
+     * primitive widening to it, or a reference type beside {@code Object}.
+     *
+     * @param candidates the constructors of one phase
+     * @return the most specific, or {@code null} when none is, the call being ambiguous
+     */
+    private static @Nullable Candidate mostSpecific(List<Candidate> candidates) {
+        for (Candidate candidate : candidates) {
+            boolean beatsAll = true;
+            for (Candidate other : candidates) {
+                if (other == candidate) continue;
+                for (int i = 0; i < candidate.keys().size() && beatsAll; i++)
+                    beatsAll = subtype(candidate.keys().get(i), other.keys().get(i));
+            }
+            if (beatsAll) return candidate;
+        }
+        return null;
+    }
+
+    /** Whether the one type is a subtype of the other, as far as names can tell. */
+    private static boolean subtype(ParameterKey type, ParameterKey supertype) {
+        if (type.erased().equals(supertype.erased())) return true;
+        if (type.primitive()) return supertype.primitive() && widens(type.erased(), supertype.erased());
+        return supertype.object();
+    }
+
+    /** Whether a primitive widens to another, per JLS 5.1.2. */
+    private static boolean widens(String from, String to) {
+        return switch (from) {
+            case "byte" -> Set.of("short", "int", "long", "float", "double").contains(to);
+            case "short", "char" -> Set.of("int", "long", "float", "double").contains(to);
+            case "int" -> Set.of("long", "float", "double").contains(to);
+            case "long" -> Set.of("float", "double").contains(to);
+            case "float" -> to.equals("double");
+            default -> false;
+        };
+    }
+
+    /** Whether one of the constructors has the given one's method key. */
+    private static boolean sameKeyAsOneOf(List<String> constructor, List<List<String>> constructors) {
+        String key = methodKey("<init>", constructor);
+        for (List<String> other : constructors) {
+            if (methodKey("<init>", other).equals(key)) return true;
         }
         return false;
     }
@@ -1048,9 +1255,11 @@ public final class DeclaredBuilderShape {
      * no constructor they can call.
      *
      * <p>Worded by what the entry points pass: with no seed the missing
-     * constructor is a no-argument one, and with seeds it is one taking exactly
-     * those, which on a constructor or factory target is only ever
-     * {@code builder(..)}.
+     * constructor is a no-argument one, and with seeds it is one taking those,
+     * which on a constructor or factory target is only ever {@code builder(..)}.
+     * The seeded note names the conversions {@link #instantiable} counts - a
+     * constructor javac would reach only through another supertype is not one
+     * of them, nor is one of two it could not choose between.
      *
      * @param declaredName the declared builder's simple name
      * @param entryPoints the names of the entry points that were not added
@@ -1068,11 +1277,14 @@ public final class DeclaredBuilderShape {
                 + "declares takes parameters, so " + skipped + " - declare a no-argument "
                 + "constructor or write " + pronoun;
         }
-        String seeds = seedNames.size() == 1 ? "the seed" : "the " + seedNames.size() + " seeds";
-        return "@ClassBuilder merged into '" + declaredName + "' but none of its constructors "
-            + "takes " + seeds + " " + quotedList(entryPoints) + " passes, so " + skipped
-            + " - declare a constructor taking (" + String.join(", ", seedNames) + ") or write "
-            + pronoun;
+        String seeds = seedNames.size() == 1
+            ? "the seed " + quotedList(entryPoints) + " passes as its own type, its box or primitive, "
+                + "a wider primitive or Object"
+            : "the " + seedNames.size() + " seeds " + quotedList(entryPoints) + " passes as their own "
+                + "types, their boxes or primitives, wider primitives or Object";
+        return "@ClassBuilder merged into '" + declaredName + "' but no single constructor it declares "
+            + "takes " + seeds + ", so " + skipped + " - declare a constructor taking ("
+            + String.join(", ", seedNames) + ") or write " + pronoun;
     }
 
     /**

@@ -101,14 +101,15 @@ final class BootstrapMethodFactory {
      *
      * <p>Only ever false for a merged builder: a synthesised one is given the
      * constructor it needs. The author's is theirs throughout - javac's own
-     * default included - so a class that declares constructors and none taking
-     * the seeds' types in seed order leaves the entry points with nothing to
-     * call, and they are skipped with a note rather than emitted onto a line
-     * javac rejects - and so does one whose constructor taking them declares a
-     * throws clause that may name a checked exception, which the entry points
-     * call with nothing to handle it. The decision is
-     * {@link DeclaredBuilderShape#instantiable}, which the editor asks of the
-     * same parameter types read out of PSI.
+     * default included - and so is one a constructor annotation written on it
+     * appended in the constructor pass, which is in the tree by now; a class
+     * where none of those is one javac would call with the seeds leaves the
+     * entry points with nothing to call, and they are skipped with a note
+     * rather than emitted onto a line javac rejects - and so does one whose
+     * selected constructor declares a throws clause that may name a checked
+     * exception, which the entry points call with nothing to handle it. The
+     * decision is {@link DeclaredBuilderShape#instantiable}, which the editor
+     * asks of the same parameter types read out of PSI.
      *
      * @return whether the entry points can be emitted
      */

@@ -33,6 +33,11 @@ import static org.junit.Assert.assertTrue;
  */
 public class DeclaredBuilderMergeTest {
 
+    /** The note for a constructor target's {@code builder(origin)} skipped for want of a constructor. */
+    private static final String SEED_SKIPPED = "@ClassBuilder merged into 'Builder' but no single constructor "
+        + "it declares takes the seed 'builder' passes as its own type, its box or primitive, a wider primitive "
+        + "or Object, so 'builder' was not added - declare a constructor taking (origin) or write it";
+
     private static Compilation compile(JavaFileObject... sources) {
         return Compiler.javac()
             .withProcessors(new ClassBuilderProcessor())
@@ -1193,9 +1198,7 @@ public class DeclaredBuilderMergeTest {
                 "    }",
                 "}"));
         assertThat(c).succeeded();
-        assertThat(c).hadNoteContaining("@ClassBuilder merged into 'Builder' but none of its "
-            + "constructors takes the seed 'builder' passes, so 'builder' was not added - declare a "
-            + "constructor taking (origin) or write it");
+        assertThat(c).hadNoteContaining(SEED_SKIPPED);
         assertEquals("desk:tea", runGo(c, "demo.UseTicket"));
     }
 
@@ -2842,9 +2845,7 @@ public class DeclaredBuilderMergeTest {
                 "    }",
                 "}"));
         assertThat(c).succeeded();
-        assertThat(c).hadNoteContaining("@ClassBuilder merged into 'Builder' but none of its constructors "
-            + "takes the seed 'builder' passes, so 'builder' was not added - declare a constructor taking "
-            + "(origin) or write it");
+        assertThat(c).hadNoteContaining(SEED_SKIPPED);
     }
 
     /** The seeds are passed in parameter order, so a constructor taking them swapped is not one either. */
@@ -2869,9 +2870,10 @@ public class DeclaredBuilderMergeTest {
                 "    }",
                 "}"));
         assertThat(c).succeeded();
-        assertThat(c).hadNoteContaining("@ClassBuilder merged into 'Builder' but none of its constructors "
-            + "takes the 2 seeds 'builder' passes, so 'builder' was not added - declare a constructor taking "
-            + "(origin, qty) or write it");
+        assertThat(c).hadNoteContaining("@ClassBuilder merged into 'Builder' but no single constructor it "
+            + "declares takes the 2 seeds 'builder' passes as their own types, their boxes or primitives, wider "
+            + "primitives or Object, so 'builder' was not added - declare a constructor taking (origin, qty) or "
+            + "write it");
     }
 
     /**
@@ -2910,6 +2912,245 @@ public class DeclaredBuilderMergeTest {
                 "}"));
         assertThat(c).succeeded();
         assertEquals("a[1]b", runGo(c, "demo.UseSlot"));
+    }
+
+    /**
+     * An {@code Order} whose one seed is {@code origin} of {@code seedType},
+     * whose declared builder carries {@code constructors}, and a
+     * {@code demo.UseOrder.go()} entering it through {@code builder(argument)}.
+     */
+    private static JavaFileObject[] seededOrder(String seedType, String constructors, String argument) {
+        return new JavaFileObject[]{
+            JavaFileObjects.forSourceLines("demo.Order",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderSeed;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public final class Order {",
+                "    private final " + seedType + " origin;",
+                "    private final String item;",
+                "    @ClassBuilder",
+                "    Order(@BuilderSeed " + seedType + " origin, String item) {",
+                "        this.origin = origin; this.item = item;",
+                "    }",
+                "    public String describe() { return origin + \":\" + item; }",
+                "    public static final class Builder {",
+                "        " + constructors,
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseOrder",
+                "package demo;",
+                "public class UseOrder {",
+                "    public static String go() {",
+                "        return Order.builder(" + argument + ").item(\"x\").build().describe();",
+                "    }",
+                "}")
+        };
+    }
+
+    /**
+     * {@code builder(seed)} reaches a constructor taking the seed's box, as
+     * javac's own call would. Only equal types were counted, so the entry point
+     * was skipped and the caller failed with {@code cannot find symbol}.
+     */
+    @Test
+    public void merge_onAPrimitiveSeedWhoseBuilderTakesItsBox_keepsTheEntryPoint() throws Exception {
+        Compilation c = compile(seededOrder("int",
+            "Builder(Integer origin) { this.origin = origin; }", "3"));
+        assertThat(c).succeeded();
+        assertEquals("3:x", runGo(c, "demo.UseOrder"));
+    }
+
+    /** A boxed seed reaches a constructor taking its primitive. */
+    @Test
+    public void merge_onABoxedSeedWhoseBuilderTakesItsPrimitive_keepsTheEntryPoint() throws Exception {
+        Compilation c = compile(seededOrder("Integer",
+            "Builder(int origin) { this.origin = origin; }", "3"));
+        assertThat(c).succeeded();
+        assertEquals("3:x", runGo(c, "demo.UseOrder"));
+    }
+
+    /** A primitive seed reaches a constructor taking a wider primitive. */
+    @Test
+    public void merge_onAPrimitiveSeedWhoseBuilderTakesAWiderPrimitive_keepsTheEntryPoint() throws Exception {
+        Compilation c = compile(seededOrder("int",
+            "Builder(long origin) { this.origin = (int) (origin * 2); }", "3"));
+        assertThat(c).succeeded();
+        assertEquals("6:x", runGo(c, "demo.UseOrder"));
+    }
+
+    /** A reference seed reaches a constructor taking {@code Object}. */
+    @Test
+    public void merge_onAReferenceSeedWhoseBuilderTakesObject_keepsTheEntryPoint() throws Exception {
+        Compilation c = compile(seededOrder("String",
+            "Builder(java.lang.Object origin) { this.origin = origin + \"!\"; }", "\"web\""));
+        assertThat(c).succeeded();
+        assertEquals("web!:x", runGo(c, "demo.UseOrder"));
+    }
+
+    /**
+     * Any other supertype is one names cannot vouch for, so the entry point is
+     * skipped with the note, which says what is counted.
+     */
+    @Test
+    public void merge_onAReferenceSeedWhoseBuilderTakesAnotherSupertype_skipsTheEntryPointWithTheNote() {
+        JavaFileObject[] sources = seededOrder("String",
+            "Builder(CharSequence origin) { this.origin = origin.toString(); }", "\"web\"");
+        Compilation c = compile(sources[0]);
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining(SEED_SKIPPED);
+    }
+
+    /**
+     * Two constructors reached by widening, neither more specific than the
+     * other, are ambiguous to javac, so no single one serves and the entry
+     * point is skipped rather than emitted onto {@code reference to Builder is
+     * ambiguous}.
+     */
+    @Test
+    public void merge_onSeedsTwoBuilderConstructorsTakeAmbiguously_skipsTheEntryPoint() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Grid",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderSeed;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public final class Grid {",
+                "    private final int x;",
+                "    private final int y;",
+                "    private final String label;",
+                "    @ClassBuilder",
+                "    Grid(@BuilderSeed int x, @BuilderSeed int y, String label) {",
+                "        this.x = x; this.y = y; this.label = label;",
+                "    }",
+                "    public static final class Builder {",
+                "        Builder(long x, int y) { this.x = (int) x; this.y = y; }",
+                "        Builder(int x, long y) { this.x = x; this.y = (int) y; }",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("@ClassBuilder merged into 'Builder' but no single constructor it "
+            + "declares takes the 2 seeds 'builder' passes");
+    }
+
+    /**
+     * javac selects a widening before a boxing, so where the widened
+     * constructor throws, the entry point would call it with nothing to handle
+     * the exception - skipped with the throws note, though a boxed constructor
+     * throwing nothing sits beside it.
+     */
+    @Test
+    public void merge_onASeedWhoseSelectedWidenedConstructorThrows_skipsTheEntryPointWithTheThrowsNote() {
+        JavaFileObject[] sources = seededOrder("int",
+            "Builder(long origin) throws Exception { this.origin = (int) origin; } "
+                + "Builder(Integer origin) { this.origin = origin; }", "3");
+        Compilation c = compile(sources[0]);
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("@ClassBuilder merged into 'Builder' but its constructor taking the "
+            + "seed 'builder' passes declares a throws clause naming an exception not known to be unchecked, so "
+            + "'builder' was not added - declare one throwing only unchecked exceptions or write it");
+    }
+
+    /**
+     * A {@code Held} target whose declared builder carries {@code annotation}
+     * and {@code body}, and a {@code demo.UseHeld.go()} returning {@code use}.
+     */
+    private static JavaFileObject[] heldWith(String annotation, String body, String use) {
+        return new JavaFileObject[]{
+            JavaFileObjects.forSourceLines("demo.Held",
+                "package demo;",
+                "import dev.simplified.annotations.*;",
+                "@ClassBuilder",
+                "public class Held {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "    " + annotation,
+                "    public static class Builder {",
+                "        " + body,
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseHeld",
+                "package demo;",
+                "public class UseHeld {",
+                "    public static String go() { return " + use + "; }",
+                "}")
+        };
+    }
+
+    /**
+     * The constructor pass runs before the merge, so a constructor an
+     * {@code @AllArgsConstructor} on the declared builder appends is one the
+     * entry points are counted against: taking parameters, it leaves them
+     * nothing to call and they are skipped with the note. The javac twin of the
+     * editor case, which counted only the author's constructors.
+     */
+    @Test
+    public void merge_intoABuilderWhoseOnlyConstructorAnAllArgsAnnotationAppends_skipsTheEntryPoints()
+        throws Exception {
+        Compilation c = compile(heldWith("@AllArgsConstructor", "private String tag;",
+            "new Held.Builder(\"t\").name(\"a\").build().getName()"));
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("@ClassBuilder merged into 'Builder' but every constructor it declares "
+            + "takes parameters, so 'builder', 'from' and 'mutate' were not added - declare a no-argument "
+            + "constructor or write them");
+        assertEquals("a", runGo(c, "demo.UseHeld"));
+    }
+
+    /** The same for {@code @RequiredArgsConstructor} over a final field. */
+    @Test
+    public void merge_intoABuilderWhoseOnlyConstructorARequiredArgsAnnotationAppends_skipsTheEntryPoints() {
+        Compilation c = compile(heldWith("@RequiredArgsConstructor", "private final String tag;",
+            "Held.builder().name(\"a\").build().getName()"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("cannot find symbol");
+        assertThat(c).hadNoteContaining("@ClassBuilder merged into 'Builder' but every constructor it declares "
+            + "takes parameters");
+    }
+
+    /**
+     * A no-argument constructor {@code @NoArgsConstructor} appends beside the
+     * author's parameterised one is one the entry points can call, so they are
+     * emitted.
+     */
+    @Test
+    public void merge_intoABuilderWithANoArgsAnnotationBesideAParameterConstructor_keepsTheEntryPoints()
+        throws Exception {
+        Compilation c = compile(heldWith("@NoArgsConstructor", "public Builder(String tag) { }",
+            "Held.builder().name(\"a\").build().getName() + Held.from(new Held.Builder(\"t\").name(\"b\").build())"
+                + ".build().getName()"));
+        assertThat(c).succeeded();
+        assertEquals("ab", runGo(c, "demo.UseHeld"));
+    }
+
+    /**
+     * On a constructor target the constructor {@code @AllArgsConstructor}
+     * appends over the author's seed field takes the seed, so
+     * {@code builder(seed)} is emitted and calls it.
+     */
+    @Test
+    public void merge_onAConstructorTargetWhoseAllArgsBuilderTakesTheSeed_keepsTheEntryPoint() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Order",
+                "package demo;",
+                "import dev.simplified.annotations.AllArgsConstructor;",
+                "import dev.simplified.annotations.BuilderSeed;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public final class Order {",
+                "    private final String origin;",
+                "    private final String item;",
+                "    @ClassBuilder",
+                "    Order(@BuilderSeed String origin, String item) { this.origin = origin; this.item = item; }",
+                "    public String describe() { return origin + \":\" + item; }",
+                "    @AllArgsConstructor",
+                "    public static final class Builder {",
+                "        private final String origin;",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseOrder",
+                "package demo;",
+                "public class UseOrder {",
+                "    public static String go() { return Order.builder(\"web\").item(\"x\").build().describe(); }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("web:x", runGo(c, "demo.UseOrder"));
     }
 
     /**

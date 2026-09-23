@@ -26,10 +26,12 @@ import java.util.Objects;
  * target declares has no constructor they can call.
  *
  * <p>Every entry point instantiates the builder with the seeds, in parameter
- * order, and a declared builder's constructors are the author's, so one
- * declaring no constructor taking the seeds' types in that order leaves
- * {@code builder()}, {@code from(T)} and {@code mutate()} nothing to call, and
- * so does one whose constructor taking them declares a throws clause naming an
+ * order, and a declared builder's constructors are the author's and those a
+ * constructor annotation written on it appends, so one where none of them is a
+ * constructor {@link DeclaredBuilderShape#instantiable} finds javac calling
+ * with the seeds leaves {@code builder()}, {@code from(T)} and
+ * {@code mutate()} nothing to call, and so does one whose constructor it
+ * selects declares a throws clause naming an
  * exception {@link DeclaredBuilderShape#throwsNothingChecked} does not know to
  * be unchecked. The
  * processor skips them with a note and the

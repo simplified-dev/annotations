@@ -68,9 +68,12 @@ import java.lang.annotation.Target;
  * its enclosing type declares. Its builder re-declares the type parameters the
  * generated members are written in - a static factory's own - and its one entry
  * point, {@code builder(..)}, passes each {@link BuilderSeed} to the builder's
- * constructor, so it is emitted only where the author declares a constructor
- * taking exactly those - the seeds' types in parameter order, compared by
- * erasure and simple name - and is skipped with a note otherwise. A seed is
+ * constructor, so it is emitted only where names alone single out the
+ * constructor javac calls with the seeds in parameter order - one taking their
+ * own types, compared by erasure and simple name, or else one taking each as
+ * its box or primitive, a wider primitive or, for a reference seed,
+ * {@code Object} - and is skipped with a note otherwise, a constructor reached
+ * through any other supertype included. A seed is
  * appended as a {@code final} field that the author's constructors assign. A
  * static factory inside an interface is such a target too, and merges into the
  * class the interface body declares.

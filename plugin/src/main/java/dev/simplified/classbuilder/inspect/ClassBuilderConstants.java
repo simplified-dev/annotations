@@ -4,6 +4,7 @@ import com.intellij.psi.CommonClassNames;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationMemberValue;
 import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiJavaCodeReferenceElement;
 import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiMethod;
@@ -364,11 +365,12 @@ public final class ClassBuilderConstants {
      * being generated.
      *
      * <p>Every entry point instantiates the builder with the seeds, in parameter
-     * order, and a declared builder's constructors are the author's throughout,
-     * so one that declares no constructor taking the seeds' types in that order
-     * leaves the entry points with nothing to call and the processor skips them
-     * with a note, which {@link DeclaredBuilderSkipsEntryPointsInspection}
-     * reports in the editor in the same words. Everything else still runs - the
+     * order, and a declared builder's constructors are the author's and the ones
+     * a constructor annotation written on it appends, so one where none of those
+     * is a constructor javac would call with the seeds leaves the entry points
+     * with nothing to call and the processor skips them with a note, which
+     * {@link DeclaredBuilderSkipsEntryPointsInspection} reports in the editor in
+     * the same words. Everything else still runs - the
      * merge appends every setter, a class target still gets the all-args
      * constructor {@code build()} calls, and a chain link still gets its copy
      * constructor. Withholding the whole member list here would take that
@@ -381,7 +383,8 @@ public final class ClassBuilderConstants {
      * counted as none the entry points can call. On a class or
      * record target, a chain link among them, there is no seed, so the
      * constructor that serves is a no-argument one; on a constructor or factory
-     * target it is one taking exactly the seeds {@code builder(..)} passes. An
+     * target it is the one javac selects for the seeds {@code builder(..)}
+     * passes, as far as names can tell. An
      * interface type target's entry points call its sibling builder, never a
      * class nested in the interface body; a constructor or factory inside an
      * interface merges into that class as it does anywhere else.
@@ -399,24 +402,57 @@ public final class ClassBuilderConstants {
         if (target.isInterface() && !executable) return false;
         PsiClass declared = declaredBuilderOf(target, builderName);
         return declared != null
-            && !DeclaredBuilderShape.instantiable(declaredConstructorSignatures(declared, false),
-                declaredConstructorSignatures(declared, true), seedTypes);
+            && !DeclaredBuilderShape.instantiable(constructorSignatures(declared, false),
+                constructorSignatures(declared, true), seedTypes);
     }
 
     /**
-     * Whether the entry points are skipped only because the declared builder's
-     * constructors taking what they pass all declare a throws clause that may
-     * name a checked exception, which decides the wording of the note, as
+     * Whether the entry points are skipped only because the constructor javac
+     * selects for what they pass declares a throws clause that may name a
+     * checked exception, which decides the wording of the note, as
      * {@link DeclaredBuilderShape#skippedForAThrowsClause} decides it for the
      * processor.
      *
      * @param declared the builder the author wrote
      * @param seedTypes the type of each seed the entry points pass, in parameter order
-     * @return whether a constructor taking them exists and every one declares such a throws clause
+     * @return whether a constructor is selected and it declares such a throws clause
      */
     public static boolean skippedForAThrowsClause(@NotNull PsiClass declared, @NotNull List<String> seedTypes) {
-        return DeclaredBuilderShape.skippedForAThrowsClause(declaredConstructorSignatures(declared, false),
-            declaredConstructorSignatures(declared, true), seedTypes);
+        return DeclaredBuilderShape.skippedForAThrowsClause(constructorSignatures(declared, false),
+            constructorSignatures(declared, true), seedTypes);
+    }
+
+    /**
+     * The parameter types of each constructor the processor finds on the
+     * declared builder when it counts the entry points' constructors: the
+     * author's, and each one a constructor annotation written on the builder
+     * appends.
+     *
+     * <p>The constructor pass runs before the merge, so what those annotations
+     * append is in the builder by then, and the processor counts it beside the
+     * author's. Here it is the args provider's light constructor, which no own
+     * read returns, so it is derived as that pass derives it - from the written
+     * annotations and the builder's own fields, through
+     * {@link ArgsConstants#appendedConstructors} - and a constructor it appends
+     * declares no throws clause.
+     *
+     * @param declared the builder the author wrote
+     * @param callableOnly whether to read only the constructors whose throws clause
+     *     {@link DeclaredBuilderShape#throwsNothingChecked} accepts
+     * @return each constructor's parameter types, the author's first
+     */
+    private static @NotNull List<List<String>> constructorSignatures(@NotNull PsiClass declared,
+                                                                    boolean callableOnly) {
+        List<List<String>> out = declaredConstructorSignatures(declared, callableOnly);
+        for (List<PsiField> parameters : ArgsConstants.appendedConstructors(declared)) {
+            List<String> types = new ArrayList<>(parameters.size());
+            for (PsiField field : parameters) {
+                String written = MergedSlotStorage.writtenTypeText(field);
+                types.add(written == null ? "" : written);
+            }
+            out.add(types);
+        }
+        return out;
     }
 
     /**

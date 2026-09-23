@@ -37,8 +37,12 @@ for each element annotated with @ClassBuilder (CLASS | RECORD | INTERFACE):
     ExecutableBuilderMutator (annotation on a constructor or static
       factory) merges into the enclosing type's declared builder the same
       way, a static factory inside an interface included; builder(..)
-      needs a constructor taking exactly the seeds' types in parameter
-      order, by erased simple name, and is skipped with a NOTE otherwise
+      needs the constructor javac would select for the seeds, as names
+      tell it (DeclaredBuilderShape.instantiable: own type by erased simple
+      name, box or primitive, wider primitive, Object; phases and most
+      specific as javac; any unplaceable rival skips), counting the ones a
+      constructor annotation on the builder appends, and is skipped with a
+      NOTE otherwise
     If JavacProcessingEnvironment cannot be unwrapped (ecj, unknown wrapper),
       the processor ERRORs - consumers must use javac.
   for INTERFACE:

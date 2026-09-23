@@ -1510,8 +1510,178 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
     }
 
     // ------------------------------------------------------------------
+    // The constructors the entry points are counted against
+    // ------------------------------------------------------------------
+
+    /**
+     * The constructor {@code @AllArgsConstructor} appends onto the declared
+     * builder takes parameters, so javac skips {@code builder()},
+     * {@code from(T)} and {@code mutate()}. The editor counted only the
+     * author's constructors and offered all three, green over a call javac
+     * rejects; the appended constructor itself stays callable.
+     */
+    public void testADeclaredBuilderWhoseOnlyConstructorAnAllArgsAnnotationAppends_offersNoEntryPoints() {
+        addArgsConstructorAnnotation("AllArgsConstructor");
+        PsiFile file = myFixture.configureByText("Held.java",
+            """
+            import dev.simplified.annotations.AllArgsConstructor;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Held {
+                private String name;
+                public String getName() { return name; }
+                @AllArgsConstructor
+                public static class Builder {
+                    private String tag;
+                }
+                static String go() { return new Held.Builder("t").name("a").build().getName(); }
+            }
+            """);
+        List<String> names = methodNamesOf(((PsiJavaFile) file).getClasses()[0]);
+        assertFalse("javac emits no builder(): " + names, names.contains("builder"));
+        assertFalse("nor from(T): " + names, names.contains("from"));
+        assertFalse("nor mutate(): " + names, names.contains("mutate"));
+        assertNoErrors();
+    }
+
+    /**
+     * The no-argument constructor {@code @NoArgsConstructor} appends beside the
+     * author's parameterised one serves the entry points, so javac emits them.
+     * The editor withheld them, red over source that builds.
+     */
+    public void testANoArgsAnnotationBesideAParameterConstructor_offersTheEntryPoints() {
+        addNoArgsConstructorAnnotation();
+        myFixture.configureByText("Held.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.NoArgsConstructor;
+            @ClassBuilder
+            public class Held {
+                private String name;
+                public String getName() { return name; }
+                @NoArgsConstructor
+                public static class Builder {
+                    public Builder(String tag) { }
+                }
+                static String go() {
+                    return Held.builder().name("a").build().getName()
+                        + Held.from(new Held.Builder("t").name("b").build()).build().getName();
+                }
+            }
+            """);
+        assertNoErrors();
+    }
+
+    /**
+     * On a constructor target the constructor {@code @AllArgsConstructor}
+     * appends over the author's seed field takes the seed, so javac emits
+     * {@code builder(origin)}. The editor saw no constructor and withheld it.
+     */
+    public void testAConstructorTargetWhoseAllArgsBuilderTakesTheSeed_offersTheEntryPoint() {
+        addArgsConstructorAnnotation("AllArgsConstructor");
+        myFixture.configureByText("Order.java",
+            """
+            import dev.simplified.annotations.AllArgsConstructor;
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Order {
+                private final String origin;
+                private final String item;
+                @ClassBuilder
+                Order(@BuilderSeed String origin, String item) { this.origin = origin; this.item = item; }
+                public String origin() { return origin; }
+                @AllArgsConstructor
+                public static final class Builder {
+                    private final String origin;
+                }
+                static String go() { return Order.builder("web").item("x").build().origin(); }
+            }
+            """);
+        assertNoErrors();
+    }
+
+    /**
+     * An {@code Order} whose one seed is {@code origin} of {@code seedType},
+     * whose declared builder carries {@code constructors}, entered through
+     * {@code builder(argument)}.
+     */
+    private void configureSeededOrder(String seedType, String constructors, String argument) {
+        myFixture.configureByText("Order.java",
+            """
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Order {
+                private final %1$s origin;
+                private final String item;
+                @ClassBuilder
+                Order(@BuilderSeed %1$s origin, String item) { this.origin = origin; this.item = item; }
+                public String describe() { return origin + ":" + item; }
+                public static final class Builder {
+                    %2$s
+                }
+                static String go() { return Order.builder(%3$s).item("x").build().describe(); }
+            }
+            """.formatted(seedType, constructors, argument));
+    }
+
+    /**
+     * javac's {@code builder(seed)} reaches a constructor taking the seed's box.
+     * Only equal types were counted, so the editor withheld it, red over source
+     * that builds.
+     */
+    public void testMergeOnAPrimitiveSeedWhoseBuilderTakesItsBox_offersTheEntryPoint() {
+        configureSeededOrder("int", "Builder(Integer origin) { this.origin = origin; }", "3");
+        assertNoErrors();
+    }
+
+    /** A boxed seed reaches a constructor taking its primitive. */
+    public void testMergeOnABoxedSeedWhoseBuilderTakesItsPrimitive_offersTheEntryPoint() {
+        configureSeededOrder("Integer", "Builder(int origin) { this.origin = origin; }", "3");
+        assertNoErrors();
+    }
+
+    /** A primitive seed reaches a constructor taking a wider primitive. */
+    public void testMergeOnAPrimitiveSeedWhoseBuilderTakesAWiderPrimitive_offersTheEntryPoint() {
+        configureSeededOrder("int", "Builder(long origin) { this.origin = (int) (origin * 2); }", "3");
+        assertNoErrors();
+    }
+
+    /** A reference seed reaches a constructor taking {@code Object}. */
+    public void testMergeOnAReferenceSeedWhoseBuilderTakesObject_offersTheEntryPoint() {
+        configureSeededOrder("String", "Builder(java.lang.Object origin) { this.origin = origin + \"!\"; }",
+            "\"web\"");
+        assertNoErrors();
+    }
+
+    /**
+     * Any other supertype stays unmatched on both halves, so the editor
+     * withholds {@code builder(seed)} as javac skips it.
+     */
+    public void testMergeOnAReferenceSeedWhoseBuilderTakesAnotherSupertype_offersNoEntryPoint() {
+        configureSeededOrder("String", "Builder(CharSequence origin) { this.origin = origin.toString(); }",
+            "\"web\"");
+        assertTrue("javac emits no builder(String): " + errors(),
+            errors().contains("Cannot resolve method 'builder' in 'Order'"));
+    }
+
+    // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+
+    /** Adds a constructor annotation of the given simple name that appends a constructor. */
+    private void addArgsConstructorAnnotation(String name) {
+        myFixture.addFileToProject("dev/simplified/annotations/" + name + ".java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS)
+            @Target(ElementType.TYPE)
+            public @interface %s {
+                AccessLevel access() default AccessLevel.PUBLIC;
+                boolean emitGenerated() default true;
+            }
+            """.formatted(name));
+    }
 
     private void addNoArgsConstructorAnnotation() {
         myFixture.addFileToProject("dev/simplified/annotations/NoArgsConstructor.java",

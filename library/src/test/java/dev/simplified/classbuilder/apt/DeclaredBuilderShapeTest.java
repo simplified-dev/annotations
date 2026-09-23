@@ -701,6 +701,87 @@ public class DeclaredBuilderShapeTest {
             DeclaredBuilderShape.skippedForAThrowsClause(List.of(List.of("int")), List.of(), List.of("String")));
     }
 
+    /**
+     * javac reaches a constructor through more than its own parameter types:
+     * a primitive seed boxed or widened, a boxed one unboxed, and any reference
+     * seed passed as {@code Object}. Only equal types were counted, and every
+     * one of these was skipped with the note though the call compiles.
+     */
+    @Test
+    public void instantiable_takesTheSeedsThroughBoxingWideningOrObject() {
+        assertTrue("a primitive into its box", instantiableOver(List.of("Integer"), "int"));
+        assertTrue("a qualified box", instantiableOver(List.of("java.lang.Integer"), "int"));
+        assertTrue("a box into its primitive", instantiableOver(List.of("int"), "java.lang.Integer"));
+        assertTrue("a primitive widened", instantiableOver(List.of("long"), "int"));
+        assertTrue("a narrow primitive widened to the widest", instantiableOver(List.of("double"), "byte"));
+        assertTrue("char widened to int", instantiableOver(List.of("int"), "char"));
+        assertTrue("a reference seed as Object", instantiableOver(List.of("Object"), "java.lang.String"));
+        assertTrue("as java.lang.Object", instantiableOver(List.of("java.lang.Object"), "List<String>"));
+        assertTrue("an array seed as Object", instantiableOver(List.of("Object"), "String[]"));
+        assertTrue("every seed at once",
+            instantiableOver(List.of("Integer", "long", "Object"), "int", "int", "String"));
+    }
+
+    /**
+     * Any other conversion is one names cannot vouch for, so the constructor is
+     * not counted and the entry point is skipped with the note: another
+     * supertype, a primitive into {@code Object} or a wider box, a narrowing,
+     * and an unboxing followed by a widening.
+     */
+    @Test
+    public void instantiable_countsNoOtherConversion() {
+        assertFalse("another supertype", instantiableOver(List.of("CharSequence"), "String"));
+        assertFalse("a primitive into Object", instantiableOver(List.of("Object"), "int"));
+        assertFalse("into another box", instantiableOver(List.of("Long"), "int"));
+        assertFalse("a narrowing", instantiableOver(List.of("int"), "long"));
+        assertFalse("boolean is no number", instantiableOver(List.of("int"), "boolean"));
+        assertFalse("an unboxing then a widening", instantiableOver(List.of("long"), "Integer"));
+        assertFalse("an Object of another package", instantiableOver(List.of("org.acme.Object"), "String"));
+        assertFalse("a primitive array widened", instantiableOver(List.of("long[]"), "int[]"));
+    }
+
+    /**
+     * Where more than one constructor takes the seeds, the one counted is the
+     * one javac selects: the earliest phase - no boxing before boxing - and in
+     * it the most specific. Two that neither is more specific than, or a
+     * constructor names cannot place that might be chosen first, leave no
+     * single constructor, and a throws clause is read off the selected one.
+     */
+    @Test
+    public void instantiable_readsTheConstructorJavacSelects() {
+        List<List<String>> crossed = List.of(List.of("long", "int"), List.of("int", "long"));
+        assertFalse("an ambiguous pair", DeclaredBuilderShape.instantiable(crossed, crossed, List.of("int", "int")));
+        List<List<String>> nested = List.of(List.of("long", "int"), List.of("long", "long"));
+        assertTrue("one more specific than the other",
+            DeclaredBuilderShape.instantiable(nested, nested, List.of("int", "int")));
+        List<List<String>> unplaced = List.of(List.of("Object"), List.of("CharSequence"));
+        assertFalse("a supertype javac may prefer",
+            DeclaredBuilderShape.instantiable(unplaced, unplaced, List.of("String")));
+        List<List<String>> exact = List.of(List.of("String"), List.of("CharSequence"));
+        assertTrue("its own type beats any other",
+            DeclaredBuilderShape.instantiable(exact, exact, List.of("String")));
+        List<List<String>> laterPhase = List.of(List.of("Integer"), List.of("Number"));
+        assertTrue("a supertype reached only by boxing competes with no widening",
+            DeclaredBuilderShape.instantiable(List.of(List.of("long"), List.of("Number")),
+                List.of(List.of("long"), List.of("Number")), List.of("int")));
+        assertFalse("but with a boxing it may",
+            DeclaredBuilderShape.instantiable(laterPhase, laterPhase, List.of("int")));
+        List<List<String>> widenedOrBoxed = List.of(List.of("long"), List.of("Integer"));
+        List<List<String>> boxedOnly = List.of(List.of("Integer"));
+        assertFalse("the widening is selected, and it throws",
+            DeclaredBuilderShape.instantiable(widenedOrBoxed, boxedOnly, List.of("int")));
+        assertTrue("which the note is worded by",
+            DeclaredBuilderShape.skippedForAThrowsClause(widenedOrBoxed, boxedOnly, List.of("int")));
+        assertFalse("and not where nothing is selected",
+            DeclaredBuilderShape.skippedForAThrowsClause(crossed, List.of(), List.of("int", "int")));
+    }
+
+    /** Whether a builder whose one throw-free constructor takes {@code parameters} serves the seeds. */
+    private static boolean instantiableOver(List<String> parameters, String... seedTypes) {
+        List<List<String>> constructors = List.of(parameters);
+        return DeclaredBuilderShape.instantiable(constructors, constructors, Arrays.asList(seedTypes));
+    }
+
     /** The skip note names only the entry points skipped, and the arity they needed. */
     @Test
     public void uninstantiable_wordsTheNoteByWhatTheEntryPointsPass() {
@@ -711,9 +792,9 @@ public class DeclaredBuilderShapeTest {
         assertEquals("@ClassBuilder merged into 'Builder' but every constructor it declares takes "
                 + "parameters, so 'builder' was not added - declare a no-argument constructor or write it",
             DeclaredBuilderShape.uninstantiable("Builder", List.of("builder"), List.of()));
-        assertEquals("@ClassBuilder merged into 'Builder' but none of its constructors takes the 2 seeds "
-                + "'builder' passes, so 'builder' was not added - declare a constructor taking "
-                + "(origin, kind) or write it",
+        assertEquals("@ClassBuilder merged into 'Builder' but no single constructor it declares takes the 2 "
+                + "seeds 'builder' passes as their own types, their boxes or primitives, wider primitives or "
+                + "Object, so 'builder' was not added - declare a constructor taking (origin, kind) or write it",
             DeclaredBuilderShape.uninstantiable("Builder", List.of("builder"), List.of("origin", "kind")));
     }
 
@@ -734,9 +815,9 @@ public class DeclaredBuilderShapeTest {
                 + "parameters, so 'builder' and 'mutate' were not added - declare a no-argument "
                 + "constructor or write them",
             DeclaredBuilderShape.entryPointsSkipped("Builder", noFrom, false, List.of()));
-        assertEquals("@ClassBuilder merged into 'Builder' but none of its constructors takes the seed "
-                + "'builder' passes, so 'builder' was not added - declare a constructor taking "
-                + "(origin) or write it",
+        assertEquals("@ClassBuilder merged into 'Builder' but no single constructor it declares takes the "
+                + "seed 'builder' passes as its own type, its box or primitive, a wider primitive or Object, "
+                + "so 'builder' was not added - declare a constructor taking (origin) or write it",
             DeclaredBuilderShape.entryPointsSkipped("Builder", all, true, List.of("origin")));
     }
 

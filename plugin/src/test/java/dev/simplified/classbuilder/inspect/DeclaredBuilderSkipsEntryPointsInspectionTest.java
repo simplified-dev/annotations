@@ -29,6 +29,10 @@ public class DeclaredBuilderSkipsEntryPointsInspectionTest extends BasePlatformT
         + "constructor it declares takes parameters, so 'builder', 'from' and 'mutate' were not added - "
         + "declare a no-argument constructor or write them";
 
+    private static final String SEED_SKIPPED = "@ClassBuilder merged into 'Builder' but no single constructor "
+        + "it declares takes the seed 'builder' passes as its own type, its box or primitive, a wider primitive "
+        + "or Object, so 'builder' was not added - declare a constructor taking (origin) or write it";
+
     private AccessToken jsvgSuppressor;
 
     @Override
@@ -284,10 +288,7 @@ public class DeclaredBuilderSkipsEntryPointsInspectionTest extends BasePlatformT
                 }
             }
             """);
-        assertEquals("@ClassBuilder merged into 'Builder' but none of its constructors takes the seed "
-                + "'builder' passes, so 'builder' was not added - declare a constructor taking "
-                + "(origin) or write it",
-            theOnlyWarning());
+        assertEquals(SEED_SKIPPED, theOnlyWarning());
     }
 
     /** A declared constructor taking exactly the seed serves the seeded entry point. */
@@ -472,10 +473,170 @@ public class DeclaredBuilderSkipsEntryPointsInspectionTest extends BasePlatformT
                 }
             }
             """);
-        assertEquals("@ClassBuilder merged into 'Builder' but none of its constructors takes the seed "
-                + "'builder' passes, so 'builder' was not added - declare a constructor taking "
-                + "(origin) or write it",
+        assertEquals(SEED_SKIPPED, theOnlyWarning());
+    }
+
+    /**
+     * A primitive seed reaches a constructor taking its box, as javac's own call
+     * does, so the entry point is emitted and there is no skip to report. Only
+     * equal types were counted, and the warning fired over a call that compiles.
+     */
+    public void testOnAPrimitiveSeedWhoseBuilderTakesItsBox_isNotWarned() {
+        myFixture.configureByText("Order.java",
+            """
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Order {
+                private final int origin;
+                private final String item;
+                @ClassBuilder
+                Order(@BuilderSeed int origin, String item) { this.origin = origin; this.item = item; }
+                public static final class Builder {
+                    Builder(Integer origin) { this.origin = origin; }
+                }
+            }
+            """);
+        assertEquals("javac emits builder(int): " + weakWarningTexts(), 0, weakWarnings().size());
+    }
+
+    /**
+     * Two constructors reached by widening, neither more specific than the
+     * other, leave no single one javac would call, so the entry point is skipped
+     * with the note.
+     */
+    public void testOnSeedsTwoBuilderConstructorsTakeAmbiguously_isWarned() {
+        myFixture.configureByText("Grid.java",
+            """
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Grid {
+                private final int x;
+                private final int y;
+                private final String label;
+                @ClassBuilder
+                Grid(@BuilderSeed int x, @BuilderSeed int y, String label) { this.x = x; this.y = y; this.label = label; }
+                public static final class Builder {
+                    Builder(long x, int y) { this.x = (int) x; this.y = y; }
+                    Builder(int x, long y) { this.x = x; this.y = (int) y; }
+                }
+            }
+            """);
+        assertEquals("@ClassBuilder merged into 'Builder' but no single constructor it declares takes the 2 "
+                + "seeds 'builder' passes as their own types, their boxes or primitives, wider primitives or "
+                + "Object, so 'builder' was not added - declare a constructor taking (x, y) or write it",
             theOnlyWarning());
+    }
+
+    /**
+     * The constructor {@code @AllArgsConstructor} appends onto the declared
+     * builder is in the builder javac counts the entry points against, and it
+     * takes parameters, so the three are skipped. The editor counted only the
+     * author's constructors and stayed silent over a builder javac skips them on.
+     */
+    public void testADeclaredBuilderWhoseOnlyConstructorAnAllArgsAnnotationAppends_isWarned() {
+        addConstructorAnnotations();
+        myFixture.configureByText("Held.java",
+            """
+            import dev.simplified.annotations.AllArgsConstructor;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Held {
+                private String name;
+                @AllArgsConstructor
+                public static class Builder {
+                    private String tag;
+                }
+            }
+            """);
+        assertEquals(ALL_THREE_SKIPPED, theOnlyWarning());
+    }
+
+    /** The same for {@code @RequiredArgsConstructor} over a final field. */
+    public void testADeclaredBuilderWhoseOnlyConstructorARequiredArgsAnnotationAppends_isWarned() {
+        addConstructorAnnotations();
+        myFixture.configureByText("Held.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.RequiredArgsConstructor;
+            @ClassBuilder
+            public class Held {
+                private String name;
+                @RequiredArgsConstructor
+                public static class Builder {
+                    private final String tag;
+                }
+            }
+            """);
+        assertEquals(ALL_THREE_SKIPPED, theOnlyWarning());
+    }
+
+    /**
+     * The no-argument constructor {@code @NoArgsConstructor} appends beside the
+     * author's parameterised one serves the entry points, so javac emits them
+     * and there is nothing to report.
+     */
+    public void testANoArgsAnnotationBesideAParameterConstructor_isNotWarned() {
+        addConstructorAnnotations();
+        myFixture.configureByText("Held.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.NoArgsConstructor;
+            @ClassBuilder
+            public class Held {
+                private String name;
+                @NoArgsConstructor
+                public static class Builder {
+                    public Builder(String tag) { }
+                }
+            }
+            """);
+        assertEquals("javac emits the entry points: " + weakWarningTexts(), 0, weakWarnings().size());
+    }
+
+    /** At {@code AccessLevel.NONE} the annotation appends nothing, so the author's constructor is all there is. */
+    public void testANoArgsAnnotationAtAccessNoneBesideAParameterConstructor_isWarned() {
+        addConstructorAnnotations();
+        myFixture.configureByText("Held.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.NoArgsConstructor;
+            @ClassBuilder
+            public class Held {
+                private String name;
+                @NoArgsConstructor(access = AccessLevel.NONE)
+                public static class Builder {
+                    public Builder(String tag) { }
+                }
+            }
+            """);
+        assertEquals(ALL_THREE_SKIPPED, theOnlyWarning());
+    }
+
+    /**
+     * On a constructor target, the constructor {@code @AllArgsConstructor}
+     * appends over the author's seed field takes the seed, so javac emits
+     * {@code builder(origin)} and there is nothing to report.
+     */
+    public void testOnAConstructorTargetWhoseAllArgsBuilderTakesTheSeed_isNotWarned() {
+        addConstructorAnnotations();
+        myFixture.configureByText("Order.java",
+            """
+            import dev.simplified.annotations.AllArgsConstructor;
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Order {
+                private final String origin;
+                private final String item;
+                @ClassBuilder
+                Order(@BuilderSeed String origin, String item) { this.origin = origin; this.item = item; }
+                @AllArgsConstructor
+                public static final class Builder {
+                    private final String origin;
+                }
+            }
+            """);
+        assertEquals("javac emits builder(String): " + weakWarningTexts(), 0, weakWarnings().size());
     }
 
     /**
@@ -498,6 +659,28 @@ public class DeclaredBuilderSkipsEntryPointsInspectionTest extends BasePlatformT
             """);
         assertEquals("javac prints no merge note for a refused member: " + weakWarningTexts(),
             0, weakWarnings().size());
+    }
+
+    /** Adds the access enum and the three constructor annotations that append a constructor. */
+    private void addConstructorAnnotations() {
+        myFixture.addFileToProject("dev/simplified/annotations/AccessLevel.java",
+            """
+            package dev.simplified.annotations;
+            public enum AccessLevel { PUBLIC, PROTECTED, PACKAGE, PRIVATE, NONE }
+            """);
+        for (String name : List.of("AllArgsConstructor", "RequiredArgsConstructor", "NoArgsConstructor")) {
+            myFixture.addFileToProject("dev/simplified/annotations/" + name + ".java",
+                """
+                package dev.simplified.annotations;
+                import java.lang.annotation.*;
+                @Retention(RetentionPolicy.CLASS)
+                @Target(ElementType.TYPE)
+                public @interface %s {
+                    AccessLevel access() default AccessLevel.PUBLIC;
+                    boolean force() default false;
+                }
+                """.formatted(name));
+        }
     }
 
     private List<HighlightInfo> weakWarnings() {
