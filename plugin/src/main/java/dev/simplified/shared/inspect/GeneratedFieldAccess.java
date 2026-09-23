@@ -1,20 +1,38 @@
 package dev.simplified.shared.inspect;
 
+import com.intellij.psi.JavaRecursiveElementWalkingVisitor;
 import com.intellij.psi.PsiAnnotation;
+import com.intellij.psi.PsiAssignmentExpression;
 import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiCodeBlock;
 import com.intellij.psi.PsiEnumConstant;
+import com.intellij.psi.PsiExpression;
+import com.intellij.psi.PsiExpressionStatement;
 import com.intellij.psi.PsiField;
+import com.intellij.psi.PsiMethod;
+import com.intellij.psi.PsiMethodCallExpression;
 import com.intellij.psi.PsiModifier;
+import com.intellij.psi.PsiParameter;
+import com.intellij.psi.PsiReferenceExpression;
+import com.intellij.psi.PsiStatement;
+import com.intellij.psi.PsiThisExpression;
+import com.intellij.psi.PsiVariable;
+import com.intellij.psi.impl.source.PsiExtensibleClass;
+import com.intellij.psi.util.PsiUtil;
 import dev.simplified.accessor.inspect.AccessorConstants;
 import dev.simplified.args.apt.ArgsMode;
 import dev.simplified.args.editor.ArgsInference;
 import dev.simplified.args.inspect.ArgsConstants;
+import dev.simplified.classbuilder.apt.BlankFinalLift;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.equality.inspect.WholeObjectConstants;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Answers what a generated member does to a field, for the two extension points
@@ -88,7 +106,10 @@ public final class GeneratedFieldAccess {
      * the lift happens because the field is in the builder's selection, whether
      * or not the builder also synthesises the constructor that assigns it. A
      * target with a hand-written constructor gets the lift and no synthesised
-     * constructor, and that is the shape this exists for.
+     * constructor, and that is the shape this exists for - unless one of those
+     * constructors assigns the field nowhere, which {@link BlankFinalLift}
+     * decides from the written constructors as the processor does, and the
+     * field then keeps its initializer.
      *
      * @param field the field a report landed on
      * @return whether the field is a lifted blank final
@@ -99,7 +120,93 @@ public final class GeneratedFieldAccess {
         PsiClass owner = owningClass(field);
         if (owner == null) return false;
         if (owner.getAnnotation(ClassBuilderConstants.ANNOTATION_FQN) == null) return false;
-        return names(ArgsConstants.select(owner, ArgsMode.BUILDER, builderExclude(owner)), field);
+        List<PsiField> selected = ArgsConstants.select(owner, ArgsMode.BUILDER, builderExclude(owner));
+        return names(selected, field) && BlankFinalLift.lifts(field.getName(), writtenConstructors(owner));
+    }
+
+    /**
+     * Summarises each constructor written on the class for {@link BlankFinalLift}.
+     *
+     * <p>Read through {@link PsiExtensibleClass#getOwnMethods()}, so a
+     * constructor an augment provider contributes is not among them - the
+     * processor leaves out every constructor it generates the same way.
+     *
+     * @param owner the field's class
+     * @return one summary per written constructor
+     */
+    private static @NotNull List<BlankFinalLift.Writes> writtenConstructors(@NotNull PsiClass owner) {
+        List<PsiMethod> methods = owner instanceof PsiExtensibleClass extensible
+            ? extensible.getOwnMethods()
+            : List.of(owner.getMethods());
+        List<BlankFinalLift.Writes> out = new ArrayList<>();
+        for (PsiMethod method : methods) {
+            if (!method.isConstructor() || !method.isPhysical()) continue;
+            PsiCodeBlock body = method.getBody();
+            if (body != null) out.add(writesOf(method, body));
+        }
+        return out;
+    }
+
+    /**
+     * Reads the names one constructor body writes and declares, by name and
+     * without resolving, never descending into a nested class's body.
+     *
+     * @param constructor the written constructor
+     * @param body its body
+     * @return its summary
+     */
+    private static @NotNull BlankFinalLift.Writes writesOf(@NotNull PsiMethod constructor,
+                                                           @NotNull PsiCodeBlock body) {
+        Set<String> declared = new HashSet<>();
+        PsiParameter[] parameters = constructor.getParameterList().getParameters();
+        for (PsiParameter parameter : parameters) declared.add(parameter.getName());
+        List<String> thisWrites = new ArrayList<>();
+        List<String> bareWrites = new ArrayList<>();
+        body.accept(new JavaRecursiveElementWalkingVisitor() {
+            @Override
+            public void visitClass(@NotNull PsiClass aClass) {
+            }
+
+            @Override
+            public void visitVariable(@NotNull PsiVariable variable) {
+                declared.add(variable.getName());
+                super.visitVariable(variable);
+            }
+
+            @Override
+            public void visitAssignmentExpression(@NotNull PsiAssignmentExpression expression) {
+                PsiExpression written = PsiUtil.skipParenthesizedExprDown(expression.getLExpression());
+                if (written instanceof PsiReferenceExpression reference) {
+                    String name = reference.getReferenceName();
+                    PsiExpression qualifier =
+                        PsiUtil.skipParenthesizedExprDown(reference.getQualifierExpression());
+                    if (name != null && qualifier == null) {
+                        bareWrites.add(name);
+                    } else if (name != null && qualifier instanceof PsiThisExpression self
+                        && self.getQualifier() == null) {
+                        thisWrites.add(name);
+                    }
+                }
+                super.visitAssignmentExpression(expression);
+            }
+        });
+        return BlankFinalLift.Writes.of(callsThis(body), declared, thisWrites, bareWrites);
+    }
+
+    /**
+     * Whether one of a constructor body's statements is a {@code this(..)} call.
+     *
+     * @param body the constructor body
+     * @return whether it delegates to another constructor of its class
+     */
+    private static boolean callsThis(@NotNull PsiCodeBlock body) {
+        for (PsiStatement statement : body.getStatements()) {
+            if (statement instanceof PsiExpressionStatement expression
+                && expression.getExpression() instanceof PsiMethodCallExpression call
+                && call.getMethodExpression().getQualifierExpression() == null
+                && "this".equals(call.getMethodExpression().getReferenceName())) return true;
+        }
+        return false;
     }
 
     /**

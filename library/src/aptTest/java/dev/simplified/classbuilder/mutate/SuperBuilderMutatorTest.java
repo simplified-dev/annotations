@@ -179,6 +179,49 @@ public class SuperBuilderMutatorTest {
     }
 
     /**
+     * A hand-written copy constructor that leaves a {@code final} field to its
+     * initializer keeps that initializer on a generated builder too. The lift
+     * took it off for the generated copy constructor the author's replaces, and
+     * javac reported {@code variable sides might not have been initialized} on
+     * the author's constructor.
+     */
+    @Test
+    public void userWrittenCopyCtor_leavingAnInitializedFinal_keepsItsInitializer() throws Exception {
+        JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Base",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Base {",
+            "    private final String name;",
+            "    private final int sides = 3;",
+            "    public String getName() { return name; }",
+            "    public int getSides() { return sides; }",
+            "    protected Base(Builder<?, ?> b) { this.name = b.name; }",
+            "}");
+        JavaFileObject child = JavaFileObjects.forSourceLines("demo.Leaf",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Leaf extends Base {",
+            "    int count;",
+            "}");
+        Compilation c = compile(parent, child);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> baseCls = Class.forName("demo.Base", true, cl);
+        Class<?> leafCls = Class.forName("demo.Leaf", true, cl);
+        Class<?> leafBuilder = nested(leafCls, "Builder");
+        Object b = leafCls.getMethod("builder").invoke(null);
+        leafBuilder.getMethod("name", String.class).invoke(b, "tri");
+        leafBuilder.getMethod("sides", int.class).invoke(b, 8);
+        Object built = leafBuilder.getMethod("build").invoke(b);
+        assertEquals("tri", baseCls.getMethod("getName").invoke(built));
+        assertEquals("the author's constructor leaves the initializer in charge",
+            3, baseCls.getMethod("getSides").invoke(built));
+    }
+
+    /**
      * A hand-written copy constructor naming the builder through its target -
      * {@code Base.Builder<?, ?>} on the root, {@code demo.Leaf.Builder} on the
      * link - is the author's version as much as the simple spelling is. The

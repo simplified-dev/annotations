@@ -376,6 +376,30 @@ public class GeneratedMemberHighlightFilterTest extends LightJavaCodeInsightFixt
         assertTrue(reportsFinalAssignment("a"));
     }
 
+    /**
+     * A written constructor that assigns the field nowhere keeps its initializer
+     * in javac, so the write in the other constructor is a second assignment -
+     * {@code cannot assign a value to final variable a} on that line. The report
+     * was dropped as a write to a lifted blank final, which left the editor
+     * green over source javac rejects.
+     */
+    public void testAWriteBesideAConstructorLeavingTheFinal_keepsTheReport() {
+        configure(
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Target {
+                private final int a = 128;
+                public Target(int a) {
+                    this.a = a;
+                }
+                public Target() {
+                }
+            }
+            """);
+        assertTrue("javac rejects the write as a second assignment", reportsFinalAssignment("a"));
+    }
+
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------

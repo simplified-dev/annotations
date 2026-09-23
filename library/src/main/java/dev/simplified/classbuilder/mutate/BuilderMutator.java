@@ -204,9 +204,11 @@ public final class BuilderMutator {
      * javac's own default constructor is then already the no-argument one
      * {@code build()} calls.
      *
-     * <p>A declared nested builder never suppresses it: the generated
-     * {@code build()} merged into that builder still calls
-     * {@code new Target(..)}, so the constructor it calls still has to exist.
+     * <p>A declared nested builder never suppresses it, whichever
+     * {@code build()} it keeps: the generated one merged into that builder
+     * calls {@code new Target(..)}, and beside an author's own {@code build()}
+     * the constructor is emitted all the same, taking the place of javac's
+     * no-argument default.
      *
      * @param targetElement the annotated type
      * @param target the target's class declaration

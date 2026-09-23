@@ -1,9 +1,11 @@
 package dev.simplified.classbuilder.mutate;
 import com.sun.tools.javac.code.Flags;
 import com.sun.tools.javac.parser.ParserFactory;
+import com.sun.tools.javac.tree.JCTree.JCAssign;
 import com.sun.tools.javac.tree.JCTree.JCBlock;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import com.sun.tools.javac.tree.JCTree.JCExpression;
+import com.sun.tools.javac.tree.JCTree.JCExpressionStatement;
 import com.sun.tools.javac.tree.JCTree.JCFieldAccess;
 import com.sun.tools.javac.tree.JCTree.JCIdent;
 import com.sun.tools.javac.tree.JCTree.JCMethodDecl;
@@ -13,11 +15,14 @@ import com.sun.tools.javac.tree.JCTree.JCStatement;
 import com.sun.tools.javac.tree.JCTree.JCVariableDecl;
 import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.TreeCopier;
+import com.sun.tools.javac.tree.TreeInfo;
 import com.sun.tools.javac.tree.TreeMaker;
+import com.sun.tools.javac.tree.TreeScanner;
 import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.Name;
 import com.sun.tools.javac.util.Names;
 import com.sun.tools.javac.util.Position;
+import dev.simplified.classbuilder.apt.BlankFinalLift;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.shared.apt.SourceIntrospector;
 import dev.simplified.shared.javac.AstMarkers;
@@ -26,6 +31,9 @@ import dev.simplified.shared.javac.JavacTypeFactory;
 
 import javax.annotation.processing.Messager;
 import javax.tools.Diagnostic;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * Emits a {@code private static <FieldType> $default$<fieldName>()} method on
@@ -92,6 +100,7 @@ final class RetainedInitFactory {
      */
     void appendAll() {
         JCClassDecl target = ctx.target();
+        java.util.List<BlankFinalLift.Writes> authored = authorConstructors(target);
         for (FieldSpec f : ctx.fields()) {
             JCExpression original =
                 f.sourceInitializerTree instanceof JCExpression captured ? captured : null;
@@ -142,8 +151,92 @@ final class RetainedInitFactory {
             // retainInit = false) must not leave a final field's initializer
             // in place. Such a field simply defaults to null, exactly as the
             // non-final case already did.
-            stripToBlankFinal(target, f.name);
+            //
+            // A constructor the author wrote answers for itself: where one
+            // assigns the field nowhere the initializer stays, since lifting
+            // it would leave that constructor a blank final it never assigns.
+            if (BlankFinalLift.lifts(f.name, authored)) stripToBlankFinal(target, f.name);
         }
+    }
+
+    /**
+     * Summarises each constructor the author wrote on the target for
+     * {@link BlankFinalLift}.
+     *
+     * <p>javac's implicit default and every constructor this pipeline generated
+     * are left out: a generated constructor assigns every field it is built
+     * over, and the implicit default stands only where no constructor is
+     * written, beside the all-args constructor {@code build()} calls.
+     *
+     * @param target the target's class declaration
+     * @return one summary per author-written constructor
+     */
+    private static java.util.List<BlankFinalLift.Writes> authorConstructors(JCClassDecl target) {
+        java.util.List<BlankFinalLift.Writes> out = new ArrayList<>();
+        for (JCTree def : target.defs) {
+            if (!(def instanceof JCMethodDecl m)) continue;
+            if (!m.name.toString().equals("<init>") || m.body == null) continue;
+            if ((m.mods.flags & Flags.GENERATEDCONSTR) != 0) continue;
+            if (AstMarkers.isGenerated(m)) continue;
+            out.add(writesOf(m));
+        }
+        return out;
+    }
+
+    /**
+     * Reads the names one constructor body writes and declares, never
+     * descending into a nested class's body.
+     *
+     * @param constructor the author-written constructor
+     * @return its summary
+     */
+    private static BlankFinalLift.Writes writesOf(JCMethodDecl constructor) {
+        Set<String> declared = new HashSet<>();
+        for (JCVariableDecl param : constructor.params) declared.add(param.name.toString());
+        java.util.List<String> thisWrites = new ArrayList<>();
+        java.util.List<String> bareWrites = new ArrayList<>();
+        new TreeScanner() {
+            @Override
+            public void visitClassDef(JCClassDecl tree) {
+            }
+
+            @Override
+            public void visitVarDef(JCVariableDecl tree) {
+                declared.add(tree.name.toString());
+                super.visitVarDef(tree);
+            }
+
+            @Override
+            public void visitAssign(JCAssign tree) {
+                JCExpression written = TreeInfo.skipParens(tree.lhs);
+                if (written instanceof JCIdent bare) {
+                    bareWrites.add(bare.name.toString());
+                } else if (written instanceof JCFieldAccess select
+                    && TreeInfo.skipParens(select.selected) instanceof JCIdent qualifier
+                    && qualifier.name.toString().equals("this")) {
+                    thisWrites.add(select.name.toString());
+                }
+                super.visitAssign(tree);
+            }
+        }.scan(constructor.body);
+        return BlankFinalLift.Writes.of(callsThis(constructor.body), declared,
+            thisWrites, bareWrites);
+    }
+
+    /**
+     * Whether one of a constructor body's statements is a {@code this(..)} call.
+     *
+     * @param body the constructor body
+     * @return whether it delegates to another constructor of its class
+     */
+    private static boolean callsThis(JCBlock body) {
+        for (JCStatement statement : body.stats) {
+            if (statement instanceof JCExpressionStatement expression
+                && expression.expr instanceof JCMethodInvocation call
+                && call.meth instanceof JCIdent callee
+                && callee.name.toString().equals("this")) return true;
+        }
+        return false;
     }
 
     /**

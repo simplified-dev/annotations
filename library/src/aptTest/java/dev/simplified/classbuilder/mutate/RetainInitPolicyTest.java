@@ -309,6 +309,34 @@ public class RetainInitPolicyTest {
         assertNull(get(target, buildUntouched(target), "getName"));
     }
 
+    /**
+     * An author constructor that assigns a {@code final} field nowhere keeps
+     * the field's initializer, so a second one that does assign it writes a
+     * final that already has a value - the error the editor shows on the same
+     * line. The lift took the initializer off instead, and javac reported
+     * {@code variable retries might not have been initialized} on the
+     * constructor that leaves it, where the editor showed nothing.
+     */
+    @Test
+    public void finalAnAuthorConstructorLeaves_isNotLifted() {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Config",
+            """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false)
+            public class Config {
+                private final String name;
+                private final int retries = 3;
+                public Config(String name) { this.name = name; }
+                public Config(String name, int retries) { this.name = name; this.retries = retries; }
+            }
+            """.split("\n"));
+        Compilation c = compile(src);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("cannot assign a value to final variable retries");
+        assertThat(c).hadErrorCount(1);
+    }
+
     // ------------------------------------------------------------------
     // Fresh-per-build semantics survive the policy change
     // ------------------------------------------------------------------

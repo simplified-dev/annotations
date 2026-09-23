@@ -692,8 +692,10 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      * Records keep their canonical constructor, a set {@code factoryMethod} means
      * {@code build()} never calls {@code new}, and any author-declared
      * constructor suppresses synthesis outright. A declared nested builder never
-     * does: the generated {@code build()} merged into it still calls
-     * {@code new Target(..)}, so the constructor it calls still has to exist.
+     * does, whichever {@code build()} it keeps: the generated one merged into it
+     * calls {@code new Target(..)}, and beside an author's own {@code build()}
+     * the constructor is emitted all the same, taking the place of javac's
+     * no-argument default.
      *
      * <p>Reads {@code getOwnMethods()} rather than {@code getConstructors()}:
      * the latter is augment-aware and would recurse back into this provider.

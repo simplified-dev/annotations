@@ -2762,4 +2762,86 @@ public class DeclaredBuilderMergeTest {
         assertEquals(2, runGo(c, "demo.UseTags"));
     }
 
+    /**
+     * A declared builder whose {@code build()} the author wrote calls the
+     * author's own constructor, which leaves a {@code final} field to its
+     * initializer. The initializer was lifted off the field all the same, for a
+     * generated constructor that is never emitted, and the author's constructor
+     * failed with {@code variable retries might not have been initialized}.
+     */
+    @Test
+    public void merge_besideAnAuthorBuild_keepsAFinalInitializerTheAuthorsConstructorLeaves()
+        throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Config",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public class Config {",
+                "    private final String name;",
+                "    private final int retries = 3;",
+                "    public Config(String name) { this.name = name; }",
+                "    public String name() { return name; }",
+                "    public int retries() { return retries; }",
+                "    public static class Builder {",
+                "        private String name;",
+                "        public Builder name(String name) { this.name = name; return this; }",
+                "        public Config build() { return new Config(name); }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseConfig",
+                "package demo;",
+                "public class UseConfig {",
+                "    public static String go() {",
+                "        Config c = Config.builder().name(\"x\").retries(5).build();",
+                "        return c.name() + c.retries();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("x3", runGo(c, "demo.UseConfig"));
+    }
+
+    /**
+     * The chain twin: a root's declared builder is merged into and the author's
+     * copy constructor is kept, which assigns one {@code final} field and leaves
+     * the other to its initializer. The lift took that initializer off too, and
+     * the copy constructor failed with {@code variable sides might not have
+     * been initialized}.
+     */
+    @Test
+    public void merge_onAnAbstractRoot_keepsAFinalInitializerTheAuthorsCopyConstructorLeaves()
+        throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public abstract class Shape {",
+                "    private final String name;",
+                "    private final int sides = 0;",
+                "    protected Shape(Builder<?, ?> b) { this.name = b.name; }",
+                "    public String name() { return name; }",
+                "    public int sides() { return sides; }",
+                "    public abstract static class Builder<T extends Shape, B extends Builder<T, B>> { }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.Square",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public class Square extends Shape {",
+                "    private int size;",
+                "    public int size() { return size; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseShape",
+                "package demo;",
+                "public class UseShape {",
+                "    public static String go() {",
+                "        Square s = Square.builder().name(\"sq\").sides(4).size(2).build();",
+                "        return s.name() + s.sides() + s.size();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("sq02", runGo(c, "demo.UseShape"));
+    }
+
 }

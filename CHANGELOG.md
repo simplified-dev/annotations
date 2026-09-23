@@ -97,6 +97,17 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   constructor taking an ancestor's `Base.Builder` shares the simple name but not the erasure, and
   still gets the generated copy constructor beside it.
 
+- **A `final` field a hand-written constructor leaves alone keeps its initializer.** The builder
+  lifts a `final` field's initializer off it so the constructor `build()` reaches can assign it, and
+  it lifted it whatever the author's constructors wrote. A constructor assigning the field nowhere -
+  beside a declared builder's own `build()`, or an author copy constructor on a chain, merged or
+  generated - then failed with `variable ... might not have been initialized` on the author's line
+  while the editor showed nothing. Each author constructor now answers for itself on both halves,
+  read by name: where one assigns the field nowhere and delegates to no `this(..)`, the initializer
+  stays, the generated setter for it has no effect on that constructor, and a second constructor
+  that does assign the field is reported as writing a final that already has a value, in javac and
+  the editor alike.
+
 - **A merged builder's slot fields resolve in the editor.** The merge appends them and the editor
   contributed none, so an author's own verb inside that class referencing a slot was red over source
   that builds - which lands on exactly the hand-written verb the merge exists to allow. Each slot is
@@ -173,8 +184,11 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   `mergeDeclaredBuilder = true`.**
 
   A bare declared builder, which 2.6.x left alone, now gains the generated slot fields, setters and
-  `build()` it does not spell, and its target gains the all-args constructor `build()` calls and the
-  entry points `builder()`, `from(T)` and `mutate()`, typed against the declared class. Each skipped
+  `build()` it does not spell, and its target gains the entry points `builder()`, `from(T)` and
+  `mutate()`, typed against the declared class. A target that declares no constructor also gains the
+  all-args constructor the generated `build()` calls, and gains it beside an author's own `build()`
+  too, where it takes the place of javac's no-argument default: a `build()` calling `new Target()`
+  on such a target stops compiling - declare the no-argument constructor it calls. Each skipped
   member the author already spells is listed in one note - a method counting as spelled where it has
   the generated one's name and erased parameter types, so an author's `port(String)` beside an
   `int port` slot is an overload and the generated `port(int)` that `from(T)` and `mutate()` call is
