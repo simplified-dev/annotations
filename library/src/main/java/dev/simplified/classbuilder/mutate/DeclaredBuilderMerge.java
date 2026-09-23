@@ -15,6 +15,7 @@ import dev.simplified.classbuilder.apt.DeclaredBuilderRejection;
 import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.classbuilder.apt.RoleExpectation;
+import dev.simplified.classbuilder.apt.SlotHolding;
 import org.jetbrains.annotations.Nullable;
 
 import javax.annotation.processing.Messager;
@@ -237,45 +238,38 @@ final class DeclaredBuilderMerge {
     }
 
     /**
-     * Reports a declared slot field whose type is not the one the builder holds
-     * that slot in, which the generated setter would otherwise fail to assign on
-     * a line the author never wrote.
+     * Reports each declared slot field whose type is not the one the builder
+     * holds that slot in.
      *
-     * <p>Compared against the <em>storage</em> type rather than the field's
-     * declared type, because the two differ for three shapes and the setters
-     * assign into the first. Comparing against the declared type gets a lazy
-     * field wrong in both directions at once: it rejects the supplier spelling,
-     * which is the only one the generated setters can assign, and accepts the
-     * natural one, which then fails on a generated line - the exact outcome this
-     * check exists to prevent.
+     * <p>The comparison and its wording are
+     * {@link DeclaredBuilderShape#mistypedSlot}, which the editor's inspection
+     * asks of the same strings read out of PSI. What is left here is classifying
+     * each slot's storage from the tree, which is where the processor knows more
+     * than the editor: whether a retained initializer reads instance state is a
+     * question only this side answers.
      *
-     * <p>Compared on the rendered type rather than through the element model,
-     * which is what is available for a tree the round is still building. A false
-     * negative here is only a missed diagnostic - javac still refuses the
-     * assignment - so the comparison errs towards saying nothing.
+     * <p>The merge continues after a report, so javac also refuses the generated
+     * member that assigns the slot - the report is what says why on a line the
+     * author wrote.
      */
     private void rejectMistypedSlots(TypeElement targetElement, JCClassDecl declared) {
         for (JCTree def : declared.defs) {
             if (!(def instanceof JCVariableDecl field)) continue;
+            if (field.vartype == null) continue;
             String name = field.name.toString();
             for (FieldSpec slot : ctx.fields()) {
                 if (!slot.name.equals(name)) continue;
-                if (field.vartype == null) continue;
-                String storage = slotStorageType(slot);
-                if (erasedName(field.vartype.toString()).equals(erasedName(storage))) continue;
-                messager.printMessage(Diagnostic.Kind.ERROR,
-                    "@ClassBuilder merged into '" + declared.name + "' finds '" + name
-                        + "' declared as " + field.vartype + ", and the slot it stands for is "
-                        + storage + " - the generated setter has nothing to assign it to"
-                        + heldIndirectly(slot),
-                    targetElement);
+                SlotHolding holding = holdingOf(slot);
+                String message = DeclaredBuilderShape.mistypedSlot(declared.name.toString(), name,
+                    field.vartype.toString(), storageType(slot, holding), holding);
+                if (message != null) messager.printMessage(Diagnostic.Kind.ERROR, message, targetElement);
             }
         }
     }
 
     /**
-     * The type the generated builder declares the slot as, which is not always
-     * the type the field is declared with.
+     * The form the generated builder holds the slot in, which is not always the
+     * type the field is declared with.
      *
      * <p>Three shapes, matching {@code FieldMutators} exactly: a collected field
      * whose default reads instance state gathers into a plain {@code java.util}
@@ -284,38 +278,26 @@ final class DeclaredBuilderMerge {
      * ambiguity, and everything else is held as declared.
      *
      * @param slot the slot being merged
-     * @return the storage type, rendered
+     * @return how the slot is held
      */
-    private String slotStorageType(FieldSpec slot) {
-        if (ctx.isCollectedInstanceDefault(slot)) return ctx.collectedSlotType(slot).toString();
-        if (slot.lazy || ctx.isInstanceDefault(slot.name)) {
-            return "java.util.function.Supplier<" + slot.typeDisplay + ">";
-        }
-        return slot.typeDisplay;
+    private SlotHolding holdingOf(FieldSpec slot) {
+        if (ctx.isCollectedInstanceDefault(slot)) return SlotHolding.COLLECTED_SCRATCH;
+        if (slot.lazy) return SlotHolding.LAZY;
+        if (ctx.isInstanceDefault(slot.name)) return SlotHolding.INSTANCE_DEFAULT;
+        return SlotHolding.DECLARED;
     }
 
     /**
-     * Why a slot is held as something other than its declared type, for the two
-     * shapes where an author would otherwise read the storage type as a mistake
-     * in the generator rather than a property of their own field.
+     * The type the generated builder declares the slot as.
      *
      * @param slot the slot being merged
-     * @return the trailing clause, empty where the slot is held as declared
+     * @param holding how the slot is held
+     * @return the storage type, rendered
      */
-    private String heldIndirectly(FieldSpec slot) {
-        // A collected slot with an instance-computed default is held as a plain
-        // java.util container, not as a supplier - the storage type above has
-        // already printed it as one, and the supplier clause would contradict
-        // the sentence it is appended to.
-        if (ctx.isCollectedInstanceDefault(slot)) return "";
-        if (slot.lazy) {
-            return ". A @Lazy field is held in the builder as a supplier of its declared type";
-        }
-        if (ctx.isInstanceDefault(slot.name)) {
-            return ". A slot whose retained initializer reads instance state is held in the builder "
-                + "as a supplier of its declared type";
-        }
-        return "";
+    private String storageType(FieldSpec slot, SlotHolding holding) {
+        if (holding == SlotHolding.COLLECTED_SCRATCH) return ctx.collectedSlotType(slot).toString();
+        if (holding.isSupplier()) return DeclaredBuilderShape.supplierOf(slot.typeDisplay);
+        return slot.typeDisplay;
     }
 
     /** Field names the declared builder already spells. */

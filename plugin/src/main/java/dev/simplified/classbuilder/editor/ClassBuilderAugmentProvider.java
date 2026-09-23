@@ -50,15 +50,17 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      * fresh {@code LightPsiClassBuilder} / {@code LightMethodBuilder} on each
      * call yields new-identity instances that fail that check, so we keep one
      * cached pair on the target's user data keyed by the resolved
-     * {@link GeneratedMemberFactory.EditorBuilderConfig}. When the annotation
-     * changes, the config differs, and the lambda synthesises fresh members
+     * {@link GeneratedMemberFactory.EditorBuilderConfig} and the builder class
+     * the target declares, if any. When the annotation or the declaration
+     * changes, the key differs, and the lambda synthesises fresh members
      * (and replaces the cache). When the producer is re-invoked for the same
-     * config, it returns the already-stored instances - idempotent.
+     * key, it returns the already-stored instances - idempotent.
      */
     private static final Key<SynthesizedMembers> SYNTHESIZED =
         Key.create("dev.simplified.classbuilder.synthesized");
 
     private record SynthesizedMembers(GeneratedMemberFactory.EditorBuilderConfig config,
+                                      @Nullable PsiClass declaredBuilder,
                                       List<PsiMethod> bootstrapMethods,
                                       PsiClass builderClass,
                                       DeferredConstructor allArgsConstructor) {
@@ -464,14 +466,44 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             // constructor build() calls, so answering the whole request empty
             // here took that constructor with it and put a same-package
             // new Target(...) red over source that builds.
+            // The third is a declared builder whose shape the merge refuses. The
+            // processor reports it and returns before the entry points, having
+            // already decided the all-args constructor, so the split is the
+            // second cause's.
             boolean entryPointsWithheld = (!site.isExecutable()
                 && target.hasModifierProperty(PsiModifier.ABSTRACT))
                 || ClassBuilderConstants.withholdsEntryPointsOnly(target, config.builderName(),
-                    site.isExecutable());
+                    site.isExecutable())
+                || rejectsDeclaredBuilder(site, config);
             return CachedValueProvider.Result.create(
                 entryPointsWithheld ? members.constructorOnly() : members.allMethods(),
                 PsiModificationTracker.MODIFICATION_COUNT);
         });
+    }
+
+    /**
+     * Whether the target declares a builder whose shape the merge refuses.
+     *
+     * <p>The processor reports the rejection and returns ahead of the entry
+     * points, so none of the three is emitted beside a refused declaration, and
+     * offering them would leave {@code Target.builder()} green at a call site in
+     * another file while the build fails. The decision is
+     * {@link ClassBuilderConstants#mergeRejection}, the one the shape inspection
+     * reports, and it is asked only where a merge runs at all - never of an
+     * executable target, an interface or a chain role.
+     *
+     * @param site the annotated site
+     * @param config the resolved configuration for it
+     * @return whether a declared builder exists and its shape is refused
+     */
+    private static boolean rejectsDeclaredBuilder(BuilderSite site,
+                                                  GeneratedMemberFactory.EditorBuilderConfig config) {
+        if (site.isExecutable()) return false;
+        PsiClass target = site.owner();
+        if (target.isInterface() || ClassBuilderConstants.chainRoleOf(target).isChained()) return false;
+        PsiClass declared = ClassBuilderConstants.declaredBuilderOf(target, config.builderName());
+        return declared != null
+            && ClassBuilderConstants.mergeRejection(target, declared, config.names()) != null;
     }
 
     /**
@@ -542,20 +574,31 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
     }
 
     /**
-     * Returns cached {@link SynthesizedMembers} when the stored config matches
-     * the current annotation, otherwise re-synthesises and replaces the cache.
-     * Pairs with {@link #SYNTHESIZED} to defeat
+     * Returns cached {@link SynthesizedMembers} when the stored config and the
+     * declared builder both match the current source, otherwise re-synthesises
+     * and replaces the cache. Pairs with {@link #SYNTHESIZED} to defeat
      * {@link IdempotenceChecker} re-invocation failures:
      * whoever wins the synthesis race stores its result under the key, and
      * subsequent calls (including the checker's rerun) retrieve the same
      * {@link PsiClass} / {@link PsiMethod} instances.
+     *
+     * <p>The entry points return the builder javac emits, which on a target
+     * declaring its own is the author's class with the merged members in it,
+     * not the synthesised one. That class is withheld from the target's nested
+     * classes and carries only the generated set, so entry points typed against
+     * it would put a call chaining a generated setter into an author's own verb
+     * red over source that builds. Which class that is decides the members
+     * cached here, so a cached value is reused only while the target declares
+     * the same class it was built against.
      */
     private static SynthesizedMembers synthesizeOrReuse(BuilderSite site) {
         PsiClass target = site.owner();
         GeneratedMemberFactory.EditorBuilderConfig config =
             GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
+        PsiClass declared = entryPointBuilderOf(site, config);
         SynthesizedMembers cached = target.getUserData(SYNTHESIZED);
-        if (cached != null && Objects.equals(cached.config(), config)) {
+        if (cached != null && Objects.equals(cached.config(), config)
+            && cached.declaredBuilder() == declared) {
             return cached;
         }
         // Wrap synthesis in the recursion guard. Eagerly resolving the self-
@@ -566,12 +609,32 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         // target - BuilderSite.of takes one - cannot clear it on the way out.
         return withInProgress(target, () -> {
             PsiClass builderClass = GeneratedMemberFactory.synthesizeBuilderClass(site, config);
-            List<PsiMethod> bootstrap = GeneratedMemberFactory.bootstrapMethods(site, config, builderClass);
-            SynthesizedMembers fresh = new SynthesizedMembers(config, bootstrap, builderClass,
-                new DeferredConstructor(site, config, builderClass));
+            PsiClass emitted = declared != null ? declared : builderClass;
+            List<PsiMethod> bootstrap = GeneratedMemberFactory.bootstrapMethods(site, config, emitted);
+            SynthesizedMembers fresh = new SynthesizedMembers(config, declared, bootstrap,
+                builderClass, new DeferredConstructor(site, config, emitted));
             target.putUserData(SYNTHESIZED, fresh);
             return fresh;
         });
+    }
+
+    /**
+     * The builder class the target declares and the merge runs into, which is
+     * the class its entry points return.
+     *
+     * <p>Only a class or record target merges. An executable target and a chain
+     * role with a declaration generate nothing and never reach synthesis, and an
+     * interface's entry points return its sibling builder, never a class nested
+     * in the interface body.
+     *
+     * @param site the annotated site
+     * @param config the resolved configuration for it
+     * @return the declared builder, or {@code null} when the entry points return the synthesised one
+     */
+    private static @Nullable PsiClass entryPointBuilderOf(BuilderSite site,
+                                                          GeneratedMemberFactory.EditorBuilderConfig config) {
+        if (site.isExecutable() || site.owner().isInterface()) return null;
+        return ClassBuilderConstants.declaredBuilderOf(site.owner(), config.builderName());
     }
 
     /**

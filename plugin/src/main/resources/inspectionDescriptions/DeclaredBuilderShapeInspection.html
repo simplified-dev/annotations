@@ -36,6 +36,18 @@ The shapes refused, each for a reason the generated members cannot work around:
 </ul>
 
 <p>
+On a shape the merge accepts, a field the author declares in the builder under
+a slot's name is also checked against the type the generated setters assign.
+That is the field's declared type, except for a <code>@Lazy</code> field, which
+the builder holds as a <code>Supplier</code> of it - so <code>private String
+note;</code> beside a <code>@Lazy String note</code> is reported, and
+<code>private Supplier&lt;String&gt; note;</code> is not. A non-lazy slot whose
+field carries an initializer is not checked here: whether the builder holds it
+as a supplier depends on what the initializer reads, which only the build
+decides.
+</p>
+
+<p>
 Reported at error level because the alternative is javac failing on a generated
 line. The message is the one the processor prints, rendered from the same
 decision, so the editor is red exactly where and for exactly the reason the

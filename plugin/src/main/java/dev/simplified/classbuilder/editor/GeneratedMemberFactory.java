@@ -864,7 +864,7 @@ public final class GeneratedMemberFactory {
      * @param name the slot's name
      * @return whether the field carries an initializer
      */
-    private static boolean hasInitializer(PsiClass target, String name) {
+    static boolean hasInitializer(PsiClass target, String name) {
         PsiField field = ownField(target, name);
         return field != null && field.hasInitializer();
     }
@@ -1344,7 +1344,14 @@ public final class GeneratedMemberFactory {
         return out;
     }
 
-    private static Set<String> excludedNames(PsiClass target) {
+    /**
+     * The field names the annotation's {@code exclude} attribute removes from the
+     * builder.
+     *
+     * @param target the annotated type
+     * @return the excluded names, empty when the attribute is absent
+     */
+    static Set<String> excludedNames(PsiClass target) {
         Set<String> out = new HashSet<>();
         PsiAnnotation annotation = PsiFieldShapeExtractor.classBuilderAnnotation(target);
         if (annotation == null) return out;

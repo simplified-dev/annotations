@@ -5,6 +5,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * Decides whether an author-declared nested builder can carry the members a role
@@ -23,6 +24,15 @@ import java.util.List;
  * provider re-enters it.
  */
 public final class DeclaredBuilderShape {
+
+    /** A type annotation, with its arguments when it carries any. */
+    private static final Pattern TYPE_ANNOTATION = Pattern.compile("@\\s*[\\w$.]+(\\s*\\([^()]*\\))?");
+
+    /** A run of whitespace. */
+    private static final Pattern WHITESPACE = Pattern.compile("\\s+");
+
+    /** A type punctuation character with the whitespace on either side of it. */
+    private static final Pattern AROUND_PUNCTUATION = Pattern.compile("\\s*([<>,\\[\\].])\\s*");
 
     private DeclaredBuilderShape() {
     }
@@ -191,6 +201,91 @@ public final class DeclaredBuilderShape {
                                                                 @NotNull String ancestorName) {
         return "@ClassBuilder generates no builder on '" + targetName + "' - its annotated "
             + "supertype '" + ancestorName + "' declares its own nested builder";
+    }
+
+    /**
+     * Reports a declared builder field whose type is not the one the merge holds
+     * the slot of its name in, which the generated setter would otherwise fail to
+     * assign on a line the author never wrote.
+     *
+     * <p>Compared against the <em>storage</em> type rather than the declared one,
+     * because the two differ for three shapes and the setters assign into the
+     * first. Comparing against the declared type gets a lazy field wrong in both
+     * directions at once: it rejects the supplier spelling, which is the only one
+     * the generated setters can assign, and accepts the natural one, which then
+     * fails on a generated line.
+     *
+     * <p>Compared on the erased simple name of each rendered type, which is what
+     * both halves can read without a resolve. Two types sharing an erasure and
+     * differing in their arguments therefore pass - a missed diagnostic, never a
+     * false one, javac still refusing the assignment. Both types are rendered
+     * through {@link #typeText} before they are compared or printed, so the
+     * sentence does not depend on which model spelled them.
+     *
+     * @param declaredName the declared builder's simple name
+     * @param slotName the slot's name, which the declared field shares
+     * @param writtenType the declared field's type as written
+     * @param storageType the type the merge holds the slot in
+     * @param holding the form the slot is held in, which decides the trailing clause
+     * @return the diagnostic text both halves report, or {@code null} when the field can hold the slot
+     */
+    public static @Nullable String mistypedSlot(@NotNull String declaredName,
+                                                @NotNull String slotName,
+                                                @NotNull String writtenType,
+                                                @NotNull String storageType,
+                                                @NotNull SlotHolding holding) {
+        String written = typeText(writtenType);
+        String storage = typeText(storageType);
+        if (erasedName(written).equals(erasedName(storage))) return null;
+        return "@ClassBuilder merged into '" + declaredName + "' finds '" + slotName
+            + "' declared as " + written + ", and the slot it stands for is " + storage
+            + " - the generated setter has nothing to assign it to" + holding.clause();
+    }
+
+    /**
+     * Renders the supplier a slot is held as when its {@link SlotHolding} is one.
+     *
+     * <p>A primitive is boxed, because the generated storage is
+     * {@code Supplier<Integer>} and {@code Supplier<int>} names no type at all.
+     *
+     * @param declaredType the slot's declared type
+     * @return the supplier type holding it
+     */
+    public static @NotNull String supplierOf(@NotNull String declaredType) {
+        String type = typeText(declaredType);
+        String boxed = switch (type) {
+            case "boolean" -> "java.lang.Boolean";
+            case "byte" -> "java.lang.Byte";
+            case "char" -> "java.lang.Character";
+            case "short" -> "java.lang.Short";
+            case "int" -> "java.lang.Integer";
+            case "long" -> "java.lang.Long";
+            case "float" -> "java.lang.Float";
+            case "double" -> "java.lang.Double";
+            default -> type;
+        };
+        return "java.util.function.Supplier<" + boxed + ">";
+    }
+
+    /**
+     * A rendered type in the one spelling both halves print it in.
+     *
+     * <p>The two models render the same type differently: javac joins type
+     * arguments with a bare comma and can carry a type annotation into the
+     * rendering, PSI separates arguments with a comma and a space and leaves the
+     * annotation out, and a type read as written keeps whatever spacing the
+     * author typed. Type annotations are dropped, whitespace is collapsed and
+     * removed around the type punctuation, and every comma is followed by one
+     * space.
+     *
+     * @param type the type as either model renders it
+     * @return the normalised rendering
+     */
+    public static @NotNull String typeText(@NotNull String type) {
+        String out = TYPE_ANNOTATION.matcher(type).replaceAll(" ");
+        out = WHITESPACE.matcher(out).replaceAll(" ").trim();
+        out = AROUND_PUNCTUATION.matcher(out).replaceAll("$1");
+        return out.replace(",", ", ");
     }
 
     /** A type-parameter list as it reads in a diagnostic, or {@code none}. */

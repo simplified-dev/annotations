@@ -228,4 +228,49 @@ public class DeclaredBuilderShapeTest {
                 "Other.Builder"));
     }
 
+    /**
+     * javac joins type arguments with a bare comma and PSI with a comma and a
+     * space, so the same slot type printed by each half differed in the
+     * mistyped-slot sentence until both rendered it through one spelling.
+     */
+    @Test
+    public void typeText_rendersBothModelsSpellingsAlike() {
+        String javac = DeclaredBuilderShape.typeText("java.util.Map<java.lang.String,java.lang.Integer>");
+        String psi = DeclaredBuilderShape.typeText("java.util.Map<java.lang.String, java.lang.Integer>");
+        assertEquals("java.util.Map<java.lang.String, java.lang.Integer>", javac);
+        assertEquals(javac, psi);
+        assertEquals("the author's spacing is not the author's type",
+            "Map<String, List<Integer>>", DeclaredBuilderShape.typeText("Map< String ,List<Integer> >"));
+        assertEquals("a type annotation is not part of the type either",
+            "java.lang.String", DeclaredBuilderShape.typeText("@org.jetbrains.annotations.NotNull java.lang.String"));
+    }
+
+    /** {@code Supplier<int>} names no type; the generated storage boxes it. */
+    @Test
+    public void supplierOf_boxesAPrimitive() {
+        assertEquals("java.util.function.Supplier<java.lang.Integer>", DeclaredBuilderShape.supplierOf("int"));
+        assertEquals("java.util.function.Supplier<java.lang.String>",
+            DeclaredBuilderShape.supplierOf("java.lang.String"));
+    }
+
+    /** The shared sentence, with the reason a lazy slot is not its declared type. */
+    @Test
+    public void mistypedSlot_rendersTheSharedSentence() {
+        assertEquals("@ClassBuilder merged into 'Builder' finds 'note' declared as String, and the slot "
+                + "it stands for is java.util.function.Supplier<java.lang.String> - the generated setter "
+                + "has nothing to assign it to. A @Lazy field is held in the builder as a supplier of its "
+                + "declared type",
+            DeclaredBuilderShape.mistypedSlot("Builder", "note", "String",
+                DeclaredBuilderShape.supplierOf("java.lang.String"), SlotHolding.LAZY));
+    }
+
+    /** Erasure decides, so a qualified or differently-spaced spelling of the storage passes. */
+    @Test
+    public void mistypedSlot_acceptsTheStorageTypeInAnySpelling() {
+        assertNull(DeclaredBuilderShape.mistypedSlot("Builder", "note", "Supplier<String>",
+            "java.util.function.Supplier<java.lang.String>", SlotHolding.LAZY));
+        assertNull(DeclaredBuilderShape.mistypedSlot("Builder", "size", "int", "int",
+            SlotHolding.DECLARED));
+    }
+
 }

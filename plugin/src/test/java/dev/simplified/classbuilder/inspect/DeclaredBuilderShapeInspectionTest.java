@@ -271,6 +271,148 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
         assertEquals("an ordinary chain is left alone: " + errors(), 0, errors().size());
     }
 
+    /**
+     * The processor refuses a declared field of a slot's name whose type the
+     * generated setter cannot assign, and the editor said nothing - the merged
+     * setters were contributed beside the field and the class was green up to
+     * the build. The sentence is the one the apt twin asserts, and it is
+     * reported on the field's type.
+     */
+    public void testAMistypedSlot_isReportedOnTheFieldsType() {
+        myFixture.configureByText("Mistyped.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Mistyped {
+                private int size;
+                public static class Builder {
+                    private String size;
+                }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder merged into 'Builder' finds 'size' declared as "
+                + "String, and the slot it stands for is int - the generated setter has nothing to "
+                + "assign it to"));
+        List<String> anchors = new ArrayList<>();
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            String description = info.getDescription();
+            if (info.getSeverity() == HighlightSeverity.ERROR && description != null
+                && description.startsWith("@ClassBuilder merged into")) {
+                anchors.add(info.getText());
+            }
+        }
+        assertEquals("reported on the declared field's type", List.of("String"), anchors);
+    }
+
+    /**
+     * The slot's arguments print as the processor prints them, which is what
+     * lets both suites assert one sentence over a parameterised slot.
+     */
+    public void testAMistypedGenericSlot_isReportedInTheProcessorsSentence() {
+        myFixture.configureByText("Tally.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import java.util.List;
+            import java.util.Map;
+            @ClassBuilder
+            public class Tally {
+                private Map<String, Integer> counts;
+                public static class Builder {
+                    private List<String> counts;
+                }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder merged into 'Builder' finds 'counts' declared as "
+                + "List<String>, and the slot it stands for is java.util.Map<java.lang.String, "
+                + "java.lang.Integer> - the generated setter has nothing to assign it to"));
+    }
+
+    /**
+     * A lazy slot is held as a supplier of its declared type, so its natural
+     * spelling is the one the merge cannot assign - the same sentence the apt
+     * twin asserts, storage type and reason included.
+     */
+    public void testALazySlotDeclaredWithItsNaturalType_isReported() {
+        addLazyAnnotation();
+        myFixture.configureByText("Natural.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Lazy;
+            @ClassBuilder
+            public class Natural {
+                @Lazy private String note = compute();
+                private static String compute() { return "computed"; }
+                public static class Builder {
+                    private String note;
+                }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder merged into 'Builder' finds 'note' declared as "
+                + "String, and the slot it stands for is java.util.function.Supplier<java.lang.String> - "
+                + "the generated setter has nothing to assign it to. A @Lazy field is held in the "
+                + "builder as a supplier of its declared type"));
+    }
+
+    /** A primitive lazy slot names the boxed supplier, as the processor does. */
+    public void testALazyPrimitiveSlotDeclaredWithItsNaturalType_namesTheBoxedSupplier() {
+        addLazyAnnotation();
+        myFixture.configureByText("Counted.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Lazy;
+            @ClassBuilder
+            public class Counted {
+                @Lazy private int count = compute();
+                private static int compute() { return 7; }
+                public static class Builder {
+                    private int count;
+                }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("finds 'count' declared as int, and the slot it stands for is "
+                + "java.util.function.Supplier<java.lang.Integer> - the generated setter"));
+    }
+
+    /**
+     * The supplier spelling is the one the generated setters assign, so it draws
+     * nothing. A check comparing against the declared type would report exactly
+     * this shape.
+     */
+    public void testALazySlotDeclaredAsASupplier_isNotReported() {
+        addLazyAnnotation();
+        myFixture.configureByText("Held.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Lazy;
+            import java.util.function.Supplier;
+            @ClassBuilder
+            public class Held {
+                @Lazy private String note = compute();
+                private static String compute() { return "computed"; }
+                public static class Builder {
+                    private Supplier<String> note;
+                }
+            }
+            """);
+        assertEquals("the supplier spelling is the storage type: " + errors(), 0, errors().size());
+    }
+
+    private void addLazyAnnotation() {
+        myFixture.addFileToProject("dev/simplified/annotations/Lazy.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS)
+            @Target(ElementType.FIELD)
+            public @interface Lazy {
+            }
+            """);
+    }
+
     private String theOnlyError() {
         List<String> errors = errors();
         assertEquals("expected exactly one highlight, got: " + errors, 1, errors.size());
@@ -285,7 +427,8 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
             if (info.getSeverity() != HighlightSeverity.ERROR) continue;
             String description = info.getDescription();
             if (description != null && (description.startsWith("@ClassBuilder cannot merge into")
-                || description.startsWith("@ClassBuilder generates no builder on"))) {
+                || description.startsWith("@ClassBuilder generates no builder on")
+                || description.startsWith("@ClassBuilder merged into"))) {
                 out.add(description);
             }
         }

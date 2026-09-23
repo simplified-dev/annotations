@@ -325,7 +325,8 @@ public class DeclaredBuilderMergeTest {
     /**
      * A declared slot of the wrong type is reported at the target rather than
      * left to fail on the generated setter, which is a line the author never
-     * wrote.
+     * wrote. The sentence is the one {@code DeclaredBuilderShapeInspectionTest}
+     * asserts at the same shape.
      */
     @Test
     public void merge_ontoAMistypedSlot_isRejected() {
@@ -342,7 +343,36 @@ public class DeclaredBuilderMergeTest {
                 "    }",
                 "}"));
         assertThat(c).failed();
-        assertThat(c).hadErrorContaining("the slot it stands for is int");
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds 'size' declared as "
+            + "String, and the slot it stands for is int - the generated setter has nothing to assign it to");
+    }
+
+    /**
+     * The storage type is printed in one spelling on both halves. javac rendered
+     * a parameterised slot type with a bare comma between its arguments where
+     * the editor's rendering carries a space, so the two halves printed
+     * different sentences for one shape.
+     */
+    @Test
+    public void merge_ontoAMistypedGenericSlot_printsTheEditorsSentence() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Tally",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import java.util.List;",
+                "import java.util.Map;",
+                "@ClassBuilder(validate = false)",
+                "public class Tally {",
+                "    private Map<String, Integer> counts;",
+                "    Tally(Map<String, Integer> counts) { this.counts = counts; }",
+                "    public static class Builder {",
+                "        private List<String> counts;",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds 'counts' declared as "
+            + "List<String>, and the slot it stands for is java.util.Map<java.lang.String, java.lang.Integer>"
+            + " - the generated setter has nothing to assign it to");
     }
 
     /**
@@ -524,7 +554,9 @@ public class DeclaredBuilderMergeTest {
 
     /**
      * And the natural spelling is the one that cannot work, which the check used
-     * to accept and leave to fail on a generated line.
+     * to accept and leave to fail on a generated line. The whole sentence is
+     * asserted, the storage type included, because the inspection asserts the
+     * same one at the same shape.
      */
     @Test
     public void merge_whereALazySlotIsDeclaredWithItsNaturalType_isRejected() {
@@ -542,8 +574,35 @@ public class DeclaredBuilderMergeTest {
                 "    }",
                 "}"));
         assertThat(c).failed();
-        assertThat(c).hadErrorContaining(
-            "A @Lazy field is held in the builder as a supplier of its declared type");
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds 'note' declared as "
+            + "String, and the slot it stands for is java.util.function.Supplier<java.lang.String> - the "
+            + "generated setter has nothing to assign it to. A @Lazy field is held in the builder as a "
+            + "supplier of its declared type");
+    }
+
+    /**
+     * A primitive lazy slot is held as a supplier of the boxed type. The sentence
+     * used to print {@code Supplier<int>}, which names no type the author could
+     * write.
+     */
+    @Test
+    public void merge_whereALazyPrimitiveSlotIsDeclaredWithItsNaturalType_namesTheBoxedSupplier() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Counted",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import dev.simplified.annotations.Lazy;",
+                "@ClassBuilder(validate = false)",
+                "public class Counted {",
+                "    @Lazy private int count = compute();",
+                "    private static int compute() { return 7; }",
+                "    public static class Builder {",
+                "        private int count;",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("finds 'count' declared as int, and the slot it stands for is "
+            + "java.util.function.Supplier<java.lang.Integer> - the generated setter");
     }
 
     // ------------------------------------------------------------------

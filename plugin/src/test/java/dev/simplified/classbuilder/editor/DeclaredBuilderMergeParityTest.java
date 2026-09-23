@@ -3,7 +3,9 @@ package dev.simplified.classbuilder.editor;
 import com.intellij.codeInsight.daemon.impl.HighlightInfo;
 import com.intellij.lang.annotation.HighlightSeverity;
 import com.intellij.openapi.application.AccessToken;
+import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiDocumentManager;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiJavaFile;
@@ -394,16 +396,109 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
         assertTrue("and the other slot is contributed: " + names, names.contains("pages"));
     }
 
+    /**
+     * javac's entry points return the declared builder, which carries the
+     * author's verbs beside the merged setters. The editor typed all three
+     * against the synthesised builder it withholds from the target, whose
+     * members are the generated set alone, so a call chaining a generated setter
+     * into an author's verb and on to {@code build()} was red on the author's
+     * verb over source that builds.
+     */
+    public void testEntryPoints_returnTheDeclaredBuilder_soAnAuthorVerbChains() {
+        myFixture.configureByText("Settings.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Settings {
+                private String name;
+                private int size;
+                public static class Builder {
+                    public Builder apply(Runnable task) { task.run(); return this; }
+                }
+            }
+            class Caller {
+                Settings make() { return Settings.builder().name("x").apply(() -> { }).size(3).build(); }
+                Settings copy(Settings s) { return Settings.from(s).apply(() -> { }).build(); }
+                Settings again(Settings s) { return s.mutate().apply(() -> { }).build(); }
+            }
+            """);
+        assertNoErrors();
+    }
+
+    /**
+     * The entry points are cached on the target, and the cache was reused
+     * whenever the annotation read the same - so an author typing the builder
+     * class into a target whose entry points were already built kept them typed
+     * against the synthesised class, and their own verb stayed red until
+     * something else invalidated it.
+     */
+    public void testDeclaringTheBuilderLater_retypesTheEntryPoints() {
+        myFixture.configureByText("Settings.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Settings {
+                private String name;
+                <caret>
+            }
+            class Caller {
+                Settings make() { return Settings.builder().name("x").apply(() -> { }).build(); }
+            }
+            """);
+        List<String> before = errors();
+        assertFalse("no builder declared yet, so there is no apply: " + before, before.isEmpty());
+
+        WriteCommandAction.runWriteCommandAction(getProject(), () ->
+            myFixture.getEditor().getDocument().insertString(myFixture.getCaretOffset(),
+                "public static class Builder { public Builder apply(Runnable task) { return this; } }"));
+        PsiDocumentManager.getInstance(getProject()).commitAllDocuments();
+        assertNoErrors();
+    }
+
+    /**
+     * The processor reports a refused shape and returns before the entry points,
+     * so none of the three is emitted, while the all-args constructor it decided
+     * ahead of the merge still is. The editor withheld the merged members but
+     * still offered all three entry points, green at a call site javac rejects.
+     */
+    public void testARejectedShape_offersNoEntryPointsAndNoMembers() {
+        PsiFile file = myFixture.configureByText("Inner.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Inner {
+                private String name;
+                public class Builder { }
+            }
+            """);
+        PsiClass target = ((PsiJavaFile) file).getClasses()[0];
+        List<String> names = methodNamesOf(target);
+        assertFalse("no builder() beside a refused declaration: " + names, names.contains("builder"));
+        assertFalse("nor from(T): " + names, names.contains("from"));
+        assertFalse("nor mutate(): " + names, names.contains("mutate"));
+        List<String> nested = methodNamesOf(nestedOf(target, "Builder"));
+        assertFalse("and nothing merged into it: " + nested, nested.contains("name"));
+        PsiMethod[] constructors = target.getConstructors();
+        assertEquals("the all-args constructor is decided ahead of the merge and kept: "
+            + constructors.length, 1, constructors.length);
+        assertEquals(1, constructors[0].getParameterList().getParametersCount());
+    }
+
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
 
     private void assertNoErrors() {
+        List<String> errors = errors();
+        assertTrue("expected no editor errors, got: " + errors, errors.isEmpty());
+    }
+
+    private List<String> errors() {
         List<String> errors = new ArrayList<>();
         for (HighlightInfo info : myFixture.doHighlighting()) {
             if (info.getSeverity() == HighlightSeverity.ERROR) errors.add(info.getDescription());
         }
-        assertTrue("expected no editor errors, got: " + errors, errors.isEmpty());
+        return errors;
     }
 
     /**
