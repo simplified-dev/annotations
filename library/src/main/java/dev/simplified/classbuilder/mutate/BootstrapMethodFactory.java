@@ -250,7 +250,8 @@ final class BootstrapMethodFactory {
      * Appends a method produced by {@code supplier} unless the target already
      * declares one that collides with it. Emits a {@link Diagnostic.Kind#NOTE}
      * on skip so the note is discoverable but does not pollute
-     * warning-as-error builds.
+     * warning-as-error builds, on the member the annotation is written on - the
+     * annotated constructor or factory on that path, the type on every other.
      *
      * @param target the target's tree
      * @param name the bootstrap name
@@ -265,7 +266,7 @@ final class BootstrapMethodFactory {
             messager.printMessage(Diagnostic.Kind.NOTE,
                 "@ClassBuilder skipped bootstrap '" + name + "' - target already declares "
                     + name + signature,
-                ctx.targetElement());
+                ctx.isExecutableTarget() ? ctx.executable() : ctx.targetElement());
             return;
         }
         ctx.bridge().compat().appendDef(target, supplier.get());

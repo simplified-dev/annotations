@@ -725,4 +725,27 @@ public class ExecutableTargetTest {
         assertThat(c).hadErrorContaining("cannot be accessed from outside package");
     }
 
+    /**
+     * An author's {@code builder()} of the entry point's arity keeps the
+     * generated one out, and the note saying so sits on the annotated
+     * constructor, as every other diagnostic of this path does. It was reported
+     * on the enclosing type's line.
+     */
+    @Test
+    public void authorBuilderMethodBesideAConstructorTarget_isNotedOnTheConstructor() {
+        JavaFileObject action = JavaFileObjects.forSourceLines("demo.Action",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "public final class Action {",
+            "    private final String name;",
+            "    @ClassBuilder",
+            "    Action(String name) { this.name = name; }",
+            "    public static Object builder() { return \"author\"; }",
+            "}");
+        Compilation c = compile(action);
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("@ClassBuilder skipped bootstrap 'builder' - target already declares "
+            + "builder/0").inFile(action).onLine(6);
+    }
+
 }

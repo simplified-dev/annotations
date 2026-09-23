@@ -1,6 +1,8 @@
 package dev.simplified.classbuilder.apt;
 
 import dev.simplified.annotations.AccessLevel;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * The rule deciding which builder constructor
@@ -22,12 +24,16 @@ import dev.simplified.annotations.AccessLevel;
  * default at the builder class's own access whether it is generated or
  * declared, because a subclass builder in another package reaches it through
  * {@code super()}; an interface target's sibling builder keeps its implicit
- * constructor.
+ * constructor. A value written on either reaches nothing, which is what
+ * {@link #misplaced} says.
  */
 public final class BuilderConstructorAccess {
 
     /** The attribute's name on {@code @ClassBuilder}. */
     public static final String ATTRIBUTE = "builderConstructorAccess";
+
+    /** The attribute's default, which requests nothing wherever it is written. */
+    public static final AccessLevel DEFAULT = AccessLevel.PACKAGE;
 
     private BuilderConstructorAccess() { }
 
@@ -77,6 +83,31 @@ public final class BuilderConstructorAccess {
         return "@ClassBuilder(builderConstructorAccess) has no effect - the declared '" + builderName
             + "' declares its own constructor, which keeps the access it is written with. Write "
             + "the access on that constructor, or drop the attribute";
+    }
+
+    /**
+     * The warning for {@code builderConstructorAccess} written on a type target
+     * whose builder the attribute never reaches - a SuperBuilder chain role, or
+     * an interface - reported on the attribute.
+     *
+     * <p>Asked of the written value alone, so a value equal to {@link #DEFAULT}
+     * requests nothing and is not warned, and {@code NONE} is left to
+     * {@link #notExpressible()}, the one diagnostic it gets.
+     *
+     * @param targetName the annotated type's simple name
+     * @param interfaceTarget whether the annotated type is an interface
+     * @param role the annotated type's position in a chain, {@link ChainRole#STANDALONE} for an interface
+     * @param written the name of the access level written on the annotation, or {@code null} when unwritten
+     * @return the sentence both halves report, or {@code null} when there is nothing to warn about
+     */
+    public static @Nullable String misplaced(@NotNull String targetName, boolean interfaceTarget,
+                                             @NotNull ChainRole role, @Nullable String written) {
+        if (written == null || written.equals(DEFAULT.name()) || written.equals(AccessLevel.NONE.name()))
+            return null;
+        if (!interfaceTarget && appliesTo(role)) return null;
+        return "@ClassBuilder(builderConstructorAccess) has no effect on '" + targetName + "' - it applies "
+            + "only to the builder of a class or record outside a SuperBuilder chain, or of a constructor or "
+            + "factory target, never to a chain's builder or an interface's. Drop the attribute";
     }
 
 }

@@ -481,7 +481,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         if (merge == null) return Collections.emptyList();
         Set<String> spelled = new HashSet<>();
         for (PsiMethod own : GeneratedMemberFactory.ownMethods(declared))
-            spelled.add(MergedSlotStorage.writtenKey(own));
+            spelled.add(MergedSlotStorage.writtenKey(own, declared));
         // Guarded for the reason the field contribution is, and opened in the
         // same place: synthesising a setter resolves the type of the slot it
         // assigns, which re-enters this provider for the class that wrote it.
@@ -492,7 +492,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
                 // The generated constructor is never appended as it stands; the
                 // one below takes its place where the author wrote none.
                 if (generated.isConstructor()) continue;
-                if (spelled.contains(MergedSlotStorage.generatedKey(generated))) continue;
+                if (spelled.contains(MergedSlotStorage.generatedKey(generated, declared))) continue;
                 out.add(generated);
             }
             // The processor retypes javac's default to builderConstructorAccess
@@ -774,7 +774,8 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         PsiClass declared = ClassBuilderConstants.declaredBuilderOf(target, config.builderName());
         if (declared == null) return false;
         Set<String> keys = new HashSet<>();
-        for (PsiMethod own : GeneratedMemberFactory.ownMethods(declared)) keys.add(MergedSlotStorage.writtenKey(own));
+        for (PsiMethod own : GeneratedMemberFactory.ownMethods(declared))
+            keys.add(MergedSlotStorage.writtenKey(own, declared));
         return DeclaredBuilderShape.withholdsAllArgsConstructor(config.buildMethodName(), keys,
             WrittenAnnotations.find(target, ArgsConstants.BUILDER_ARGS_FQN) != null);
     }

@@ -35,9 +35,12 @@ with the seeds, in parameter order, as far as names can tell: one taking the
 seeds' own types, compared by erasure and simple name, a distinct concrete
 parameterisation of a seed's generic type never being its own; otherwise one taking each
 seed as its box or primitive, a wider primitive or, for a reference seed,
-<code>Object</code>, chosen as javac chooses - without boxing before with it,
-then the most specific. A constructor reached only through another supertype
-does not serve, nor does one of two javac could not choose between, nor any
+<code>Object</code> or a common JDK supertype of its type - <code>CharSequence</code>,
+<code>Number</code>, <code>Comparable</code> or a <code>java.util</code>
+collection interface, the seed's type arguments carried across - chosen as
+javac chooses - without boxing before with it, then the most specific. A
+constructor reached only through any other supertype does not serve, nor does
+one of two javac could not choose between, nor any
 where a constructor names cannot place might be chosen first. A static factory
 inside an interface is such a target, and its
 builder is the class the interface body declares.

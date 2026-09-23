@@ -446,6 +446,34 @@ public class DeclaredBuilderShapeTest {
     }
 
     /**
+     * A parameter typed by one of the declared builder's own type variables is
+     * keyed by that variable's erasure - its first bound's, or {@code Object}
+     * unbounded - which is the signature javac compares, so an author method
+     * taking the erasure keys as the generated one does. The variable was keyed
+     * by its name, and the two were kept beside each other as a name clash.
+     */
+    @Test
+    public void methodKey_keysABuildersTypeVariableByItsErasure() {
+        Map<String, String> erasures = DeclaredBuilderShape.typeVariableErasures(List.of("T", "N", "B", "U"),
+            Arrays.asList(null, "java.lang.Number & Comparable<N>", "Builder<T, N, B>", "N"));
+        assertEquals("value(Object)", DeclaredBuilderShape.methodKey("value", List.of("T"), erasures));
+        assertEquals("the first bound, unqualified", "amount(Number)",
+            DeclaredBuilderShape.methodKey("amount", List.of("N"), erasures));
+        assertEquals("a bound applied to arguments", "self(Builder)",
+            DeclaredBuilderShape.methodKey("self", List.of("B"), erasures));
+        assertEquals("a bound naming another variable erases as that one does", "count(Number)",
+            DeclaredBuilderShape.methodKey("count", List.of("U"), erasures));
+        assertEquals("an array of a variable", "items(Object[])",
+            DeclaredBuilderShape.methodKey("items", List.of("T..."), erasures));
+        assertEquals("a variable as an argument erases with its type", "list(List)",
+            DeclaredBuilderShape.methodKey("list", List.of("java.util.List<T>"), erasures));
+        assertEquals("a name the builder does not declare stays as written", "value(V)",
+            DeclaredBuilderShape.methodKey("value", List.of("V"), erasures));
+        assertEquals("with no variables the key is the plain one", DeclaredBuilderShape.methodKey("value", List.of("T")),
+            DeclaredBuilderShape.methodKey("value", List.of("T"), Map.of()));
+    }
+
+    /**
      * A record, an enum and an interface cannot be a builder, and the kind is
      * asked ahead of the modifier the javac tree does not record on them.
      */
@@ -784,7 +812,7 @@ public class DeclaredBuilderShapeTest {
      */
     @Test
     public void instantiable_countsNoOtherConversion() {
-        assertFalse("another supertype", instantiableOver(List.of("CharSequence"), "String"));
+        assertFalse("an unlisted supertype", instantiableOver(List.of("java.io.Serializable"), "String"));
         assertFalse("a primitive into Object", instantiableOver(List.of("Object"), "int"));
         assertFalse("into another box", instantiableOver(List.of("Long"), "int"));
         assertFalse("a narrowing", instantiableOver(List.of("int"), "long"));
@@ -808,7 +836,7 @@ public class DeclaredBuilderShapeTest {
         List<List<String>> nested = List.of(List.of("long", "int"), List.of("long", "long"));
         assertTrue("one more specific than the other",
             DeclaredBuilderShape.instantiable(nested, nested, List.of("int", "int")));
-        List<List<String>> unplaced = List.of(List.of("Object"), List.of("CharSequence"));
+        List<List<String>> unplaced = List.of(List.of("Object"), List.of("java.io.Serializable"));
         assertFalse("a supertype javac may prefer",
             DeclaredBuilderShape.instantiable(unplaced, unplaced, List.of("String")));
         List<List<String>> exact = List.of(List.of("String"), List.of("CharSequence"));
@@ -859,6 +887,67 @@ public class DeclaredBuilderShapeTest {
                 List.of("List<String>"), List.of()));
     }
 
+    /**
+     * A reference seed reaches a constructor taking one of the supertypes the
+     * table lists for its type, spelled simply or in its own package, with the
+     * seed's type arguments carried across; a concrete argument that differs
+     * is refused as it is for one generic type. Only {@code Object} was
+     * counted, and each of these was skipped with the note though javac calls
+     * it.
+     */
+    @Test
+    public void instantiable_takesTheSeedThroughAListedSupertype() {
+        assertTrue("CharSequence over String", instantiableOver(List.of("CharSequence"), "String"));
+        assertTrue("qualified", instantiableOver(List.of("java.lang.CharSequence"), "java.lang.StringBuilder"));
+        assertTrue("Number over a box", instantiableOver(List.of("Number"), "Integer"));
+        assertTrue("Number over BigDecimal", instantiableOver(List.of("java.lang.Number"), "java.math.BigDecimal"));
+        assertTrue("Number over an atomic", instantiableOver(List.of("Number"),
+            "java.util.concurrent.atomic.AtomicLong"));
+        assertTrue("Comparable raw", instantiableOver(List.of("Comparable"), "String"));
+        assertTrue("Comparable of the seed", instantiableOver(List.of("Comparable<Integer>"), "Integer"));
+        assertTrue("Comparable of what a date compares to",
+            instantiableOver(List.of("Comparable<java.time.chrono.ChronoLocalDate>"), "java.time.LocalDate"));
+        assertTrue("List over ArrayList", instantiableOver(List.of("List<String>"), "ArrayList<String>"));
+        assertTrue("Collection over List", instantiableOver(List.of("java.util.Collection<String>"),
+            "List<String>"));
+        assertTrue("Iterable over a set", instantiableOver(List.of("Iterable<String>"), "TreeSet<String>"));
+        assertTrue("NavigableMap over TreeMap", instantiableOver(List.of("NavigableMap<String, Integer>"),
+            "TreeMap<String,Integer>"));
+        assertTrue("Map over ConcurrentHashMap", instantiableOver(List.of("Map<String, Integer>"),
+            "java.util.concurrent.ConcurrentHashMap<String, Integer>"));
+        assertTrue("Deque over ArrayDeque", instantiableOver(List.of("Deque<String>"), "ArrayDeque<String>"));
+        assertTrue("a raw seed", instantiableOver(List.of("Collection<String>"), "ArrayList"));
+        assertTrue("a raw parameter", instantiableOver(List.of("Collection"), "List<String>"));
+        assertTrue("a wildcard", instantiableOver(List.of("Collection<? extends CharSequence>"), "List<String>"));
+
+        assertFalse("another argument", instantiableOver(List.of("Collection<Integer>"), "List<String>"));
+        assertFalse("another argument to Comparable", instantiableOver(List.of("Comparable<Long>"), "Integer"));
+        assertFalse("a date is no Comparable of itself",
+            instantiableOver(List.of("Comparable<LocalDate>"), "LocalDate"));
+        assertFalse("another package", instantiableOver(List.of("org.acme.CharSequence"), "String"));
+        assertFalse("the seed in another package", instantiableOver(List.of("CharSequence"), "org.acme.String"));
+        assertFalse("a supertype not listed for it", instantiableOver(List.of("Number"), "String"));
+        assertFalse("a list is no set", instantiableOver(List.of("Set<String>"), "ArrayList<String>"));
+        assertFalse("a map is no collection", instantiableOver(List.of("Collection<String>"),
+            "HashMap<String, String>"));
+    }
+
+    /**
+     * A listed supertype is more specific than {@code Object} and than a
+     * listed supertype of its own, as javac finds, and two listed supertypes
+     * neither of which is the other's leave no single constructor.
+     */
+    @Test
+    public void instantiable_readsTheMostSpecificListedSupertype() {
+        List<List<String>> beside = List.of(List.of("Object"), List.of("CharSequence"));
+        assertTrue("CharSequence over Object", DeclaredBuilderShape.instantiable(beside, beside, List.of("String")));
+        List<List<String>> nested = List.of(List.of("Collection<String>"), List.of("List<String>"));
+        assertTrue("List over Collection",
+            DeclaredBuilderShape.instantiable(nested, nested, List.of("ArrayList<String>")));
+        List<List<String>> crossed = List.of(List.of("CharSequence"), List.of("Comparable<String>"));
+        assertFalse("neither is the other's", DeclaredBuilderShape.instantiable(crossed, crossed, List.of("String")));
+    }
+
     /** Whether a builder whose one throw-free constructor takes {@code parameters} serves the seeds. */
     private static boolean instantiableOver(List<String> parameters, String... seedTypes) {
         List<List<String>> constructors = List.of(parameters);
@@ -876,8 +965,10 @@ public class DeclaredBuilderShapeTest {
                 + "parameters, so 'builder' was not added - declare a no-argument constructor or write it",
             DeclaredBuilderShape.uninstantiable("Builder", List.of("builder"), List.of()));
         assertEquals("@ClassBuilder merged into 'Builder' but no single constructor it declares takes the 2 "
-                + "seeds 'builder' passes as their own types, their boxes or primitives, wider primitives or "
-                + "Object, so 'builder' was not added - declare a constructor taking (origin, kind) or write it",
+                + "seeds 'builder' passes as their own types, their boxes or primitives, wider primitives, "
+                + "Object or listed JDK supertypes such as CharSequence, Number, Comparable or a java.util "
+                + "collection interface, so 'builder' was not added - declare a constructor taking "
+                + "(origin, kind) or write it",
             DeclaredBuilderShape.uninstantiable("Builder", List.of("builder"), List.of("origin", "kind")));
     }
 
@@ -899,8 +990,9 @@ public class DeclaredBuilderShapeTest {
                 + "constructor or write them",
             DeclaredBuilderShape.entryPointsSkipped("Builder", noFrom, false, List.of()));
         assertEquals("@ClassBuilder merged into 'Builder' but no single constructor it declares takes the "
-                + "seed 'builder' passes as its own type, its box or primitive, a wider primitive or Object, "
-                + "so 'builder' was not added - declare a constructor taking (origin) or write it",
+                + "seed 'builder' passes as its own type, its box or primitive, a wider primitive, Object or a "
+                + "listed JDK supertype such as CharSequence, Number, Comparable or a java.util collection "
+                + "interface, so 'builder' was not added - declare a constructor taking (origin) or write it",
             DeclaredBuilderShape.entryPointsSkipped("Builder", all, true, List.of("origin")));
     }
 

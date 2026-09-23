@@ -736,6 +736,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         validateNaming(target, config, messager);
         validateAccess(target, messager);
         validateBuilderConstructorAccess(target, messager);
+        warnMisplacedBuilderConstructorAccess(target, false, BuilderMutator.chainRoleOf(target), messager);
         List<FieldSpec> fields = collectFields(target, config);
         validateSlotNaming(fields, config.setters(), target, messager);
         validateDefaultProviders(target, fields, messager);
@@ -1124,6 +1125,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         validateNaming(target, config, messager);
         validateAccess(target, messager);
         validateBuilderConstructorAccess(target, messager);
+        warnMisplacedBuilderConstructorAccess(target, true, ChainRole.STANDALONE, messager);
 
         // generateImpl=false means the user takes responsibility for producing
         // the instance build() constructs. That only works if factoryMethod is
@@ -1404,6 +1406,28 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         if (written == null || BuilderConstructorAccess.expressible(parseAccess(written))) return;
         messager.printMessage(Diagnostic.Kind.ERROR, BuilderConstructorAccess.notExpressible(), target,
             lookup.findMirror(target, ANNOTATION_FQN));
+    }
+
+    /**
+     * Warns at the annotation where {@code builderConstructorAccess} is written
+     * on a type whose builder it never reaches - a SuperBuilder chain role, or
+     * an interface.
+     *
+     * <p>The decision and its wording are {@link BuilderConstructorAccess#misplaced},
+     * which the editor asks of the same written name.
+     *
+     * @param target the annotated type
+     * @param interfaceTarget whether the target is an interface
+     * @param role the target's position in a chain
+     * @param messager sink for diagnostics
+     */
+    private void warnMisplacedBuilderConstructorAccess(TypeElement target, boolean interfaceTarget, ChainRole role,
+                                                       Messager messager) {
+        String written = lookup.stringAttr(target, ANNOTATION_FQN, BuilderConstructorAccess.ATTRIBUTE, null);
+        String message = BuilderConstructorAccess.misplaced(target.getSimpleName().toString(), interfaceTarget,
+            role, written);
+        if (message != null)
+            messager.printMessage(Diagnostic.Kind.WARNING, message, target, lookup.findMirror(target, ANNOTATION_FQN));
     }
 
     /**

@@ -30,8 +30,9 @@ public class DeclaredBuilderSkipsEntryPointsInspectionTest extends BasePlatformT
         + "declare a no-argument constructor or write them";
 
     private static final String SEED_SKIPPED = "@ClassBuilder merged into 'Builder' but no single constructor "
-        + "it declares takes the seed 'builder' passes as its own type, its box or primitive, a wider primitive "
-        + "or Object, so 'builder' was not added - declare a constructor taking (origin) or write it";
+        + "it declares takes the seed 'builder' passes as its own type, its box or primitive, a wider primitive, "
+        + "Object or a listed JDK supertype such as CharSequence, Number, Comparable or a java.util collection "
+        + "interface, so 'builder' was not added - declare a constructor taking (origin) or write it";
 
     private AccessToken jsvgSuppressor;
 
@@ -579,8 +580,10 @@ public class DeclaredBuilderSkipsEntryPointsInspectionTest extends BasePlatformT
             }
             """);
         assertEquals("@ClassBuilder merged into 'Builder' but no single constructor it declares takes the 2 "
-                + "seeds 'builder' passes as their own types, their boxes or primitives, wider primitives or "
-                + "Object, so 'builder' was not added - declare a constructor taking (x, y) or write it",
+                + "seeds 'builder' passes as their own types, their boxes or primitives, wider primitives, "
+                + "Object or listed JDK supertypes such as CharSequence, Number, Comparable or a java.util "
+                + "collection interface, so 'builder' was not added - declare a constructor taking (x, y) or "
+                + "write it",
             theOnlyWarning());
     }
 

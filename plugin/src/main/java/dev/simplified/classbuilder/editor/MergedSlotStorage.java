@@ -152,7 +152,7 @@ public final class MergedSlotStorage {
                     }
                     Map<String, SetterShape> generated = new LinkedHashMap<>();
                     for (GeneratedMemberFactory.SlotSetter setter : slotSetters.getOrDefault(slot.name, List.of()))
-                        generated.put(generatedKey(setter.method()), setter.shape());
+                        generated.put(generatedKey(setter.method(), declared), setter.shape());
                     String finalSlot = DeclaredBuilderShape.finalSlot(declaredName, slot.name, generated,
                         slot.append, authorKeys);
                     if (finalSlot != null) {
@@ -221,7 +221,7 @@ public final class MergedSlotStorage {
         for (List<GeneratedMemberFactory.SlotSetter> setters
             : GeneratedMemberFactory.settersBySlot(site, config, declared).values()) {
             for (GeneratedMemberFactory.SlotSetter setter : setters)
-                generated.putIfAbsent(generatedKey(setter.method()), setter);
+                generated.putIfAbsent(generatedKey(setter.method(), declared), setter);
         }
         List<String> typeParameters = new ArrayList<>();
         for (PsiTypeParameter parameter : declared.getTypeParameters()) typeParameters.add(parameter.getName());
@@ -229,7 +229,7 @@ public final class MergedSlotStorage {
         List<CoveringMethod> out = new ArrayList<>();
         for (PsiMethod own : GeneratedMemberFactory.ownMethods(declared)) {
             if (own.isConstructor()) continue;
-            GeneratedMemberFactory.SlotSetter covered = generated.get(writtenKey(own));
+            GeneratedMemberFactory.SlotSetter covered = generated.get(writtenKey(own, declared));
             if (covered == null) continue;
             String message = DeclaredBuilderShape.setterWithOtherTypeArguments(declaredName, own.getName(),
                 covered.shape(), writtenTypes(own), presentableTypes(covered.method()), typeParameters,
@@ -275,7 +275,7 @@ public final class MergedSlotStorage {
             : GeneratedMemberFactory.settersBySlot(site, config, declared).values()) {
             for (GeneratedMemberFactory.SlotSetter setter : setters) {
                 PsiMethod method = setter.method();
-                if (authorKeys.contains(generatedKey(method))) continue;
+                if (authorKeys.contains(generatedKey(method, declared))) continue;
                 if (inherited == null) inherited = inheritedMethods(declared);
                 String message = DeclaredBuilderShape.unoverridableInheritedMethod(declaredName, method.getName(),
                     presentableTypes(method), inherited);
@@ -361,10 +361,11 @@ public final class MergedSlotStorage {
      * written.
      *
      * @param method a method the author declared
+     * @param declared the declared builder, whose own type variables the key erases
      * @return its {@link DeclaredBuilderShape#methodKey}
      */
-    static @NotNull String writtenKey(@NotNull PsiMethod method) {
-        return DeclaredBuilderShape.methodKey(method.getName(), writtenTypes(method));
+    static @NotNull String writtenKey(@NotNull PsiMethod method, @NotNull PsiClass declared) {
+        return DeclaredBuilderShape.methodKey(method.getName(), writtenTypes(method), typeVariableErasures(declared));
     }
 
     /**
@@ -373,16 +374,35 @@ public final class MergedSlotStorage {
      * rather than resolved.
      *
      * @param method a method the editor synthesised
+     * @param declared the declared builder, whose own type variables the key erases
      * @return its {@link DeclaredBuilderShape#methodKey}
      */
-    static @NotNull String generatedKey(@NotNull PsiMethod method) {
-        return DeclaredBuilderShape.methodKey(method.getName(), presentableTypes(method));
+    static @NotNull String generatedKey(@NotNull PsiMethod method, @NotNull PsiClass declared) {
+        return DeclaredBuilderShape.methodKey(method.getName(), presentableTypes(method),
+            typeVariableErasures(declared));
+    }
+
+    /**
+     * The erasure of each type parameter the declared builder declares, from
+     * the names and bounds as written, never resolved.
+     *
+     * @param declared the declared builder
+     * @return each name with its erasure's simple name, from {@link DeclaredBuilderShape#typeVariableErasures}
+     */
+    private static Map<String, String> typeVariableErasures(PsiClass declared) {
+        List<String> names = new ArrayList<>();
+        List<String> bounds = new ArrayList<>();
+        for (PsiTypeParameter parameter : declared.getTypeParameters()) {
+            names.add(parameter.getName() == null ? "" : parameter.getName());
+            bounds.add(ClassBuilderConstants.boundsText(parameter));
+        }
+        return DeclaredBuilderShape.typeVariableErasures(names, bounds);
     }
 
     /** Every {@link #writtenKey} the declared builder's own methods carry. */
     private static Set<String> authorKeys(PsiClass declared) {
         Set<String> out = new HashSet<>();
-        for (PsiMethod own : GeneratedMemberFactory.ownMethods(declared)) out.add(writtenKey(own));
+        for (PsiMethod own : GeneratedMemberFactory.ownMethods(declared)) out.add(writtenKey(own, declared));
         return out;
     }
 

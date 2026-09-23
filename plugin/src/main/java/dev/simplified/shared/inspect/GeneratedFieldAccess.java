@@ -1,6 +1,7 @@
 package dev.simplified.shared.inspect;
 
 import com.intellij.psi.JavaRecursiveElementWalkingVisitor;
+import com.intellij.psi.JavaTokenType;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAssignmentExpression;
 import com.intellij.psi.PsiClass;
@@ -155,6 +156,12 @@ public final class GeneratedFieldAccess {
      * Reads the names one constructor body writes and declares, by name and
      * without resolving, never descending into a nested class's body.
      *
+     * <p>A write is read only where it is a statement of the body itself, a
+     * plain assignment standing alone or a chain of them, as the processor
+     * reads it; one nested in a branch, a loop, a {@code try}, a {@code switch},
+     * a lambda or a class is not, as {@link BlankFinalLift} states. Every name
+     * the body declares is read, at any depth.
+     *
      * @param constructor the written constructor
      * @param body its body
      * @return its summary
@@ -164,8 +171,6 @@ public final class GeneratedFieldAccess {
         Set<String> declared = new HashSet<>();
         PsiParameter[] parameters = constructor.getParameterList().getParameters();
         for (PsiParameter parameter : parameters) declared.add(parameter.getName());
-        List<String> thisWrites = new ArrayList<>();
-        List<String> bareWrites = new ArrayList<>();
         body.accept(new JavaRecursiveElementWalkingVisitor() {
             @Override
             public void visitClass(@NotNull PsiClass aClass) {
@@ -176,10 +181,15 @@ public final class GeneratedFieldAccess {
                 declared.add(variable.getName());
                 super.visitVariable(variable);
             }
-
-            @Override
-            public void visitAssignmentExpression(@NotNull PsiAssignmentExpression expression) {
-                PsiExpression written = PsiUtil.skipParenthesizedExprDown(expression.getLExpression());
+        });
+        List<String> thisWrites = new ArrayList<>();
+        List<String> bareWrites = new ArrayList<>();
+        for (PsiStatement statement : body.getStatements()) {
+            if (!(statement instanceof PsiExpressionStatement expression)) continue;
+            PsiExpression step = PsiUtil.skipParenthesizedExprDown(expression.getExpression());
+            while (step instanceof PsiAssignmentExpression assignment
+                && assignment.getOperationTokenType() == JavaTokenType.EQ) {
+                PsiExpression written = PsiUtil.skipParenthesizedExprDown(assignment.getLExpression());
                 if (written instanceof PsiReferenceExpression reference) {
                     String name = reference.getReferenceName();
                     PsiExpression qualifier =
@@ -191,9 +201,9 @@ public final class GeneratedFieldAccess {
                         thisWrites.add(name);
                     }
                 }
-                super.visitAssignmentExpression(expression);
+                step = PsiUtil.skipParenthesizedExprDown(assignment.getRExpression());
             }
-        });
+        }
         return BlankFinalLift.Writes.of(callsThis(body), declared, thisWrites, bareWrites);
     }
 

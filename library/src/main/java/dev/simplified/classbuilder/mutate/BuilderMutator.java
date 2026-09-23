@@ -418,4 +418,16 @@ public final class BuilderMutator {
         return null;
     }
 
+    /**
+     * Where a class or record target sits in a SuperBuilder chain, from the two
+     * questions the mutation itself asks of it.
+     *
+     * @param target the annotated class or record
+     * @return the target's role
+     */
+    public static ChainRole chainRoleOf(TypeElement target) {
+        return ChainRole.of(target.getModifiers().contains(Modifier.ABSTRACT),
+            findAnnotatedDirectSuper(target) != null);
+    }
+
 }

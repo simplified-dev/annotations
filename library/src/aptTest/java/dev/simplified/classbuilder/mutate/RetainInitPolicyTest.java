@@ -338,6 +338,81 @@ public class RetainInitPolicyTest {
     }
 
     /**
+     * A {@code Target} with a {@code final int a = 128} and one constructor
+     * whose body is {@code body}, written on the source's eighth line.
+     */
+    private static JavaFileObject finalAssignedBy(String body) {
+        return JavaFileObjects.forSourceLines("demo.Target",
+            """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false)
+            public class Target {
+                private final int a = 128;
+                public int getA() { return a; }
+                Target(int a) {
+                    %s
+                }
+            }
+            """.formatted(body).split("\n"));
+    }
+
+    /**
+     * A constructor assigning a {@code final} field on one branch only does not
+     * assign it on the other, so the field keeps its initializer and javac
+     * refuses the branch's write as a second assignment - on the author's line,
+     * where the editor reports it too. The lift took the initializer off, and
+     * javac reported {@code variable a might not have been initialized} where
+     * the editor showed nothing.
+     */
+    @Test
+    public void finalAssignedOnABranchOnly_isNotLifted() {
+        JavaFileObject src = finalAssignedBy("if (a > 0) this.a = a;");
+        Compilation c = compile(src);
+        assertThat(c).hadErrorContaining("cannot assign a value to final variable a").inFile(src).onLine(8);
+        assertThat(c).hadErrorCount(1);
+    }
+
+    /**
+     * A loop's write may run any number of times, so it is no assignment the
+     * lift counts either. The lift reported {@code variable a might be
+     * assigned in loop} and {@code might not have been initialized}.
+     */
+    @Test
+    public void finalAssignedInALoop_isNotLifted() {
+        JavaFileObject src = finalAssignedBy("for (int i = 0; i < a; i++) this.a = i;");
+        Compilation c = compile(src);
+        assertThat(c).hadErrorContaining("cannot assign a value to final variable a").inFile(src).onLine(8);
+        assertThat(c).hadErrorCount(1);
+    }
+
+    /** A write inside a {@code try} may not complete, and is not counted. */
+    @Test
+    public void finalAssignedInATry_isNotLifted() {
+        JavaFileObject src = finalAssignedBy(
+            "try { this.a = Integer.parseInt(\"\" + a); } catch (RuntimeException e) { }");
+        Compilation c = compile(src);
+        assertThat(c).hadErrorContaining("cannot assign a value to final variable a").inFile(src).onLine(8);
+        assertThat(c).hadErrorCount(1);
+    }
+
+    /**
+     * Only a statement of the body itself counts, so two branches that between
+     * them always assign the field keep its initializer as well, and javac
+     * refuses both writes. The lift used to take it off and the constructor
+     * compiled; the rule reads no flow, so it cannot tell the two branches
+     * cover each other.
+     */
+    @Test
+    public void finalAssignedOnBothBranches_isNotLifted() {
+        JavaFileObject src = finalAssignedBy("if (a > 0) this.a = a;\n        else this.a = -a;");
+        Compilation c = compile(src);
+        assertThat(c).hadErrorContaining("cannot assign a value to final variable a").inFile(src).onLine(8);
+        assertThat(c).hadErrorContaining("cannot assign a value to final variable a").inFile(src).onLine(9);
+        assertThat(c).hadErrorCount(2);
+    }
+
+    /**
      * A lifted field is a blank final, which only a constructor of its own
      * class assigns: through {@code this}, by its bare name, or parenthesised,
      * each compiles.

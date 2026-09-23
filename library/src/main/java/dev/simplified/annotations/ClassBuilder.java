@@ -81,8 +81,11 @@ import java.lang.annotation.Target;
  * own types, compared by erasure and simple name, a distinct concrete
  * parameterisation of a seed's generic type never being its own, or else one
  * taking each as its box or primitive, a wider primitive or, for a reference
- * seed, {@code Object} - and is skipped with a note otherwise, a constructor
- * reached through any other supertype included. A seed is appended as a
+ * seed, {@code Object} or a common JDK supertype of its type -
+ * {@code CharSequence}, {@code Number}, {@code Comparable} or a
+ * {@code java.util} collection interface, the seed's type arguments carried
+ * across - and is skipped with a note otherwise, a constructor reached through
+ * any other supertype included. A seed is appended as a
  * {@code final} field that the builder's constructors assign exactly once. A
  * static factory inside an interface is such a target too, and merges into the
  * class the interface body declares.
@@ -358,6 +361,9 @@ public @interface ClassBuilder {
      *   <li>on an interface target - the sibling {@code <Name>Builder} keeps its
      *       implicit constructor.</li>
      * </ul>
+     *
+     * <p>A value other than the default written on a chain role or an interface
+     * target is a compile warning.
      *
      * <p>{@link AccessLevel#NONE} is a compile error on every target, since every
      * builder has a constructor; the builder is then generated as under the

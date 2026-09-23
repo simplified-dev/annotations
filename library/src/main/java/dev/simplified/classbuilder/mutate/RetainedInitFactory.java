@@ -229,14 +229,18 @@ final class RetainedInitFactory {
      * Reads the names one constructor body writes and declares, never
      * descending into a nested class's body.
      *
+     * <p>A write is read only where it is a statement of the body itself, an
+     * assignment standing alone or a chain of them; one nested in a branch, a
+     * loop, a {@code try}, a {@code switch}, a lambda or a class is not, as
+     * {@link BlankFinalLift} states. Every name the body declares is read, at
+     * any depth.
+     *
      * @param constructor the author-written constructor
      * @return its summary
      */
     private static BlankFinalLift.Writes writesOf(JCMethodDecl constructor) {
         Set<String> declared = new HashSet<>();
         for (JCVariableDecl param : constructor.params) declared.add(param.name.toString());
-        java.util.List<String> thisWrites = new ArrayList<>();
-        java.util.List<String> bareWrites = new ArrayList<>();
         new TreeScanner() {
             @Override
             public void visitClassDef(JCClassDecl tree) {
@@ -247,10 +251,14 @@ final class RetainedInitFactory {
                 declared.add(tree.name.toString());
                 super.visitVarDef(tree);
             }
-
-            @Override
-            public void visitAssign(JCAssign tree) {
-                JCExpression written = TreeInfo.skipParens(tree.lhs);
+        }.scan(constructor.body);
+        java.util.List<String> thisWrites = new ArrayList<>();
+        java.util.List<String> bareWrites = new ArrayList<>();
+        for (JCStatement statement : constructor.body.stats) {
+            if (!(statement instanceof JCExpressionStatement expression)) continue;
+            JCExpression step = TreeInfo.skipParens(expression.expr);
+            while (step instanceof JCAssign assign) {
+                JCExpression written = TreeInfo.skipParens(assign.lhs);
                 if (written instanceof JCIdent bare) {
                     bareWrites.add(bare.name.toString());
                 } else if (written instanceof JCFieldAccess select
@@ -258,9 +266,9 @@ final class RetainedInitFactory {
                     && qualifier.name.toString().equals("this")) {
                     thisWrites.add(select.name.toString());
                 }
-                super.visitAssign(tree);
+                step = TreeInfo.skipParens(assign.rhs);
             }
-        }.scan(constructor.body);
+        }
         return BlankFinalLift.Writes.of(callsThis(constructor.body), declared,
             thisWrites, bareWrites);
     }

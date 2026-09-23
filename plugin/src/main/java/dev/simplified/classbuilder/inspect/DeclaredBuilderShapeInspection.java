@@ -11,6 +11,7 @@ import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiElementVisitor;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifierListOwner;
+import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiTypeElement;
 import com.intellij.psi.util.PsiTreeUtil;
 import dev.simplified.annotations.NamingStyle;
@@ -70,7 +71,10 @@ import java.util.Objects;
  * <p>On a class or record target and on a constructor or factory target, a
  * {@code builderConstructorAccess} written on the annotation while the declared
  * builder declares a constructor of its own is a warning on that attribute, in
- * the processor's sentence: the author's constructor keeps its own access.
+ * the processor's sentence: the author's constructor keeps its own access. On a
+ * SuperBuilder chain role or an interface target, a value other than the
+ * default is a warning on the attribute whether or not a builder is declared,
+ * since no builder there takes it.
  *
  * <p>Only the annotation the processor builds from is judged, which is the one
  * {@link BuilderSite#of} answers: an annotated member the processor refuses -
@@ -112,6 +116,19 @@ public class DeclaredBuilderShapeInspection extends LocalInspectionTool {
                 NamingStyle style = ClassBuilderConstants.namingStyle(annotation);
                 BuilderScheme names =
                     ClassBuilderConstants.builderScheme(annotation, style, target.getName());
+
+                // A chain role's builder and an interface's sibling keep a
+                // constructor the attribute never reaches, which the processor
+                // warns about before it generates anything.
+                PsiAnnotationMemberValue access =
+                    annotation.findDeclaredAttributeValue(BuilderConstructorAccess.ATTRIBUTE);
+                if (!executable && access != null) {
+                    boolean interfaceTarget = target.isInterface();
+                    String misplaced = BuilderConstructorAccess.misplaced(target.getName(), interfaceTarget,
+                        interfaceTarget ? ChainRole.STANDALONE : ClassBuilderConstants.chainRoleOf(target),
+                        access instanceof PsiReferenceExpression reference ? reference.getReferenceName() : null);
+                    if (misplaced != null) holder.registerProblem(access, misplaced, ProblemHighlightType.WARNING);
+                }
 
                 // The ancestor case is reported on the annotation rather than on
                 // a declaration, the offending class being one the author did
@@ -156,8 +173,6 @@ public class DeclaredBuilderShapeInspection extends LocalInspectionTool {
 
                 // The author's constructor keeps its own access, so the attribute
                 // written beside it changes nothing on the roles it reaches.
-                PsiAnnotationMemberValue access =
-                    annotation.findDeclaredAttributeValue(BuilderConstructorAccess.ATTRIBUTE);
                 if (access != null && BuilderConstructorAccess.appliesTo(role)
                     && ClassBuilderConstants.declaresConstructor(declared)) {
                     holder.registerProblem(access, BuilderConstructorAccess.hasNoEffect(declared.getName()),

@@ -36,8 +36,9 @@ public class DeclaredBuilderMergeTest {
 
     /** The note for a constructor target's {@code builder(origin)} skipped for want of a constructor. */
     private static final String SEED_SKIPPED = "@ClassBuilder merged into 'Builder' but no single constructor "
-        + "it declares takes the seed 'builder' passes as its own type, its box or primitive, a wider primitive "
-        + "or Object, so 'builder' was not added - declare a constructor taking (origin) or write it";
+        + "it declares takes the seed 'builder' passes as its own type, its box or primitive, a wider primitive, "
+        + "Object or a listed JDK supertype such as CharSequence, Number, Comparable or a java.util collection "
+        + "interface, so 'builder' was not added - declare a constructor taking (origin) or write it";
 
     private static Compilation compile(JavaFileObject... sources) {
         return Compiler.javac()
@@ -317,6 +318,38 @@ public class DeclaredBuilderMergeTest {
                 "}"));
         assertThat(c).succeeded();
         assertThat(c).hadNoteContaining("already spells");
+    }
+
+    /**
+     * A declared builder whose one constructor an {@code @AllArgsConstructor} on
+     * it appends has javac's default beside it while the merge runs, which the
+     * next round's tree cleaner removes, so the built class has no
+     * {@code Builder()}. The note named that default as one the author spells.
+     */
+    @Test
+    public void merge_besideAConstructorAnAnnotationAppends_namesNoDefaultConstructor() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Tagged",
+                "package demo;",
+                "import dev.simplified.annotations.AllArgsConstructor;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Tagged {",
+                "    private String tag;",
+                "    public String getTag() { return tag; }",
+                "    @AllArgsConstructor",
+                "    public static class Builder {",
+                "        private String tag;",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        List<String> spelled = new ArrayList<>();
+        for (Diagnostic<? extends JavaFileObject> note : c.notes()) {
+            String message = String.valueOf(note.getMessage(null));
+            if (message.contains("already spells")) spelled.add(message);
+        }
+        assertEquals("@ClassBuilder merged into the declared 'Builder'; Builder already spells tag, Builder(..), "
+            + "so the generated version was not added", String.join(" | ", spelled));
     }
 
     /** A generic target's declared builder has to carry the same parameters. */
@@ -1608,6 +1641,98 @@ public class DeclaredBuilderMergeTest {
                 "}"));
         assertThat(c).succeeded();
         assertEquals(1, runGo(c, "demo.UseBox"));
+    }
+
+    /**
+     * A generic {@code Box} whose declared builder re-declares {@code bounded}
+     * and spells {@code value(erasure)}, entered through {@code go()} with
+     * {@code argument} as the witness and the value.
+     */
+    private static JavaFileObject[] boxWithAuthorValue(String bounded, String erasure, String witness,
+                                                       String argument) {
+        return new JavaFileObject[]{
+            JavaFileObjects.forSourceLines("demo.Box",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Box<" + bounded + "> {",
+                "    private T value;",
+                "    public T getValue() { return value; }",
+                "    public static class Builder<" + bounded + "> {",
+                "        @SuppressWarnings(\"unchecked\")",
+                "        public Builder<T> value(" + erasure + " v) { this.value = (T) v; return this; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseBox",
+                "package demo;",
+                "public class UseBox {",
+                "    public static Object go() {",
+                "        Box<" + witness + "> b = Box.<" + witness + ">builder().value(" + argument + ").build();",
+                "        return Box.from(b).build().getValue() + \"/\" + b.mutate().build().getValue();",
+                "    }",
+                "}")
+        };
+    }
+
+    /**
+     * An author method taking {@code Object} where the generated setter takes
+     * the builder's unbounded {@code T} has the setter's erasure, so it covers
+     * the setter and the copy entry points call it. Keyed by the variable's
+     * name, the two were kept side by side and javac refused them as a name
+     * clash on the target's line.
+     */
+    @Test
+    public void merge_anAuthorMethodTakingAnUnboundedTypeVariablesErasure_coversTheSetter() throws Exception {
+        Compilation c = compile(boxWithAuthorValue("T", "Object", "String", "\"x\""));
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("Builder already spells value(1 args)");
+        assertEquals("x/x", runGo(c, "demo.UseBox"));
+    }
+
+    /** A bounded type variable erases to its first bound, which the author's method takes. */
+    @Test
+    public void merge_anAuthorMethodTakingABoundedTypeVariablesErasure_coversTheSetter() throws Exception {
+        Compilation c = compile(boxWithAuthorValue("T extends Number", "Number", "Integer", "1"));
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("Builder already spells value(1 args)");
+        assertEquals("1/1", runGo(c, "demo.UseBox"));
+    }
+
+    /**
+     * A declared chain root's own type variable is keyed by its erasure too: an
+     * author {@code value(Object)} covers the setter taking the root's
+     * {@code V}, and the link below it builds through it.
+     */
+    @Test
+    public void merge_onARootAnAuthorMethodTakingATypeVariablesErasure_coversTheSetter() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public abstract class Shape<V> {",
+                "    private V value;",
+                "    public V getValue() { return value; }",
+                "    public abstract static class Builder<V, T extends Shape<V>, B extends Builder<V, T, B>> {",
+                "        @SuppressWarnings(\"unchecked\")",
+                "        public B value(Object v) { this.value = (V) v; return self(); }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.Circle",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Circle extends Shape<String> {",
+                "    private int radius;",
+                "    public int getRadius() { return radius; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseCircle",
+                "package demo;",
+                "public class UseCircle {",
+                "    public static Object go() { return Circle.builder().value(\"v\").radius(2).build().getValue(); }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("v", runGo(c, "demo.UseCircle"));
     }
 
     /**
@@ -2923,7 +3048,8 @@ public class DeclaredBuilderMergeTest {
         assertThat(c).succeeded();
         assertThat(c).hadNoteContaining("@ClassBuilder merged into 'Builder' but no single constructor it "
             + "declares takes the 2 seeds 'builder' passes as their own types, their boxes or primitives, wider "
-            + "primitives or Object, so 'builder' was not added - declare a constructor taking (origin, qty) or "
+            + "primitives, Object or listed JDK supertypes such as CharSequence, Number, Comparable or a java.util "
+            + "collection interface, so 'builder' was not added - declare a constructor taking (origin, qty) or "
             + "write it");
     }
 
@@ -3039,13 +3165,97 @@ public class DeclaredBuilderMergeTest {
     }
 
     /**
-     * Any other supertype is one names cannot vouch for, so the entry point is
-     * skipped with the note, which says what is counted.
+     * A {@code String} seed reaches a constructor taking {@code CharSequence},
+     * a supertype the seed match lists. It was skipped with the note, and the
+     * caller failed with {@code cannot find symbol}.
      */
     @Test
-    public void merge_onAReferenceSeedWhoseBuilderTakesAnotherSupertype_skipsTheEntryPointWithTheNote() {
+    public void merge_onAStringSeedWhoseBuilderTakesCharSequence_keepsTheEntryPoint() throws Exception {
+        Compilation c = compile(seededOrder("String",
+            "Builder(CharSequence origin) { this.origin = origin.toString(); }", "\"web\""));
+        assertThat(c).succeeded();
+        assertEquals("web:x", runGo(c, "demo.UseOrder"));
+    }
+
+    /**
+     * A supertype the table does not list - an interface of the author's own -
+     * is one names cannot vouch for, so the entry point is skipped with the
+     * note, which says what is counted.
+     */
+    @Test
+    public void merge_onASeedWhoseBuilderTakesAnUnlistedSupertype_skipsTheEntryPointWithTheNote() {
+        JavaFileObject[] sources = seededOrder("Code",
+            "Builder(Labelled origin) { this.origin = (Code) origin; }", "new Code()");
+        Compilation c = compile(sources[0],
+            JavaFileObjects.forSourceLines("demo.Labelled", "package demo;", "public interface Labelled { }"),
+            JavaFileObjects.forSourceLines("demo.Code", "package demo;", "public class Code implements Labelled { }"));
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining(SEED_SKIPPED);
+    }
+
+    /**
+     * A {@code List<String>} seed reaches a constructor taking
+     * {@code Collection<String>}: the collection interfaces are listed over
+     * their usual implementations and over {@code List}, {@code Set} and
+     * {@code Queue}, the seed's type arguments carried across.
+     */
+    @Test
+    public void merge_onAListSeedWhoseBuilderTakesACollectionOfTheSameArgument_keepsTheEntryPoint()
+        throws Exception {
+        Compilation c = compile(seededOrder("java.util.List<String>",
+            "Builder(java.util.Collection<String> origin) { this.origin = new java.util.ArrayList<>(origin); }",
+            "java.util.List.of(\"a\", \"b\")"));
+        assertThat(c).succeeded();
+        assertEquals("[a, b]:x", runGo(c, "demo.UseOrder"));
+    }
+
+    /**
+     * The type-argument rule holds across the supertype: a {@code List<String>}
+     * seed never reaches {@code Collection<Integer>}, so the entry point is
+     * skipped with the note rather than emitted onto {@code incompatible types}.
+     */
+    @Test
+    public void merge_onAListSeedWhoseBuilderTakesACollectionOfAnotherArgument_skipsTheEntryPoint() {
+        JavaFileObject[] sources = seededOrder("java.util.List<String>",
+            "Builder(java.util.Collection<Integer> codes) { this.origin = new java.util.ArrayList<>(); }",
+            "java.util.List.of(\"a\")");
+        Compilation c = compile(sources[0]);
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining(SEED_SKIPPED);
+    }
+
+    /**
+     * A box reaches {@code Number} and its own {@code Comparable}, and beside
+     * {@code Object} the listed supertype is the more specific, which is the
+     * constructor javac calls.
+     */
+    @Test
+    public void merge_onASeedWhoseBuilderTakesNumberOrComparable_keepsTheEntryPoint() throws Exception {
+        Compilation number = compile(seededOrder("Integer",
+            "Builder(java.lang.Number origin) { this.origin = origin.intValue() + 1; }", "3"));
+        assertThat(number).succeeded();
+        assertEquals("4:x", runGo(number, "demo.UseOrder"));
+        Compilation comparable = compile(seededOrder("Integer",
+            "Builder(Comparable<Integer> origin) { this.origin = (Integer) origin; }", "3"));
+        assertThat(comparable).succeeded();
+        assertEquals("3:x", runGo(comparable, "demo.UseOrder"));
+        Compilation specific = compile(seededOrder("String",
+            "Builder(Object origin) { this.origin = \"object\"; } "
+                + "Builder(CharSequence origin) { this.origin = \"chars\"; }", "\"web\""));
+        assertThat(specific).succeeded();
+        assertEquals("chars:x", runGo(specific, "demo.UseOrder"));
+    }
+
+    /**
+     * Two listed supertypes neither of which is more specific are ambiguous to
+     * javac, so the entry point is skipped rather than emitted onto
+     * {@code reference to Builder is ambiguous}.
+     */
+    @Test
+    public void merge_onASeedTwoListedSupertypesTakeAmbiguously_skipsTheEntryPoint() {
         JavaFileObject[] sources = seededOrder("String",
-            "Builder(CharSequence origin) { this.origin = origin.toString(); }", "\"web\"");
+            "Builder(CharSequence origin) { this.origin = \"chars\"; } "
+                + "Builder(Comparable<String> origin) { this.origin = \"comparable\"; }", "\"web\"");
         Compilation c = compile(sources[0]);
         assertThat(c).succeeded();
         assertThat(c).hadNoteContaining(SEED_SKIPPED);

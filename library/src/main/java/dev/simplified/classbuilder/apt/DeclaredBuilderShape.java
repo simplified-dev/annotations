@@ -6,6 +6,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.ConcurrentModificationException;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -868,12 +869,79 @@ public final class DeclaredBuilderShape {
      * @return the key both halves compare
      */
     public static @NotNull String methodKey(@NotNull String name, @NotNull List<String> parameterTypes) {
+        return methodKey(name, parameterTypes, Map.of());
+    }
+
+    /**
+     * Keys a method of a declared builder that declares type parameters, a
+     * parameter typed by one of them being keyed by that variable's erasure.
+     *
+     * <p>javac compares two methods of one class by their erasures, and a type
+     * variable erases to its first bound, or {@code Object} unbounded - so an
+     * author method taking that erasure is the generated setter taking the
+     * variable, and appending the setter beside it is a name clash. Every other
+     * parameter is keyed as {@link #methodKey(String, List)} keys it.
+     *
+     * @param name the method's name
+     * @param parameterTypes each parameter's type as either model renders it, in order
+     * @param typeVariableErasures each of the declared builder's type parameter names with its erasure,
+     *     from {@link #typeVariableErasures}
+     * @return the key both halves compare
+     */
+    public static @NotNull String methodKey(@NotNull String name, @NotNull List<String> parameterTypes,
+                                            @NotNull Map<String, String> typeVariableErasures) {
         List<String> erased = new ArrayList<>(parameterTypes.size());
         for (String type : parameterTypes) {
             String text = typeText(type.replace("...", "[]"));
-            erased.add(erasedName(withoutDimensions(text)) + "[]".repeat(dimensions(text)));
+            String bare = withoutDimensions(text);
+            String variable = typeVariableErasures.get(bare);
+            erased.add((variable == null ? erasedName(bare) : variable) + "[]".repeat(dimensions(text)));
         }
         return name + "(" + String.join(",", erased) + ")";
+    }
+
+    /**
+     * The erasure of each type parameter a declared builder declares, read from
+     * the bounds as written.
+     *
+     * <p>A parameter erases to the simple name of its first bound with the
+     * bound's type arguments dropped, or to {@code Object} when it has none; a
+     * first bound naming another of the builder's parameters erases as that one
+     * does.
+     *
+     * @param names the type parameter names, in declaration order
+     * @param bounds each parameter's bounds joined as {@link DeclaredBuilderFacts#typeParameterBounds} holds them,
+     *     null where a parameter has none
+     * @return each name with its erasure's simple name
+     */
+    public static @NotNull Map<String, String> typeVariableErasures(@NotNull List<String> names,
+                                                                    @NotNull List<@Nullable String> bounds) {
+        Map<String, String> firstBounds = new HashMap<>();
+        for (int i = 0; i < names.size(); i++) {
+            String bound = i < bounds.size() ? bounds.get(i) : null;
+            firstBounds.put(names.get(i), bound == null || bound.isBlank() ? "Object" : erasedName(firstBound(bound)));
+        }
+        Map<String, String> out = new HashMap<>();
+        for (String name : names) {
+            String erasure = firstBounds.get(name);
+            for (int hops = 0; hops < names.size() && firstBounds.containsKey(erasure); hops++)
+                erasure = firstBounds.get(erasure);
+            out.put(name, firstBounds.containsKey(erasure) ? "Object" : erasure);
+        }
+        return out;
+    }
+
+    /** The first of a type parameter's {@code &}-joined bounds, in the spelling {@link #typeText} gives it. */
+    private static String firstBound(String bounds) {
+        String text = typeText(bounds);
+        int depth = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '<') depth++;
+            else if (c == '>') depth--;
+            else if (c == '&' && depth == 0) return text.substring(0, i).trim();
+        }
+        return text;
     }
 
     /**
@@ -952,7 +1020,8 @@ public final class DeclaredBuilderShape {
      * from names alone, which is what both halves can read without a resolve: a
      * seed reaches a parameter of its own type, compared by erasure and simple
      * name as {@link #methodKey} compares one, of its box or its primitive, of a
-     * wider primitive, or - a reference seed - of {@code Object}, and among the
+     * wider primitive, or - a reference seed - of {@code Object} or of a common
+     * JDK supertype {@link #LISTED_SUPERTYPES} lists for its type, and among the
      * constructors so reached the one selected is javac's, the earliest phase
      * and in it the most specific. A constructor needing any other conversion
      * is never selected, and where one might be applicable as early as the
@@ -974,7 +1043,10 @@ public final class DeclaredBuilderShape {
      * type arguments, neither a wildcard nor one of the declared builder's own
      * type parameters, and the arguments differing by simple name at some
      * depth - which are never assignable to each other, the rule
-     * {@link #setterWithOtherTypeArguments} applies to a covered setter.
+     * {@link #setterWithOtherTypeArguments} applies to a covered setter. The
+     * rule holds across a listed supertype, the seed read as that supertype:
+     * {@code List<String>} reaches {@code Collection<String>} and never
+     * {@code Collection<Integer>}.
      *
      * @param declaredConstructors the parameter types of each constructor the builder declares, as
      *     either model renders them
@@ -1088,15 +1160,17 @@ public final class DeclaredBuilderShape {
      * {@link #methodKey} keys a parameter under, and not another concrete
      * parameterisation of it - of a wider primitive
      * (JLS 5.1.2), of its box or of its primitive, and, a reference seed, of
-     * {@code Object} or {@code java.lang.Object}. javac selects in phases, a
+     * {@code Object} or {@code java.lang.Object}, or of a supertype
+     * {@link #LISTED_SUPERTYPES} lists for its type. javac selects in phases, a
      * constructor reached without boxing before one needing it, and within a
      * phase the most specific, so this does too: the constructor taking the
      * seeds' own types always, otherwise the one of the earliest phase more
      * specific than every other there.
      *
-     * <p>Any other conversion is one names cannot vouch for - another supertype
-     * of the seed, a primitive seed boxed into {@code Object}, an unboxing
-     * followed by a widening - and a constructor needing one is never selected.
+     * <p>Any other conversion is one names cannot vouch for - a supertype the
+     * table does not list, a primitive seed boxed into {@code Object}, an
+     * unboxing followed by a widening - and a constructor needing one is never
+     * selected.
      * Where such a constructor might still be applicable no later than the
      * phase selecting, javac may prefer it, so nothing is selected; nor is
      * anything where two constructors are ambiguous. Selecting nothing skips the
@@ -1153,14 +1227,174 @@ public final class DeclaredBuilderShape {
         Set.of("boolean", "byte", "char", "short", "int", "long", "float", "double");
 
     /**
+     * The package each type {@link #LISTED_SUPERTYPES} names is spelled in,
+     * by simple name.
+     */
+    private static final Map<String, String> LISTED_PACKAGES = listedPackages();
+
+    /**
+     * The type argument each listed {@code Comparable} type compares itself
+     * to, by simple name - its own type, but for the three {@code java.time}
+     * types that compare to a chronology interface.
+     */
+    private static final Map<String, String> COMPARABLE_TO = comparableTo();
+
+    /**
+     * The supertypes the seed match counts beyond {@code Object}, each listed
+     * type's simple name mapped to the simple names of its listed supertypes.
+     *
+     * <p>{@code CharSequence} over {@code String}, {@code StringBuilder} and
+     * {@code StringBuffer}; {@code Number} over the boxed numeric types,
+     * {@code BigInteger}, {@code BigDecimal}, {@code AtomicInteger} and
+     * {@code AtomicLong}; {@code Comparable} over {@code String}, the boxes,
+     * {@code BigInteger}, {@code BigDecimal} and the common {@code java.time}
+     * types; and the {@code java.util} collection interfaces over their usual
+     * implementations and over each other as they extend one another -
+     * {@code Collection} and {@code Iterable} over every collection listed.
+     * A name counts spelled simply or qualified by the package
+     * {@link #LISTED_PACKAGES} holds for it, so an author's own
+     * {@code CharSequence} in another package is not taken for the JDK's.
+     */
+    private static final Map<String, Set<String>> LISTED_SUPERTYPES = listedSupertypes();
+
+    /** Builds {@link #LISTED_PACKAGES}. */
+    private static Map<String, String> listedPackages() {
+        Map<String, String> out = new HashMap<>();
+        for (String name : List.of("String", "StringBuilder", "StringBuffer", "CharSequence", "Number", "Comparable",
+            "Iterable", "Byte", "Short", "Integer", "Long", "Float", "Double", "Character", "Boolean"))
+            out.put(name, "java.lang");
+        for (String name : List.of("BigInteger", "BigDecimal")) out.put(name, "java.math");
+        for (String name : List.of("AtomicInteger", "AtomicLong")) out.put(name, "java.util.concurrent.atomic");
+        for (String name : List.of("CopyOnWriteArrayList", "ConcurrentHashMap")) out.put(name, "java.util.concurrent");
+        for (String name : List.of("ArrayList", "LinkedList", "HashSet", "LinkedHashSet", "TreeSet", "ArrayDeque",
+            "HashMap", "LinkedHashMap", "TreeMap", "Collection", "List", "Set", "SortedSet", "NavigableSet", "Queue",
+            "Deque", "Map", "SortedMap", "NavigableMap"))
+            out.put(name, "java.util");
+        for (String name : List.of("Instant", "Duration", "LocalDate", "LocalTime", "LocalDateTime", "OffsetDateTime",
+            "OffsetTime", "ZonedDateTime", "Year", "YearMonth", "MonthDay"))
+            out.put(name, "java.time");
+        return Map.copyOf(out);
+    }
+
+    /** Builds {@link #COMPARABLE_TO}. */
+    private static Map<String, String> comparableTo() {
+        Map<String, String> out = new HashMap<>();
+        for (String name : List.of("String", "Byte", "Short", "Integer", "Long", "Float", "Double", "Character",
+            "Boolean", "BigInteger", "BigDecimal", "Instant", "Duration", "LocalTime", "OffsetDateTime", "OffsetTime",
+            "Year", "YearMonth", "MonthDay"))
+            out.put(name, name);
+        out.put("LocalDate", "ChronoLocalDate");
+        out.put("LocalDateTime", "ChronoLocalDateTime<?>");
+        out.put("ZonedDateTime", "ChronoZonedDateTime<?>");
+        return Map.copyOf(out);
+    }
+
+    /** Builds {@link #LISTED_SUPERTYPES}. */
+    private static Map<String, Set<String>> listedSupertypes() {
+        Map<String, Set<String>> out = new HashMap<>();
+        for (String name : List.of("String", "StringBuilder", "StringBuffer")) supertype(out, name, "CharSequence");
+        for (String name : List.of("Byte", "Short", "Integer", "Long", "Float", "Double", "BigInteger", "BigDecimal",
+            "AtomicInteger", "AtomicLong"))
+            supertype(out, name, "Number");
+        for (String name : COMPARABLE_TO.keySet()) supertype(out, name, "Comparable");
+
+        for (String name : List.of("ArrayList", "LinkedList", "CopyOnWriteArrayList")) supertype(out, name, "List");
+        for (String name : List.of("HashSet", "LinkedHashSet", "TreeSet", "SortedSet", "NavigableSet"))
+            supertype(out, name, "Set");
+        for (String name : List.of("TreeSet", "NavigableSet")) supertype(out, name, "SortedSet");
+        supertype(out, "TreeSet", "NavigableSet");
+        for (String name : List.of("ArrayDeque", "LinkedList", "Deque")) supertype(out, name, "Queue");
+        for (String name : List.of("ArrayDeque", "LinkedList")) supertype(out, name, "Deque");
+        for (String name : List.of("ArrayList", "LinkedList", "CopyOnWriteArrayList", "HashSet", "LinkedHashSet",
+            "TreeSet", "ArrayDeque", "List", "Set", "SortedSet", "NavigableSet", "Queue", "Deque")) {
+            supertype(out, name, "Collection");
+            supertype(out, name, "Iterable");
+        }
+        supertype(out, "Collection", "Iterable");
+        for (String name : List.of("HashMap", "LinkedHashMap", "TreeMap", "ConcurrentHashMap", "SortedMap",
+            "NavigableMap"))
+            supertype(out, name, "Map");
+        for (String name : List.of("TreeMap", "NavigableMap")) supertype(out, name, "SortedMap");
+        supertype(out, "TreeMap", "NavigableMap");
+        Map<String, Set<String>> frozen = new HashMap<>();
+        out.forEach((name, supertypes) -> frozen.put(name, Set.copyOf(supertypes)));
+        return Map.copyOf(frozen);
+    }
+
+    /** Records one listed supertype of a type. */
+    private static void supertype(Map<String, Set<String>> table, String type, String supertype) {
+        table.computeIfAbsent(type, name -> new HashSet<>()).add(supertype);
+    }
+
+    /**
+     * Whether the table lists the one type as a supertype of the other, both
+     * spelled as the JDK's.
+     *
+     * @param type the subtype, a seed or a parameter
+     * @param supertype the candidate supertype
+     * @return whether {@link #LISTED_SUPERTYPES} holds the pair
+     */
+    private static boolean listedSupertype(ParameterKey type, ParameterKey supertype) {
+        Set<String> supertypes = LISTED_SUPERTYPES.get(type.erased());
+        return supertypes != null && supertypes.contains(supertype.erased()) && type.listed() && supertype.listed();
+    }
+
+    /**
+     * Whether a seed reaching a listed supertype carries type arguments the
+     * parameter can take, by the rule {@link #otherParameterisation} applies to
+     * two parameterisations of one generic type.
+     *
+     * <p>The seed is read as the supertype - a collection passing its own
+     * arguments up, {@code Comparable} applied to what the seed compares to -
+     * and refused only where both it and the parameter carry concrete
+     * arguments that differ; a raw side, a wildcard in the parameter, or a type
+     * parameter of the builder's own is taken, as it is for one generic type.
+     *
+     * @param seed the seed's type
+     * @param parameter the parameter's type, a listed supertype of the seed's
+     * @param typeParameters the declared builder's own type parameter names
+     * @return whether the arguments fit
+     */
+    private static boolean argumentsFit(ParameterKey seed, ParameterKey parameter, Collection<String> typeParameters) {
+        String written = parameter.text();
+        if (written.indexOf('<') < 0 || written.indexOf('?') >= 0 || namesAny(written, typeParameters)) return true;
+        String seen;
+        if (parameter.erased().equals("Comparable")) {
+            seen = "Comparable<" + COMPARABLE_TO.get(seed.erased()) + ">";
+        } else {
+            int open = seed.text().indexOf('<');
+            if (open < 0) return true;
+            seen = parameter.erased() + seed.text().substring(open);
+        }
+        return namesAny(seen, typeParameters) || sameSimpleType(seen, written);
+    }
+
+    /**
      * A parameter or seed type as the selection reads it.
      *
      * @param erased the erased simple name with its array dimensions, as {@link #methodKey} keys it
-     * @param javaLang whether the type is written unqualified or qualified by {@code java.lang}, which
-     *     is what lets a box or {@code Object} of that name be taken for the real one
+     * @param qualifier the qualifier the type is written with, empty when it is written by its simple name
      * @param text the whole type in the spelling {@link #typeText} gives it, its type arguments kept
      */
-    private record ParameterKey(@NotNull String erased, boolean javaLang, @NotNull String text) {
+    private record ParameterKey(@NotNull String erased, @NotNull String qualifier, @NotNull String text) {
+
+        /**
+         * Whether the type is written unqualified or qualified by
+         * {@code java.lang}, which is what lets a box or {@code Object} of that
+         * name be taken for the real one.
+         */
+        boolean javaLang() {
+            return qualifier.isEmpty() || qualifier.equals("java.lang");
+        }
+
+        /**
+         * Whether the type is one {@link #LISTED_SUPERTYPES} names, written
+         * unqualified or qualified by its own package.
+         */
+        boolean listed() {
+            String home = LISTED_PACKAGES.get(erased);
+            return home != null && (qualifier.isEmpty() || qualifier.equals(home));
+        }
 
         /** Whether this is a primitive type. */
         boolean primitive() {
@@ -1169,12 +1403,12 @@ public final class DeclaredBuilderShape {
 
         /** Whether this is {@code Object}. */
         boolean object() {
-            return javaLang && erased.equals("Object");
+            return javaLang() && erased.equals("Object");
         }
 
         /** The primitive this box stands for, or {@code null} when it is none. */
         @Nullable String unboxed() {
-            if (!javaLang) return null;
+            if (!javaLang()) return null;
             for (String primitive : PRIMITIVES) {
                 String box = boxOf(primitive);
                 if (box != null && erasedName(box).equals(erased)) return primitive;
@@ -1204,8 +1438,8 @@ public final class DeclaredBuilderShape {
             int generics = bare.indexOf('<');
             String raw = (generics < 0 ? bare : bare.substring(0, generics)).trim();
             String simple = erasedName(raw);
-            out.add(new ParameterKey(simple + "[]".repeat(dimensions(text)),
-                raw.equals(simple) || raw.equals("java.lang." + simple), text));
+            String qualifier = raw.equals(simple) ? "" : raw.substring(0, raw.length() - simple.length() - 1);
+            out.add(new ParameterKey(simple + "[]".repeat(dimensions(text)), qualifier, text));
         }
         return out;
     }
@@ -1269,6 +1503,7 @@ public final class DeclaredBuilderShape {
             return -2;
         }
         if (parameter.object()) return 1;
+        if (listedSupertype(seed, parameter)) return argumentsFit(seed, parameter, typeParameters) ? 1 : UNREACHABLE;
         String unboxed = seed.unboxed();
         if (parameter.primitive()) {
             if (unboxed == null) return -2;
@@ -1283,7 +1518,8 @@ public final class DeclaredBuilderShape {
     /**
      * The one constructor more specific than every other of its phase, a
      * parameter type being more specific than another when it is the same, a
-     * primitive widening to it, or a reference type beside {@code Object}.
+     * primitive widening to it, a reference type beside {@code Object}, or a
+     * type beside one {@link #LISTED_SUPERTYPES} lists as its supertype.
      *
      * @param candidates the constructors of one phase
      * @return the most specific, or {@code null} when none is, the call being ambiguous
@@ -1305,7 +1541,7 @@ public final class DeclaredBuilderShape {
     private static boolean subtype(ParameterKey type, ParameterKey supertype) {
         if (type.erased().equals(supertype.erased())) return true;
         if (type.primitive()) return supertype.primitive() && widens(type.erased(), supertype.erased());
-        return supertype.object();
+        return supertype.object() || listedSupertype(type, supertype);
     }
 
     /** Whether a primitive widens to another, per JLS 5.1.2. */
@@ -1415,8 +1651,8 @@ public final class DeclaredBuilderShape {
      * constructor is a no-argument one, and with seeds it is one taking those,
      * which on a constructor or factory target is only ever {@code builder(..)}.
      * The seeded note names the conversions {@link #instantiable} counts - a
-     * constructor javac would reach only through another supertype is not one
-     * of them, nor is one of two it could not choose between.
+     * constructor javac would reach only through a supertype the table does not
+     * list is not one of them, nor is one of two it could not choose between.
      *
      * @param declaredName the declared builder's simple name
      * @param entryPoints the names of the entry points that were not added
@@ -1436,9 +1672,11 @@ public final class DeclaredBuilderShape {
         }
         String seeds = seedNames.size() == 1
             ? "the seed " + quotedList(entryPoints) + " passes as its own type, its box or primitive, "
-                + "a wider primitive or Object"
+                + "a wider primitive, Object or a listed JDK supertype such as CharSequence, Number, "
+                + "Comparable or a java.util collection interface"
             : "the " + seedNames.size() + " seeds " + quotedList(entryPoints) + " passes as their own "
-                + "types, their boxes or primitives, wider primitives or Object";
+                + "types, their boxes or primitives, wider primitives, Object or listed JDK supertypes such "
+                + "as CharSequence, Number, Comparable or a java.util collection interface";
         return "@ClassBuilder merged into '" + declaredName + "' but no single constructor it declares "
             + "takes " + seeds + ", so " + skipped + " - declare a constructor taking ("
             + String.join(", ", seedNames) + ") or write " + pronoun;

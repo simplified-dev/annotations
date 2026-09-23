@@ -509,6 +509,59 @@ public class GeneratedMemberHighlightFilterTest extends LightJavaCodeInsightFixt
         assertTrue("javac rejects the write as a second assignment", reportsFinalAssignment("a"));
     }
 
+    /**
+     * Configures a {@code Target} with a {@code final int a = 128} and one
+     * constructor whose body is {@code body}, starting on the fixture's sixth
+     * line.
+     */
+    private void configureFinalAssignedBy(String body) {
+        configure(
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Target {
+                private final int a = 128;
+                Target(int a) {
+                    %s
+                }
+            }
+            """.formatted(body));
+    }
+
+    /**
+     * A constructor assigning the field on one branch only leaves it assigned
+     * nowhere on the other, so javac keeps the initializer and refuses the
+     * branch's write as a second assignment on that line. The field was taken
+     * for a lifted final and the report dropped, green over source javac
+     * rejects.
+     */
+    public void testAWriteToAFinalOnABranchOnly_keepsTheReport() {
+        configureFinalAssignedBy("if (a > 0) this.a = a;");
+        assertEquals("javac rejects the branch's write", List.of(6), finalAssignmentLines());
+    }
+
+    /** A loop's write is no assignment the lift counts, and javac rejects it. */
+    public void testAWriteToAFinalInALoop_keepsTheReport() {
+        configureFinalAssignedBy("for (int i = 0; i < a; i++) this.a = i;");
+        assertEquals("javac rejects the loop's write", List.of(6), finalAssignmentLines());
+    }
+
+    /** A write inside a {@code try} is not counted either. */
+    public void testAWriteToAFinalInATry_keepsTheReport() {
+        configureFinalAssignedBy("try { this.a = Integer.parseInt(\"\" + a); } catch (RuntimeException e) { }");
+        assertEquals("javac rejects the try's write", List.of(6), finalAssignmentLines());
+    }
+
+    /**
+     * Two branches that between them always assign the field are not counted,
+     * since only a statement of the body itself is, so javac refuses both
+     * writes and so does the editor.
+     */
+    public void testWritesToAFinalOnBothBranches_keepTheReport() {
+        configureFinalAssignedBy("if (a > 0) this.a = a;\n        else this.a = -a;");
+        assertEquals("javac rejects both writes", List.of(6, 7), finalAssignmentLines());
+    }
+
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------

@@ -17,6 +17,8 @@ import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 import static com.google.testing.compile.CompilationSubject.assertThat;
 import static org.junit.Assert.assertEquals;
@@ -824,6 +826,122 @@ public class BuilderConfigAttributesTest {
                 "}"));
         assertThat(c).failed();
         assertThat(c).hadErrorContaining(NONE_REJECTED);
+    }
+
+    /** The sentence both halves report where {@code builderConstructorAccess} reaches no constructor. */
+    private static String inertOn(String targetName) {
+        return "@ClassBuilder(builderConstructorAccess) has no effect on '" + targetName + "' - it applies "
+            + "only to the builder of a class or record outside a SuperBuilder chain, or of a constructor or "
+            + "factory target, never to a chain's builder or an interface's. Drop the attribute";
+    }
+
+    /** An abstract chain root below which a concrete link sits, the root carrying {@code attribute}. */
+    private static JavaFileObject[] chainWithRootAttribute(String attribute, String linkAttribute) {
+        return new JavaFileObject[]{
+            JavaFileObjects.forSourceLines("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false" + attribute + ")",
+                "public abstract class Shape {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.Circle",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false" + linkAttribute + ")",
+                "public class Circle extends Shape {",
+                "    private int radius;",
+                "    public int getRadius() { return radius; }",
+                "}")
+        };
+    }
+
+    /** The warnings a compilation raised about {@code builderConstructorAccess}. */
+    private static List<String> accessWarnings(Compilation c) {
+        List<String> out = new ArrayList<>();
+        for (var warning : c.warnings()) {
+            String message = warning.getMessage(null);
+            if (message.startsWith("@ClassBuilder(builderConstructorAccess)"))
+                out.add(warning.getSource().getName() + ":" + warning.getLineNumber() + " " + message);
+        }
+        return out;
+    }
+
+    /**
+     * A chain role's builder keeps javac's default constructor, so
+     * {@code builderConstructorAccess} written on an abstract root changes
+     * nothing, and says so on the annotation. It was accepted in silence.
+     */
+    @Test
+    public void builderConstructorAccess_onAnAbstractRootWithALink_isWarned() {
+        Compilation c = compile(chainWithRootAttribute(", builderConstructorAccess = AccessLevel.PRIVATE", ""));
+        assertThat(c).succeeded();
+        assertEquals(List.of("demo/Shape.java:4 " + inertOn("Shape")), accessWarnings(c));
+    }
+
+    /** A concrete link's builder is a chain role's too, and is warned the same way. */
+    @Test
+    public void builderConstructorAccess_onAConcreteLink_isWarned() {
+        Compilation c = compile(chainWithRootAttribute("", ", builderConstructorAccess = AccessLevel.PUBLIC"));
+        assertThat(c).succeeded();
+        assertEquals(List.of("demo/Circle.java:4 " + inertOn("Circle")), accessWarnings(c));
+    }
+
+    /**
+     * An interface target's sibling builder keeps its implicit constructor, so
+     * the attribute written there is warned on the annotation.
+     */
+    @Test
+    public void builderConstructorAccess_onAnInterface_isWarned() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Face",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(builderConstructorAccess = AccessLevel.PRIVATE)",
+                "public interface Face {",
+                "    String name();",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals(List.of("demo/Face.java:4 " + inertOn("Face")), accessWarnings(c));
+    }
+
+    /**
+     * The default written out requests nothing, on a chain role or an
+     * interface, and a class standing alone takes the attribute, so neither
+     * says anything.
+     */
+    @Test
+    public void builderConstructorAccess_atItsDefaultOrWhereItApplies_isNotWarned() {
+        Compilation chain = compile(chainWithRootAttribute(", builderConstructorAccess = AccessLevel.PACKAGE",
+            ", builderConstructorAccess = AccessLevel.PACKAGE"));
+        assertThat(chain).succeeded();
+        assertEquals(List.of(), accessWarnings(chain));
+        Compilation face = compile(
+            JavaFileObjects.forSourceLines("demo.Face",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(builderConstructorAccess = AccessLevel.PACKAGE)",
+                "public interface Face {",
+                "    String name();",
+                "}"));
+        assertThat(face).succeeded();
+        assertEquals(List.of(), accessWarnings(face));
+        Compilation alone = compile(
+            JavaFileObjects.forSourceLines("demo.Alone",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, builderConstructorAccess = AccessLevel.PRIVATE)",
+                "public class Alone {",
+                "    private String name;",
+                "}"));
+        assertThat(alone).succeeded();
+        assertEquals(List.of(), accessWarnings(alone));
     }
 
     /** The sentence both halves report for {@code access = NONE}. */

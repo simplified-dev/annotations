@@ -1200,7 +1200,7 @@ public final class ClassBuilderConstants {
      * @param parameter the parameter to read
      * @return the bounds, or {@code null} when none is written
      */
-    private static @Nullable String boundsText(@NotNull PsiTypeParameter parameter) {
+    public static @Nullable String boundsText(@NotNull PsiTypeParameter parameter) {
         PsiJavaCodeReferenceElement[] references = parameter.getExtendsList().getReferenceElements();
         if (references.length == 0) return null;
         List<String> out = new ArrayList<>(references.length);

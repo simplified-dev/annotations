@@ -1342,6 +1342,122 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
         assertEquals("the retype takes it: " + accessWarnings(), 0, accessWarnings().size());
     }
 
+    /** The apt suite's sentence where {@code builderConstructorAccess} reaches no constructor. */
+    private static String inertOn(String targetName) {
+        return "@ClassBuilder(builderConstructorAccess) has no effect on '" + targetName + "' - it applies "
+            + "only to the builder of a class or record outside a SuperBuilder chain, or of a constructor or "
+            + "factory target, never to a chain's builder or an interface's. Drop the attribute";
+    }
+
+    /** The one {@code builderConstructorAccess} warning, as its description and its highlighted text. */
+    private String theOnlyAccessWarning() {
+        List<HighlightInfo> warnings = accessWarnings();
+        assertEquals("one warning: " + warnings, 1, warnings.size());
+        HighlightInfo warning = warnings.get(0);
+        return warning.getDescription() + " @ " + myFixture.getEditor().getDocument().getText()
+            .substring(warning.getStartOffset(), warning.getEndOffset());
+    }
+
+    /**
+     * A chain role's builder keeps javac's default constructor, so the
+     * attribute written on an abstract root is warned on the written value, in
+     * the apt suite's sentence. Both halves were silent.
+     */
+    public void testBuilderConstructorAccessOnAnAbstractRoot_isWarnedOnTheAttribute() {
+        myFixture.addFileToProject("Circle.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Circle extends Shape {
+                private int radius;
+            }
+            """);
+        myFixture.configureByText("Shape.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builderConstructorAccess = AccessLevel.PRIVATE)
+            public abstract class Shape {
+                private String name;
+            }
+            """);
+        assertEquals(inertOn("Shape") + " @ AccessLevel.PRIVATE", theOnlyAccessWarning());
+    }
+
+    /** A concrete link's builder is a chain role's too. */
+    public void testBuilderConstructorAccessOnAConcreteLink_isWarnedOnTheAttribute() {
+        myFixture.addFileToProject("Shape.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Shape {
+                private String name;
+            }
+            """);
+        myFixture.configureByText("Circle.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builderConstructorAccess = AccessLevel.PUBLIC)
+            public class Circle extends Shape {
+                private int radius;
+            }
+            """);
+        assertEquals(inertOn("Circle") + " @ AccessLevel.PUBLIC", theOnlyAccessWarning());
+    }
+
+    /** An interface target's sibling builder keeps its implicit constructor. */
+    public void testBuilderConstructorAccessOnAnInterface_isWarnedOnTheAttribute() {
+        myFixture.configureByText("Face.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builderConstructorAccess = AccessLevel.PRIVATE)
+            public interface Face {
+                String name();
+            }
+            """);
+        assertEquals(inertOn("Face") + " @ AccessLevel.PRIVATE", theOnlyAccessWarning());
+    }
+
+    /**
+     * The default written out requests nothing on a chain role or an
+     * interface, and a class standing alone takes the attribute, so none of
+     * the three is warned.
+     */
+    public void testBuilderConstructorAccessAtItsDefaultOrWhereItApplies_isNotWarned() {
+        myFixture.configureByText("Shape.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builderConstructorAccess = AccessLevel.PACKAGE)
+            public abstract class Shape {
+                private String name;
+            }
+            """);
+        assertEquals("the default on a root: " + accessWarnings(), 0, accessWarnings().size());
+        myFixture.configureByText("Face.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builderConstructorAccess = AccessLevel.PACKAGE)
+            public interface Face {
+                String name();
+            }
+            """);
+        assertEquals("the default on an interface: " + accessWarnings(), 0, accessWarnings().size());
+        myFixture.configureByText("Alone.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builderConstructorAccess = AccessLevel.PRIVATE)
+            public class Alone {
+                private String name;
+            }
+            """);
+        assertEquals("where it applies: " + accessWarnings(), 0, accessWarnings().size());
+    }
+
     // ------------------------------------------------------------------
     // Reviewed reproductions: each shape was green here while javac failed on
     // a generated line, or red here over source javac compiles.

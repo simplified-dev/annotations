@@ -152,12 +152,15 @@ final class DeclaredBuilderMerge {
                 // always has one by now - the author's, or the default javac
                 // entered before this round - and a second no-arg form beside
                 // either is a duplicate. A retyped default already stands in
-                // for the generated one, so only the author's is reported.
+                // for the generated one, and javac's own default is not one
+                // the builder spells - the tree cleaner removes it before the
+                // next round - so only a constructor written on the builder,
+                // the author's or one an annotation on it appends, is reported.
                 if (method.name.contentEquals("<init>")) {
-                    if (!retyped) skipped.add(declared.name + "(" + (authorOwnsConstruction ? "..)" : ")"));
+                    if (!retyped && !constructorSignatures(declared).isEmpty()) skipped.add(declared.name + "(..)");
                     continue;
                 }
-                JCMethodDecl author = methods.get(key(method));
+                JCMethodDecl author = methods.get(key(declared, method));
                 if (author != null) {
                     skipped.add(signature(method));
                     SetterShape shape = ctx.setterShape(method);
@@ -427,7 +430,7 @@ final class DeclaredBuilderMerge {
                 String finalSlot = (field.mods.flags & Flags.FINAL) == 0
                     ? null
                     : DeclaredBuilderShape.finalSlot(declared.name.toString(), name,
-                        setters(members, name), slot.append, authorKeys);
+                        setters(declared, members, name), slot.append, authorKeys);
                 if (finalSlot != null) {
                     messager.printMessage(Diagnostic.Kind.ERROR, finalSlot, anchor);
                     continue;
@@ -467,7 +470,7 @@ final class DeclaredBuilderMerge {
         List<InheritedMethod> inherited = null;
         for (JCTree member : members) {
             if (!(member instanceof JCMethodDecl method) || ctx.setterSlot(method) == null) continue;
-            if (authorKeys.contains(key(method))) continue;
+            if (authorKeys.contains(key(declared, method))) continue;
             if (inherited == null) inherited = inheritedMethods(builder);
             String message = DeclaredBuilderShape.unoverridableInheritedMethod(declared.name.toString(),
                 method.name.toString(), parameterTypes(method), inherited);
@@ -607,7 +610,7 @@ final class DeclaredBuilderMerge {
         Map<String, JCMethodDecl> out = new HashMap<>();
         for (JCTree def : declared.defs) {
             if (def instanceof JCMethodDecl method && !method.name.contentEquals("<init>"))
-                out.putIfAbsent(key(method), method);
+                out.putIfAbsent(key(declared, method), method);
         }
         return out;
     }
@@ -616,15 +619,16 @@ final class DeclaredBuilderMerge {
      * The {@link DeclaredBuilderShape#methodKey} of each setter generated for a
      * slot, with its shape.
      *
+     * @param declared the builder the author wrote, whose type variables the keys erase
      * @param members the generated members being merged
      * @param slotName the slot's name
      * @return each key with its setter's shape, in emission order
      */
-    private Map<String, SetterShape> setters(List<JCTree> members, String slotName) {
+    private Map<String, SetterShape> setters(JCClassDecl declared, List<JCTree> members, String slotName) {
         Map<String, SetterShape> out = new LinkedHashMap<>();
         for (JCTree member : members) {
             if (member instanceof JCMethodDecl method && slotName.equals(ctx.setterSlot(method)))
-                out.put(key(method), ctx.setterShape(method));
+                out.put(key(declared, method), ctx.setterShape(method));
         }
         return out;
     }
@@ -715,8 +719,18 @@ final class DeclaredBuilderMerge {
     }
 
 
-    private static String key(JCMethodDecl method) {
-        return DeclaredBuilderShape.methodKey(method.name.toString(), parameterTypes(method));
+    /**
+     * The {@link DeclaredBuilderShape#methodKey} of a method the declared
+     * builder declares or has merged into it, a parameter typed by one of the
+     * builder's own type variables keyed by that variable's erasure.
+     *
+     * @param declared the builder the author wrote
+     * @param method the method to key
+     * @return its key
+     */
+    private static String key(JCClassDecl declared, JCMethodDecl method) {
+        return DeclaredBuilderShape.methodKey(method.name.toString(), parameterTypes(method),
+            DeclaredBuilderShape.typeVariableErasures(declaredParameterNames(declared), boundsOf(declared.typarams)));
     }
 
     /** Each parameter's type as the tree spells it, in order. */

@@ -1691,14 +1691,110 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
     }
 
     /**
-     * Any other supertype stays unmatched on both halves, so the editor
-     * withholds {@code builder(seed)} as javac skips it.
+     * A {@code String} seed reaches a constructor taking {@code CharSequence}, a
+     * supertype the seed match lists, and javac emits {@code builder(String)}.
+     * The editor withheld it, red over source that builds.
      */
-    public void testMergeOnAReferenceSeedWhoseBuilderTakesAnotherSupertype_offersNoEntryPoint() {
+    public void testMergeOnAStringSeedWhoseBuilderTakesCharSequence_offersTheEntryPoint() {
         configureSeededOrder("String", "Builder(CharSequence origin) { this.origin = origin.toString(); }",
             "\"web\"");
+        assertNoErrors();
+    }
+
+    /**
+     * A supertype the table does not list stays unmatched on both halves, so
+     * the editor withholds {@code builder(seed)} as javac skips it.
+     */
+    public void testMergeOnASeedWhoseBuilderTakesAnUnlistedSupertype_offersNoEntryPoint() {
+        myFixture.addFileToProject("Labelled.java", "public interface Labelled { }");
+        myFixture.addFileToProject("Code.java", "public class Code implements Labelled { }");
+        configureSeededOrder("Code", "Builder(Labelled origin) { this.origin = (Code) origin; }", "new Code()");
+        assertTrue("javac emits no builder(Code): " + errors(),
+            errors().contains("Cannot resolve method 'builder' in 'Order'"));
+    }
+
+    /** A {@code List<String>} seed reaches a constructor taking {@code Collection<String>}. */
+    public void testMergeOnAListSeedWhoseBuilderTakesACollectionOfTheSameArgument_offersTheEntryPoint() {
+        configureSeededOrder("java.util.List<String>",
+            "Builder(java.util.Collection<String> origin) { this.origin = new java.util.ArrayList<>(origin); }",
+            "java.util.List.of(\"a\")");
+        assertNoErrors();
+    }
+
+    /** The type-argument rule holds across the supertype, so {@code Collection<Integer>} is no match. */
+    public void testMergeOnAListSeedWhoseBuilderTakesACollectionOfAnotherArgument_offersNoEntryPoint() {
+        configureSeededOrder("java.util.List<String>",
+            "Builder(java.util.Collection<Integer> codes) { this.origin = new java.util.ArrayList<>(); }",
+            "java.util.List.of(\"a\")");
+        assertTrue("javac emits no builder(List<String>): " + errors(),
+            errors().contains("Cannot resolve method 'builder' in 'Order'"));
+    }
+
+    /** A box reaches {@code Number} and its own {@code Comparable}. */
+    public void testMergeOnASeedWhoseBuilderTakesNumberOrComparable_offersTheEntryPoint() {
+        configureSeededOrder("Integer", "Builder(java.lang.Number origin) { this.origin = origin.intValue(); }",
+            "3");
+        assertNoErrors();
+        configureSeededOrder("Integer", "Builder(Comparable<Integer> origin) { this.origin = (Integer) origin; }",
+            "3");
+        assertNoErrors();
+    }
+
+    /** Two listed supertypes neither of which is more specific leave javac no single constructor. */
+    public void testMergeOnASeedTwoListedSupertypesTakeAmbiguously_offersNoEntryPoint() {
+        configureSeededOrder("String", "Builder(CharSequence origin) { this.origin = \"chars\"; } "
+            + "Builder(Comparable<String> origin) { this.origin = \"comparable\"; }", "\"web\"");
         assertTrue("javac emits no builder(String): " + errors(),
             errors().contains("Cannot resolve method 'builder' in 'Order'"));
+    }
+
+    // ------------------------------------------------------------------
+    // An author method taking a type variable's erasure
+    // ------------------------------------------------------------------
+
+    /**
+     * A generic {@code Box} whose declared builder re-declares {@code bounded}
+     * and spells {@code value(erasure)}, entered with {@code witness}.
+     */
+    private PsiClass configureBoxWithAuthorValue(String bounded, String erasure, String witness,
+                                                 String argument) {
+        PsiFile file = myFixture.configureByText("Box.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Box<%1$s> {
+                private T value;
+                public T getValue() { return value; }
+                public static class Builder<%1$s> {
+                    @SuppressWarnings("unchecked")
+                    public Builder<T> value(%2$s v) { this.value = (T) v; return this; }
+                }
+                static Object go() {
+                    Box<%3$s> b = Box.<%3$s>builder().value(%4$s).build();
+                    return Box.from(b).build().getValue() + "/" + b.mutate().build().getValue();
+                }
+            }
+            """.formatted(bounded, erasure, witness, argument));
+        return ((PsiJavaFile) file).getClasses()[0];
+    }
+
+    /**
+     * The author's {@code value(Object)} has the erasure of the generated
+     * {@code value(T)}, so javac appends no setter beside it. The editor
+     * contributed one, and the platform reported the two as a clash on the
+     * author's method.
+     */
+    public void testMergeOnAnAuthorMethodTakingAnUnboundedTypeVariablesErasure_coversTheSetter() {
+        PsiClass box = configureBoxWithAuthorValue("T", "Object", "String", "\"x\"");
+        assertNoErrors();
+        assertEquals("only the author's value", 1, count(methodNamesOf(nestedOf(box, "Builder")), "value"));
+    }
+
+    /** A bounded type variable is keyed by its first bound. */
+    public void testMergeOnAnAuthorMethodTakingABoundedTypeVariablesErasure_coversTheSetter() {
+        PsiClass box = configureBoxWithAuthorValue("T extends Number", "Number", "Integer", "1");
+        assertNoErrors();
+        assertEquals("only the author's value", 1, count(methodNamesOf(nestedOf(box, "Builder")), "value"));
     }
 
     /**

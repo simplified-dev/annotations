@@ -134,7 +134,14 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   read by name: where one assigns the field nowhere and delegates to no `this(..)`, the initializer
   stays, the generated setter for it has no effect on that constructor, and a second constructor
   that does assign the field is reported as writing a final that already has a value, in javac and
-  the editor alike.
+  the editor alike. Only a statement of the constructor's body itself counts as assigning the field:
+  a write inside an `if` or `else`, a `switch`, a loop, a `try`, `catch` or `finally`, a lambda or a
+  nested class may not run, or may run more than once, so a constructor whose only write to the
+  field sits there keeps the initializer, and javac's `cannot assign a value to final variable` on
+  that write is shown by the editor on the same line. Such a constructor used to be lifted, failing
+  with `variable ... might not have been initialized` while the editor showed nothing. The rule
+  reads no flow, so an `if` and an `else` that between them always assign the field are refused the
+  same way, where they compiled before - assign the field in one statement of the body instead.
 
 - **A merged builder's slot fields resolve in the editor.** The merge appends them and the editor
   contributed none, so an author's own verb inside that class referencing a slot was red over source
@@ -323,6 +330,23 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   `incompatible types` on a generated line. An author accessor is used only where it returns a type
   the field's setter accepts; otherwise the field is read directly.
 
+- **An author method taking a type variable's erasure stands in for the generated setter.** The
+  merge keyed a parameter typed by one of the declared builder's own type variables by the
+  variable's name, so beside `Builder<T>` an author `value(Object)` and the generated `value(T)`
+  were both kept and javac refused them as a `name clash ... have the same erasure` on the target's
+  line, while the editor reported the clash on the author's method. The variable is keyed by its
+  erasure - its first bound, `Object` unbounded - on both halves, so the author's method is the
+  setter, and `from(T)` and `mutate()` call it; a chain root's own type variables are read the
+  same way.
+
+- **Two notes name what they mean and sit where the author acts.** The merge's note listing what a
+  declared builder already spells named `Builder()` beside a constructor an `@AllArgsConstructor`
+  on it appends - javac's default, which never reaches the built class - and now names the
+  appended constructor as `Builder(..)`. The note for an entry point skipped because the target
+  already declares one of its name and arity was printed on the enclosing type on a constructor or
+  factory target, and is printed on the annotated member there, as the path's other diagnostics
+  are.
+
 ### Changed
 
 - **BREAKING: `mergeDeclaredBuilder` is removed, and a declared builder is always merged into.** A
@@ -437,8 +461,15 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   parameterisation of a seed's generic type, `List<Integer>` for a `List<String>` seed, never being
   its own and never reaching it; otherwise one
   reaching each seed as its box or primitive, a wider primitive (JLS 5.1.2) or, for a reference
-  seed, `Object`, selected as javac selects - no boxing before boxing, then the most specific. A
-  constructor reached only through another supertype is not counted, nor is one of two javac could
+  seed, `Object` or a common JDK supertype of its type, selected as javac selects - no boxing before
+  boxing, then the most specific. The supertypes are listed by name, simply or in their own package:
+  `CharSequence` over `String`, `StringBuilder` and `StringBuffer`; `Number` over the boxed numeric
+  types, `BigInteger`, `BigDecimal`, `AtomicInteger` and `AtomicLong`; `Comparable` over `String`,
+  the boxes, `BigInteger`, `BigDecimal` and the common `java.time` types; and the `java.util`
+  collection interfaces over their usual implementations, `Collection` and `Iterable` over every
+  listed collection. A seed's type arguments are carried across, so `List<String>` reaches
+  `Collection<String>` and never `Collection<Integer>`. A constructor reached only through any other
+  supertype is not counted, nor is one of two javac could
   not choose between, nor any where a constructor names cannot place might be chosen first; the
   entry point is skipped with a note saying what is counted, and where the selected constructor
   declares a throws clause the throws note is printed instead. An author's own `builder`
@@ -474,6 +505,14 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   nothing. Both halves warn on the attribute on a class or record target and on a constructor or
   factory target:
   `@ClassBuilder(builderConstructorAccess) has no effect - the declared 'Builder' declares its own constructor, which keeps the access it is written with. Write the access on that constructor, or drop the attribute`.
+
+- **A warning where `builderConstructorAccess` is written on a chain role or an interface.** A
+  SuperBuilder chain role's builder, generated or declared, keeps javac's default constructor at the
+  builder class's access, and an interface target's sibling builder keeps its implicit one, so the
+  attribute reaches neither; a value other than the default written there was accepted in silence on
+  both halves. Both now warn on the attribute, the default written out and `NONE` (an error of its
+  own) excepted:
+  `@ClassBuilder(builderConstructorAccess) has no effect on 'Shape' - it applies only to the builder of a class or record outside a SuperBuilder chain, or of a constructor or factory target, never to a chain's builder or an interface's. Drop the attribute`.
 
 - **A weak warning where the entry points are skipped beside a declared builder.** `builder()`,
   `from(T)` and `mutate()` leave completion when the declared builder has no constructor they can

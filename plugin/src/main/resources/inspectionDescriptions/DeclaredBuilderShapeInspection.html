@@ -144,7 +144,9 @@ On a class or record target and on a constructor or static factory target, a
 declared builder declares a constructor of its own is reported as a warning on
 that attribute: the author's constructor keeps the access it is written with.
 Where the declared builder declares no constructor, its implicit default takes
-the attribute's access instead.
+the attribute's access instead. On a SuperBuilder chain role or an interface
+target the attribute reaches no builder at all, and a value other than the
+default written there is reported as a warning on the attribute too.
 </p>
 
 <p>

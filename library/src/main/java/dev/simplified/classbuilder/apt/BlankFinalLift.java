@@ -18,6 +18,15 @@ import java.util.Set;
  * the author's own line. A constructor calling {@code this(..)} leaves its
  * fields to the constructor it delegates to and has no say.
  *
+ * <p>A constructor assigns a field only through a statement of its body
+ * itself - an assignment standing alone, or a chain of them. A write inside an
+ * {@code if} or {@code else}, a {@code switch}, a loop, a {@code try},
+ * {@code catch} or {@code finally}, a lambda or a nested class may run once,
+ * never or many times, which no reading of names can tell apart, so it is not
+ * counted: the field keeps its initializer, and javac refuses the nested write
+ * as a second assignment on the author's line, where the editor reports it
+ * too. That holds for branches that between them always assign the field.
+ *
  * <p>Answered from names alone, so both halves reach the same verdict: the
  * processor summarises each constructor off the javac tree, the editor off
  * PSI it does not resolve, and neither re-derives the rule.
@@ -31,7 +40,7 @@ public final class BlankFinalLift {
      * What one author-written constructor writes, read off its body by name.
      *
      * @param delegates whether one of the body's statements is a {@code this(..)} call
-     * @param assigned the field names the body assigns
+     * @param assigned the field names the body's own statements assign
      */
     public record Writes(boolean delegates, Set<String> assigned) {
 
@@ -41,12 +50,14 @@ public final class BlankFinalLift {
          * <p>A write through {@code this.name} always names the field. A bare
          * {@code name = ..} names it only where the body declares no parameter
          * or local of that name, since such a write assigns the variable
-         * instead. A nested class's body is not read by either half.
+         * instead. Both halves read the writes of the body's own statements
+         * alone, and the names it declares at any depth but a nested class's
+         * body.
          *
          * @param delegates whether one of the body's statements is a {@code this(..)} call
          * @param declared the parameter and local variable names the constructor declares
-         * @param thisWrites the names assigned through an unqualified {@code this}
-         * @param bareWrites the simple names assigned without a qualifier
+         * @param thisWrites the names a statement of the body assigns through an unqualified {@code this}
+         * @param bareWrites the simple names a statement of the body assigns without a qualifier
          * @return the summary
          */
         public static Writes of(boolean delegates, Collection<String> declared,
