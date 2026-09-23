@@ -12,6 +12,7 @@ import com.sun.tools.javac.tree.TreeMaker;
 import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
+import dev.simplified.classbuilder.apt.ChainBuilderReach;
 import dev.simplified.classbuilder.apt.ChainMemberIndex;
 import dev.simplified.classbuilder.apt.ChainRole;
 import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
@@ -22,6 +23,7 @@ import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.JavacTypeFactory;
 
 import javax.annotation.processing.Messager;
+import javax.lang.model.util.Elements;
 import javax.tools.Diagnostic;
 import java.util.Collection;
 
@@ -105,6 +107,17 @@ final class SuperBuilderMutator {
                 DeclaredBuilderShape.ancestorDeclaresItsOwnBuilder(ctx.targetSimpleName(),
                     annotatedSuper.simpleName()),
                 ctx.targetElement());
+            return;
+        }
+
+        // The same clause has to name the ancestor's builder from the link's
+        // package, and the constructor javac gives the link's builder calls the
+        // ancestor's no-argument one through its implicit super(). A builder
+        // the ancestor's author wrote out of either's reach fails on a generated
+        // line, so the link is refused on its own annotation instead.
+        String unreachable = annotatedSuper == null ? null : ancestorBuilderUnreachable();
+        if (unreachable != null) {
+            messager.printMessage(Diagnostic.Kind.ERROR, unreachable, ctx.targetElement());
             return;
         }
 
@@ -294,8 +307,12 @@ final class SuperBuilderMutator {
             for (JCMethodDecl s : fm.setters(f)) defs.append(s);
         }
 
-        // @Override protected Builder self() { return this; }
-        defs.append(concreteMethod(Flags.PROTECTED, "self", ctx.builderType(),
+        // @Override protected Builder self() { return this; } - public where an
+        // ancestor's author made the one it overrides public.
+        long selfAccess = ChainBuilderReach.linkSelfPublic(nearestAuthoredSelfPublic())
+            ? Flags.PUBLIC
+            : Flags.PROTECTED;
+        defs.append(concreteMethod(selfAccess, ChainBuilderReach.SELF, ctx.builderType(),
             List.nil(), List.of(make.Return(make.Ident(names._this))),
             contracts.thisReturnNullary()));
 
@@ -442,11 +459,62 @@ final class SuperBuilderMutator {
     }
 
     /**
+     * Renders why the link's builder cannot extend the builder its ancestor's
+     * author declared, as {@link ChainBuilderReach#unreachable} decides it.
+     *
+     * <p>Read through the two-view index, so an ancestor in this round is asked
+     * of its tree and one compiled earlier of its class file. A builder that is
+     * absent - generated, or not generated yet - is the generator's, in a shape
+     * every link can reach.
+     *
+     * @return the error, or null when the link can extend it
+     */
+    private String ancestorBuilderUnreachable() {
+        ChainMemberIndex ancestor = ChainMemberIndex.of(ctx.bridge(), annotatedSuper.element(),
+            ctx.builderName(), annotatedSuper.role());
+        Elements elements = ctx.bridge().processingEnvironment().getElementUtils();
+        boolean samePackage = elements.getPackageOf(ctx.targetElement())
+            .equals(elements.getPackageOf(annotatedSuper.element()));
+        ChainBuilderReach.Unreachable reason = ancestor.unreachable(samePackage);
+        return reason == null
+            ? null
+            : ChainBuilderReach.unreachableAncestorBuilder(reason, ctx.targetSimpleName(),
+                annotatedSuper.simpleName(), ctx.builderName());
+    }
+
+    /**
+     * Whether the nearest {@code self()} an ancestor's author wrote is public,
+     * walking the annotated ancestors upward from the direct one.
+     *
+     * <p>A builder the generator writes, or one whose author wrote no
+     * {@code self()}, says nothing and the walk goes on to the ancestor's own
+     * annotated superclass, so a leaf below a generated chained abstract reads
+     * its root's.
+     *
+     * @return whether it is public, or null when no ancestor's author wrote one
+     */
+    private Boolean nearestAuthoredSelfPublic() {
+        for (AnnotatedSuper ancestor = annotatedSuper; ancestor != null;
+             ancestor = BuilderMutator.findAnnotatedDirectSuper(ancestor.element())) {
+            Boolean selfPublic = ChainMemberIndex.of(ctx.bridge(), ancestor.element(), ctx.builderName(),
+                ancestor.role()).authoredSelfPublic();
+            if (selfPublic != null) return selfPublic;
+        }
+        return null;
+    }
+
+    /**
      * Builds the {@code extends Super.Builder<...>} clause. The leading
      * arguments are whatever the target passes to its superclass
      * ({@code String} for {@code class StringBox extends Box<String>}), followed
      * by the two self-type arguments - bound to the concrete types on a concrete
      * link, and forwarded as this builder's own parameters on a chained abstract.
+     *
+     * <p>The ancestor's builder is spelled by its canonical name - package,
+     * enclosing classes, ancestor, builder - since the clause lands in the
+     * link's file, which may name the ancestor fully qualified, or through a
+     * class it nests in, and import nothing a shorter spelling would resolve
+     * through.
      *
      * @param selfArgs the two trailing self-type arguments
      * @return the parameterised supertype expression
@@ -455,13 +523,8 @@ final class SuperBuilderMutator {
         ListBuffer<JCExpression> args = new ListBuffer<>();
         for (String arg : annotatedSuper.typeArguments()) args.append(ctx.types().parseType(arg));
         args.appendList(selfArgs);
-        return make.TypeApply(
-            make.Select(
-                make.Ident(names.fromString(annotatedSuper.simpleName())),
-                names.fromString(ctx.builderName())
-            ),
-            args.toList()
-        );
+        String canonical = annotatedSuper.element().getQualifiedName() + "." + ctx.builderName();
+        return make.TypeApply(ctx.types().parseType(canonical), args.toList());
     }
 
     private JCExpression identType(String simpleName) {

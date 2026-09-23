@@ -236,7 +236,9 @@ public final class DeclaredBuilderShape {
             expectedBuildReturnType(role, targetName, pair.get(0)),
             expectedSuperTypeArguments(role, superArguments, targetName, builderName, pair),
             acceptedBuildReturnTypes(role, targetName, pair.get(0)),
-            targetTypeParameterBounds);
+            targetTypeParameterBounds,
+            targetName,
+            builderName);
     }
 
     /**
@@ -316,7 +318,7 @@ public final class DeclaredBuilderShape {
             return DeclaredBuilderRejection.TYPE_PARAMETERS;
         }
         if (!targetBoundsKept(facts, expectation)) return DeclaredBuilderRejection.TYPE_PARAMETER_BOUNDS;
-        if (role.isSelfTyped() && !selfTypeBoundsWritten(facts, expectation)) {
+        if (role.isSelfTyped() && !selfTypeBoundsKept(facts, expectation)) {
             return DeclaredBuilderRejection.SELF_TYPE_BOUNDS;
         }
         String expectedSuper = expectation.superType();
@@ -1749,29 +1751,53 @@ public final class DeclaredBuilderShape {
     }
 
     /**
-     * Whether the trailing pair carries any bound at all.
+     * Whether the trailing pair is bounded as a self-typed builder's has to be.
      *
-     * <p>Presence rather than shape: the bound a self-typed pair needs is
-     * spelled in the author's own parameter names and mentions the builder they
-     * are declared on, so matching it textually would be matching a rendering
-     * rather than a requirement. An unbounded pair is the one shape that cannot
-     * work whatever the spelling - a setter returning it would return something
-     * with no members - and it is what this catches.
+     * <p>Every link below the declaration binds the pair to itself and its own
+     * builder, so the first parameter needs a bound the link is within and the
+     * second one the link's builder is within. Both are read as written, by name,
+     * since neither half can resolve them: the first has to carry a bound whose
+     * erasure is the target's simple name, however qualified and whatever type
+     * arguments a generic target is written with, and the second one whose
+     * erasure is the builder's simple name and whose type arguments end with the
+     * pair's own two names, in order - a generic root's own parameters leading
+     * them. An unbounded parameter carries neither. Where the expectation names
+     * neither the target nor the builder the bounds are asked for their presence
+     * only.
      *
      * @param facts the declared builder as written
      * @param expectation what the role requires
-     * @return whether both trailing parameters are bounded
+     * @return whether the trailing pair carries the bounds a link below it needs
      */
-    private static boolean selfTypeBoundsWritten(DeclaredBuilderFacts facts,
-                                                 RoleExpectation expectation) {
-        int trailing = expectation.typeParameterNames().size() - 2;
+    private static boolean selfTypeBoundsKept(DeclaredBuilderFacts facts, RoleExpectation expectation) {
+        int size = expectation.typeParameterNames().size();
         List<@Nullable String> bounds = facts.typeParameterBounds();
-        if (trailing < 0 || bounds.size() < expectation.typeParameterNames().size()) return false;
-        for (int i = trailing; i < bounds.size(); i++) {
-            String bound = bounds.get(i);
-            if (bound == null || bound.isEmpty()) return false;
-        }
-        return true;
+        if (size < 2 || bounds.size() < size || facts.typeParameterNames().size() < size) return false;
+        List<String> builtBounds = boundList(bounds.get(size - 2));
+        List<String> builderBounds = boundList(bounds.get(size - 1));
+        if (builtBounds.isEmpty() || builderBounds.isEmpty()) return false;
+        String targetName = expectation.targetName();
+        String builderName = expectation.builderName();
+        if (targetName == null || builderName == null) return true;
+        List<String> pair = facts.typeParameterNames().subList(size - 2, size);
+        return builtBounds.stream().anyMatch(bound -> erasedName(bound).equals(targetName))
+            && builderBounds.stream().anyMatch(bound -> appliesToPair(bound, builderName, pair));
+    }
+
+    /**
+     * Whether a bound names the builder applied to arguments ending with the
+     * pair, in order.
+     *
+     * @param bound the bound, in the spelling {@link #typeText} gives it
+     * @param builderName the builder's simple name
+     * @param pair the pair's two names, the built type's first
+     * @return whether the bound is the builder applied to the pair
+     */
+    private static boolean appliesToPair(String bound, String builderName, List<String> pair) {
+        if (!erasedName(bound).equals(builderName) || bound.indexOf('<') < 0) return false;
+        List<String> arguments = typeArguments(bound);
+        int count = arguments.size();
+        return count >= 2 && arguments.subList(count - 2, count).equals(pair);
     }
 
 }

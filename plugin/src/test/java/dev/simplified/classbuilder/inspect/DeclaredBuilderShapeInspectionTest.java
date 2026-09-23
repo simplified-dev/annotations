@@ -1182,7 +1182,7 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
             @ClassBuilder
             abstract class Other {
                 private String note;
-                public abstract static class Builder<T extends Object, B extends Builder<T, B>> { }
+                public abstract static class Builder<T extends Other, B extends Builder<T, B>> { }
             }
             """);
         assertTrue("the shared wording: " + errors(),

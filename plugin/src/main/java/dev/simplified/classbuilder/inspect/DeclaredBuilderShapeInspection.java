@@ -17,7 +17,6 @@ import dev.simplified.annotations.NamingStyle;
 import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
 import dev.simplified.classbuilder.apt.BuilderScheme;
 import dev.simplified.classbuilder.apt.ChainRole;
-import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.editor.BuilderSite;
 import dev.simplified.classbuilder.editor.MergedSlotStorage;
 import org.jetbrains.annotations.NotNull;
@@ -59,6 +58,14 @@ import java.util.Objects;
  * - a {@code final} one, or one returning a type the builder cannot stand in for
  * - is reported on the builder's name, the supertypes resolved here as the
  * processor reads them from the element model.
+ *
+ * <p>On an abstract root or a chained abstract, a declared builder the builders
+ * generated below it cannot extend - a private one, or one declaring
+ * constructors none of which takes no parameters - or whose {@code self()} they
+ * cannot override because it is {@code final}, is reported on the builder's
+ * name in the processor's sentence. A link whose annotated ancestor's builder
+ * is out of its reach is reported on its annotation, as is a link whose
+ * ancestor's builder cannot take the extends clause.
  *
  * <p>On a class or record target and on a constructor or factory target, a
  * {@code builderConstructorAccess} written on the annotation while the declared
@@ -108,14 +115,12 @@ public class DeclaredBuilderShapeInspection extends LocalInspectionTool {
 
                 // The ancestor case is reported on the annotation rather than on
                 // a declaration, the offending class being one the author did
-                // not write and may not own.
-                PsiClass blocking = ClassBuilderConstants.ancestorBlockingGeneration(target,
+                // not write and may not own - a link without a declared builder
+                // of its own included.
+                ClassBuilderConstants.AncestorBlock blocking = ClassBuilderConstants.ancestorBlock(target,
                     names.type(), executable);
-                if (blocking != null && blocking.getName() != null) {
-                    holder.registerProblem(annotation,
-                        DeclaredBuilderShape.ancestorDeclaresItsOwnBuilder(target.getName(),
-                            blocking.getName()),
-                        ProblemHighlightType.GENERIC_ERROR);
+                if (blocking != null) {
+                    holder.registerProblem(annotation, blocking.message(), ProblemHighlightType.GENERIC_ERROR);
                     return;
                 }
 
@@ -137,9 +142,20 @@ public class DeclaredBuilderShapeInspection extends LocalInspectionTool {
                     return;
                 }
 
+                // A self-typed role's builder is extended by every link below it,
+                // which the processor judges once the shape is accepted and
+                // reports on the builder, merging on.
+                ChainRole role = executable ? ChainRole.STANDALONE : ClassBuilderConstants.chainRoleOf(target);
+                if (role.isSelfTyped()) {
+                    PsiElement builderName = declared.getNameIdentifier();
+                    for (String message : ClassBuilderConstants.unextendableBuilder(target, declared)) {
+                        holder.registerProblem(builderName == null ? declared : builderName, message,
+                            ProblemHighlightType.GENERIC_ERROR);
+                    }
+                }
+
                 // The author's constructor keeps its own access, so the attribute
                 // written beside it changes nothing on the roles it reaches.
-                ChainRole role = executable ? ChainRole.STANDALONE : ClassBuilderConstants.chainRoleOf(target);
                 PsiAnnotationMemberValue access =
                     annotation.findDeclaredAttributeValue(BuilderConstructorAccess.ATTRIBUTE);
                 if (access != null && BuilderConstructorAccess.appliesTo(role)

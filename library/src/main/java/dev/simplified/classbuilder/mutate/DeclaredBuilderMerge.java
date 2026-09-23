@@ -10,6 +10,7 @@ import com.sun.tools.javac.tree.JCTree.JCVariableDecl;
 import com.sun.tools.javac.tree.JCTree;
 import dev.simplified.annotations.ClassBuilder;
 import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
+import dev.simplified.classbuilder.apt.ChainBuilderReach;
 import dev.simplified.classbuilder.apt.ChainRole;
 import dev.simplified.classbuilder.apt.DeclaredBuildMethod;
 import dev.simplified.classbuilder.apt.DeclaredBuilderFacts;
@@ -128,6 +129,7 @@ final class DeclaredBuilderMerge {
     boolean merge(JCClassDecl target, Element anchor, JCClassDecl declared, ChainRole role,
                   List<JCTree> members, @Nullable AnnotatedSuper annotatedSuper) {
         if (!rejectUnusableShape(anchor, declared, role, annotatedSuper)) return false;
+        if (role.isSelfTyped()) rejectUnextendable(anchor, declared);
         Map<String, JCMethodDecl> methods = declaredMethodKeys(declared);
         rejectMistypedSlots(anchor, declared, members, methods.keySet());
         rejectUnoverridableInheritedMethods(declared, members, methods.keySet());
@@ -205,6 +207,57 @@ final class DeclaredBuilderMerge {
                 ctx.targetSimpleName(), ctx.config().builderMethodName(), facts, expectation),
             anchor);
         return false;
+    }
+
+    /**
+     * Reports a builder declared on a self-typed role that the builders
+     * generated below it cannot extend or override into.
+     *
+     * <p>The decisions and their wording are
+     * {@link ChainBuilderReach#unextendableBuilder} and
+     * {@link ChainBuilderReach#finalSelf}, which the editor's inspection asks of
+     * the same facts read out of PSI. Reported on the declared builder, where
+     * the author acts; the merge continues, since the builder itself is sound
+     * and only a link below it is not, and each link is refused on its own
+     * annotation.
+     *
+     * @param anchor the element the annotation is written on, reported against when the builder has no symbol
+     * @param declared the builder the author wrote
+     */
+    private void rejectUnextendable(Element anchor, JCClassDecl declared) {
+        Element builder = declared.sym == null ? anchor : declared.sym;
+        String declaredName = declared.name.toString();
+        String unextendable = ChainBuilderReach.unextendableBuilder(declaredName, ctx.targetSimpleName(),
+            (declared.mods.flags & Flags.PRIVATE) != 0, constructorSignatures(declared));
+        if (unextendable != null) messager.printMessage(Diagnostic.Kind.ERROR, unextendable, builder);
+        boolean selfFinal = false;
+        for (JCTree def : declared.defs) {
+            if (def instanceof JCMethodDecl method && method.name.contentEquals(ChainBuilderReach.SELF)
+                && method.params.isEmpty() && !AstMarkers.isGenerated(method)) {
+                selfFinal = (method.mods.flags & Flags.FINAL) != 0;
+            }
+        }
+        String finalSelf = ChainBuilderReach.finalSelf(declaredName, ctx.targetSimpleName(), selfFinal);
+        if (finalSelf != null) messager.printMessage(Diagnostic.Kind.ERROR, finalSelf, builder);
+    }
+
+    /**
+     * The parameter types of each constructor the declared builder declares, as
+     * written - the author's, and each one a constructor annotation written on
+     * it appended in the pass before this one - leaving out the default javac
+     * entered for a class declaring none.
+     *
+     * @param declared the builder the author wrote
+     * @return each constructor's parameter types, in declaration order
+     */
+    private static List<List<String>> constructorSignatures(JCClassDecl declared) {
+        List<List<String>> out = new ArrayList<>();
+        for (JCTree def : declared.defs) {
+            if (!(def instanceof JCMethodDecl method) || !method.name.contentEquals("<init>")) continue;
+            if ((method.mods.flags & Flags.GENERATEDCONSTR) != 0) continue;
+            out.add(parameterTypes(method));
+        }
+        return out;
     }
 
     /**

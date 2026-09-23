@@ -4,6 +4,7 @@ import com.sun.tools.javac.code.Flags;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import com.sun.tools.javac.tree.JCTree.JCMethodDecl;
 import com.sun.tools.javac.tree.JCTree;
+import dev.simplified.annotations.AccessLevel;
 import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.JavacBridge;
 import org.jetbrains.annotations.NotNull;
@@ -44,12 +45,22 @@ public final class ChainMemberIndex {
     private final boolean builderPresent;
     private final int builderTypeParameters;
     private final Set<String> authoredNoArgMethods;
+    private final AccessLevel builderAccess;
+    private final boolean declaresConstructors;
+    private final @Nullable AccessLevel noArgumentConstructorAccess;
+    private final @Nullable Boolean authoredSelfPublic;
 
-    private ChainMemberIndex(boolean builderPresent, int builderTypeParameters,
-                             Set<String> authoredNoArgMethods) {
+    private ChainMemberIndex(boolean builderPresent, int builderTypeParameters, Set<String> authoredNoArgMethods,
+                             AccessLevel builderAccess, boolean declaresConstructors,
+                             @Nullable AccessLevel noArgumentConstructorAccess,
+                             @Nullable Boolean authoredSelfPublic) {
         this.builderPresent = builderPresent;
         this.builderTypeParameters = builderTypeParameters;
         this.authoredNoArgMethods = authoredNoArgMethods;
+        this.builderAccess = builderAccess;
+        this.declaresConstructors = declaresConstructors;
+        this.noArgumentConstructorAccess = noArgumentConstructorAccess;
+        this.authoredSelfPublic = authoredSelfPublic;
     }
 
     /**
@@ -90,17 +101,32 @@ public final class ChainMemberIndex {
             // for a class they never wrote.
             if (AstMarkers.isGenerated(nested)) return absent();
             Set<String> authored = new HashSet<>();
+            boolean declaresConstructors = false;
+            AccessLevel noArgumentConstructor = null;
+            Boolean selfPublic = null;
             for (JCTree member : nested.defs) {
-                if (!(member instanceof JCMethodDecl method) || !method.params.isEmpty()) continue;
+                if (!(member instanceof JCMethodDecl method)) continue;
+                // javac's default is in the tree before the round, flagged as
+                // its own; a class declaring nothing else reads as declaring
+                // nothing, which is what the element view's default also says.
+                if (method.name.contentEquals("<init>")) {
+                    if ((method.mods.flags & Flags.GENERATEDCONSTR) != 0) continue;
+                    declaresConstructors = true;
+                    if (method.params.isEmpty()) noArgumentConstructor = accessOf(method.mods.flags);
+                    continue;
+                }
+                if (!method.params.isEmpty()) continue;
                 if (AstMarkers.isGenerated(member)) continue;
                 if (!recordsConcreteMatches(ancestorRole)
                     && !isAbstract(method)) {
                     continue;
                 }
                 authored.add(method.name.toString());
+                if (method.name.contentEquals(ChainBuilderReach.SELF))
+                    selfPublic = (method.mods.flags & Flags.PUBLIC) != 0;
             }
             return new ChainMemberIndex(true, nested.typarams == null ? 0 : nested.typarams.size(),
-                authored);
+                authored, accessOf(nested.mods.flags), declaresConstructors, noArgumentConstructor, selfPublic);
         }
         return absent();
     }
@@ -125,7 +151,19 @@ public final class ChainMemberIndex {
             // tell apart, and it reads as the author's.
             if (carriesGeneratedAnnotation(nested)) return absent();
             Set<String> authored = new HashSet<>();
+            boolean declaresConstructors = false;
+            AccessLevel noArgumentConstructor = null;
+            Boolean selfPublic = null;
             for (Element member : nested.getEnclosedElements()) {
+                // A class file carries javac's default like any other
+                // constructor, at the class's own access, so it is read as
+                // one - the answer the tree view gives by reading the class's.
+                if (member.getKind() == ElementKind.CONSTRUCTOR) {
+                    declaresConstructors = true;
+                    if (((ExecutableElement) member).getParameters().isEmpty())
+                        noArgumentConstructor = accessOf(member.getModifiers());
+                    continue;
+                }
                 if (member.getKind() != ElementKind.METHOD) continue;
                 ExecutableElement method = (ExecutableElement) member;
                 if (!method.getParameters().isEmpty()) continue;
@@ -136,8 +174,11 @@ public final class ChainMemberIndex {
                 boolean methodAbstract = method.getModifiers().contains(Modifier.ABSTRACT);
                 if (!recordsConcreteMatches(ancestorRole) && !methodAbstract) continue;
                 authored.add(method.getSimpleName().toString());
+                if (method.getSimpleName().contentEquals(ChainBuilderReach.SELF))
+                    selfPublic = method.getModifiers().contains(Modifier.PUBLIC);
             }
-            return new ChainMemberIndex(true, nested.getTypeParameters().size(), authored);
+            return new ChainMemberIndex(true, nested.getTypeParameters().size(), authored,
+                accessOf(nested.getModifiers()), declaresConstructors, noArgumentConstructor, selfPublic);
         }
         return absent();
     }
@@ -179,8 +220,20 @@ public final class ChainMemberIndex {
         return (method.mods.flags & Flags.ABSTRACT) != 0;
     }
 
+    /** The access a tree node's modifier flags give it. */
+    private static AccessLevel accessOf(long flags) {
+        return ChainBuilderReach.accessOf((flags & Flags.PUBLIC) != 0, (flags & Flags.PROTECTED) != 0,
+            (flags & Flags.PRIVATE) != 0);
+    }
+
+    /** The access an element's modifiers give it. */
+    private static AccessLevel accessOf(Set<Modifier> modifiers) {
+        return ChainBuilderReach.accessOf(modifiers.contains(Modifier.PUBLIC),
+            modifiers.contains(Modifier.PROTECTED), modifiers.contains(Modifier.PRIVATE));
+    }
+
     private static ChainMemberIndex absent() {
-        return new ChainMemberIndex(false, 0, Set.of());
+        return new ChainMemberIndex(false, 0, Set.of(), AccessLevel.PUBLIC, false, null, null);
     }
 
     /**
@@ -208,6 +261,28 @@ public final class ChainMemberIndex {
      */
     public boolean suppliesNoArg(@Nullable String name) {
         return name != null && authoredNoArgMethods.contains(name);
+    }
+
+    /**
+     * Whether the {@code self()} the ancestor's builder's author wrote is public.
+     *
+     * @return whether it is public, or null when the author wrote none or the builder is absent
+     */
+    public @Nullable Boolean authoredSelfPublic() {
+        return authoredSelfPublic;
+    }
+
+    /**
+     * Decides, through {@link ChainBuilderReach#unreachable}, whether a link's
+     * generated builder can extend the ancestor's builder.
+     *
+     * @param samePackage whether the link is in the ancestor's package
+     * @return why it cannot, or null when it can or the builder is absent - generated, or not generated yet
+     */
+    public @Nullable ChainBuilderReach.Unreachable unreachable(boolean samePackage) {
+        if (!builderPresent) return null;
+        return ChainBuilderReach.unreachable(builderAccess, declaresConstructors, noArgumentConstructorAccess,
+            samePackage);
     }
 
 }

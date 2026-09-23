@@ -393,7 +393,7 @@ public final class BuilderMutator {
      * @param target the annotated type
      * @return the annotated superclass and its arguments, or {@code null}
      */
-    private static AnnotatedSuper findAnnotatedDirectSuper(TypeElement target) {
+    static AnnotatedSuper findAnnotatedDirectSuper(TypeElement target) {
         TypeMirror superMirror = target.getSuperclass();
         if (!(superMirror instanceof DeclaredType dt)) return null;
         Element superElement = dt.asElement();

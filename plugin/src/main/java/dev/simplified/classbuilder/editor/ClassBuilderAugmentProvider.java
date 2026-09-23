@@ -590,8 +590,9 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
 
     /**
      * Whether no builder is generated for this target at all - an annotated
-     * supertype whose own declared builder the extends clause cannot name - so
-     * the entry points and the copy constructor are withheld with it.
+     * supertype whose own declared builder the extends clause cannot name, or
+     * that is out of the target's reach - so the entry points and the copy
+     * constructor are withheld with it.
      *
      * <p>The decision is
      * {@link ClassBuilderConstants#ancestorBlockingGeneration(PsiClass, String, boolean)},
@@ -619,7 +620,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             // configured Builder name - the user's hand-written version wins and
             // is merged into rather than joined by a second class - and
             // skip when the ancestor's own declared builder leaves the extends
-            // clause unformable, which is the shape the processor refuses.
+            // clause unformable or out of reach, which the processor refuses.
             GeneratedMemberFactory.EditorBuilderConfig config =
                 GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
             if (ClassBuilderConstants.declaredBuilderOf(target, config.builderName()) != null

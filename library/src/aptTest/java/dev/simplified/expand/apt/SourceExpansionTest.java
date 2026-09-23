@@ -453,6 +453,39 @@ public class SourceExpansionTest {
             expanded.contains("@return this builder"));
     }
 
+    /**
+     * A link in another package naming its root fully qualified is rendered
+     * with the extends clause the build compiles, the root's builder spelled by
+     * its canonical name. The build failed on that clause, spelled
+     * {@code Shape.Builder}, and nothing was written.
+     */
+    @Test
+    public void aLinkInAnotherPackageExtendsItsRootsBuilderByItsCanonicalName() throws IOException {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "/** A shape. */",
+                "@ClassBuilder(validate = false)",
+                "public abstract class Shape {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "}"),
+            JavaFileObjects.forSourceLines("other.Circle",
+                "package other;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "/** A circle. */",
+                "@ClassBuilder(validate = false)",
+                "public class Circle extends demo.Shape {",
+                "    private int radius;",
+                "    public int getRadius() { return radius; }",
+                "}"));
+        assertThat(c).succeeded();
+        String expanded = expanded("other/Circle.java");
+        assertTrue("the builder extends the root's by its canonical name: " + expanded,
+            expanded.contains("extends demo.Shape.Builder<Circle, Builder>"));
+    }
+
     private static int occurrences(String haystack, String needle) {
         int found = 0;
         for (int at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + 1)) {

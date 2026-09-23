@@ -70,8 +70,10 @@ public enum DeclaredBuilderRejection {
         + "bound the target's type parameters as %s, and this one declares %s"),
 
     /**
-     * The trailing pair carries the bounds that make the builder self-typed, and
-     * a setter returning the second parameter is unusable without them.
+     * The trailing pair carries the bounds that make the builder self-typed: a
+     * setter returning the second parameter is unusable without them, and a link
+     * below binds the pair to itself and its own builder, which a bound naming
+     * another type, or the builder applied to the pair out of order, cannot take.
      */
     SELF_TYPE_BOUNDS("@ClassBuilder cannot merge into '%s' - its trailing pair has to be bounded "
         + "as %s for the generated setters to return the caller's own builder type, and this one "

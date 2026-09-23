@@ -86,6 +86,29 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   with no supertype and reported nothing at all. An ancestor whose declared builder has the root's
   shape is merged into and extended like a generated one.
 
+- **A link whose ancestor's declared builder is out of its reach is refused on the link.** Every
+  link's generated builder names the ancestor's builder in its extends clause and calls its
+  no-argument constructor through the implicit `super()` of the constructor javac gives it. A
+  builder the ancestor's author made `private`, or package-private from a link in another package,
+  or whose no-argument constructor is `private`, package-private from another package, or missing
+  among constructors that all take parameters, failed on those generated lines - `is not public in
+  demo.Shape; cannot be accessed from outside package`, `cannot be applied to given types` - while
+  the editor resolved the link's builder green. The link now generates no builder and is refused on
+  its annotation on both halves, read from the ancestor's source or from its class file. A
+  `protected` builder or no-argument constructor is reached from another package and stays accepted.
+
+- **A link overrides a public `self()` publicly.** Every link's builder overrides the `self()` its
+  ancestor's builder declares, and the override was always `protected`, so a root builder whose
+  author wrote `public abstract B self()` failed every link with `attempting to assign weaker access
+  privileges; was public`. The override is now public where the nearest `self()` an ancestor's author
+  wrote is public, a generated chained abstract in between included, on both halves.
+
+- **A link in another package naming its root fully qualified builds.** The generated extends clause
+  spelled the root's builder `Shape.Builder`, which resolves only where the link's file imports
+  `Shape`; `class Circle extends demo.Shape` with no import, or `extends Outer.Shape` below a root
+  nested in `Outer`, failed with `package Shape does not exist`. The clause now names the builder by
+  its canonical name, `demo.Shape.Builder`, as the expanded source shows it.
+
 - **The chain's copy constructor is offered in the editor.** The processor emits
   `protected Target(Builder)` on every chain role and the editor synthesised none, so a hand-written
   `super(builder)` was red over source that builds. Contributed under both of the gates javac reads -
@@ -350,8 +373,16 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
     it the slot - take the slot's type, rename it, or name both copy entry points `NONE`. A method
     standing in for another setter of the slot, a singular `addItem(List<Integer>)` beside a
     `List<List<String>>` slot among them, is never passed the slot and is left alone;
-  - on a chain root, a builder that is not abstract or not self-typed - declare it
-    `abstract static class Builder<T extends Target, B extends Builder<T, B>>`;
+  - on a chain root, a builder that is not abstract or not self-typed, or whose self-typed pair is
+    bounded otherwise - the first parameter by a type other than the target, the pair written the
+    other way round, or the builder's bound applied to the pair out of order - declare it
+    `abstract static class Builder<T extends Target, B extends Builder<T, B>>`, a generic target's
+    own parameters leading;
+  - on a chain root or a chained abstract, a builder the links below cannot extend - a `private` one,
+    or one whose constructors all take parameters - reported on the builder: widen it, or declare a
+    no-argument constructor. The links below it are refused as well;
+  - on a chain root or a chained abstract, a `final` `self()`, which every link overrides - drop
+    `final`;
   - below a chain root, a missing or wrong `extends` clause or the wrong arguments to it - extend
     the ancestor's builder as `Ancestor.Builder<Link, Builder>` on a concrete link, or forward the
     builder's own self-typed pair on a chained abstract;

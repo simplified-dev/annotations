@@ -2411,7 +2411,7 @@ public class DeclaredBuilderMergeTest {
                 "@ClassBuilder(validate = false)",
                 "public abstract class Other {",
                 "    private String note;",
-                "    public abstract static class Builder<T extends Object, B extends Builder<T, B>> { }",
+                "    public abstract static class Builder<T extends Other, B extends Builder<T, B>> { }",
                 "}"),
             JavaFileObjects.forSourceLines("demo.Link",
                 "package demo;",

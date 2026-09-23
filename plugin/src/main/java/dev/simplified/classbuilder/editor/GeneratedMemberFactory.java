@@ -37,6 +37,7 @@ import com.intellij.util.IncorrectOperationException;
 import dev.simplified.annotations.NamingStyle;
 import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
 import dev.simplified.classbuilder.apt.BuilderScheme;
+import dev.simplified.classbuilder.apt.ChainBuilderReach;
 import dev.simplified.classbuilder.apt.ChainRole;
 import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.SetterScheme;
@@ -956,16 +957,20 @@ public final class GeneratedMemberFactory {
         boolean abstractMembers = builder.hasModifierProperty(PsiModifier.ABSTRACT);
 
         // self() exists only inside a chain: declared abstract on the root,
-        // overridden to return this on a concrete link. A chained abstract
+        // overridden to return this on a concrete link - publicly where an
+        // ancestor's author made the one it overrides public. A chained abstract
         // inherits the root's and declares neither of the pair, which is what
         // the processor emits on it. A standalone builder chains on its own
         // type and needs none.
         if (role == ChainRole.ABSTRACT_ROOT) {
-            methods.add(chainMethod(psiManager, target, builder, "self", selfType,
+            methods.add(chainMethod(psiManager, target, builder, ChainBuilderReach.SELF, selfType,
                 PsiModifier.PROTECTED, abstractMembers));
         } else if (role == ChainRole.CONCRETE_LINK) {
-            methods.add(chainMethod(psiManager, target, builder, "self", selfType,
-                PsiModifier.PROTECTED, false));
+            String selfAccess = ClassBuilderConstants.linkSelfPublic(target, config.builderName())
+                ? PsiModifier.PUBLIC
+                : PsiModifier.PROTECTED;
+            methods.add(chainMethod(psiManager, target, builder, ChainBuilderReach.SELF, selfType,
+                selfAccess, false));
         }
 
         // build() - always public (access attribute governs the enclosing
