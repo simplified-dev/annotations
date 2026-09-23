@@ -42,7 +42,13 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
             @Retention(RetentionPolicy.CLASS)
             @Target({ElementType.TYPE, ElementType.CONSTRUCTOR, ElementType.METHOD})
             public @interface ClassBuilder {
+                AccessLevel builderConstructorAccess() default AccessLevel.PACKAGE;
             }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/AccessLevel.java",
+            """
+            package dev.simplified.annotations;
+            public enum AccessLevel { PUBLIC, PROTECTED, PACKAGE, PRIVATE, NONE }
             """);
     }
 
@@ -755,6 +761,63 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
             }
             """);
         assertEquals("every role's usable shape: " + errors(), 0, errors().size());
+    }
+
+    /**
+     * The apt suite's sentence, on the attribute: the author's constructor keeps
+     * its own access, so the attribute beside it changes nothing. It used to be
+     * accepted there in silence on both halves.
+     */
+    public void testBuilderConstructorAccessBesideTheAuthorsConstructor_isWarnedOnTheAttribute() {
+        myFixture.configureByText("Owned.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builderConstructorAccess = AccessLevel.PRIVATE)
+            public class Owned {
+                private String name;
+                public static class Builder {
+                    public Builder() { }
+                }
+            }
+            """);
+        List<HighlightInfo> warnings = accessWarnings();
+        assertEquals("one warning: " + warnings, 1, warnings.size());
+        assertEquals("@ClassBuilder(builderConstructorAccess) has no effect - the declared 'Builder' "
+                + "declares its own constructor, which keeps the access it is written with. Write "
+                + "the access on that constructor, or drop the attribute",
+            warnings.get(0).getDescription());
+        assertEquals("on the written value", "AccessLevel.PRIVATE",
+            myFixture.getEditor().getDocument().getText()
+                .substring(warnings.get(0).getStartOffset(), warnings.get(0).getEndOffset()));
+    }
+
+    /** Where the builder declares none, the attribute reaches javac's default, so nothing is said. */
+    public void testBuilderConstructorAccessOnABuilderWithNoConstructor_isNotWarned() {
+        myFixture.configureByText("Sealed.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builderConstructorAccess = AccessLevel.PRIVATE)
+            public class Sealed {
+                private String name;
+                public static class Builder { }
+            }
+            """);
+        assertEquals("the retype takes it: " + accessWarnings(), 0, accessWarnings().size());
+    }
+
+    /** The warnings this inspection raises about {@code builderConstructorAccess}. */
+    private List<HighlightInfo> accessWarnings() {
+        List<HighlightInfo> out = new ArrayList<>();
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            String description = info.getDescription();
+            if (info.getSeverity() == HighlightSeverity.WARNING && description != null
+                && description.startsWith("@ClassBuilder(builderConstructorAccess)")) {
+                out.add(info);
+            }
+        }
+        return out;
     }
 
     private void addBuilderSeedAnnotation() {

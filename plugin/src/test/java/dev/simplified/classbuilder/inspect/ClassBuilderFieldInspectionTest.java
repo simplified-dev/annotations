@@ -3,9 +3,11 @@ package dev.simplified.classbuilder.inspect;
 import com.intellij.codeInsight.daemon.impl.HighlightInfo;
 import com.intellij.codeInspection.LocalInspectionTool;
 import com.intellij.lang.annotation.HighlightSeverity;
+import com.intellij.openapi.application.AccessToken;
 import com.intellij.testFramework.LightProjectDescriptor;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
+import dev.simplified.testutil.JSvgErrorSuppressor;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.List;
@@ -25,11 +27,23 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
         return LightJavaCodeInsightFixtureTestCase.JAVA_17;
     }
 
+    private AccessToken jsvgSuppressor;
+
     @Override
     protected void setUp() throws Exception {
         super.setUp();
+        jsvgSuppressor = JSvgErrorSuppressor.install();
         myFixture.enableInspections((Class<? extends LocalInspectionTool>) ClassBuilderFieldInspection.class);
         addAnnotationSources();
+    }
+
+    @Override
+    protected void tearDown() throws Exception {
+        try {
+            if (jsvgSuppressor != null) jsvgSuppressor.close();
+        } finally {
+            super.tearDown();
+        }
     }
 
     private void addAnnotationSources() {
@@ -38,7 +52,14 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
             package dev.simplified.annotations;
             import java.lang.annotation.*;
             @Retention(RetentionPolicy.CLASS) @Target(ElementType.TYPE)
-            public @interface ClassBuilder { }
+            public @interface ClassBuilder {
+                AccessLevel builderConstructorAccess() default AccessLevel.PACKAGE;
+            }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/AccessLevel.java",
+            """
+            package dev.simplified.annotations;
+            public enum AccessLevel { PUBLIC, PROTECTED, PACKAGE, PRIVATE, NONE }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/Formattable.java",
             """
@@ -385,5 +406,49 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
             """);
         assertTrue(hasErrorContaining(
             "@BuildFlag is only read on an abstract zero-arg accessor of an interface target"));
+    }
+
+    /**
+     * {@code builderConstructorAccess = NONE} is an error on the written value,
+     * in the processor's sentence. It used to be read as package-private here
+     * while the processor failed the target with an internal message.
+     */
+    public void testBuilderConstructorAccessNone_isAnErrorOnTheAttribute() {
+        myFixture.configureByText("Closed.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builderConstructorAccess = AccessLevel.NONE)
+            public class Closed {
+                String name;
+            }
+            """);
+        HighlightInfo found = null;
+        for (HighlightInfo h : myFixture.doHighlighting()) {
+            if (h.getSeverity() == HighlightSeverity.ERROR && h.getDescription() != null
+                && h.getDescription().startsWith("@ClassBuilder(builderConstructorAccess")) {
+                found = h;
+            }
+        }
+        assertNotNull("an error on the attribute", found);
+        assertEquals("@ClassBuilder(builderConstructorAccess = NONE) is not expressible - every "
+                + "builder has a constructor, so choose PRIVATE, PACKAGE, PROTECTED or PUBLIC",
+            found.getDescription());
+        assertEquals("AccessLevel.NONE", myFixture.getEditor().getDocument().getText()
+            .substring(found.getStartOffset(), found.getEndOffset()));
+    }
+
+    /** Every other level is legal, so nothing is said. */
+    public void testBuilderConstructorAccessPrivate_isClean() {
+        myFixture.configureByText("Closed.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builderConstructorAccess = AccessLevel.PRIVATE)
+            public class Closed {
+                String name;
+            }
+            """);
+        assertFalse(hasErrorContaining("builderConstructorAccess"));
     }
 }

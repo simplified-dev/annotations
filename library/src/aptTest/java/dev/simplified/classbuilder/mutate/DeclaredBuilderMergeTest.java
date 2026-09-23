@@ -211,6 +211,10 @@ public class DeclaredBuilderMergeTest {
      * written beside the annotation. The declaration used to suppress every
      * generated member unless an attribute asked for the merge, so the setter
      * called here did not exist.
+     *
+     * <p>An empty builder spells nothing, so nothing is reported as the author's.
+     * The note used to claim a {@code Builder()} there, naming the javac default
+     * the generated constructor's access is now retyped onto.
      */
     @Test
     public void anEmptyDeclaredBuilder_isMergedInto() throws Exception {
@@ -232,7 +236,10 @@ public class DeclaredBuilderMergeTest {
                 "    }",
                 "}"));
         assertThat(c).succeeded();
-        assertThat(c).hadNoteContaining("@ClassBuilder merged into the declared 'Builder'");
+        for (var note : c.notes()) {
+            assertFalse("the author spelled nothing: " + note.getMessage(null),
+                String.valueOf(note.getMessage(null)).contains("already spells"));
+        }
         assertEquals("x", runGo(c, "demo.UseUntouched"));
     }
 
@@ -476,6 +483,184 @@ public class DeclaredBuilderMergeTest {
     }
 
     /**
+     * A declared builder that declares no constructor has javac's default
+     * retyped to {@code builderConstructorAccess}, package-private by default,
+     * so {@code builder()} stays the one way in from another package exactly as
+     * it is on a generated builder. javac's default used to keep the declared
+     * class's own access, publishing {@code new Target.Builder()} beside it.
+     */
+    @Test
+    public void merge_whereTheBuilderDeclaresNoConstructor_retypesTheDefault() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Probe",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Probe {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "    public static class Builder { }",
+                "}"),
+            JavaFileObjects.forSourceLines("other.UseProbe",
+                "package other;",
+                "import demo.Probe;",
+                "public class UseProbe {",
+                "    public static String go() {",
+                "        return Probe.builder().name(\"x\").build().getName()",
+                "            + new Probe.Builder().name(\"y\").build().getName();",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("cannot be accessed from outside package");
+        assertEquals("the entry point itself stays reachable: " + c.errors(), 1, c.errors().size());
+    }
+
+    /**
+     * The retype takes the configured access, not merely package-private: a
+     * private one refuses a same-package {@code new Target.Builder()} while the
+     * entry point inside the target still instantiates it. javac's default kept
+     * the declared class's access, so the same-package call compiled.
+     */
+    @Test
+    public void merge_whereTheBuilderDeclaresNoConstructor_takesTheConfiguredAccess() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Sealed",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, builderConstructorAccess = AccessLevel.PRIVATE)",
+                "public class Sealed {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "    public static class Builder { }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseSealed",
+                "package demo;",
+                "public class UseSealed {",
+                "    public static String go() {",
+                "        return Sealed.builder().name(\"x\").build().getName()",
+                "            + new Sealed.Builder().name(\"y\").build().getName();",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("has private access");
+        assertEquals("the entry point itself stays reachable: " + c.errors(), 1, c.errors().size());
+    }
+
+    /**
+     * An author's own constructor is never retyped, whatever its access: a
+     * public one stays reachable from another package with the attribute at its
+     * default.
+     */
+    @Test
+    public void merge_whereTheBuilderDeclaresAPublicConstructor_keepsItPublic() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Open",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Open {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "    public static class Builder {",
+                "        public Builder() { }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("other.UseOpen",
+                "package other;",
+                "import demo.Open;",
+                "public class UseOpen {",
+                "    public static String go() { return new Open.Builder().name(\"x\").build().getName(); }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("x", runGo(c, "other.UseOpen"));
+    }
+
+    /**
+     * {@code builderConstructorAccess} written beside an author's constructor
+     * changes nothing, the author's constructor winning, and says so at the
+     * annotation. The attribute used to be accepted there in silence.
+     */
+    @Test
+    public void merge_whereTheBuilderDeclaresItsOwnConstructor_warnsThatTheAttributeHasNoEffect() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Owned",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, builderConstructorAccess = AccessLevel.PRIVATE)",
+                "public class Owned {",
+                "    private String name;",
+                "    public static class Builder {",
+                "        public Builder() { }",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertThat(c).hadWarningContaining("@ClassBuilder(builderConstructorAccess) has no effect - "
+            + "the declared 'Builder' declares its own constructor, which keeps the access it is "
+            + "written with. Write the access on that constructor, or drop the attribute");
+    }
+
+    /**
+     * A constructor target's declared builder with no constructor of its own is
+     * retyped as a type target's is, its entry point instantiating it in the
+     * enclosing type. javac's default used to keep the class's access there too.
+     */
+    @Test
+    public void merge_onAConstructorTargetWhoseBuilderDeclaresNoConstructor_retypesTheDefault() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Step",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public final class Step {",
+                "    private final String key;",
+                "    @ClassBuilder",
+                "    Step(String key) { this.key = key; }",
+                "    public String getKey() { return key; }",
+                "    public static class Builder { }",
+                "}"),
+            JavaFileObjects.forSourceLines("other.UseStep",
+                "package other;",
+                "import demo.Step;",
+                "public class UseStep {",
+                "    public static String go() {",
+                "        return Step.builder().key(\"a\").build().getKey()",
+                "            + new Step.Builder().key(\"b\").build().getKey();",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("cannot be accessed from outside package");
+        assertEquals("the entry point itself stays reachable: " + c.errors(), 1, c.errors().size());
+    }
+
+    /**
+     * A chain role's declared builder keeps javac's default at the class's own
+     * access, as the builder the chain generates does, so a subclass builder or
+     * caller in another package reaches it.
+     */
+    @Test
+    public void merge_onADeclaredLinkBuilder_keepsJavacsDefault() throws Exception {
+        Compilation c = compile(base(),
+            JavaFileObjects.forSourceLines("demo.Link",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Link extends Base {",
+                "    private String extra;",
+                "    public String getExtra() { return extra; }",
+                "    public static class Builder extends Base.Builder<Link, Builder> { }",
+                "}"),
+            JavaFileObjects.forSourceLines("other.UseLink",
+                "package other;",
+                "import demo.Link;",
+                "public class UseLink {",
+                "    public static String go() { return new Link.Builder().extra(\"x\").build().getExtra(); }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("x", runGo(c, "other.UseLink"));
+    }
+
+    /**
      * The entry points call {@code new} on the declared builder, so declaring it
      * abstract leaves them nothing to create - which used to be found by javac
      * on a generated line rather than said here.
@@ -644,7 +829,6 @@ public class DeclaredBuilderMergeTest {
                 "    }",
                 "}"));
         assertThat(c).succeeded();
-        assertThat(c).hadNoteContaining("@ClassBuilder merged into the declared 'Builder'");
         assertEquals("k", runGo(c, "demo.UseAction"));
     }
 
@@ -885,7 +1069,12 @@ public class DeclaredBuilderMergeTest {
             .inFile(slip).onLine(10);
     }
 
-    /** A builder declaring no constructor keeps javac's default, which assigns nothing. */
+    /**
+     * A builder declaring no constructor has javac's default retyped rather than
+     * replaced, and that constructor assigns nothing, so the seed is reported
+     * unassigned on it. Before the retype javac reported the same failure as
+     * one of its own default constructor.
+     */
     @Test
     public void merge_onASeededConstructor_whoseBuilderDeclaresNoConstructor_fails() {
         Compilation c = compile(
@@ -899,7 +1088,7 @@ public class DeclaredBuilderMergeTest {
                 "    public static class Builder { }",
                 "}"));
         assertThat(c).failed();
-        assertThat(c).hadErrorContaining("variable origin not initialized in the default constructor");
+        assertThat(c).hadErrorContaining("variable origin might not have been initialized");
     }
 
     /**
@@ -1506,7 +1695,6 @@ public class DeclaredBuilderMergeTest {
                 "    }",
                 "}"));
         assertThat(c).succeeded();
-        assertThat(c).hadNoteContaining("@ClassBuilder merged into the declared 'Builder'");
         for (var diagnostic : c.diagnostics()) {
             assertFalse("the author's apply is not a generated member, so it is never reported: "
                     + diagnostic.getMessage(null),

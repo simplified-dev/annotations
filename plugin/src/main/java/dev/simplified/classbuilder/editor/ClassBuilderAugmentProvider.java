@@ -13,6 +13,7 @@ import com.intellij.psi.util.CachedValueProvider;
 import com.intellij.psi.util.CachedValuesManager;
 import com.intellij.psi.util.PsiModificationTracker;
 import com.intellij.util.IdempotenceChecker;
+import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
 import dev.simplified.classbuilder.apt.ChainRole;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
@@ -298,8 +299,10 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      *
      * <p>The collision rule is the processor's: a generated method is offered
      * only when the declared class spells no method of that name and parameter
-     * count, and the builder's constructor is never offered, that class always
-     * having one by the time either half looks. Read through
+     * count, and the generated constructor is never offered, that class always
+     * having one by the time either half looks. Where the author wrote none on a
+     * class, record, constructor or factory target, the default javac retypes
+     * to {@code builderConstructorAccess} is offered in its place. Read through
      * {@code getOwnMethods()} rather than {@code getMethods()}, the latter being
      * augment-aware and answering with whatever this provider contributed last.
      *
@@ -433,12 +436,23 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             List<PsiMethod> out = new ArrayList<>();
             for (PsiMethod generated : GeneratedMemberFactory.synthesizeBuilderMethods(
                 merge.site(), merge.config(), declared)) {
+                // The generated constructor is never appended as it stands; the
+                // one below takes its place where the author wrote none.
                 if (generated.isConstructor()) continue;
                 if (spelled.contains(generated.getName() + "/"
                     + generated.getParameterList().getParametersCount())) {
                     continue;
                 }
                 out.add(generated);
+            }
+            // The processor retypes javac's default to builderConstructorAccess
+            // on a builder that declares no constructor, on the roles the
+            // attribute reaches. PSI carries no default to retype, so the
+            // retyped one is contributed; elsewhere PSI's implicit default is
+            // javac's, at the class's access.
+            if (BuilderConstructorAccess.appliesTo(GeneratedMemberFactory.roleOf(merge.site()))
+                && !ClassBuilderConstants.declaresConstructor(declared)) {
+                out.add(GeneratedMemberFactory.retypedDefaultConstructor(declared, merge.config()));
             }
             return out;
         });

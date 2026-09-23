@@ -762,4 +762,55 @@ public class SuperBuilderAugmentTest extends LightJavaCodeInsightFixtureTestCase
         assertNoErrors();
     }
 
+    /**
+     * No chain builder carries a declared constructor: the processor writes none
+     * on any role, so javac's default at the builder class's access - public
+     * here - is what a caller in another package constructs a link's builder
+     * through, and PSI's implicit default is the same constructor. The editor
+     * used to contribute a package-private one at builderConstructorAccess on
+     * every role, red over source that builds.
+     */
+    public void testAChainBuilder_keepsTheImplicitDefault() {
+        myFixture.addFileToProject("r/Doc.java",
+            """
+            package r;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Doc {
+                String title;
+                public String getTitle() { return title; }
+            }
+            """);
+        myFixture.addFileToProject("r/Article.java",
+            """
+            package r;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Article extends Doc {
+                int words;
+                public int getWords() { return words; }
+            }
+            """);
+        myFixture.configureByText("UseArticle.java",
+            """
+            import r.Article;
+            public class UseArticle {
+                String go() { return new Article.Builder().title("t").words(3).build().getTitle(); }
+            }
+            """);
+        assertNoErrors();
+        PsiClass article = myFixture.findClass("r.Article");
+        PsiClass doc = myFixture.findClass("r.Doc");
+        assertEquals("the link's builder", 0, builderOf(article).getConstructors().length);
+        assertEquals("the root's builder", 0, builderOf(doc).getConstructors().length);
+    }
+
+    /** The builder the editor lists on a target. */
+    private static PsiClass builderOf(PsiClass target) {
+        for (PsiClass nested : target.getInnerClasses()) {
+            if ("Builder".equals(nested.getName())) return nested;
+        }
+        throw new AssertionError("expected a Builder on " + target.getName());
+    }
+
 }

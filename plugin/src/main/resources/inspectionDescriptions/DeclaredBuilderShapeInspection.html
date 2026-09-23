@@ -74,7 +74,16 @@ javac refuses both.
 </p>
 
 <p>
-Reported at error level because the alternative is javac failing on a generated
+On a class or record target and on a constructor or static factory target, a
+<code>builderConstructorAccess</code> written on the annotation while the
+declared builder declares a constructor of its own is reported as a warning on
+that attribute: the author's constructor keeps the access it is written with.
+Where the declared builder declares no constructor, its implicit default takes
+the attribute's access instead.
+</p>
+
+<p>
+Shape rejections are reported at error level because the alternative is javac failing on a generated
 line. The message is the one the processor prints, rendered from the same
 decision, so the editor is red exactly where and for exactly the reason the
 build is.

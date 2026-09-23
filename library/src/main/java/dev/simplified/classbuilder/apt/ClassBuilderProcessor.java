@@ -681,6 +681,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
                                    Messager messager) {
         BuilderConfig config = extractConfig(executable, enclosing.getSimpleName().toString());
         validateNaming(executable, config, messager);
+        validateBuilderConstructorAccess(executable, messager);
         if (!config.excludeSet().isEmpty()) {
             messager.printMessage(Diagnostic.Kind.ERROR,
                 "@ClassBuilder(exclude) names fields, and this builder's slots are "
@@ -755,6 +756,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     private void processClass(TypeElement target, Messager messager) {
         BuilderConfig config = extractConfig(target);
         validateNaming(target, config, messager);
+        validateBuilderConstructorAccess(target, messager);
         List<FieldSpec> fields = collectFields(target, config);
         validateSlotNaming(fields, config.setters(), target, messager);
         validateDefaultProviders(target, fields, messager);
@@ -1141,6 +1143,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     private void processInterface(TypeElement target, Messager messager) throws IOException {
         BuilderConfig config = extractConfig(target);
         validateNaming(target, config, messager);
+        validateBuilderConstructorAccess(target, messager);
 
         // generateImpl=false means the user takes responsibility for producing
         // the instance build() constructs. That only works if factoryMethod is
@@ -1248,8 +1251,13 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         AccessLevel access = parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, "access", "PUBLIC"));
         AccessLevel constructorAccess =
             parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, "constructorAccess", "PACKAGE"));
+        // NONE is reported at the annotation by validateBuilderConstructorAccess,
+        // and the builder is then generated as under the default, so that error
+        // is the only one the author sees - the editor contributes the same.
         AccessLevel builderConstructorAccess =
-            parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, "builderConstructorAccess", "PACKAGE"));
+            parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, BuilderConstructorAccess.ATTRIBUTE, "PACKAGE"));
+        if (!BuilderConstructorAccess.expressible(builderConstructorAccess))
+            builderConstructorAccess = AccessLevel.PACKAGE;
         boolean retainInit = lookup.booleanAttr(target, ANNOTATION_FQN, "retainInit", true);
         boolean generateCopyConstructor = lookup.booleanAttr(target, ANNOTATION_FQN, "generateCopyConstructor", true);
         boolean generateImpl = lookup.booleanAttr(target, ANNOTATION_FQN, "generateImpl", true);
@@ -1392,6 +1400,24 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     private void validateNaming(Element target, BuilderConfig config, Messager messager) {
         validateSetterScheme(config.setters(), target, true, messager);
         validateBuilderNames(target, messager);
+    }
+
+    /**
+     * Reports {@code builderConstructorAccess = NONE} at the annotation.
+     *
+     * <p>Every builder has a constructor, so the value names nothing to
+     * suppress. The configuration generates as under the default beside the
+     * error, which keeps every generated line compilable and leaves this the
+     * one diagnostic, on every kind of target alike.
+     *
+     * @param target the annotated element
+     * @param messager sink for diagnostics
+     */
+    private void validateBuilderConstructorAccess(Element target, Messager messager) {
+        String written = lookup.stringAttr(target, ANNOTATION_FQN, BuilderConstructorAccess.ATTRIBUTE, null);
+        if (written == null || BuilderConstructorAccess.expressible(parseAccess(written))) return;
+        messager.printMessage(Diagnostic.Kind.ERROR, BuilderConstructorAccess.notExpressible(), target,
+            lookup.findMirror(target, ANNOTATION_FQN));
     }
 
     /**

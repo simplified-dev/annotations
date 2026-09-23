@@ -703,4 +703,42 @@ public class SuperBuilderMutatorTest {
         assertEquals(99, articleCls.getMethod("getWords").invoke(second));
     }
 
+    /**
+     * A generated link builder carries javac's default constructor at the
+     * builder class's access, {@code public} by default, and
+     * {@code builderConstructorAccess} does not reach it - so a caller in another
+     * package constructs it directly. The editor has to offer the same.
+     */
+    @Test
+    public void linkBuilder_keepsJavacsDefaultAtTheClassAccess() throws Exception {
+        JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Doc",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Doc {",
+            "    String title;",
+            "    public String getTitle() { return title; }",
+            "}");
+        JavaFileObject child = JavaFileObjects.forSourceLines("demo.Article",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Article extends Doc {",
+            "    int words;",
+            "    public int getWords() { return words; }",
+            "}");
+        JavaFileObject caller = JavaFileObjects.forSourceLines("other.UseArticle",
+            "package other;",
+            "import demo.Article;",
+            "public class UseArticle {",
+            "    public static String go() {",
+            "        return new Article.Builder().title(\"t\").words(3).build().getTitle();",
+            "    }",
+            "}");
+        Compilation c = compile(parent, child, caller);
+        assertThat(c).succeeded();
+        Object title = Class.forName("other.UseArticle", true, loadClasses(c)).getMethod("go").invoke(null);
+        assertEquals("t", title);
+    }
+
 }

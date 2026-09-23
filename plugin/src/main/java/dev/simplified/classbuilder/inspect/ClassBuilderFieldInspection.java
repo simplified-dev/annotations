@@ -14,11 +14,14 @@ import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiPrimitiveType;
+import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypes;
 import com.intellij.psi.util.InheritanceUtil;
 import com.intellij.psi.util.PsiUtil;
+import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.SetterNames;
+import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
 import dev.simplified.classbuilder.apt.NamePattern;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -48,6 +51,8 @@ import java.util.Map;
  *       accessor, where nothing will read it</li>
  *   <li>a {@code @SetterNames} pattern that cannot expand to a Java
  *       identifier, or that suppresses the setter role</li>
+ *   <li>{@code @ClassBuilder(builderConstructorAccess = NONE)}, which names no
+ *       modifier a builder's constructor can carry</li>
  * </ul>
  */
 public class ClassBuilderFieldInspection extends LocalInspectionTool {
@@ -84,6 +89,8 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
                         "a builder with no class to name is not a builder");
                     checkNotSuppressed(holder, annotation, "build",
                         "a builder with no way to finish is not a builder");
+                } else if (ClassBuilderConstants.ANNOTATION_FQN.equals(qualifiedName)) {
+                    checkBuilderConstructorAccess(holder, annotation);
                 }
             }
 
@@ -136,6 +143,25 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
                 checkBuildFlag(holder, flag, method.getReturnType());
             }
         };
+    }
+
+    /**
+     * Reports {@code builderConstructorAccess = NONE} on the written value, in
+     * the processor's sentence. Every builder has a constructor, so the value
+     * suppresses nothing; the processor then generates as under the default,
+     * which is what the augment provider contributes.
+     *
+     * @param holder sink for the diagnostic
+     * @param annotation the {@code @ClassBuilder} annotation
+     */
+    private static void checkBuilderConstructorAccess(@NotNull ProblemsHolder holder,
+                                                      @NotNull PsiAnnotation annotation) {
+        PsiAnnotationMemberValue value =
+            annotation.findDeclaredAttributeValue(BuilderConstructorAccess.ATTRIBUTE);
+        if (!(value instanceof PsiReferenceExpression reference)) return;
+        if (!AccessLevel.NONE.name().equals(reference.getReferenceName())) return;
+        holder.registerProblem(value, BuilderConstructorAccess.notExpressible(),
+            ProblemHighlightType.GENERIC_ERROR);
     }
 
     /**

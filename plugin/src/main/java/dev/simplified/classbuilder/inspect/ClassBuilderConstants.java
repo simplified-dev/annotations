@@ -411,6 +411,20 @@ public final class ClassBuilderConstants {
         return out;
     }
 
+    /**
+     * Whether the author wrote the declared builder a constructor, which is what
+     * decides whether {@code builderConstructorAccess} reaches it.
+     *
+     * <p>Read through {@link PsiExtensibleClass#getOwnMethods()}, so a light
+     * constructor this plugin contributes is never taken for the author's.
+     *
+     * @param declared the builder the author wrote
+     * @return whether it declares any constructor
+     */
+    public static boolean declaresConstructor(@NotNull PsiClass declared) {
+        return !declaredConstructorArities(declared).isEmpty();
+    }
+
     // ------------------------------------------------------------------
     // The declared builder's shape, as the shared decision states it
     // ------------------------------------------------------------------

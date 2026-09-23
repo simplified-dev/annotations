@@ -753,4 +753,76 @@ public class BuilderConfigAttributesTest {
         assertTrue("from(T) remains when only mutate is disabled",
             hasMethod(target, "from", target));
     }
+
+    /** The sentence both halves report for {@code builderConstructorAccess = NONE}. */
+    private static final String NONE_REJECTED =
+        "@ClassBuilder(builderConstructorAccess = NONE) is not expressible - every builder has a "
+            + "constructor, so choose PRIVATE, PACKAGE, PROTECTED or PUBLIC";
+
+    /**
+     * {@code builderConstructorAccess = NONE} is one error at the annotation, and
+     * the builder is generated as under the default beside it, so nothing
+     * generated fails with it. The value used to reach the constructor's
+     * modifier switch and fail the whole target with that switch's internal
+     * message.
+     */
+    @Test
+    public void builderConstructorAccess_noneIsRejectedAtTheAnnotation() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Closed",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, builderConstructorAccess = AccessLevel.NONE)",
+                "public class Closed {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseClosed",
+                "package demo;",
+                "public class UseClosed {",
+                "    public static String go() { return new Closed.Builder().name(\"x\").build().getName(); }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(NONE_REJECTED);
+        assertEquals("the one error, and a package-private builder beside it: " + c.errors(),
+            1, c.errors().size());
+    }
+
+    /** A constructor target reads the attribute through the same rule. */
+    @Test
+    public void builderConstructorAccess_noneIsRejectedOnAConstructorTarget() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Gate",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public final class Gate {",
+                "    @ClassBuilder(builderConstructorAccess = AccessLevel.NONE)",
+                "    Gate(String key) { }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(NONE_REJECTED);
+        assertEquals(c.errors().toString(), 1, c.errors().size());
+    }
+
+    /**
+     * An interface target's sibling builder never reads the attribute, and the
+     * value is rejected there too, since no builder anywhere is without a
+     * constructor. It used to be accepted in silence.
+     */
+    @Test
+    public void builderConstructorAccess_noneIsRejectedOnAnInterface() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(builderConstructorAccess = AccessLevel.NONE)",
+                "public interface Shape {",
+                "    String name();",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(NONE_REJECTED);
+    }
 }

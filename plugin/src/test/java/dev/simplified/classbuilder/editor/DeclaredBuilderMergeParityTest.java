@@ -10,6 +10,7 @@ import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiMethod;
+import com.intellij.psi.PsiModifier;
 import com.intellij.testFramework.LightProjectDescriptor;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
 import dev.simplified.testutil.BuilderParityFixture;
@@ -482,6 +483,188 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
             """);
         List<String> names = methodNamesOf(((PsiJavaFile) file).getClasses()[0]);
         assertTrue("one constructor serves them: " + names, names.contains("builder"));
+    }
+
+    // ------------------------------------------------------------------
+    // The declared builder's constructor
+    //
+    // The processor retypes javac's default constructor on a declared builder
+    // that declares none to builderConstructorAccess, on a class, record,
+    // constructor or factory target. PSI has no default to retype, so the
+    // editor contributes one at that access; the editor used to leave PSI's
+    // implicit default at the class's access, public here.
+    // ------------------------------------------------------------------
+
+    /** One constructor, package-private at the attribute's default. */
+    public void testADeclaredBuilderWithNoConstructor_getsOneAtBuilderConstructorAccess() {
+        PsiFile file = myFixture.configureByText("Probe.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Probe {
+                private String name;
+                public static class Builder { }
+            }
+            """);
+        PsiMethod[] constructors = nestedOf(((PsiJavaFile) file).getClasses()[0], "Builder").getConstructors();
+        assertEquals("javac's retyped default: " + constructors.length, 1, constructors.length);
+        assertEquals(0, constructors[0].getParameterList().getParametersCount());
+        assertFalse(constructors[0].hasModifierProperty(PsiModifier.PUBLIC));
+        assertFalse(constructors[0].hasModifierProperty(PsiModifier.PROTECTED));
+        assertFalse(constructors[0].hasModifierProperty(PsiModifier.PRIVATE));
+    }
+
+    /** The configured access, not merely package-private. */
+    public void testADeclaredBuilderWithNoConstructor_takesTheConfiguredAccess() {
+        PsiFile file = myFixture.configureByText("Sealed.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builderConstructorAccess = AccessLevel.PRIVATE)
+            public class Sealed {
+                private String name;
+                public static class Builder { }
+            }
+            """);
+        PsiMethod[] constructors = nestedOf(((PsiJavaFile) file).getClasses()[0], "Builder").getConstructors();
+        assertEquals("javac's retyped default: " + constructors.length, 1, constructors.length);
+        assertTrue(constructors[0].hasModifierProperty(PsiModifier.PRIVATE));
+    }
+
+    /**
+     * The apt suite's cross-package case: the entry point resolves and the
+     * direct construction is refused, as javac refuses it.
+     */
+    public void testADeclaredBuilderWithNoConstructor_isClosedToAnotherPackage() {
+        myFixture.addFileToProject("p/Probe.java",
+            """
+            package p;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Probe {
+                private String name;
+                public String getName() { return name; }
+                public static class Builder { }
+            }
+            """);
+        myFixture.configureByText("UseProbe.java",
+            """
+            import p.Probe;
+            public class UseProbe {
+                String go() {
+                    return Probe.builder().name("x").build().getName()
+                        + new Probe.Builder().name("y").build().getName();
+                }
+            }
+            """);
+        List<String> errors = errors();
+        assertEquals("only the direct construction is refused: " + errors, 1, errors.size());
+        assertTrue(errors.get(0), errors.get(0).contains("Builder()"));
+    }
+
+    /**
+     * A generated builder's package-private constructor is refused from another
+     * package too, as javac refuses it. The light constructor used to carry no
+     * access modifier at all, which the platform's access check reads as
+     * public, so the call resolved.
+     */
+    public void testAGeneratedBuildersConstructor_isClosedToAnotherPackage() {
+        myFixture.addFileToProject("p/Widget.java",
+            """
+            package p;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Widget {
+                private String name;
+                public String getName() { return name; }
+            }
+            """);
+        myFixture.configureByText("UseWidget.java",
+            """
+            import p.Widget;
+            public class UseWidget {
+                String go() {
+                    return Widget.builder().name("x").build().getName()
+                        + new Widget.Builder().name("y").build().getName();
+                }
+            }
+            """);
+        List<String> errors = errors();
+        assertEquals("only the direct construction is refused: " + errors, 1, errors.size());
+        assertTrue(errors.get(0), errors.get(0).contains("Builder()"));
+    }
+
+    /** An author's constructor is theirs, and nothing is contributed beside it. */
+    public void testADeclaredBuilderWithItsOwnConstructor_keepsItAlone() {
+        PsiFile file = myFixture.configureByText("Open.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Open {
+                private String name;
+                public static class Builder {
+                    public Builder() { }
+                }
+            }
+            """);
+        PsiMethod[] constructors = nestedOf(((PsiJavaFile) file).getClasses()[0], "Builder").getConstructors();
+        assertEquals("the author's alone: " + constructors.length, 1, constructors.length);
+        assertTrue(constructors[0].hasModifierProperty(PsiModifier.PUBLIC));
+    }
+
+    /** A constructor target's declared builder is retyped as a type target's is. */
+    public void testAConstructorTargetsDeclaredBuilderWithNoConstructor_getsOneAtBuilderConstructorAccess() {
+        PsiFile file = myFixture.configureByText("Step.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Step {
+                private final String key;
+                @ClassBuilder
+                Step(String key) { this.key = key; }
+                public static class Builder { }
+            }
+            """);
+        PsiMethod[] constructors = nestedOf(((PsiJavaFile) file).getClasses()[0], "Builder").getConstructors();
+        assertEquals("javac's retyped default: " + constructors.length, 1, constructors.length);
+        assertEquals(0, constructors[0].getParameterList().getParametersCount());
+        assertFalse(constructors[0].hasModifierProperty(PsiModifier.PUBLIC));
+    }
+
+    /**
+     * A chain role's declared builder keeps javac's default at the class's
+     * access, so nothing is contributed and a caller in another package
+     * constructs it.
+     */
+    public void testADeclaredLinkBuilder_keepsTheImplicitDefault() {
+        myFixture.addFileToProject("q/Base.java",
+            """
+            package q;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Base {
+                String label;
+                public String getLabel() { return label; }
+            }
+            """);
+        myFixture.addFileToProject("q/Link.java",
+            """
+            package q;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Link extends Base {
+                String extra;
+                public String getExtra() { return extra; }
+                public static class Builder extends Base.Builder<Link, Builder> { }
+            }
+            """);
+        myFixture.configureByText("UseLink.java",
+            """
+            import q.Link;
+            public class UseLink {
+                String go() { return new Link.Builder().extra("x").build().getExtra(); }
+            }
+            """);
+        assertNoErrors();
     }
 
     /** And a field the author declared themselves is not doubled. */

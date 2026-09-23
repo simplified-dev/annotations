@@ -8,6 +8,8 @@ import com.sun.tools.javac.tree.JCTree.JCTypeApply;
 import com.sun.tools.javac.tree.JCTree.JCTypeParameter;
 import com.sun.tools.javac.tree.JCTree.JCVariableDecl;
 import com.sun.tools.javac.tree.JCTree;
+import dev.simplified.annotations.ClassBuilder;
+import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
 import dev.simplified.classbuilder.apt.ChainRole;
 import dev.simplified.classbuilder.apt.DeclaredBuildMethod;
 import dev.simplified.classbuilder.apt.DeclaredBuilderFacts;
@@ -16,6 +18,8 @@ import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.classbuilder.apt.RoleExpectation;
 import dev.simplified.classbuilder.apt.SlotHolding;
+import dev.simplified.shared.apt.AnnotationLookup;
+import dev.simplified.shared.javac.AstMarkers;
 import org.jetbrains.annotations.Nullable;
 
 import javax.annotation.processing.Messager;
@@ -61,11 +65,18 @@ import java.util.Set;
  *       beside either is a duplicate.</li>
  * </ul>
  *
- * <p>That last one is why {@code builderConstructorAccess} does not reach a
- * merged builder: javac's default was entered with the declared class's own
- * access and its symbol is what every later reference reads. An author wanting
- * {@code new Target.Builder()} closed off declares the constructor themselves,
- * which is the same thing they would do to any other class they wrote.
+ * <p>Where the author wrote no constructor, the default javac entered takes the
+ * generated constructor's place instead: on a class or record target and on a
+ * constructor or factory target it is retyped to {@code builderConstructorAccess}
+ * and marked generated, so {@code new Target.Builder()} is closed off exactly as
+ * it is on a builder the generator writes whole. The retype clears javac's
+ * default-constructor flag along with the access bits, on the tree and on the
+ * entered symbol, because the tree cleaner between rounds removes a first
+ * method still carrying that flag and javac then enters a fresh default at the
+ * class's own access. A chain role's builder keeps javac's default, as the
+ * builder the chain generates does. Where the author wrote one, it wins, and
+ * {@code builderConstructorAccess} written beside it is reported as having no
+ * effect.
  *
  * <p>What is skipped is reported in one note rather than silently, because the
  * difference between "the author's version won" and "the generator never ran"
@@ -107,6 +118,9 @@ final class DeclaredBuilderMerge {
         Set<String> fields = declaredFieldNames(declared);
         Set<String> methods = declaredMethodKeys(declared);
         boolean authorOwnsConstruction = declaresConstructor(declared);
+        boolean accessApplies = BuilderConstructorAccess.appliesTo(role);
+        if (accessApplies && authorOwnsConstruction) warnInertAccess(anchor, declared);
+        boolean retyped = accessApplies && retypeDefaultConstructor(declared);
 
         List<String> skipped = new ArrayList<>();
         for (JCTree member : members) {
@@ -119,12 +133,10 @@ final class DeclaredBuilderMerge {
                 // A constructor is never appended here. The declared builder
                 // always has one by now - the author's, or the default javac
                 // entered before this round - and a second no-arg form beside
-                // either is a duplicate. That default is also why
-                // builderConstructorAccess does not reach a merged builder: it
-                // was entered with the class's own access and its symbol is
-                // already what every later reference reads.
+                // either is a duplicate. A retyped default already stands in
+                // for the generated one, so only the author's is reported.
                 if (method.name.contentEquals("<init>")) {
-                    skipped.add(declared.name + "(" + (authorOwnsConstruction ? "..)" : ")"));
+                    if (!retyped) skipped.add(declared.name + "(" + (authorOwnsConstruction ? "..)" : ")"));
                     continue;
                 }
                 if (methods.contains(key(method))) {
@@ -364,6 +376,64 @@ final class DeclaredBuilderMerge {
      */
     private static boolean declaresConstructor(JCClassDecl declared) {
         return AllArgsConstructorFactory.hasExplicitConstructor(declared);
+    }
+
+    /**
+     * Retypes the default constructor javac entered into a declared builder
+     * that has no other, to {@code builderConstructorAccess}.
+     *
+     * <p>The recipe {@code @UtilityClass} uses on its target's default: the
+     * access bits and {@link Flags#GENERATEDCONSTR} are cleared on the tree and
+     * on the entered symbol, the configured access is set on both, and the
+     * constructor is marked generated so the author-constructor test keeps
+     * reading it as not the author's. Clearing the flag is what makes the retype
+     * survive the next round, whose tree cleaner removes a first method still
+     * carrying it and lets javac enter a fresh default at the class's access.
+     *
+     * <p>Nothing is retyped beside any other constructor, the author's or one
+     * this pipeline appended: the default would become a second no-argument
+     * constructor once the flag is gone, where the cleaner would otherwise have
+     * removed it.
+     *
+     * @param declared the builder the author wrote
+     * @return whether the default was found and retyped
+     */
+    private boolean retypeDefaultConstructor(JCClassDecl declared) {
+        JCMethodDecl implicit = null;
+        for (JCTree def : declared.defs) {
+            if (!(def instanceof JCMethodDecl method) || !method.name.contentEquals("<init>")) continue;
+            if ((method.mods.flags & Flags.GENERATEDCONSTR) == 0) return false;
+            implicit = method;
+        }
+        if (implicit == null) return false;
+
+        long cleared = Flags.PUBLIC | Flags.PROTECTED | Flags.PRIVATE | Flags.GENERATEDCONSTR;
+        long access = MutationContext.accessFlagFor(ctx.config().builderConstructorAccess());
+        implicit.mods.flags = (implicit.mods.flags & ~cleared) | access;
+        if (implicit.sym != null) implicit.sym.flags_field = (implicit.sym.flags_field & ~cleared) | access;
+        AstMarkers.markGenerated(implicit, ctx.generated());
+        return true;
+    }
+
+    /**
+     * Warns that {@code builderConstructorAccess}, written on the annotation,
+     * changes nothing because the declared builder declares its own constructor.
+     *
+     * <p>A warning rather than a note: the attribute is defeated outright rather
+     * than made redundant, as {@code @UtilityClass} warns when an author's
+     * constructor defeats its own. Silent when the attribute is not written, the
+     * default being no request at all.
+     *
+     * @param anchor the element the annotation is written on
+     * @param declared the builder the author wrote
+     */
+    private void warnInertAccess(Element anchor, JCClassDecl declared) {
+        AnnotationLookup lookup = new AnnotationLookup();
+        String annotation = ClassBuilder.class.getName();
+        if (lookup.stringAttr(anchor, annotation, BuilderConstructorAccess.ATTRIBUTE, null) == null) return;
+        messager.printMessage(Diagnostic.Kind.WARNING,
+            BuilderConstructorAccess.hasNoEffect(declared.name.toString()),
+            anchor, lookup.findMirror(anchor, annotation));
     }
 
 

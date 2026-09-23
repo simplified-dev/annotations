@@ -107,7 +107,7 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
         myFixture.addFileToProject("dev/simplified/annotations/AccessLevel.java",
             """
             package dev.simplified.annotations;
-            public enum AccessLevel { PUBLIC, PROTECTED, PACKAGE, PRIVATE }
+            public enum AccessLevel { PUBLIC, PROTECTED, PACKAGE, PRIVATE, NONE }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/Negate.java",
             """
@@ -647,6 +647,30 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
         PsiMethod[] ctors = builder.getConstructors();
         assertEquals(1, ctors.length);
         assertTrue(ctors[0].hasModifierProperty(PsiModifier.PUBLIC));
+    }
+
+    /**
+     * {@code NONE} is reported at the annotation, and the processor generates
+     * as under the default beside the error - a package-private constructor and
+     * the entry points - which is what is contributed here.
+     */
+    public void testBuilderConstructorAccessNone_contributesWhatTheDefaultDoes() {
+        PsiFile file = myFixture.configureByText("Closed.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builderConstructorAccess = AccessLevel.NONE)
+            public class Closed {
+                String label;
+            }
+            """);
+        PsiClass target = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+        assertEquals("the entry point is there", 1, target.findMethodsByName("builder", false).length);
+        PsiMethod[] ctors = target.getInnerClasses()[0].getConstructors();
+        assertEquals(1, ctors.length);
+        assertFalse(ctors[0].hasModifierProperty(PsiModifier.PUBLIC));
+        assertFalse(ctors[0].hasModifierProperty(PsiModifier.PROTECTED));
+        assertFalse(ctors[0].hasModifierProperty(PsiModifier.PRIVATE));
     }
 
     public void testHandWrittenBootstrap_isNotDuplicated() {

@@ -5,6 +5,7 @@ import com.intellij.codeInspection.ProblemHighlightType;
 import com.intellij.codeInspection.ProblemsHolder;
 import com.intellij.psi.JavaElementVisitor;
 import com.intellij.psi.PsiAnnotation;
+import com.intellij.psi.PsiAnnotationMemberValue;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiElementVisitor;
@@ -13,7 +14,9 @@ import com.intellij.psi.PsiModifierListOwner;
 import com.intellij.psi.PsiTypeElement;
 import com.intellij.psi.util.PsiTreeUtil;
 import dev.simplified.annotations.NamingStyle;
+import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
 import dev.simplified.classbuilder.apt.BuilderScheme;
+import dev.simplified.classbuilder.apt.ChainRole;
 import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.editor.MergedSlotStorage;
 import org.jetbrains.annotations.NotNull;
@@ -43,6 +46,11 @@ import org.jetbrains.annotations.NotNull;
  * type, again in the processor's sentence. The slot's storage is classified by
  * {@link MergedSlotStorage}, which leaves unjudged a slot whose storage depends
  * on what its initializer reads.
+ *
+ * <p>On a class or record target and on a constructor or factory target, a
+ * {@code builderConstructorAccess} written on the annotation while the declared
+ * builder declares a constructor of its own is a warning on that attribute, in
+ * the processor's sentence: the author's constructor keeps its own access.
  *
  * <p>On a constructor or factory target, a seed the merge appends as a
  * {@code final} field and a constructor of the declared builder leaves
@@ -101,6 +109,17 @@ public class DeclaredBuilderShapeInspection extends LocalInspectionTool {
                     holder.registerProblem(anchor == null ? declared : anchor, rejection,
                         ProblemHighlightType.GENERIC_ERROR);
                     return;
+                }
+
+                // The author's constructor keeps its own access, so the attribute
+                // written beside it changes nothing on the roles it reaches.
+                ChainRole role = executable ? ChainRole.STANDALONE : ClassBuilderConstants.chainRoleOf(target);
+                PsiAnnotationMemberValue access =
+                    annotation.findDeclaredAttributeValue(BuilderConstructorAccess.ATTRIBUTE);
+                if (access != null && BuilderConstructorAccess.appliesTo(role)
+                    && ClassBuilderConstants.declaresConstructor(declared)) {
+                    holder.registerProblem(access, BuilderConstructorAccess.hasNoEffect(declared.getName()),
+                        ProblemHighlightType.WARNING);
                 }
 
                 // The processor judges the slot fields only once the shape is

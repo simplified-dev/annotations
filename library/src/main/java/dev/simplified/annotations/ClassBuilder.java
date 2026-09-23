@@ -45,6 +45,9 @@ import java.lang.annotation.Target;
  * is reported in one compiler note rather than left silent. The target still
  * gets the all-args constructor {@code build()} calls, and still gets the three
  * entry points unless the declared builder has no constructor they can call. A
+ * declared builder that declares no constructor has its implicit default
+ * retyped to {@link #builderConstructorAccess()}, so {@code new Target.Builder()}
+ * is closed off exactly as on a generated builder. A
  * declared shape the generated members cannot live in - an inner class, the
  * wrong type parameters, an {@code abstract} builder the entry points would
  * instantiate - is a compile error.
@@ -290,11 +293,11 @@ public @interface ClassBuilder {
     @NotNull AccessLevel constructorAccess() default AccessLevel.PACKAGE;
 
     /**
-     * The access level of the generated builder's own no-arg constructor.
-     * Defaults to package-private for the reason {@link #constructorAccess}
-     * does one level down - it routes callers through the entry point rather
-     * than past it, so {@code builder()} is the one way to obtain a builder and
-     * Lombok's shape is matched.
+     * The access level of the builder's own constructor, on a builder its entry
+     * points instantiate. Defaults to package-private for the reason
+     * {@link #constructorAccess} does one level down - it routes callers through
+     * the entry point rather than past it, so {@code builder()} is the one way
+     * to obtain a builder and Lombok's shape is matched.
      *
      * <p>Separate from {@link #access()}, which governs the builder class and
      * would otherwise decide this too: a builder class has to be visible to be
@@ -302,9 +305,32 @@ public @interface ClassBuilder {
      * {@code new Target.Builder()} is an entry point. Widen it only to publish
      * that second way in deliberately.
      *
-     * <p>A declared builder keeps the constructors its author wrote, javac's own
-     * default included where the author wrote none, so this does not reach it -
-     * declare one to narrow it, as on any other written class.
+     * <p>It applies on a class or record target and on a constructor or factory
+     * target:
+     * <ul>
+     *   <li>to the constructor of a generated builder, which takes one parameter
+     *       per {@link BuilderSeed} and none otherwise;</li>
+     *   <li>to a declared builder that declares no constructor, whose implicit
+     *       default constructor is retyped to it.</li>
+     * </ul>
+     *
+     * <p>It does not apply:
+     * <ul>
+     *   <li>to a declared builder that declares a constructor - the author's
+     *       constructors keep the access they are written with, and the
+     *       attribute written beside them is a compile warning;</li>
+     *   <li>on a SuperBuilder chain - a root's, a chained abstract's or a
+     *       concrete link's builder, generated or declared, carries the implicit
+     *       default constructor at the builder class's own access, which is what
+     *       a subclass builder in another package calls through
+     *       {@code super()};</li>
+     *   <li>on an interface target - the sibling {@code <Name>Builder} keeps its
+     *       implicit constructor.</li>
+     * </ul>
+     *
+     * <p>{@link AccessLevel#NONE} is a compile error on every target, since every
+     * builder has a constructor; the builder is then generated as under the
+     * default.
      */
     @NotNull AccessLevel builderConstructorAccess() default AccessLevel.PACKAGE;
 

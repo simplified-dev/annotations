@@ -33,6 +33,7 @@ import com.intellij.psi.impl.source.PsiExtensibleClass;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.util.IncorrectOperationException;
 import dev.simplified.annotations.NamingStyle;
+import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
 import dev.simplified.classbuilder.apt.BuilderScheme;
 import dev.simplified.classbuilder.apt.ChainRole;
 import dev.simplified.classbuilder.apt.SetterScheme;
@@ -569,7 +570,7 @@ public final class GeneratedMemberFactory {
      * @param site where the annotation is written
      * @return the chain role, {@link ChainRole#STANDALONE} for an executable target
      */
-    private static ChainRole roleOf(BuilderSite site) {
+    static ChainRole roleOf(BuilderSite site) {
         return site.isExecutable() ? ChainRole.STANDALONE : ClassBuilderConstants.chainRoleOf(site.owner());
     }
 
@@ -783,12 +784,34 @@ public final class GeneratedMemberFactory {
         // The builder's own constructor, declared rather than left implicit for
         // the reason the processor declares it: an implicit one takes the
         // class's access, so a public builder class would offer
-        // `new Target.Builder()` as a second entry point the processor no longer
-        // publishes. Without this the editor resolves a cross-package call that
-        // javac then refuses.
-        methods.add(builderConstructor(psiManager, builder, config.builderConstructorAccess(), fields));
+        // `new Target.Builder()` as a second entry point the processor does not
+        // publish. Without this the editor resolves a cross-package call that
+        // javac then refuses. A chain role's builder is the exception on both
+        // halves: the processor declares none there, so javac's default at the
+        // class's access is what a caller or a subclass builder reaches, and
+        // PSI's implicit default is the same constructor.
+        if (BuilderConstructorAccess.appliesTo(role))
+            methods.add(builderConstructor(psiManager, builder, config.builderConstructorAccess(), fields));
 
         return methods;
+    }
+
+    /**
+     * The constructor a declared builder that declares none of its own carries,
+     * which the processor makes by retyping javac's default to
+     * {@code builderConstructorAccess}.
+     *
+     * <p>No-argument whatever the site's seeds, because it is javac's default
+     * that is retyped: a seeded slot is left for the author's constructor to
+     * assign, and the build fails when there is none.
+     *
+     * @param declared the builder the author wrote
+     * @param config the resolved configuration of the annotation merging into it
+     * @return the light constructor
+     */
+    static PsiMethod retypedDefaultConstructor(PsiClass declared, EditorBuilderConfig config) {
+        return builderConstructor(PsiManager.getInstance(declared.getProject()), declared,
+            config.builderConstructorAccess(), List.of());
     }
 
     /**
@@ -909,8 +932,9 @@ public final class GeneratedMemberFactory {
     }
 
     /**
-     * The synth Builder's constructor, at the configured access and carrying one
-     * parameter per seeded slot - the only way a slot with no setter is filled.
+     * A builder's constructor, at the configured access and carrying one
+     * parameter per seeded slot given - the only way a slot with no setter is
+     * filled.
      */
     private static PsiMethod builderConstructor(PsiManager manager, PsiClass builder, String access,
                                                 List<PsiFieldShape> slots) {
@@ -918,7 +942,11 @@ public final class GeneratedMemberFactory {
         ctor.setConstructor(true);
         ctor.setContainingClass(builder);
         ctor.setNavigationElement(builder);
-        if (!access.isEmpty()) ctor.addModifier(access);
+        // Package-private is spelled out rather than left implicit: a light
+        // modifier list reports only what was added to it, and the platform's
+        // access check reads a list carrying none of the four as public, which
+        // would resolve a call from another package that javac refuses.
+        ctor.addModifier(access.isEmpty() ? PsiModifier.PACKAGE_LOCAL : access);
         for (PsiFieldShape slot : slots) {
             if (slot.seed) ctor.addParameter(buildParam(ctor, slot.name, slot.type, false));
         }
@@ -1405,7 +1433,9 @@ public final class GeneratedMemberFactory {
             // Package-private default, matching the ctor Lombok @Builder supplies.
             String constructorAccess = ClassBuilderConstants.accessKeyword(annotation,
                 ClassBuilderConstants.ATTR_CONSTRUCTOR_ACCESS, "");
-            // Same default one level down, so builder() is the one way in.
+            // Same default one level down, so builder() is the one way in. NONE
+            // falls to it as well: the processor reports that value at the
+            // annotation and generates as under the default beside the error.
             String builderConstructorAccess = ClassBuilderConstants.accessKeyword(annotation,
                 ClassBuilderConstants.ATTR_BUILDER_CONSTRUCTOR_ACCESS, "");
             // Read with the annotation's own default, and part of the record for

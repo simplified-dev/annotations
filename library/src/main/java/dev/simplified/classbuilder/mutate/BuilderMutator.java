@@ -188,7 +188,8 @@ public final class BuilderMutator {
      * SuperBuilder targets (they take a copy constructor instead), when a
      * {@code factoryMethod} means {@code build()} never calls {@code new}, when
      * the author declared any constructor, and when there are no fields to pass -
-     * that last case would collide with javac's own default constructor.
+     * javac's own default constructor is then already the no-argument one
+     * {@code build()} calls.
      *
      * <p>A declared nested builder never suppresses it: the generated
      * {@code build()} merged into that builder still calls
