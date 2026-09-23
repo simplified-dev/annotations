@@ -46,13 +46,33 @@ final class SelfTypedSetters {
     private final Names names;
     private final JavacTypeFactory types;
     private final ContractAnnotations contracts;
+    /** The name of the builder's self-type parameter, which every setter returns. */
+    private final String selfBuilderName;
 
+    /**
+     * Creates setters returning the self-type parameter under the name the
+     * generator gives it.
+     *
+     * @param ctx the per-target mutation context
+     */
     SelfTypedSetters(MutationContext ctx) {
+        this(ctx, ctx.selfBuilderName());
+    }
+
+    /**
+     * Creates setters returning the self-type parameter under the given name,
+     * which is the one a declared builder spells its trailing parameter with.
+     *
+     * @param ctx the per-target mutation context
+     * @param selfBuilderName the name of the builder's self-type parameter
+     */
+    SelfTypedSetters(MutationContext ctx, String selfBuilderName) {
         this.ctx = ctx;
         this.make = ctx.make();
         this.names = ctx.names();
         this.types = ctx.types();
         this.contracts = ctx.contracts();
+        this.selfBuilderName = selfBuilderName;
     }
 
     /** Mirrors {@link FieldMutators#setters} but always with {@code return self();}. */
@@ -724,9 +744,10 @@ final class SelfTypedSetters {
 
     private JCMethodDecl method(String methodName, List<JCVariableDecl> params, List<JCStatement> body) {
         JCBlock block = make.Block(0, body);
-        // The self-type parameter, which dodges its usual "B" spelling when the
-        // target declares a type parameter of that name.
-        JCExpression returnType = make.Ident(names.fromString(ctx.selfBuilderName()));
+        // The self-type parameter. Under the generator's name it dodges its
+        // usual "B" spelling when the target declares a type parameter of that
+        // name; a declared builder's own spelling is taken as written.
+        JCExpression returnType = make.Ident(names.fromString(selfBuilderName));
         // Contract mirrors FieldMutators: every setter returns this via
         // self() and mutates the builder. Arity picks the left-hand side.
         List<JCAnnotation> contract = switch (params.size()) {

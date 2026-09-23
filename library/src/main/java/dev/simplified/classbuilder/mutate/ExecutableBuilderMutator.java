@@ -2,6 +2,7 @@ package dev.simplified.classbuilder.mutate;
 
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import dev.simplified.classbuilder.apt.BuilderConfig;
+import dev.simplified.classbuilder.apt.ChainRole;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.JavacBridge;
@@ -79,7 +80,10 @@ public final class ExecutableBuilderMutator {
         // around it, as every other diagnostic on this path does. A refused
         // shape emits nothing further, the entry point included.
         if (declared != null) {
-            if (!new DeclaredBuilderMerge(ctx, messager).merge(target, executable, declared)) return true;
+            if (!new DeclaredBuilderMerge(ctx, messager).merge(target, executable, declared,
+                ChainRole.STANDALONE, new NestedBuilderFactory(ctx).members(), null)) {
+                return true;
+            }
         } else {
             bridge.compat().appendDef(target, new NestedBuilderFactory(ctx).build());
         }

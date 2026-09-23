@@ -145,7 +145,8 @@ public final class BuilderMutator {
         new RetainedInitFactory(ctx, messager).appendAll();
 
         if (declared != null) {
-            if (!new DeclaredBuilderMerge(ctx, messager).merge(target, targetElement, declared)) {
+            if (!new DeclaredBuilderMerge(ctx, messager).merge(target, targetElement, declared,
+                ChainRole.STANDALONE, new NestedBuilderFactory(ctx).members(), null)) {
                 return true;
             }
         } else {

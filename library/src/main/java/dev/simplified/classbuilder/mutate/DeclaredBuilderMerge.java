@@ -89,11 +89,19 @@ final class DeclaredBuilderMerge {
      *     diagnostic is reported against - the type, or the constructor or
      *     factory method
      * @param declared the builder the target declares
+     * @param role the target's position in a chain, which decides the shape the
+     *     declared builder has to take
+     * @param members the generated members to merge, in emission order, as the
+     *     producer for the role builds them
+     * @param annotatedSuper the target's annotated direct superclass, whose
+     *     builder a linked role's declaration has to extend, or {@code null}
+     *     when there is none
      * @return whether the merge ran; {@code false} when the declared builder
      *     cannot host the generated members and an error was reported
      */
-    boolean merge(JCClassDecl target, Element anchor, JCClassDecl declared) {
-        if (!rejectUnusableShape(anchor, declared)) return false;
+    boolean merge(JCClassDecl target, Element anchor, JCClassDecl declared, ChainRole role,
+                  List<JCTree> members, @Nullable AnnotatedSuper annotatedSuper) {
+        if (!rejectUnusableShape(anchor, declared, role, annotatedSuper)) return false;
         rejectMistypedSlots(anchor, declared);
 
         Set<String> fields = declaredFieldNames(declared);
@@ -101,7 +109,7 @@ final class DeclaredBuilderMerge {
         boolean authorOwnsConstruction = declaresConstructor(declared);
 
         List<String> skipped = new ArrayList<>();
-        for (JCTree member : new NestedBuilderFactory(ctx).members()) {
+        for (JCTree member : members) {
             if (member instanceof JCVariableDecl field) {
                 if (fields.contains(field.name.toString())) {
                     skipped.add(field.name.toString());
@@ -145,11 +153,17 @@ final class DeclaredBuilderMerge {
      * editor runs over the same facts read out of PSI, so a builder the editor
      * populates is a builder javac accepts. What is left here is filling the
      * facts from the tree and choosing the operands each rejection interpolates.
+     *
+     * @param anchor the element every diagnostic is reported against
+     * @param declared the builder the target declares
+     * @param role the target's position in a chain
+     * @param annotatedSuper the target's annotated direct superclass, or {@code null}
+     * @return whether the merge may proceed
      */
-    private boolean rejectUnusableShape(Element anchor, JCClassDecl declared) {
-        ChainRole role = roleOf();
-        RoleExpectation expectation = expectationFor(role);
+    private boolean rejectUnusableShape(Element anchor, JCClassDecl declared, ChainRole role,
+                                        @Nullable AnnotatedSuper annotatedSuper) {
         DeclaredBuilderFacts facts = factsOf(declared);
+        RoleExpectation expectation = expectationFor(role, facts, annotatedSuper);
         DeclaredBuilderRejection rejection = DeclaredBuilderShape.check(role, facts, expectation);
         if (rejection == null) return true;
         messager.printMessage(Diagnostic.Kind.ERROR,
@@ -160,37 +174,41 @@ final class DeclaredBuilderMerge {
     }
 
     /**
-     * Where the target this merge runs for sits in a chain.
-     *
-     * <p>Two callers reach the merge - a class or record target outside any
-     * chain, and a constructor or factory target, which is never in one - and
-     * both are standalone. The chain branch returns ahead of the declared-builder
-     * check, so this answers the one role that gets here, while the decision it
-     * feeds is written for all four.
-     *
-     * @return the target's role
-     */
-    private ChainRole roleOf() {
-        return ChainRole.STANDALONE;
-    }
-
-    /**
      * What the role requires of the declared builder.
      *
+     * <p>The leading type parameters are the target's own. On a self-typed role
+     * the trailing pair is the one the declaration spells, since the author
+     * names it and the check compares names; with fewer than the target's own
+     * count plus two there is no pair to read, the generator's names stand in,
+     * and the check reports the parameter list. On a role with an annotated
+     * superclass the declaration has to extend that ancestor's builder, compared
+     * by erased simple name as the facts state the written clause.
+     *
      * @param role the target's position in a chain
+     * @param facts the declared builder as written
+     * @param annotatedSuper the target's annotated direct superclass, or {@code null}
      * @return the parameter names, supertype and build return type to measure against
      */
-    private RoleExpectation expectationFor(ChainRole role) {
+    private RoleExpectation expectationFor(ChainRole role, DeclaredBuilderFacts facts,
+                                           @Nullable AnnotatedSuper annotatedSuper) {
         List<String> targetParameters = new ArrayList<>();
         for (JCTypeParameter parameter : ctx.typeParams()) {
             targetParameters.add(parameter.name.toString());
         }
         List<String> selfNames = List.of(ctx.selfTypeName(), ctx.selfBuilderName());
+        List<String> declaredNames = facts.typeParameterNames();
+        if (role.isSelfTyped() && declaredNames.size() >= targetParameters.size() + 2) {
+            int pair = declaredNames.size() - 2;
+            selfNames = List.copyOf(declaredNames.subList(pair, pair + 2));
+        }
+        String superBuilderType = annotatedSuper == null
+            ? null
+            : erasedName(annotatedSuper.simpleName() + "." + ctx.builderName());
         return new RoleExpectation(
             DeclaredBuilderShape.expectedTypeParameters(role, targetParameters, selfNames),
-            DeclaredBuilderShape.expectedSuperType(role, null),
+            DeclaredBuilderShape.expectedSuperType(role, superBuilderType),
             DeclaredBuilderShape.expectedBuildReturnType(role, ctx.targetSimpleName(),
-                ctx.selfTypeName()));
+                selfNames.get(0)));
     }
 
     /**
