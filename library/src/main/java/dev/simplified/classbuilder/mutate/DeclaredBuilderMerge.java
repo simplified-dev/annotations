@@ -29,9 +29,11 @@ import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
 import javax.tools.Diagnostic;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -114,10 +116,10 @@ final class DeclaredBuilderMerge {
     boolean merge(JCClassDecl target, Element anchor, JCClassDecl declared, ChainRole role,
                   List<JCTree> members, @Nullable AnnotatedSuper annotatedSuper) {
         if (!rejectUnusableShape(anchor, declared, role, annotatedSuper)) return false;
-        rejectMistypedSlots(anchor, declared);
+        Map<String, JCMethodDecl> methods = declaredMethodKeys(declared);
+        rejectMistypedSlots(anchor, declared, members, methods.keySet());
 
         Set<String> fields = declaredFieldNames(declared);
-        Set<String> methods = declaredMethodKeys(declared);
         boolean authorOwnsConstruction = declaresConstructor(declared);
         boolean accessApplies = BuilderConstructorAccess.appliesTo(role);
         if (accessApplies && authorOwnsConstruction) warnInertAccess(anchor, declared);
@@ -140,8 +142,13 @@ final class DeclaredBuilderMerge {
                     if (!retyped) skipped.add(declared.name + "(" + (authorOwnsConstruction ? "..)" : ")"));
                     continue;
                 }
-                if (methods.contains(key(method))) {
+                JCMethodDecl author = methods.get(key(method));
+                if (author != null) {
                     skipped.add(signature(method));
+                    if (ctx.setterSlot(method) != null) {
+                        ctx.recordCoveredSetter(new CoveredSetter(method.name.toString(),
+                            parameterTypes(author), parameterTypes(method)));
+                    }
                     continue;
                 }
             }
@@ -325,24 +332,35 @@ final class DeclaredBuilderMerge {
      * the editor asks of the same facts.
      *
      * <p>A field declared {@code final} is reported too, through
-     * {@link DeclaredBuilderShape#finalSlot}, whatever its type: the generated
-     * setter assigns it. A seed is the exception, being appended {@code final}
-     * itself and assigned by the author's constructor alone.
+     * {@link DeclaredBuilderShape#finalSlot}, whatever its type, where a setter
+     * generated for its slot is left to be appended - the author spelling no
+     * method under its key - since that setter assigns it. The setters are told
+     * apart in the member list by the slot {@link MutationContext#setterSlot}
+     * recorded for each, and keyed as the collision rule keys them.
      *
      * <p>The merge continues after a report, so javac also refuses the generated
      * member that assigns the slot - the report is what says why on a line the
      * author wrote.
+     *
+     * @param anchor the element every diagnostic is reported against
+     * @param declared the builder the author wrote
+     * @param members the generated members being merged
+     * @param authorKeys the {@link DeclaredBuilderShape#methodKey} of each method the author declared
      */
-    private void rejectMistypedSlots(Element anchor, JCClassDecl declared) {
+    private void rejectMistypedSlots(Element anchor, JCClassDecl declared, List<JCTree> members,
+                                     Set<String> authorKeys) {
         for (JCTree def : declared.defs) {
             if (!(def instanceof JCVariableDecl field)) continue;
             if (field.vartype == null) continue;
             String name = field.name.toString();
             for (FieldSpec slot : ctx.fields()) {
                 if (!slot.name.equals(name)) continue;
-                if ((field.mods.flags & Flags.FINAL) != 0 && !slot.seed) {
-                    messager.printMessage(Diagnostic.Kind.ERROR,
-                        DeclaredBuilderShape.finalSlot(declared.name.toString(), name), anchor);
+                String finalSlot = (field.mods.flags & Flags.FINAL) == 0
+                    ? null
+                    : DeclaredBuilderShape.finalSlot(declared.name.toString(), name,
+                        setterKeys(members, name), authorKeys);
+                if (finalSlot != null) {
+                    messager.printMessage(Diagnostic.Kind.ERROR, finalSlot, anchor);
                     continue;
                 }
                 SlotHolding holding = holdingOf(slot);
@@ -400,16 +418,49 @@ final class DeclaredBuilderMerge {
         return out;
     }
 
-    /** {@link DeclaredBuilderShape#methodKey} keys the declared builder already spells. */
-    private static Set<String> declaredMethodKeys(JCClassDecl declared) {
-        Set<String> out = new HashSet<>();
+    /**
+     * The methods the declared builder already spells, by their
+     * {@link DeclaredBuilderShape#methodKey}.
+     *
+     * @param declared the builder the author wrote
+     * @return each key with the first method declared under it
+     */
+    private static Map<String, JCMethodDecl> declaredMethodKeys(JCClassDecl declared) {
+        Map<String, JCMethodDecl> out = new HashMap<>();
         for (JCTree def : declared.defs) {
-            if (def instanceof JCMethodDecl method && !method.name.contentEquals("<init>")) {
-                out.add(key(method));
-            }
+            if (def instanceof JCMethodDecl method && !method.name.contentEquals("<init>"))
+                out.putIfAbsent(key(method), method);
         }
         return out;
     }
+
+    /**
+     * The {@link DeclaredBuilderShape#methodKey} of each setter generated for a
+     * slot.
+     *
+     * @param members the generated members being merged
+     * @param slotName the slot's name
+     * @return the keys, in emission order
+     */
+    private List<String> setterKeys(List<JCTree> members, String slotName) {
+        List<String> out = new ArrayList<>();
+        for (JCTree member : members) {
+            if (member instanceof JCMethodDecl method && slotName.equals(ctx.setterSlot(method)))
+                out.add(key(method));
+        }
+        return out;
+    }
+
+    /**
+     * A setter the merge leaves out because an author method covers it under
+     * {@link DeclaredBuilderShape#methodKey}, which the copy entry points pass the
+     * slot to instead.
+     *
+     * @param name the method name the two share
+     * @param writtenTypes each parameter type of the author's method as written
+     * @param generatedTypes each parameter type of the generated setter as rendered
+     */
+    record CoveredSetter(String name, List<String> writtenTypes, List<String> generatedTypes) { }
 
     /**
      * Whether the author wrote the declared builder a constructor.
@@ -485,10 +536,15 @@ final class DeclaredBuilderMerge {
 
 
     private static String key(JCMethodDecl method) {
+        return DeclaredBuilderShape.methodKey(method.name.toString(), parameterTypes(method));
+    }
+
+    /** Each parameter's type as the tree spells it, in order. */
+    private static List<String> parameterTypes(JCMethodDecl method) {
         List<String> types = new ArrayList<>(method.params.size());
         for (JCVariableDecl parameter : method.params)
             types.add(parameter.vartype == null ? "" : parameter.vartype.toString());
-        return DeclaredBuilderShape.methodKey(method.name.toString(), types);
+        return types;
     }
 
     private static String signature(JCMethodDecl method) {

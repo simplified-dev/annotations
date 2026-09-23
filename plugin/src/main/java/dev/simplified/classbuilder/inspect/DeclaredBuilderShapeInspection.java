@@ -46,11 +46,15 @@ import java.util.Objects;
  * where the factory is static.
  *
  * <p>On a shape the merge accepts, a declared field sharing a slot's name and
- * holding a type the generated setters cannot assign, or declared {@code final},
- * is reported on that field's type, again in the processor's sentence. The slot's storage is classified by
+ * holding a type the generated setters cannot assign, or declared {@code final}
+ * where a generated setter of its slot is appended, is reported on that field's
+ * type, again in the processor's sentence. The slot's storage is classified by
  * {@link MergedSlotStorage}, as the processor classifies it - an initialised
  * slot included, held as a supplier where its kept initializer reads the
- * instance, and a collected one in its {@code java.util} scratch container.
+ * instance, and a collected one in its {@code java.util} scratch container. An
+ * author method covering a generated setter with another parameterisation of
+ * the same generic type is reported on its name where {@code from(T)} or
+ * {@code mutate()} is emitted to pass it the slot's own type.
  *
  * <p>On a class or record target and on a constructor or factory target, a
  * {@code builderConstructorAccess} written on the annotation while the declared
@@ -148,6 +152,16 @@ public class DeclaredBuilderShapeInspection extends LocalInspectionTool {
                     PsiTypeElement anchor = mistyped.field().getTypeElement();
                     holder.registerProblem(anchor == null ? mistyped.field() : anchor,
                         mistyped.message(), ProblemHighlightType.GENERIC_ERROR);
+                }
+
+                // The processor judges a covered setter's parameter where it
+                // emits the copy entry points that call it, and reports on the
+                // class; the author's method is what to act on here.
+                for (MergedSlotStorage.CoveringMethod covering
+                    : MergedSlotStorage.settersCoveredWithOtherTypeArguments(target, member, declared, annotation)) {
+                    PsiElement anchor = covering.method().getNameIdentifier();
+                    holder.registerProblem(anchor == null ? covering.method() : anchor,
+                        covering.message(), ProblemHighlightType.GENERIC_ERROR);
                 }
 
                 // A seed is appended final and only the author's constructors can

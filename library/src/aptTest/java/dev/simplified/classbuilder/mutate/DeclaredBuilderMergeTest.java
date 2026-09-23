@@ -1591,12 +1591,14 @@ public class DeclaredBuilderMergeTest {
     }
 
     /**
-     * A boxed field over a primitive slot takes every value the generated
-     * members assign and read back, under boxing and unboxing, so it is merged
-     * into. It was refused as mistyped though its hand expansion compiles.
+     * A boxed field over a primitive slot is refused: left unset, it reaches
+     * the primitive constructor parameter as {@code null} and {@code build()}
+     * throws. It was accepted, and an unset builder threw
+     * {@code NullPointerException} where a generated one passes {@code 0}.
+     * {@code DeclaredBuilderShapeInspectionTest} asserts the same sentence.
      */
     @Test
-    public void merge_ontoABoxedTwinOfAPrimitiveSlot_isMergedInto() throws Exception {
+    public void merge_ontoABoxedFieldOverAPrimitiveSlot_isRejected() {
         Compilation c = compile(
             JavaFileObjects.forSourceLines("demo.Counter",
                 "package demo;",
@@ -1611,17 +1613,171 @@ public class DeclaredBuilderMergeTest {
                 "            return this;",
                 "        }",
                 "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds 'count' declared as "
+            + "Integer, and the slot it stands for is int - an unset Integer field reaches the primitive "
+            + "constructor parameter as null");
+    }
+
+    /**
+     * A primitive field over a boxed slot takes every value the generated
+     * members assign, under unboxing, and is never {@code null} to hand on, so
+     * it is merged into.
+     */
+    @Test
+    public void merge_ontoAPrimitiveFieldOverABoxedSlot_isMergedInto() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Counter",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public class Counter {",
+                "    Integer count;",
+                "    public static class Builder {",
+                "        private int count;",
+                "        public Builder bump() {",
+                "            this.count++;",
+                "            return this;",
+                "        }",
+                "    }",
                 "}"),
             JavaFileObjects.forSourceLines("demo.UseCounter",
                 "package demo;",
                 "public class UseCounter {",
                 "    public static Object go() {",
                 "        Counter first = Counter.builder().bump().bump().build();",
-                "        return Counter.from(first).build().count;",
+                "        return Counter.from(first).bump().build().count;",
                 "    }",
                 "}"));
         assertThat(c).succeeded();
-        assertEquals(2, runGo(c, "demo.UseCounter"));
+        assertEquals(3, runGo(c, "demo.UseCounter"));
+    }
+
+    /**
+     * A {@code final} field whose slot's every generated setter the author
+     * spells is left for the author's own members to assign - nothing the merge
+     * appends writes it - so it is merged into. It was refused whatever the
+     * author wrote, though the builder compiles. The author's setter here hands
+     * back a fresh builder rather than assigning.
+     */
+    @Test
+    public void merge_ontoAFinalSlotEverySetterOfWhichTheAuthorSpells_isMergedInto() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Server",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public class Server {",
+                "    int port;",
+                "    public static class Builder {",
+                "        private final int port;",
+                "        public Builder() { this(80); }",
+                "        private Builder(int port) { this.port = port; }",
+                "        public Builder port(int port) { return new Builder(port); }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseServer",
+                "package demo;",
+                "public class UseServer {",
+                "    public static Object go() { return Server.builder().port(9).build().port; }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals(9, runGo(c, "demo.UseServer"));
+    }
+
+    /**
+     * A {@code final} field some of whose slot's setters the author leaves to
+     * the generator is still refused - the generated {@code enabled()} assigns
+     * it.
+     */
+    @Test
+    public void merge_ontoAFinalSlotOneOfWhoseSettersIsLeftGenerated_isRejected() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Switch",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public class Switch {",
+                "    boolean enabled;",
+                "    public static class Builder {",
+                "        private final boolean enabled;",
+                "        public Builder() { this(false); }",
+                "        private Builder(boolean enabled) { this.enabled = enabled; }",
+                "        public Builder enabled(boolean enabled) { return new Builder(enabled); }",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds 'enabled' declared "
+            + "final, and the generated setter assigns it");
+    }
+
+    /**
+     * An author method covering a generated setter under the method key while
+     * taking another parameterisation of the same generic type cannot take the
+     * slot's own type, which {@code from(T)} and {@code mutate()} pass it, so it
+     * is refused on the class. It covered the setter with nothing said, and
+     * javac failed on the generated {@code from(T)}.
+     * {@code DeclaredBuilderShapeInspectionTest} asserts the same sentence.
+     */
+    @Test
+    public void merge_anAuthorMethodCoveringASetterWithOtherTypeArguments_isRejected() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Bag",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import java.util.ArrayList;",
+                "import java.util.List;",
+                "@ClassBuilder",
+                "public class Bag {",
+                "    List<String> items;",
+                "    public static class Builder {",
+                "        public Builder items(List<Integer> codes) {",
+                "            this.items = new ArrayList<>();",
+                "            for (Integer code : codes) this.items.add(\"#\" + code);",
+                "            return this;",
+                "        }",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds items(List<Integer>) "
+            + "standing in for the generated items(List<String>), and 'from' and 'mutate' pass it the "
+            + "slot's List<String>, which its List<Integer> parameter cannot take");
+    }
+
+    /**
+     * The same author method on a constructor target, where no {@code from(T)}
+     * or {@code mutate()} is emitted to pass it the slot, compiles and is left
+     * alone.
+     */
+    @Test
+    public void merge_onAConstructorTarget_anAuthorMethodCoveringASetterWithOtherTypeArguments_compiles()
+        throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Bag",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import java.util.ArrayList;",
+                "import java.util.List;",
+                "public class Bag {",
+                "    final List<String> items;",
+                "    @ClassBuilder",
+                "    Bag(List<String> items) { this.items = items; }",
+                "    public static class Builder {",
+                "        public Builder items(List<Integer> codes) {",
+                "            this.items = new ArrayList<>();",
+                "            for (Integer code : codes) this.items.add(\"#\" + code);",
+                "            return this;",
+                "        }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseBag",
+                "package demo;",
+                "public class UseBag {",
+                "    public static Object go() { return Bag.builder().items(java.util.List.of(1)).build().items; }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals(List.of("#1"), runGo(c, "demo.UseBag"));
     }
 
     /**
@@ -1651,8 +1807,66 @@ public class DeclaredBuilderMergeTest {
                 "}"));
         assertThat(c).succeeded();
         assertThat(c).hadNoteContaining("@ClassBuilder merged into 'Builder' but its no-argument "
-            + "constructor declares a throws clause, so 'builder', 'from' and 'mutate' were not added - "
-            + "declare one that throws nothing or write them");
+            + "constructor declares a throws clause naming an exception not known to be unchecked, so "
+            + "'builder', 'from' and 'mutate' were not added - declare one throwing only unchecked "
+            + "exceptions or write them");
+    }
+
+    /**
+     * A throws clause naming only known unchecked exceptions, simple or
+     * qualified, leaves a constructor the entry points can call, so all three
+     * are emitted. Any throws clause skipped them, over source whose entry
+     * points compile.
+     */
+    @Test
+    public void merge_intoABuilderWhoseNoArgConstructorThrowsOnlyUncheckedExceptions_keepsTheEntryPoints()
+        throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Conn",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public class Conn {",
+                "    String host;",
+                "    public static class Builder {",
+                "        Builder() throws IllegalStateException, java.util.NoSuchElementException { }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseConn",
+                "package demo;",
+                "public class UseConn {",
+                "    public static Object go() {",
+                "        Conn first = Conn.builder().host(\"h\").build();",
+                "        return Conn.from(first).build().host + first.mutate().host(\"i\").build().host;",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("hi", runGo(c, "demo.UseConn"));
+    }
+
+    /**
+     * A throws clause naming a type neither half can tell is unchecked - here
+     * the author's own, which is - still skips the entry points: the name is
+     * treated as checked, which is the answer that never emits a call javac
+     * refuses.
+     */
+    @Test
+    public void merge_intoABuilderWhoseNoArgConstructorThrowsAnUnknownName_skipsTheEntryPoints() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Conn",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public class Conn {",
+                "    String host;",
+                "    public static class Builder {",
+                "        Builder() throws Failure { }",
+                "    }",
+                "    static class Failure extends RuntimeException { }",
+                "}"));
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("@ClassBuilder merged into 'Builder' but its no-argument "
+            + "constructor declares a throws clause");
     }
 
     // ------------------------------------------------------------------

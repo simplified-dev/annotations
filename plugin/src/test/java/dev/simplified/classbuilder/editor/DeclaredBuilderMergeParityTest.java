@@ -1304,6 +1304,30 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
             methodNamesOf(nestedOf(target, "Builder")).contains("host"));
     }
 
+    /**
+     * A no-argument builder constructor whose throws clause names only known
+     * unchecked exceptions serves the entry points, which javac emits. The
+     * editor withheld all three over any throws clause, as the processor did.
+     */
+    public void testMergedBuilderWhoseNoArgConstructorThrowsOnlyUnchecked_offersTheEntryPoints() {
+        PsiFile file = myFixture.configureByText("Conn.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Conn {
+                String host;
+                public static class Builder {
+                    Builder() throws IllegalStateException, java.util.NoSuchElementException { }
+                }
+            }
+            """);
+        PsiClass target = ((PsiJavaFile) file).getClasses()[0];
+        List<String> names = methodNamesOf(target);
+        assertTrue("javac emits builder(): " + names, names.contains("builder"));
+        assertTrue("and from(T): " + names, names.contains("from"));
+        assertTrue("and mutate(): " + names, names.contains("mutate"));
+    }
+
     // ------------------------------------------------------------------
     // Reviewed reproductions: the constructor and factory path
     // ------------------------------------------------------------------

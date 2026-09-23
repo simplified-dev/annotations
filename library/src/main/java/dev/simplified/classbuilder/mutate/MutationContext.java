@@ -17,6 +17,7 @@ import dev.simplified.shared.javac.ContractAnnotations;
 import dev.simplified.shared.javac.GeneratedAnnotations;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.JavacTypeFactory;
+import org.jetbrains.annotations.Nullable;
 
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
@@ -26,8 +27,11 @@ import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.TypeParameterElement;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeMirror;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -53,6 +57,8 @@ public final class MutationContext {
     private final String selfBuilderName;
     private final ExecutableElement executable;
     private final List<? extends TypeParameterElement> typeParameters;
+    private final Map<JCMethodDecl, String> setterSlots = new IdentityHashMap<>();
+    private final List<DeclaredBuilderMerge.CoveredSetter> coveredSetters = new ArrayList<>();
 
     public MutationContext(JavacBridge bridge,
                            TypeElement targetElement,
@@ -137,6 +143,46 @@ public final class MutationContext {
     /** Field names taking the constructor-computed default path. */
     public Set<String> instanceDefaults() {
         return instanceDefaults;
+    }
+
+    /**
+     * Records the slot each of these setters was generated for, so a merge
+     * handed the whole member list can tell which of them assign which slot.
+     *
+     * @param slot the slot the setters assign
+     * @param setters the setters generated for it
+     * @return the same setters
+     */
+    com.sun.tools.javac.util.List<JCMethodDecl> recordSetters(FieldSpec slot,
+                                                              com.sun.tools.javac.util.List<JCMethodDecl> setters) {
+        for (JCMethodDecl setter : setters) setterSlots.put(setter, slot.name);
+        return setters;
+    }
+
+    /**
+     * The slot a generated member is a setter of.
+     *
+     * @param member a member the builder producers generated
+     * @return the slot's name, or {@code null} when the member is no slot's setter
+     */
+    @Nullable String setterSlot(JCTree member) {
+        return member instanceof JCMethodDecl method ? setterSlots.get(method) : null;
+    }
+
+    /**
+     * Records a generated setter the merge left out because an author method
+     * covers it, for the copy entry points to judge once they know whether they
+     * are emitted.
+     *
+     * @param covered the author's method and the setter it covers
+     */
+    void recordCoveredSetter(DeclaredBuilderMerge.CoveredSetter covered) {
+        coveredSetters.add(covered);
+    }
+
+    /** Every generated setter the merge left out for an author method covering it, in merge order. */
+    List<DeclaredBuilderMerge.CoveredSetter> coveredSetters() {
+        return coveredSetters;
     }
 
     /**

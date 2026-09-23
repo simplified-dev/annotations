@@ -75,8 +75,19 @@ final class SelfTypedSetters {
         this.selfBuilderName = selfBuilderName;
     }
 
-    /** Mirrors {@link FieldMutators#setters} but always with {@code return self();}. */
+    /**
+     * Mirrors {@link FieldMutators#setters} but always with {@code return self();},
+     * each setter recorded on the context as the field's.
+     *
+     * @param field the slot
+     * @return its setters, in emission order
+     */
     List<JCMethodDecl> setters(FieldSpec field) {
+        return ctx.recordSetters(field, shapes(field));
+    }
+
+    /** Every setter shape the field emits, in emission order. */
+    private List<JCMethodDecl> shapes(FieldSpec field) {
         ListBuffer<JCMethodDecl> out = new ListBuffer<>();
         if (field.lazy) {
             out.append(lazyValueSetter(field));

@@ -10,8 +10,13 @@ Every entry point creates the builder with the <code>@BuilderSeed</code>
 parameters, in order, so where the declared builder declares constructors and
 none taking the seeds' types in that order, <code>builder()</code>,
 <code>from(T)</code> and <code>mutate()</code> are not generated - and neither
-are they where every constructor taking them declares a throws clause, since the entry points call
-it with nothing around the call to handle what it throws. The processor says so in a compiler
+are they where every constructor taking them declares a throws clause naming an
+exception not known to be unchecked, since the entry points call it with nothing
+around the call to handle what it throws. Neither the processor nor the editor
+resolves a thrown name, so only <code>RuntimeException</code>, <code>Error</code>
+and their common subclasses in <code>java.lang</code> and <code>java.util</code>,
+written by simple or qualified name, count as unchecked; any other name is
+treated as checked, an unchecked exception of the author's own among them. The processor says so in a compiler
 note and completion leaves the three out; this warning is the note, in the
 same words, on the annotation.
 </p>

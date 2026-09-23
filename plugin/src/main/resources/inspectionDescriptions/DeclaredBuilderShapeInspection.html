@@ -70,8 +70,9 @@ nothing and is not judged.
 <p>
 On a shape the merge accepts, a field the author declares in the builder under
 a slot's name is also checked against the type the generated setters assign,
-type arguments included, a primitive and its box being accepted for each other
-since the setter assigns and <code>build()</code> reads back under boxing. A
+type arguments included. A primitive field over its box is accepted, the setter
+assigning it under unboxing; a box over its primitive is reported, since an unset
+one reaches the primitive constructor parameter as <code>null</code>. A
 field written C-style, <code>String tags[]</code>, is read with its brackets,
 and a varargs parameter's slot is the array it is.
 That is the field's declared type, except for a
@@ -86,8 +87,21 @@ plain <code>java.util</code> container of its elements - <code>List</code>,
 <code>Set</code> or <code>Map</code> - so <code>private List&lt;String&gt;
 tags;</code> holds an <code>ArrayList&lt;String&gt; tags</code> slot and
 <code>private ArrayList&lt;String&gt; tags;</code> is reported. A field under a slot's name declared <code>final</code> is
-reported whatever its type, the generated setter assigning it; a
-<code>@BuilderSeed</code> is the exception, appended <code>final</code> itself.
+reported whatever its type where one of the slot's generated setters is
+appended - the author writing no method of its name and erased parameter
+types - since that setter assigns it; where the author writes every one of
+them, nothing generated assigns the field. A <code>@BuilderSeed</code> has no
+setter and is never reported.
+</p>
+
+<p>
+An author method of a generated setter's name and erased parameter types takes
+its place, and <code>from(T)</code> and <code>mutate()</code> pass it the slot's
+own type. Where the two parameters are distinct parameterisations of one
+generic type - <code>items(List&lt;Integer&gt;)</code> beside a
+<code>List&lt;String&gt;</code> slot, neither a wildcard nor one of the
+builder's type parameters - javac cannot pass it, and the method is reported on
+its name wherever either copy entry point is emitted.
 </p>
 
 <p>

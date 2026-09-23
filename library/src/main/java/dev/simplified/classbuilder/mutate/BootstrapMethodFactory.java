@@ -105,9 +105,10 @@ final class BootstrapMethodFactory {
      * the seeds' types in seed order leaves the entry points with nothing to
      * call, and they are skipped with a note rather than emitted onto a line
      * javac rejects - and so does one whose constructor taking them declares a
-     * throws clause, which the entry points call with nothing to handle it. The
-     * decision is {@link DeclaredBuilderShape#instantiable}, which the editor
-     * asks of the same parameter types read out of PSI.
+     * throws clause that may name a checked exception, which the entry points
+     * call with nothing to handle it. The decision is
+     * {@link DeclaredBuilderShape#instantiable}, which the editor asks of the
+     * same parameter types read out of PSI.
      *
      * @return whether the entry points can be emitted
      */
@@ -121,7 +122,8 @@ final class BootstrapMethodFactory {
      * The parameter types of each constructor the merged builder declares, as
      * written.
      *
-     * @param callableOnly whether to read only the ones declaring no throws clause
+     * @param callableOnly whether to read only the ones whose throws clause
+     *     {@link DeclaredBuilderShape#throwsNothingChecked} accepts
      * @return each constructor's parameter types, in declaration order
      */
     private java.util.List<java.util.List<String>> constructorSignatures(boolean callableOnly) {
@@ -132,13 +134,44 @@ final class BootstrapMethodFactory {
             // javac's own default is in the tree by now; it is what a class
             // declaring nothing falls back to, not a constructor the author wrote.
             if ((method.mods.flags & Flags.GENERATEDCONSTR) != 0) continue;
-            if (callableOnly && method.thrown != null && !method.thrown.isEmpty()) continue;
+            if (callableOnly && !DeclaredBuilderShape.throwsNothingChecked(thrownTypes(method))) continue;
             java.util.List<String> types = new ArrayList<>(method.params.size());
             for (JCVariableDecl parameter : method.params)
                 types.add(parameter.vartype == null ? "" : parameter.vartype.toString());
             signatures.add(types);
         }
         return signatures;
+    }
+
+    /** Each type a constructor's throws clause names, as the tree spells it. */
+    private static java.util.List<String> thrownTypes(JCMethodDecl constructor) {
+        java.util.List<String> out = new ArrayList<>();
+        if (constructor.thrown == null) return out;
+        for (JCExpression thrown : constructor.thrown) out.add(thrown.toString());
+        return out;
+    }
+
+    /**
+     * Reports each setter the merge left out for an author method covering it
+     * with another parameterisation of the same generic type, which the copy
+     * entry points about to be emitted would pass the slot's own type.
+     *
+     * <p>The rule and its wording are
+     * {@link DeclaredBuilderShape#setterWithOtherTypeArguments}, which the
+     * editor's inspection asks of the same types read out of PSI; what is known
+     * only here is which copy entry points are emitted.
+     *
+     * @param copyEntryPoints the names of the copy entry points about to be emitted
+     */
+    private void rejectCoveredSetters(java.util.List<String> copyEntryPoints) {
+        if (mergedInto == null || copyEntryPoints.isEmpty()) return;
+        java.util.List<String> typeParameters = DeclaredBuilderMerge.declaredParameterNames(mergedInto);
+        for (DeclaredBuilderMerge.CoveredSetter covered : ctx.coveredSetters()) {
+            String message = DeclaredBuilderShape.setterWithOtherTypeArguments(mergedInto.name.toString(),
+                covered.name(), covered.writtenTypes(), covered.generatedTypes(), typeParameters,
+                copyEntryPoints);
+            if (message != null) messager.printMessage(Diagnostic.Kind.ERROR, message, ctx.targetElement());
+        }
     }
 
     /** The type of each seed the entry points pass, in parameter order. */
@@ -195,13 +228,18 @@ final class BootstrapMethodFactory {
         // at. Both are suppressed rather than emitted against a guess.
         if (ctx.isExecutableTarget()) return;
 
+        boolean fromDeclared = BootstrapCollisions.declaresCopyFactory(ctx.targetElement(), fromMethod);
+        boolean mutateDeclared = BootstrapCollisions.declaresNullary(target, mutateMethod);
+        java.util.List<String> copyEntryPoints = new ArrayList<>();
+        if (!fromMethod.isEmpty() && !fromDeclared) copyEntryPoints.add(fromMethod);
+        if (!mutateMethod.isEmpty() && !mutateDeclared) copyEntryPoints.add(mutateMethod);
+        rejectCoveredSetters(copyEntryPoints);
+
         if (!fromMethod.isEmpty())
-            appendUnless(target, fromMethod, "(" + ctx.targetSimpleName() + ")",
-                BootstrapCollisions.declaresCopyFactory(ctx.targetElement(), fromMethod),
+            appendUnless(target, fromMethod, "(" + ctx.targetSimpleName() + ")", fromDeclared,
                 this::fromFactory);
         if (!mutateMethod.isEmpty())
-            appendUnless(target, mutateMethod, "/0",
-                BootstrapCollisions.declaresNullary(target, mutateMethod), this::mutateMethod);
+            appendUnless(target, mutateMethod, "/0", mutateDeclared, this::mutateMethod);
     }
 
     /**

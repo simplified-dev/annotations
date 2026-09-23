@@ -65,8 +65,10 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   primitive's `Supplier<java.lang.Integer>` read alike in the build and in the editor. The types are
   compared argument by argument, so `List<Integer>` beside a `List<String>` slot is refused on the
   author's field rather than passing on its erasure and failing inside the generated setter; a raw
-  spelling on either side still passes, and so does a primitive spelled over its box or the reverse,
-  which the setter assigns and `build()` reads back under boxing. A C-style `String tags[]` is read
+  spelling on either side still passes, and so does a primitive spelled over its box, which the
+  setter assigns under unboxing. A box spelled over its primitive, `Integer count` over an
+  `int count` slot, is refused with its own clause: left unset it reaches the primitive constructor
+  parameter as `null`, and `build()` throws where a generated builder passes `0`. A C-style `String tags[]` is read
   with its brackets in the editor as javac reads it, where it had been judged as `String`, and a
   varargs parameter's slot is the array it is, so a `String[]` field holds a `String...` slot. The editor
   classifies an initialised slot as the build does -
@@ -126,9 +128,13 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   points with nothing to call. Both halves withhold them together, and the note names only the entry
   points the path emits - `builder(..)` alone on a constructor or factory target, and never one
   named `NONE`; with every entry point named `NONE` there is nothing to skip and no note. A
-  constructor of the right arity that declares a throws clause serves no entry point either, each of
-  them calling it with nothing to handle what it throws, so they are skipped with a note saying so
-  rather than failing as `unreported exception ... in default constructor` on the class line. The note
+  constructor of the right arity whose throws clause may name a checked exception serves no entry
+  point either, each of them calling it with nothing to handle what it throws, so they are skipped
+  with a note saying so rather than failing as `unreported exception ... in default constructor` on
+  the class line. Neither half resolves a thrown name, so a clause naming only `RuntimeException`,
+  `Error` and their common subclasses in `java.lang` and `java.util`, by simple or qualified name,
+  leaves the entry points emitted; any other name, an unchecked exception of the author's own among
+  them, is treated as checked and skips them. The note
   sits on the member the annotation is written on, the constructor or factory on that path, where the
   editor's weak warning sits.
 
@@ -218,7 +224,14 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
     included - give it the slot's type, or `Supplier<T>` for a `@Lazy` slot or one whose kept
     initializer reads the instance, or the `java.util` `List`, `Set` or `Map` of its elements for a
     `@Collector` slot whose default reads the instance, or rename it;
-  - a field sharing a slot's name declared `final` - drop `final`, the generated setter assigning it;
+  - a boxed field over a primitive slot - declare the primitive, an unset box reaching the
+    constructor as `null`;
+  - a field sharing a slot's name declared `final` where a generated setter of the slot is appended -
+    drop `final`, or write every setter of the slot yourself;
+  - a method of a generated setter's name and erased parameter types taking another
+    parameterisation of the slot's generic type, `items(List<Integer>)` beside a `List<String>`
+    slot, where `from(T)` or `mutate()` is emitted to pass it the slot - take the slot's type,
+    rename it, or name both copy entry points `NONE`;
   - on a chain root, a builder that is not abstract or not self-typed - declare it
     `abstract static class Builder<T extends Target, B extends Builder<T, B>>`;
   - below a chain root, a missing or wrong `extends` clause or the wrong arguments to it - extend
@@ -232,7 +245,9 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
 
   A declared builder whose constructors all take parameters keeps its setters and loses only the
   entry points, with a note; declaring a no-argument constructor restores them. So does one whose
-  no-argument constructor declares a throws clause; declaring one that throws nothing restores them.
+  no-argument constructor declares a throws clause naming an exception not known to be unchecked;
+  declaring one that throws only `RuntimeException`, `Error` or their common `java.lang` and
+  `java.util` subclasses restores them.
 
 - **The README documents the dependency scope the artifact is actually built for.** It showed
   `implementation`, which puts a jar on a consumer's runtime classpath that nothing ever loads: every

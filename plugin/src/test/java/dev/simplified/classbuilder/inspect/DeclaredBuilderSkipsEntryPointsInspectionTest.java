@@ -132,8 +132,29 @@ public class DeclaredBuilderSkipsEntryPointsInspectionTest extends BasePlatformT
             }
             """);
         assertEquals("@ClassBuilder merged into 'Builder' but its no-argument constructor declares a "
-            + "throws clause, so 'builder', 'from' and 'mutate' were not added - declare one that throws "
-            + "nothing or write them", theOnlyWarning());
+            + "throws clause naming an exception not known to be unchecked, so 'builder', 'from' and "
+            + "'mutate' were not added - declare one throwing only unchecked exceptions or write them",
+            theOnlyWarning());
+    }
+
+    /**
+     * A throws clause naming only known unchecked exceptions leaves the entry
+     * points a constructor to call, so the processor emits them and there is no
+     * note. The editor warned over any throws clause, as the processor did.
+     */
+    public void testADeclaredBuilderWhoseNoArgConstructorThrowsOnlyUncheckedExceptions_isNotWarned() {
+        myFixture.configureByText("Conn.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Conn {
+                private String host;
+                public static class Builder {
+                    Builder() throws IllegalStateException, java.util.NoSuchElementException { }
+                }
+            }
+            """);
+        assertEquals("the entry points are emitted: " + weakWarningTexts(), 0, weakWarnings().size());
     }
 
     /** A no-argument constructor beside a parameterised one serves the entry points. */

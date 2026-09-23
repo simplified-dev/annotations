@@ -23,6 +23,7 @@ import com.intellij.psi.PsiSuperExpression;
 import com.intellij.psi.PsiThisExpression;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypeElement;
+import com.intellij.psi.PsiTypeParameter;
 import com.intellij.psi.PsiTypes;
 import com.intellij.psi.PsiVariable;
 import com.intellij.psi.controlFlow.AnalysisCanceledException;
@@ -43,14 +44,18 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
  * The editor's reading of the storage a merged builder holds each slot in, and
- * the diagnostics that follow from it - a declared field mistyped for its slot,
- * and an appended seed field a constructor leaves unassigned or assigns again.
+ * the diagnostics that follow from it - a declared field mistyped for its slot
+ * or {@code final} under a setter the merge appends, an author method covering a
+ * setter with a parameter the copy entry points cannot pass the slot to, and an
+ * appended seed field a constructor leaves unassigned or assigns again.
  *
  * <p>The comparison and the sentence are {@link DeclaredBuilderShape#mistypedSlot},
  * the one the processor reports, and the classification is {@link SlotHolding#of}
@@ -79,13 +84,15 @@ public final class MergedSlotStorage {
     /**
      * Reports each field of a declared builder whose type is not the storage type
      * of the slot it shares a name with, or which is declared {@code final} under
-     * a slot the generated setter assigns.
+     * a slot one of whose generated setters is appended to assign it.
      *
      * <p>Reads the slots with the extractor the builder synthesis uses, so the
      * set of names judged is the set the merge assigns - the target's fields or
-     * record components, or the annotated member's parameters. Not for use from
-     * an augment provider: the slot types are rendered through their canonical
-     * text, which resolves.
+     * record components, or the annotated member's parameters. A {@code final}
+     * field is judged by {@link DeclaredBuilderShape#finalSlot} over the keys of
+     * the setters synthesised for its slot and of the author's own methods, the
+     * ones the augment provider compares. Not for use from an augment provider:
+     * the slot types are rendered through their canonical text, which resolves.
      *
      * @param target the type the builder nests in
      * @param executable the annotated constructor or static factory, or {@code null} when the
@@ -112,19 +119,33 @@ public final class MergedSlotStorage {
                 : PsiFieldShapeExtractor.fromClass(target, excluded, setters);
         }
 
-        boolean retainInit =
-            GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(annotation).retainInit();
+        GeneratedMemberFactory.EditorBuilderConfig config =
+            GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(annotation);
+        boolean retainInit = config.retainInit();
+        Map<String, List<PsiMethod>> slotSetters = null;
+        Set<String> authorKeys = null;
         List<Mistyped> out = new ArrayList<>();
         for (PsiField field : ownFields(declared)) {
             String written = writtenTypeText(field);
             if (written == null) continue;
             for (PsiFieldShape slot : slots) {
                 if (!slot.name.equals(field.getName())) continue;
-                // A seed is appended final itself and assigned by the author's
-                // constructor alone; every other slot the setter assigns.
-                if (field.hasModifierProperty(PsiModifier.FINAL) && !slot.seed) {
-                    out.add(new Mistyped(field, DeclaredBuilderShape.finalSlot(declaredName, slot.name)));
-                    continue;
+                if (field.hasModifierProperty(PsiModifier.FINAL)) {
+                    // Synthesised once, and only where a final field asks.
+                    if (slotSetters == null) {
+                        slotSetters = GeneratedMemberFactory.settersBySlot(
+                            new BuilderSite(target, executable, annotation), config, declared);
+                        authorKeys = authorKeys(declared);
+                    }
+                    List<String> setterKeys = new ArrayList<>();
+                    for (PsiMethod setter : slotSetters.getOrDefault(slot.name, List.of()))
+                        setterKeys.add(generatedKey(setter));
+                    String finalSlot = DeclaredBuilderShape.finalSlot(declaredName, slot.name, setterKeys,
+                        authorKeys);
+                    if (finalSlot != null) {
+                        out.add(new Mistyped(field, finalSlot));
+                        continue;
+                    }
                 }
                 // A parameter carries no initializer and cannot be lazy, so the
                 // merge holds it as declared - a field of the enclosing type
@@ -138,6 +159,115 @@ public final class MergedSlotStorage {
             }
         }
         return out;
+    }
+
+    /**
+     * An author method of a declared builder that covers a generated setter
+     * with a parameter the copy entry points cannot pass the slot to, with the
+     * diagnostic the processor prints for it.
+     *
+     * @param method the author's method
+     * @param message the diagnostic text
+     */
+    public record CoveringMethod(@NotNull PsiMethod method, @NotNull String message) { }
+
+    /**
+     * Reports each method of a declared builder that covers a generated setter
+     * under {@link DeclaredBuilderShape#methodKey} while taking another
+     * parameterisation of the same generic type, where {@code from(T)} or
+     * {@code mutate()} is emitted to pass it the slot's own type.
+     *
+     * <p>The rule and its wording are
+     * {@link DeclaredBuilderShape#setterWithOtherTypeArguments}, asked of the
+     * author's parameter types as written and the synthesised setter's
+     * presentable ones - the keys the augment provider compares - and of the copy
+     * entry points {@link GeneratedMemberFactory#copyEntryPoints} names. Not for
+     * use from an augment provider: the setters are synthesised, which resolves
+     * the slot types.
+     *
+     * @param target the type the builder nests in
+     * @param executable the annotated constructor or static factory, or {@code null} when the
+     *     annotation is on the type
+     * @param declared the builder it declares
+     * @param annotation the {@code @ClassBuilder}, wherever it is written
+     * @return the covering methods, in the declared builder's method order
+     */
+    public static @NotNull List<CoveringMethod> settersCoveredWithOtherTypeArguments(
+        @NotNull PsiClass target, @Nullable PsiMethod executable, @NotNull PsiClass declared,
+        @NotNull PsiAnnotation annotation) {
+        String declaredName = declared.getName();
+        if (declaredName == null) return List.of();
+        BuilderSite site = new BuilderSite(target, executable, annotation);
+        GeneratedMemberFactory.EditorBuilderConfig config =
+            GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(annotation);
+        List<String> copyEntryPoints = GeneratedMemberFactory.copyEntryPoints(site, config);
+        if (copyEntryPoints.isEmpty()) return List.of();
+
+        Map<String, PsiMethod> generated = new HashMap<>();
+        for (List<PsiMethod> setters : GeneratedMemberFactory.settersBySlot(site, config, declared).values()) {
+            for (PsiMethod setter : setters) generated.putIfAbsent(generatedKey(setter), setter);
+        }
+        List<String> typeParameters = new ArrayList<>();
+        for (PsiTypeParameter parameter : declared.getTypeParameters()) typeParameters.add(parameter.getName());
+
+        List<CoveringMethod> out = new ArrayList<>();
+        for (PsiMethod own : GeneratedMemberFactory.ownMethods(declared)) {
+            if (own.isConstructor()) continue;
+            PsiMethod covered = generated.get(writtenKey(own));
+            if (covered == null) continue;
+            String message = DeclaredBuilderShape.setterWithOtherTypeArguments(declaredName, own.getName(),
+                writtenTypes(own), presentableTypes(covered), typeParameters, copyEntryPoints);
+            if (message != null) out.add(new CoveringMethod(own, message));
+        }
+        return out;
+    }
+
+    /**
+     * The key an author method is compared under, from its parameter types as
+     * written.
+     *
+     * @param method a method the author declared
+     * @return its {@link DeclaredBuilderShape#methodKey}
+     */
+    static @NotNull String writtenKey(@NotNull PsiMethod method) {
+        return DeclaredBuilderShape.methodKey(method.getName(), writtenTypes(method));
+    }
+
+    /**
+     * The key a synthesised method is compared under, from the presentable text
+     * of its parameter types - rendered from the names they were built with
+     * rather than resolved.
+     *
+     * @param method a method the editor synthesised
+     * @return its {@link DeclaredBuilderShape#methodKey}
+     */
+    static @NotNull String generatedKey(@NotNull PsiMethod method) {
+        return DeclaredBuilderShape.methodKey(method.getName(), presentableTypes(method));
+    }
+
+    /** Every {@link #writtenKey} the declared builder's own methods carry. */
+    private static Set<String> authorKeys(PsiClass declared) {
+        Set<String> out = new HashSet<>();
+        for (PsiMethod own : GeneratedMemberFactory.ownMethods(declared)) out.add(writtenKey(own));
+        return out;
+    }
+
+    /** Each parameter's type as written, in order. */
+    private static List<String> writtenTypes(PsiMethod method) {
+        List<String> types = new ArrayList<>();
+        for (PsiParameter parameter : method.getParameterList().getParameters()) {
+            String written = writtenTypeText(parameter);
+            types.add(written == null ? "" : written);
+        }
+        return types;
+    }
+
+    /** Each parameter's type in its presentable text, in order. */
+    private static List<String> presentableTypes(PsiMethod method) {
+        List<String> types = new ArrayList<>();
+        for (PsiParameter parameter : method.getParameterList().getParameters())
+            types.add(parameter.getType().getPresentableText());
+        return types;
     }
 
     /**

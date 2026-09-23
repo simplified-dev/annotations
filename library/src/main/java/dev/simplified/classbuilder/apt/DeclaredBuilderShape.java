@@ -4,7 +4,13 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.ConcurrentModificationException;
+import java.util.HashSet;
 import java.util.List;
+import java.util.NoSuchElementException;
+import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -40,7 +46,40 @@ public final class DeclaredBuilderShape {
      */
     private static final Pattern QUALIFIER = Pattern.compile("(?:[A-Za-z_$][\\w$]*\\.)+(?=[A-Za-z_$])");
 
+    /** A Java identifier, as a written type spells its names. */
+    private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z_$][\\w$]*");
+
+    /**
+     * The exception types known to be unchecked, each by its simple name and by
+     * its {@code java.lang} or {@code java.util} qualified name - the names a
+     * throws clause may be written in that neither half has to resolve to
+     * judge.
+     */
+    private static final Set<String> UNCHECKED_EXCEPTIONS = uncheckedExceptions();
+
     private DeclaredBuilderShape() {
+    }
+
+    /**
+     * Lists every spelling {@link #UNCHECKED_EXCEPTIONS} holds.
+     *
+     * @return the simple and qualified names
+     */
+    private static Set<String> uncheckedExceptions() {
+        Set<String> out = new HashSet<>();
+        for (String name : List.of("RuntimeException", "Error", "IllegalArgumentException",
+            "IllegalStateException", "UnsupportedOperationException", "NullPointerException",
+            "IndexOutOfBoundsException", "ArrayIndexOutOfBoundsException", "StringIndexOutOfBoundsException",
+            "ArithmeticException", "ClassCastException", "NegativeArraySizeException", "ArrayStoreException",
+            "SecurityException", "NumberFormatException", "AssertionError")) {
+            out.add(name);
+            out.add("java.lang." + name);
+        }
+        for (String name : List.of("ConcurrentModificationException", "NoSuchElementException")) {
+            out.add(name);
+            out.add("java.util." + name);
+        }
+        return Set.copyOf(out);
     }
 
     /**
@@ -567,10 +606,14 @@ public final class DeclaredBuilderShape {
      * so an argument differing at any depth is reported, a wildcard among them.
      * A raw spelling on either side is not, assigning and reading back with an
      * unchecked warning rather than an error, and neither is a primitive spelled
-     * over its box or the reverse, which the setter assigns and {@code build()}
-     * reads back under boxing and unboxing. Both types are rendered through
-     * {@link #typeText} before they are compared or printed, so the sentence does
-     * not depend on which model spelled them.
+     * over its box, which the setter assigns under unboxing and {@code build()}
+     * reads back boxed. A box spelled over its primitive is reported with its own
+     * clause: the setter assigns it, but a field left unset is {@code null}, and
+     * {@code build()} hands that to the primitive constructor or factory
+     * parameter, which throws where a builder the generator writes whole passes
+     * the primitive's zero. Both types are rendered through {@link #typeText}
+     * before they are compared or printed, so the sentence does not depend on
+     * which model spelled them.
      *
      * @param declaredName the declared builder's simple name
      * @param slotName the slot's name, which the declared field shares
@@ -586,10 +629,14 @@ public final class DeclaredBuilderShape {
                                                 @NotNull SlotHolding holding) {
         String written = typeText(writtenType);
         String storage = typeText(storageType);
-        if (sameSimpleType(written, storage) || boxedTwins(written, storage)) return null;
-        return "@ClassBuilder merged into '" + declaredName + "' finds '" + slotName
-            + "' declared as " + written + ", and the slot it stands for is " + storage
-            + " - the generated setter has nothing to assign it to" + holding.clause();
+        if (sameSimpleType(written, storage) || primitiveOverItsBox(written, storage)) return null;
+        String opening = "@ClassBuilder merged into '" + declaredName + "' finds '" + slotName
+            + "' declared as " + written + ", and the slot it stands for is " + storage;
+        if (primitiveOverItsBox(storage, written)) {
+            return opening + " - an unset " + written + " field reaches the primitive constructor parameter "
+                + "as null" + holding.clause();
+        }
+        return opening + " - the generated setter has nothing to assign it to" + holding.clause();
     }
 
     /**
@@ -664,30 +711,132 @@ public final class DeclaredBuilderShape {
         };
     }
 
-    /** Whether one rendered type is a primitive and the other its box, by simple name. */
-    private static boolean boxedTwins(String written, String storage) {
-        String writtenBox = boxOf(written);
-        if (writtenBox != null) return writtenBox.equals(storage) || erasedName(writtenBox).equals(storage);
-        String storageBox = boxOf(storage);
-        return storageBox != null && (storageBox.equals(written) || erasedName(storageBox).equals(written));
+    /**
+     * Whether the first rendered type is a primitive and the second its box, by
+     * simple name.
+     *
+     * @param primitive the type that may be the primitive
+     * @param box the type that may be its box
+     * @return whether it is that pair, in that order
+     */
+    private static boolean primitiveOverItsBox(String primitive, String box) {
+        String boxed = boxOf(primitive);
+        return boxed != null && (boxed.equals(box) || erasedName(boxed).equals(box));
     }
 
     /**
      * Reports a declared builder field under a slot's name that is
-     * {@code final}, which the generated setter assigns on a line the author
-     * never wrote.
+     * {@code final} where a member the merge appends assigns it.
      *
-     * <p>Asked of every slot the setters assign, which is every slot but a
-     * seed: a seed is appended {@code final} itself and assigned by the author's
-     * constructor alone.
+     * <p>What the merge appends to assign a slot is its generated setters, so
+     * the field is reported exactly when one of them is not covered by an author
+     * method under {@link #methodKey} - that setter is appended and assigns it on
+     * a line the author never wrote. Where the author spells every one, nothing
+     * generated assigns the field and the author's own members are javac's to
+     * judge. A seed has no setter, and the constructor that would assign it as
+     * one is never appended into a declared builder, so a seed's field is never
+     * reported.
+     *
+     * <p>A setter shape that only mutates the slot's container - an add, a put
+     * or a clear - counts as assigning it, since neither half reads a body the
+     * editor's members do not have.
      *
      * @param declaredName the declared builder's simple name
      * @param slotName the slot's name, which the declared field shares
-     * @return the diagnostic text both halves report
+     * @param generatedSetterKeys the {@link #methodKey} of each setter generated for the slot
+     * @param authorMethodKeys the {@link #methodKey} of each method the author declared on the builder
+     * @return the diagnostic text both halves report, or {@code null} when nothing appended assigns the field
      */
-    public static @NotNull String finalSlot(@NotNull String declaredName, @NotNull String slotName) {
+    public static @Nullable String finalSlot(@NotNull String declaredName, @NotNull String slotName,
+                                             @NotNull Collection<String> generatedSetterKeys,
+                                             @NotNull Collection<String> authorMethodKeys) {
+        if (authorMethodKeys.containsAll(generatedSetterKeys)) return null;
         return "@ClassBuilder merged into '" + declaredName + "' finds '" + slotName
             + "' declared final, and the generated setter assigns it";
+    }
+
+    /**
+     * Reports an author method that covers a generated setter under
+     * {@link #methodKey} while taking another parameterisation of the same
+     * generic type, which the copy entry points then pass the slot's own type.
+     *
+     * <p>{@code from(T)} and {@code mutate()} seed each slot through its setter,
+     * so a covered setter's call lands on the author's method. Two distinct
+     * concrete parameterisations of one generic type are never assignable to
+     * each other, so javac rejects that call on a generated line exactly when a
+     * parameter pair carries type arguments on both sides, neither holds a
+     * wildcard or one of the declared builder's own type parameters - either
+     * of which can accept the slot's type - and the arguments differ by simple
+     * name at some depth. Every other shape is left as it is: it compiles, or
+     * whether it does is not a question of names.
+     *
+     * @param declaredName the declared builder's simple name
+     * @param methodName the method's name, which the author's and the generated one share
+     * @param writtenTypes each parameter type of the author's method as written, in order
+     * @param generatedTypes each parameter type of the generated setter as either model renders it, in order
+     * @param builderTypeParameters the declared builder's own type parameter names
+     * @param copyEntryPoints the names of the copy entry points emitted, empty when none is
+     * @return the diagnostic text both halves report, or {@code null} when the copy compiles
+     */
+    public static @Nullable String setterWithOtherTypeArguments(@NotNull String declaredName,
+                                                                @NotNull String methodName,
+                                                                @NotNull List<String> writtenTypes,
+                                                                @NotNull List<String> generatedTypes,
+                                                                @NotNull Collection<String> builderTypeParameters,
+                                                                @NotNull List<String> copyEntryPoints) {
+        if (copyEntryPoints.isEmpty() || writtenTypes.size() != generatedTypes.size()) return null;
+        if (!methodKey(methodName, writtenTypes).equals(methodKey(methodName, generatedTypes))) return null;
+        for (int i = 0; i < writtenTypes.size(); i++) {
+            String written = typeText(writtenTypes.get(i).replace("...", "[]"));
+            String generated = typeText(generatedTypes.get(i).replace("...", "[]"));
+            if (!otherParameterisation(written, generated, builderTypeParameters)) continue;
+            boolean single = copyEntryPoints.size() == 1;
+            return "@ClassBuilder merged into '" + declaredName + "' finds "
+                + signature(methodName, writtenTypes) + " standing in for the generated "
+                + signature(methodName, generatedTypes) + ", and " + quotedList(copyEntryPoints)
+                + (single ? " passes" : " pass") + " it the slot's " + unqualified(generated)
+                + ", which its " + unqualified(written) + " parameter cannot take";
+        }
+        return null;
+    }
+
+    /**
+     * Whether two rendered parameter types are distinct concrete
+     * parameterisations of one generic type.
+     *
+     * @param written the author's parameter type
+     * @param generated the generated setter's parameter type
+     * @param typeParameters the declared builder's own type parameter names
+     * @return whether both carry type arguments, neither a wildcard nor a type parameter, and they differ
+     */
+    private static boolean otherParameterisation(String written, String generated,
+                                                 Collection<String> typeParameters) {
+        if (written.indexOf('<') < 0 || generated.indexOf('<') < 0) return false;
+        if (written.indexOf('?') >= 0 || generated.indexOf('?') >= 0) return false;
+        if (namesAny(written, typeParameters) || namesAny(generated, typeParameters)) return false;
+        return !sameSimpleType(written, generated);
+    }
+
+    /** Whether a rendered type spells one of the names as an identifier of its own. */
+    private static boolean namesAny(String type, Collection<String> names) {
+        if (names.isEmpty()) return false;
+        Matcher identifiers = IDENTIFIER.matcher(type);
+        while (identifiers.find()) {
+            if (names.contains(identifiers.group())) return true;
+        }
+        return false;
+    }
+
+    /** A method as a diagnostic names it - its name and its unqualified parameter types. */
+    private static String signature(String name, List<String> parameterTypes) {
+        List<String> types = new ArrayList<>(parameterTypes.size());
+        for (String type : parameterTypes) types.add(unqualified(typeText(type)));
+        return name + "(" + String.join(", ", types) + ")";
+    }
+
+    /** A rendered type with every qualifier removed, so both models print it alike. */
+    private static String unqualified(String type) {
+        return QUALIFIER.matcher(type).replaceAll("");
     }
 
     /**
@@ -729,15 +878,18 @@ public final class DeclaredBuilderShape {
      * passing nothing. On a type target there is no seed, a seed being a
      * parameter's alone.
      *
-     * <p>A constructor declaring a throws clause is not one the entry points can
-     * call either: each of them calls it with nothing around the call to handle
-     * what it throws, and whether a thrown type is checked is a question of what
-     * it resolves to, which neither half asks. So a throws clause of any type
-     * takes the constructor out of the count.
+     * <p>A constructor whose throws clause may name a checked exception is not
+     * one the entry points can call either: each of them calls it with nothing
+     * around the call to handle what it throws. Whether a thrown type is checked
+     * is a question of what it resolves to, which neither half asks, so it is
+     * answered by name through {@link #throwsNothingChecked} - a clause naming
+     * only known unchecked types leaves the constructor in the count, and any
+     * other name takes it out, the answer that never emits a call javac refuses.
      *
      * @param declaredConstructors the parameter types of each constructor the author declared, as
      *     either model renders them
-     * @param callableConstructors the parameter types of each of those declaring no throws clause
+     * @param callableConstructors the parameter types of each of those whose throws clause
+     *     {@link #throwsNothingChecked} accepts
      * @param seedTypes the type of each seed the entry points pass, in parameter order
      * @return whether a constructor the entry points can call exists
      */
@@ -749,13 +901,44 @@ public final class DeclaredBuilderShape {
     }
 
     /**
+     * Whether a throws clause names only exception types known to be unchecked,
+     * which the entry points can call through with nothing to handle them.
+     *
+     * <p>Read by name, since neither half resolves one: {@link RuntimeException},
+     * {@link Error} and the common unchecked subclasses of each in
+     * {@code java.lang} and {@code java.util} - {@link IllegalArgumentException},
+     * {@link IllegalStateException}, {@link UnsupportedOperationException},
+     * {@link NullPointerException}, {@link IndexOutOfBoundsException} and its
+     * array and string forms, {@link ArithmeticException},
+     * {@link ClassCastException}, {@link NegativeArraySizeException},
+     * {@link ArrayStoreException}, {@link SecurityException},
+     * {@link NumberFormatException}, {@link AssertionError},
+     * {@link ConcurrentModificationException} and
+     * {@link NoSuchElementException} - each by
+     * its simple name or its qualified one. Any other name is
+     * treated as checked, an unchecked type of the author's own among them, so
+     * the entry points are skipped wherever the name is unknown - the answer
+     * that never emits a call javac refuses.
+     *
+     * @param thrownTypes each type the throws clause names, as either model renders it
+     * @return whether every one is a known unchecked type, and {@code true} for an empty clause
+     */
+    public static boolean throwsNothingChecked(@NotNull List<String> thrownTypes) {
+        for (String thrown : thrownTypes) {
+            if (!UNCHECKED_EXCEPTIONS.contains(typeText(thrown))) return false;
+        }
+        return true;
+    }
+
+    /**
      * Whether the entry points are skipped only because every constructor
-     * taking what they pass declares a throws clause, which decides the note's
-     * wording.
+     * taking what they pass declares a throws clause that may name a checked
+     * exception, which decides the note's wording.
      *
      * @param declaredConstructors the parameter types of each constructor the author declared, as
      *     either model renders them
-     * @param callableConstructors the parameter types of each of those declaring no throws clause
+     * @param callableConstructors the parameter types of each of those whose throws clause
+     *     {@link #throwsNothingChecked} accepts
      * @param seedTypes the type of each seed the entry points pass, in parameter order
      * @return whether a constructor taking the seeds exists and none of them is callable
      */
@@ -814,7 +997,7 @@ public final class DeclaredBuilderShape {
      * @param executable whether the annotation sits on a constructor or factory method
      * @param seedNames the seeded slots the entry points pass, in parameter order
      * @param throwsClause whether a constructor taking what they pass exists and declares a throws
-     *     clause, from {@link #skippedForAThrowsClause}
+     *     clause that may name a checked exception, from {@link #skippedForAThrowsClause}
      * @return the note text, or {@code null} when the path emits no entry point
      */
     public static @Nullable String entryPointsSkipped(@NotNull String declaredName,
@@ -837,7 +1020,9 @@ public final class DeclaredBuilderShape {
 
     /**
      * Renders the note for entry points skipped because the constructor they
-     * would call declares a throws clause.
+     * would call declares a throws clause naming an exception
+     * {@link #throwsNothingChecked} does not know to be unchecked, which is
+     * treated as checked.
      *
      * @param declaredName the declared builder's simple name
      * @param entryPoints the names of the entry points that were not added
@@ -854,8 +1039,8 @@ public final class DeclaredBuilderShape {
             : "its constructor taking " + (seedNames.size() == 1 ? "the seed" : "the " + seedNames.size()
                 + " seeds") + " " + quotedList(entryPoints) + " passes";
         return "@ClassBuilder merged into '" + declaredName + "' but " + constructor
-            + " declares a throws clause, so " + skipped + " - declare one that throws nothing or write "
-            + (single ? "it" : "them");
+            + " declares a throws clause naming an exception not known to be unchecked, so " + skipped
+            + " - declare one throwing only unchecked exceptions or write " + (single ? "it" : "them");
     }
 
     /**

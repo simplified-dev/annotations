@@ -48,7 +48,9 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -714,6 +716,62 @@ public final class GeneratedMemberFactory {
      */
     static List<PsiMethod> synthesizeBuilderMethods(BuilderSite site, EditorBuilderConfig config,
                                                     PsiClass builder) {
+        return synthesize(site, config, builder, null);
+    }
+
+    /**
+     * The setters generated for each slot, as {@link #synthesizeBuilderMethods}
+     * builds them - what tells the setters a merge appends for one slot from the
+     * rest. A seed has none and is absent.
+     *
+     * @param site the annotated site
+     * @param config the resolved configuration
+     * @param builder the builder the members are declared in
+     * @return each slot's name with its setters, in slot order
+     */
+    static Map<String, List<PsiMethod>> settersBySlot(BuilderSite site, EditorBuilderConfig config,
+                                                      PsiClass builder) {
+        Map<String, List<PsiMethod>> out = new LinkedHashMap<>();
+        synthesize(site, config, builder, out);
+        return out;
+    }
+
+    /**
+     * Names the copy entry points the processor emits for a site -
+     * {@code from(T)} and {@code mutate()} as configured, each unless the author
+     * declares it on the target, and neither on a constructor or factory
+     * target, on an abstract target, or where a declared builder offers no
+     * constructor the entry points can call.
+     *
+     * @param site the annotated site
+     * @param config the resolved configuration
+     * @return the names emitted, in the order the processor emits them
+     */
+    static List<String> copyEntryPoints(BuilderSite site, EditorBuilderConfig config) {
+        PsiClass target = site.owner();
+        if (site.isExecutable() || target.hasModifierProperty(PsiModifier.ABSTRACT)) return List.of();
+        if (ClassBuilderConstants.withholdsEntryPointsOnly(target, config.builderName(), false, List.of()))
+            return List.of();
+        List<String> out = new ArrayList<>(2);
+        if (!config.fromMethodName().isEmpty() && !declaresCopyFactory(target, config.fromMethodName()))
+            out.add(config.fromMethodName());
+        if (!config.toBuilderMethodName().isEmpty() && !declaresNullary(target, config.toBuilderMethodName()))
+            out.add(config.toBuilderMethodName());
+        return out;
+    }
+
+    /**
+     * Builds the builder's methods, filling in each slot's setters on the side
+     * where asked.
+     *
+     * @param site the annotated site
+     * @param config the resolved configuration
+     * @param builder the builder the members are declared in
+     * @param settersBySlot where each slot's setters are recorded, or {@code null}
+     * @return every method, in emission order
+     */
+    private static List<PsiMethod> synthesize(BuilderSite site, EditorBuilderConfig config, PsiClass builder,
+                                              @Nullable Map<String, List<PsiMethod>> settersBySlot) {
         PsiClass target = site.owner();
         Project project = target.getProject();
         PsiManager psiManager = PsiManager.getInstance(project);
@@ -769,7 +827,9 @@ public final class GeneratedMemberFactory {
             // A seeded slot is supplied to builder(...) and is final from there
             // on, so every setter shape would write over a committed value.
             if (field.seed) continue;
-            methods.addAll(settersFor(ctx, field));
+            List<PsiMethod> setters = settersFor(ctx, field);
+            methods.addAll(setters);
+            if (settersBySlot != null) settersBySlot.put(field.name, setters);
         }
 
         // Whether the pair is abstract follows the class being contributed into

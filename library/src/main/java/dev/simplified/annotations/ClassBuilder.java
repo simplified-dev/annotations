@@ -47,16 +47,22 @@ import java.lang.annotation.Target;
  * is reported in one compiler note rather than left silent. The target still
  * gets the all-args constructor {@code build()} calls, and still gets the three
  * entry points unless the declared builder has no constructor they can call -
- * none of the arity they pass, or only ones declaring a throws clause - in
- * which case all three are skipped with a note naming the constructor they
- * need. A
+ * none of the arity they pass, or only ones declaring a throws clause that
+ * names an exception other than {@link RuntimeException}, {@link Error} and
+ * their common subclasses in {@code java.lang} and {@code java.util}, which is
+ * treated as checked - in which case all three are skipped with a note naming
+ * the constructor they need. A
  * declared builder that declares no constructor has its implicit default
  * retyped to {@link #builderConstructorAccess()}, so {@code new Target.Builder()}
  * is closed off exactly as on a generated builder. A
  * declared shape the generated members cannot live in - a record, enum or
  * interface, an inner class, the wrong type parameters or bounds on them, an
  * {@code abstract} builder the entry points would instantiate, a slot field the
- * generated setter cannot assign - is a compile error.
+ * generated setter cannot assign or a boxed one over a primitive slot, a
+ * {@code final} slot field a generated setter assigns, an author method taking
+ * the place of a setter with another parameterisation of the slot's generic
+ * type while {@code from(T)} or {@code mutate()} passes it the slot - is a
+ * compile error.
  *
  * <p>A constructor or static factory target merges the same way into the class
  * its enclosing type declares. Its builder re-declares the type parameters the

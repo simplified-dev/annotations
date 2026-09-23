@@ -29,7 +29,9 @@ import java.util.Objects;
  * order, and a declared builder's constructors are the author's, so one
  * declaring no constructor taking the seeds' types in that order leaves
  * {@code builder()}, {@code from(T)} and {@code mutate()} nothing to call, and
- * so does one whose constructor taking them declares a throws clause. The
+ * so does one whose constructor taking them declares a throws clause naming an
+ * exception {@link DeclaredBuilderShape#throwsNothingChecked} does not know to
+ * be unchecked. The
  * processor skips them with a note and the
  * augment provider withholds them from completion through the same
  * {@link ClassBuilderConstants#withholdsEntryPointsOnly} decision; this is the

@@ -376,8 +376,9 @@ public final class ClassBuilderConstants {
      * over source that builds.
      *
      * <p>The rule is {@link DeclaredBuilderShape#instantiable}, which the
-     * processor asks of the same parameter types - a constructor declaring a
-     * throws clause counted as none the entry points can call. On a class or
+     * processor asks of the same parameter types - a constructor whose throws
+     * clause {@link DeclaredBuilderShape#throwsNothingChecked} does not accept
+     * counted as none the entry points can call. On a class or
      * record target, a chain link among them, there is no seed, so the
      * constructor that serves is a no-argument one; on a constructor or factory
      * target it is one taking exactly the seeds {@code builder(..)} passes. An
@@ -404,14 +405,14 @@ public final class ClassBuilderConstants {
 
     /**
      * Whether the entry points are skipped only because the declared builder's
-     * constructors taking what they pass all declare a throws clause, which
-     * decides the wording of the note, as
+     * constructors taking what they pass all declare a throws clause that may
+     * name a checked exception, which decides the wording of the note, as
      * {@link DeclaredBuilderShape#skippedForAThrowsClause} decides it for the
      * processor.
      *
      * @param declared the builder the author wrote
      * @param seedTypes the type of each seed the entry points pass, in parameter order
-     * @return whether a constructor taking them exists and every one declares a throws clause
+     * @return whether a constructor taking them exists and every one declares such a throws clause
      */
     public static boolean skippedForAThrowsClause(@NotNull PsiClass declared, @NotNull List<String> seedTypes) {
         return DeclaredBuilderShape.skippedForAThrowsClause(declaredConstructorSignatures(declared, false),
@@ -428,7 +429,8 @@ public final class ClassBuilderConstants {
      * expects.
      *
      * @param declared the builder the author wrote
-     * @param callableOnly whether to read only the constructors declaring no throws clause
+     * @param callableOnly whether to read only the constructors whose throws clause
+     *     {@link DeclaredBuilderShape#throwsNothingChecked} accepts
      * @return each constructor's parameter types, in declaration order
      */
     private static @NotNull List<List<String>> declaredConstructorSignatures(@NotNull PsiClass declared,
@@ -437,7 +439,7 @@ public final class ClassBuilderConstants {
         if (!(declared instanceof PsiExtensibleClass extensible)) return out;
         for (PsiMethod own : extensible.getOwnMethods()) {
             if (!own.isConstructor()) continue;
-            if (callableOnly && own.getThrowsList().getReferenceElements().length > 0) continue;
+            if (callableOnly && !DeclaredBuilderShape.throwsNothingChecked(thrownTypes(own))) continue;
             List<String> types = new ArrayList<>();
             for (PsiParameter parameter : own.getParameterList().getParameters()) {
                 String written = MergedSlotStorage.writtenTypeText(parameter);
@@ -445,6 +447,20 @@ public final class ClassBuilderConstants {
             }
             out.add(types);
         }
+        return out;
+    }
+
+    /**
+     * Each type a constructor's throws clause names, as written - read off the
+     * reference elements rather than resolved.
+     *
+     * @param constructor the author's constructor
+     * @return the thrown types' texts, in order
+     */
+    private static @NotNull List<String> thrownTypes(@NotNull PsiMethod constructor) {
+        List<String> out = new ArrayList<>();
+        for (PsiJavaCodeReferenceElement thrown : constructor.getThrowsList().getReferenceElements())
+            out.add(thrown.getText());
         return out;
     }
 

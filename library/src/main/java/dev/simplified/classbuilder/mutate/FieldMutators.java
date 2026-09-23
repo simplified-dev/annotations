@@ -57,8 +57,20 @@ final class FieldMutators {
     }
 
 
-    /** Returns every setter the field should emit on the nested Builder. */
+    /**
+     * Returns every setter the field should emit on the nested Builder, each
+     * recorded on the context as the field's, which is how a merge tells a
+     * slot's setters apart in the member list it is handed.
+     *
+     * @param field the slot
+     * @return its setters, in emission order
+     */
     List<JCMethodDecl> setters(FieldSpec field) {
+        return ctx.recordSetters(field, shapes(field));
+    }
+
+    /** Every setter shape the field emits, in emission order. */
+    private List<JCMethodDecl> shapes(FieldSpec field) {
         ListBuffer<JCMethodDecl> out = new ListBuffer<>();
         // A seeded slot is supplied to builder(...) and is final from there on,
         // so every shape below would be an assignment to a value the caller has

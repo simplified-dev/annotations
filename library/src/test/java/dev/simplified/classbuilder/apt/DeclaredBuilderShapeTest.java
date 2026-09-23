@@ -488,11 +488,16 @@ public class DeclaredBuilderShapeTest {
             facts(true, false, List.of("T"), List.of("Object"), null, null), unbounded));
     }
 
-    /** The final-field and throwing-constructor sentences both halves print. */
+    /**
+     * The final-field and throwing-constructor sentences both halves print. The
+     * throwing note said only that the constructor declares a throws clause, and
+     * the final-field sentence was rendered whatever the author spelled.
+     */
     @Test
     public void finalSlotAndThrowingConstructor_renderTheSharedSentences() {
         assertEquals("@ClassBuilder merged into 'Builder' finds 'items' declared final, and the generated "
-            + "setter assigns it", DeclaredBuilderShape.finalSlot("Builder", "items"));
+                + "setter assigns it",
+            DeclaredBuilderShape.finalSlot("Builder", "items", List.of("items(List)"), List.of()));
         List<List<String>> noArgument = List.of(List.of());
         assertFalse("a throwing constructor serves nothing",
             DeclaredBuilderShape.instantiable(noArgument, List.of(), List.of()));
@@ -500,26 +505,117 @@ public class DeclaredBuilderShapeTest {
         assertFalse("not where no constructor takes what the entry points pass",
             DeclaredBuilderShape.skippedForAThrowsClause(List.of(List.of("String")), List.of(), List.of()));
         assertEquals("@ClassBuilder merged into 'Builder' but its constructor taking the seed 'builder' "
-                + "passes declares a throws clause, so 'builder' was not added - declare one that throws "
-                + "nothing or write it",
+                + "passes declares a throws clause naming an exception not known to be unchecked, so "
+                + "'builder' was not added - declare one throwing only unchecked exceptions or write it",
             DeclaredBuilderShape.throwingConstructor("Builder", List.of("builder"), List.of("origin")));
     }
 
     /**
-     * A primitive and its box take each other's values under boxing and
-     * unboxing, so either spelled over the other is a field the generated
-     * members can assign and read back. Both were refused as mistyped. Only the
-     * top level: a type argument is never primitive, and an array of one is no
-     * array of the other.
+     * A final field is refused only where a member the merge appends assigns
+     * it - some generated setter of its slot the author does not spell under the
+     * method key. A slot whose every setter the author writes has nothing
+     * generated left to assign it, and a seed has no setter at all. The field
+     * alone was asked, and a builder whose own setters never assign it was
+     * refused though it compiles.
      */
     @Test
-    public void mistypedSlot_acceptsABoxedOrPrimitiveTwin() {
-        assertNull(DeclaredBuilderShape.mistypedSlot("Builder", "count", "Integer", "int",
-            SlotHolding.DECLARED));
+    public void finalSlot_isReportedOnlyWhereAGeneratedSetterIsLeftToAssignIt() {
+        assertNull("every setter spelled", DeclaredBuilderShape.finalSlot("Builder", "port",
+            List.of("port(int)"), List.of("port(int)", "build()")));
+        assertNull("a seed has no setter", DeclaredBuilderShape.finalSlot("Builder", "origin",
+            List.of(), List.of()));
+        assertNotNull("one of two left generated", DeclaredBuilderShape.finalSlot("Builder", "on",
+            List.of("on()", "on(boolean)"), List.of("on(boolean)")));
+        assertNotNull("an overload beside it is no cover", DeclaredBuilderShape.finalSlot("Builder", "port",
+            List.of("port(int)"), List.of("port(String)")));
+    }
+
+    /**
+     * A throws clause naming only the known unchecked types, by simple name or
+     * by their {@code java.lang} or {@code java.util} qualified name, is one the
+     * entry points can call through. Any clause at all took the constructor out
+     * of the count; any other name still does.
+     */
+    @Test
+    public void throwsNothingChecked_readsTheKnownUncheckedNamesAlone() {
+        assertTrue("no clause", DeclaredBuilderShape.throwsNothingChecked(List.of()));
+        assertTrue("simple names", DeclaredBuilderShape.throwsNothingChecked(
+            List.of("IllegalStateException", "Error", "NoSuchElementException")));
+        assertTrue("qualified names", DeclaredBuilderShape.throwsNothingChecked(
+            List.of("java.lang.RuntimeException", "java.util.ConcurrentModificationException",
+                "java.lang . AssertionError")));
+        assertFalse("a checked type", DeclaredBuilderShape.throwsNothingChecked(List.of("java.io.IOException")));
+        assertFalse("an unknown name among known ones", DeclaredBuilderShape.throwsNothingChecked(
+            List.of("IllegalStateException", "MyFailure")));
+        assertFalse("a known name in the wrong package", DeclaredBuilderShape.throwsNothingChecked(
+            List.of("java.util.IllegalStateException")));
+        assertFalse("nor a checked exception in java.lang", DeclaredBuilderShape.throwsNothingChecked(
+            List.of("Exception")));
+        List<List<String>> noArgument = List.of(List.of());
+        assertTrue("so the constructor serves the entry points",
+            DeclaredBuilderShape.instantiable(noArgument, noArgument, List.of()));
+    }
+
+    /**
+     * An author method covering a generated setter under the method key but
+     * taking another parameterisation of the same generic type cannot take the
+     * slot's own type, which {@code from(T)} and {@code mutate()} pass it. Only
+     * where both carry type arguments, neither a wildcard nor one of the
+     * builder's own type parameters, and a copy entry point is emitted - every
+     * other shape compiles or is javac's to judge. It covered the setter with
+     * nothing said, and javac failed on a generated line.
+     */
+    @Test
+    public void setterWithOtherTypeArguments_isReportedOnlyWhereJavacRejectsTheCopy() {
+        List<String> copies = List.of("from", "mutate");
+        assertEquals("@ClassBuilder merged into 'Builder' finds items(List<Integer>) standing in for the "
+                + "generated items(List<String>), and 'from' and 'mutate' pass it the slot's List<String>, "
+                + "which its List<Integer> parameter cannot take",
+            DeclaredBuilderShape.setterWithOtherTypeArguments("Builder", "items", List.of("List<Integer>"),
+                List.of("java.util.List<java.lang.String>"), List.of(), copies));
+        assertEquals("one entry point named alone",
+            "@ClassBuilder merged into 'Builder' finds items(List<Integer>) standing in for the generated "
+                + "items(List<String>), and 'mutate' passes it the slot's List<String>, which its "
+                + "List<Integer> parameter cannot take",
+            DeclaredBuilderShape.setterWithOtherTypeArguments("Builder", "items", List.of("List<Integer>"),
+                List.of("List<String>"), List.of(), List.of("mutate")));
+        assertNull("the same arguments in another spelling", DeclaredBuilderShape.setterWithOtherTypeArguments(
+            "Builder", "items", List.of("List<String>"), List.of("java.util.List<java.lang.String>"),
+            List.of(), copies));
+        assertNull("no copy entry point emitted", DeclaredBuilderShape.setterWithOtherTypeArguments(
+            "Builder", "items", List.of("List<Integer>"), List.of("List<String>"), List.of(), List.of()));
+        assertNull("a raw side", DeclaredBuilderShape.setterWithOtherTypeArguments("Builder", "items",
+            List.of("List"), List.of("List<String>"), List.of(), copies));
+        assertNull("a wildcard", DeclaredBuilderShape.setterWithOtherTypeArguments("Builder", "items",
+            List.of("List<? extends CharSequence>"), List.of("List<String>"), List.of(), copies));
+        assertNull("a builder type parameter", DeclaredBuilderShape.setterWithOtherTypeArguments("Builder",
+            "items", List.of("List<T>"), List.of("List<String>"), List.of("T"), copies));
+        assertNull("another erasure is no cover", DeclaredBuilderShape.setterWithOtherTypeArguments("Builder",
+            "items", List.of("Set<Integer>"), List.of("List<String>"), List.of(), copies));
+        assertNotNull("a nested argument", DeclaredBuilderShape.setterWithOtherTypeArguments("Builder", "index",
+            List.of("Map<String, List<Integer>>"), List.of("Map<String, List<String>>"), List.of(), copies));
+    }
+
+    /**
+     * A primitive field over a boxed slot takes every value the generated
+     * members assign and reads back, so it is accepted; a boxed field over a
+     * primitive slot is refused, because an unset one reaches the primitive
+     * constructor parameter as {@code null}. Both directions were accepted.
+     * Only the top level: a type argument is never primitive, and an array of
+     * one is no array of the other.
+     */
+    @Test
+    public void mistypedSlot_acceptsAPrimitiveOverItsBoxAndRefusesTheReverse() {
         assertNull(DeclaredBuilderShape.mistypedSlot("Builder", "count", "int", "java.lang.Integer",
             SlotHolding.DECLARED));
-        assertNull(DeclaredBuilderShape.mistypedSlot("Builder", "on", "java.lang.Boolean", "boolean",
+        assertNull(DeclaredBuilderShape.mistypedSlot("Builder", "on", "boolean", "Boolean",
             SlotHolding.DECLARED));
+        assertEquals("@ClassBuilder merged into 'Builder' finds 'count' declared as Integer, and the slot "
+                + "it stands for is int - an unset Integer field reaches the primitive constructor parameter "
+                + "as null",
+            DeclaredBuilderShape.mistypedSlot("Builder", "count", "Integer", "int", SlotHolding.DECLARED));
+        assertNotNull("qualified too", DeclaredBuilderShape.mistypedSlot("Builder", "on", "java.lang.Boolean",
+            "boolean", SlotHolding.DECLARED));
         assertNotNull("another box", DeclaredBuilderShape.mistypedSlot("Builder", "count", "Long", "int",
             SlotHolding.DECLARED));
         assertNotNull("an array of the box", DeclaredBuilderShape.mistypedSlot("Builder", "counts",

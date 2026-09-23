@@ -1306,10 +1306,11 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
     }
 
     /**
-     * A boxed field over a primitive slot takes everything the generated
-     * members assign and read back, and javac accepts it.
+     * A boxed field over a primitive slot is refused in the sentence the apt
+     * twin asserts: left unset it reaches the primitive constructor parameter as
+     * {@code null}. The editor accepted it, as the processor did.
      */
-    public void testABoxedTwinOfAPrimitiveSlot_isNotReported() {
+    public void testABoxedFieldOverAPrimitiveSlot_isReported() {
         myFixture.configureByText("Counter.java",
             """
             import dev.simplified.annotations.ClassBuilder;
@@ -1319,6 +1320,123 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
                 public static class Builder {
                     private Integer count;
                     public Builder bump() { this.count = count == null ? 1 : count + 1; return this; }
+                }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder merged into 'Builder' finds 'count' declared as Integer, "
+                + "and the slot it stands for is int - an unset Integer field reaches the primitive "
+                + "constructor parameter as null"));
+    }
+
+    /** A primitive field over a boxed slot takes everything the setters assign, and javac accepts it. */
+    public void testAPrimitiveFieldOverABoxedSlot_isNotReported() {
+        myFixture.configureByText("Counter.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Counter {
+                Integer count;
+                public static class Builder {
+                    private int count;
+                    public Builder bump() { this.count++; return this; }
+                }
+            }
+            """);
+        assertEquals("javac accepts it: " + errors(), 0, errors().size());
+    }
+
+    /**
+     * A {@code final} field whose slot's every generated setter the author
+     * spells is assigned by nothing the merge appends, and javac accepts it. The
+     * editor refused it in the processor's sentence, as the processor did.
+     */
+    public void testAFinalSlotEverySetterOfWhichTheAuthorSpells_isNotReported() {
+        myFixture.configureByText("Server.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Server {
+                int port;
+                public static class Builder {
+                    private final int port;
+                    public Builder() { this(80); }
+                    private Builder(int port) { this.port = port; }
+                    public Builder port(int port) { return new Builder(port); }
+                }
+            }
+            """);
+        assertEquals("javac accepts it: " + errors(), 0, errors().size());
+    }
+
+    /** A {@code final} field one of whose slot's setters is left generated is still refused. */
+    public void testAFinalSlotOneOfWhoseSettersIsLeftGenerated_isReported() {
+        myFixture.configureByText("Switch.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Switch {
+                boolean enabled;
+                public static class Builder {
+                    private final boolean enabled;
+                    public Builder() { this(false); }
+                    private Builder(boolean enabled) { this.enabled = enabled; }
+                    public Builder enabled(boolean enabled) { return new Builder(enabled); }
+                }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder merged into 'Builder' finds 'enabled' declared final, "
+                + "and the generated setter assigns it"));
+    }
+
+    /**
+     * An author method covering a generated setter while taking another
+     * parameterisation of the same generic type is refused in the sentence the
+     * apt twin asserts. The editor offered {@code from(T)} and said nothing,
+     * while javac failed on the generated copy passing the slot's own type.
+     */
+    public void testAnAuthorMethodCoveringASetterWithOtherTypeArguments_isReported() {
+        myFixture.configureByText("Bag.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import java.util.ArrayList;
+            import java.util.List;
+            @ClassBuilder
+            public class Bag {
+                List<String> items;
+                public static class Builder {
+                    public Builder items(List<Integer> codes) {
+                        this.items = new ArrayList<>();
+                        for (Integer code : codes) this.items.add("#" + code);
+                        return this;
+                    }
+                }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder merged into 'Builder' finds items(List<Integer>) standing "
+                + "in for the generated items(List<String>), and 'from' and 'mutate' pass it the slot's "
+                + "List<String>, which its List<Integer> parameter cannot take"));
+    }
+
+    /** On a constructor target no copy entry point passes the slot to it, and javac accepts it. */
+    public void testOnAConstructorTarget_anAuthorMethodCoveringASetterWithOtherTypeArguments_isNotReported() {
+        myFixture.configureByText("Bag.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import java.util.ArrayList;
+            import java.util.List;
+            public class Bag {
+                final List<String> items;
+                @ClassBuilder
+                Bag(List<String> items) { this.items = items; }
+                public static class Builder {
+                    public Builder items(List<Integer> codes) {
+                        this.items = new ArrayList<>();
+                        for (Integer code : codes) this.items.add("#" + code);
+                        return this;
+                    }
                 }
             }
             """);
