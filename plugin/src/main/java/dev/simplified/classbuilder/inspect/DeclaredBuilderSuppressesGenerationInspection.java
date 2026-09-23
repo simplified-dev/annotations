@@ -18,16 +18,15 @@ import org.jetbrains.annotations.Nullable;
  * Reports a {@code @ClassBuilder} that generates nothing because the target
  * already declares a nested type of the builder's name.
  *
- * <p>All three mutation paths skip on that declaration, and the only signal is a
+ * <p>A class or record target merges into that declaration, but a SuperBuilder
+ * chain and a constructor or factory target skip on it, and the only signal is a
  * compiler note nobody reads. Without this the three entry points and the whole
  * generated surface simply are not in completion and nothing on the screen says
  * why - which reads as the annotation being broken rather than as the
  * declaration having turned it off.
  *
- * <p>Weak, because the code is correct: the author's own builder is what runs,
- * and on a plain type target one attribute turns the generated members back on
- * beside it. What the message carries is which of the three positions the target
- * is in, since the opt-in is read on one of them and not the other two.
+ * <p>Weak, because the code is correct: the author's own builder is what runs.
+ * What the message carries is which of the two positions the target is in.
  */
 public class DeclaredBuilderSuppressesGenerationInspection extends LocalInspectionTool {
 
@@ -48,15 +47,9 @@ public class DeclaredBuilderSuppressesGenerationInspection extends LocalInspecti
                 NamingStyle style = ClassBuilderConstants.namingStyle(annotation);
                 String builderName = ClassBuilderConstants
                     .builderScheme(annotation, style, target.getName()).type();
-                boolean merge = ClassBuilderConstants.booleanAttr(annotation,
-                    ClassBuilderConstants.ATTR_MERGE_DECLARED_BUILDER, false);
-                if (!ClassBuilderConstants.suppressesGeneration(target, builderName, merge, executable)) {
-                    return;
-                }
+                if (!ClassBuilderConstants.suppressesGeneration(target, builderName, executable)) return;
 
-                holder.registerProblem(annotation,
-                    message(target.getName(), builderName, executable,
-                        ClassBuilderConstants.chainRoleOf(target).isChained()),
+                holder.registerProblem(annotation, message(target.getName(), builderName, executable),
                     ProblemHighlightType.WEAK_WARNING);
             }
         };
@@ -76,29 +69,23 @@ public class DeclaredBuilderSuppressesGenerationInspection extends LocalInspecti
     }
 
     /**
-     * The reason generation was skipped, and whether the merge opt-in is read
-     * where the target sits.
+     * The reason generation was skipped, naming the position that does not merge.
      *
      * @param targetName the annotated type's simple name
      * @param builderName the configured builder class name
-     * @param executable whether the annotation sits on a constructor or factory method
-     * @param chained whether the target sits in a SuperBuilder chain
+     * @param executable whether the annotation sits on a constructor or factory method,
+     *        the only other position being a SuperBuilder chain
      * @return the message to report on the annotation
      */
-    private static String message(String targetName, String builderName,
-                                  boolean executable, boolean chained) {
+    private static String message(String targetName, String builderName, boolean executable) {
         String reason = "No builder is generated because '" + targetName
             + "' declares a nested type named '" + builderName + "'";
         if (executable) {
-            return reason + ". A constructor or factory target has no merge to opt into, so the "
-                + "declaration suppresses generation outright";
+            return reason + ". A constructor or factory target does not merge into a declared "
+                + "builder, so the declaration suppresses generation";
         }
-        if (chained) {
-            return reason + ". mergeDeclaredBuilder is not read on a SuperBuilder chain, so the "
-                + "declaration suppresses generation whether it is written or not";
-        }
-        return reason + ". Write mergeDeclaredBuilder = true to have the generated members "
-            + "appended to it";
+        return reason + ". A SuperBuilder chain does not merge into a declared builder, so the "
+            + "declaration suppresses generation";
     }
 
 }

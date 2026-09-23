@@ -9,6 +9,7 @@ import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.lazy.mutate.LazyFieldMutator;
 import dev.simplified.lazy.mutate.LazyHolders;
 import dev.simplified.shared.apt.AnnotationLookup;
+import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.JavacBridge;
 
 import javax.annotation.processing.Messager;
@@ -132,16 +133,11 @@ public final class BuilderMutator {
             return true;
         }
 
+        // A declared class of the builder's name is merged into below. One this
+        // pipeline generated is a builder an earlier run already produced, and
+        // merging into it would skip every member by name and report them all.
         JCClassDecl declared = DeclaredBuilderMerge.declaredBuilder(target, ctx.builderName());
-        if (declared != null && !config.mergeDeclaredBuilder()) {
-            messager.printMessage(Diagnostic.Kind.NOTE,
-                "@ClassBuilder skipped injection: class " + ctx.targetSimpleName()
-                    + " already declares a nested '" + ctx.builderName() + "' type. Write "
-                    + "mergeDeclaredBuilder = true to have the generated members appended to it",
-                targetElement
-            );
-            return true;
-        }
+        if (declared != null && AstMarkers.isGenerated(declared)) return true;
 
         // $default$<fieldName>() providers for retained-initializer fields.
         // Must run before the nested Builder is built so FieldMutators'
@@ -190,12 +186,11 @@ public final class BuilderMutator {
      * Skipped for records (the canonical constructor already has the shape), for
      * SuperBuilder targets (they take a copy constructor instead), when a
      * {@code factoryMethod} means {@code build()} never calls {@code new}, when
-     * the author declared any constructor, when a hand-written nested builder
-     * suppresses injection wholesale, and when there are no fields to pass -
+     * the author declared any constructor, and when there are no fields to pass -
      * that last case would collide with javac's own default constructor.
      *
-     * <p>A <em>merged</em> declared builder is the one case where a nested
-     * builder does not suppress it: the generated {@code build()} still calls
+     * <p>A declared nested builder never suppresses it: the generated
+     * {@code build()} merged into that builder still calls
      * {@code new Target(..)}, so the constructor it calls still has to exist.
      *
      * @param targetElement the annotated type
@@ -214,9 +209,7 @@ public final class BuilderMutator {
         if (isAbstract || annotatedSuper != null) return false;
         if (!ctx.config().factoryMethod().isEmpty()) return false;
         if (ctx.fields().isEmpty()) return false;
-        if (AllArgsConstructorFactory.hasExplicitConstructor(target)) return false;
-        if (ctx.config().mergeDeclaredBuilder()) return true;
-        return DeclaredBuilderMerge.declaredBuilder(target, ctx.builderName()) == null;
+        return !AllArgsConstructorFactory.hasExplicitConstructor(target);
     }
 
     /**

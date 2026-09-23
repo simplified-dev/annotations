@@ -18,7 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The editor's half of {@code mergeDeclaredBuilder}.
+ * The editor's half of the declared-builder merge, with the annotation bare.
  *
  * <p>This is the drift in its most literal form if the halves disagree: the
  * build appends every generated setter to the author's declared builder, and an
@@ -62,7 +62,6 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
                 NamingStyle style() default NamingStyle.SIMPLIFIED;
                 SetterNames setters() default @SetterNames;
                 String factoryMethod() default "";
-                boolean mergeDeclaredBuilder() default false;
                 boolean retainInit() default true;
                 boolean generateCopyConstructor() default true;
                 boolean validate() default true;
@@ -124,7 +123,7 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
         List<String> names = declaredBuilderMethodsOf("Settings",
             """
             import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder(mergeDeclaredBuilder = true)
+            @ClassBuilder
             public class Settings {
                 private String name;
                 private boolean prettyPrint;
@@ -145,7 +144,7 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
         List<String> names = declaredBuilderMethodsOf("Doc",
             """
             import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder(mergeDeclaredBuilder = true)
+            @ClassBuilder
             public class Doc {
                 private String fileName;
                 private int pages;
@@ -163,7 +162,7 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
         List<String> names = declaredBuilderMethodsOf("Boxed",
             """
             import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder(mergeDeclaredBuilder = true)
+            @ClassBuilder
             public class Boxed {
                 private int size;
                 public static class Builder {
@@ -174,34 +173,12 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
         assertEquals("exactly one build(): " + names, 1, count(names, "build"));
     }
 
-    /**
-     * Without the opt-in the declaration suppresses the whole pass, so the
-     * editor has to leave the declared builder exactly as written - offering a
-     * setter here would be completion for a method no build emits.
-     */
-    public void testWithoutTheOptIn_theDeclaredBuilderIsLeftAlone() {
-        List<String> names = declaredBuilderMethodsOf("Untouched",
-            """
-            import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder
-            public class Untouched {
-                private String name;
-                public static class Builder {
-                    public Builder apply(Runnable r) { return this; }
-                }
-            }
-            """);
-        assertTrue("the author's member: " + names, names.contains("apply"));
-        assertFalse("and nothing generated: " + names, names.contains("name"));
-        assertFalse("not even a build(): " + names, names.contains("build"));
-    }
-
     /** A nested class that is not the builder is not a merge target. */
     public void testAnUnrelatedNestedClass_isLeftAlone() {
         PsiFile file = myFixture.configureByText("Holder.java",
             """
             import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder(mergeDeclaredBuilder = true)
+            @ClassBuilder
             public class Holder {
                 private String name;
                 public static class Helper { }
@@ -219,30 +196,57 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
     }
 
     /**
-     * The processor returns ahead of every entry point where the target declares
-     * a nested type of the builder's name and the opt-in is not written, so an
-     * editor that offers one is completing a member the build answers
-     * {@code cannot find symbol} on. Reachable on a plain standalone target with
-     * no chain and no opt-in anywhere in it.
+     * The processor merges into a nested type of the builder's name on a plain
+     * standalone target and emits all three entry points onto it, so an editor
+     * withholding any of them, or any merged member, is red over source that
+     * builds. The declaration used to suppress the whole pass on both halves.
      */
-    public void testDeclaredBuilder_offersNoEntryPoints() {
-        assertParity(BuilderParityFixture.load("standalone-declared-builder-opt-out"));
+    public void testDeclaredBuilder_offersTheEntryPointsAndTheMergedMembers() {
+        assertParity(BuilderParityFixture.load("standalone-declared-builder"));
     }
 
     /**
-     * The chain branch returns ahead of the declared-builder check, so the
-     * opt-in reaches nothing on a link: no member is appended to the author's
-     * builder and no entry point lands on the target. The attribute being
-     * written is what makes this worth pinning separately - the editor reads it
-     * and the processor never does.
+     * The chain branch returns ahead of the declared-builder check, so nothing
+     * merges on a link: no member is appended to the author's builder and no
+     * entry point lands on the target.
      */
-    public void testADeclaredChainBuilderWithTheOptIn_isLeftAlone() {
-        assertParity(BuilderParityFixture.load("chain-link-declared-builder-opt-in"));
+    public void testADeclaredLinkBuilder_isLeftAlone() {
+        assertParity(BuilderParityFixture.load("chain-link-declared-builder"));
     }
 
-    /** The same abort one role up, where no opt-in is written at all. */
-    public void testADeclaredChainBuilderWithoutTheOptIn_isLeftAlone() {
-        assertParity(BuilderParityFixture.load("chain-root-declared-builder-opt-out"));
+    /** The same abort one role up. */
+    public void testADeclaredRootBuilder_isLeftAlone() {
+        assertParity(BuilderParityFixture.load("chain-root-declared-builder"));
+    }
+
+    /**
+     * An interface's builder is a sibling file and the processor never looks at
+     * a class nested in the interface body, so nothing is appended to it - and
+     * that holds even where the annotation still writes the attribute that once
+     * asked for the merge, which is the source an upgrading author has open.
+     * The editor used to read that attribute and merge into the interface's
+     * nested class, listing setters and a build method javac never emits there;
+     * with the merge running on every declared builder, an editor that did not
+     * ask whether the owner is an interface would do the same with or without
+     * it.
+     */
+    public void testAnInterfacesNestedBuilder_isNotMergedIntoUnderAStaleAttribute() {
+        PsiFile file = myFixture.configureByText("Shape.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(mergeDeclaredBuilder = true)
+            public interface Shape {
+                String name();
+                class Builder {
+                    public Builder apply(Runnable r) { return this; }
+                }
+            }
+            """);
+        PsiClass target = ((PsiJavaFile) file).getClasses()[0];
+        List<String> nested = methodNamesOf(nestedOf(target, "Builder"));
+        assertTrue("the author's member stays: " + nested, nested.contains("apply"));
+        assertFalse("and nothing is merged beside it: " + nested, nested.contains("name"));
+        assertFalse("not even a build(): " + nested, nested.contains("build"));
     }
 
     /**
@@ -255,7 +259,7 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
         myFixture.configureByText("Settings.java",
             """
             import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder(mergeDeclaredBuilder = true)
+            @ClassBuilder
             public class Settings {
                 private String name;
                 private int size;
@@ -281,7 +285,7 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
         PsiFile file = myFixture.configureByText("Seeded.java",
             """
             import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder(mergeDeclaredBuilder = true)
+            @ClassBuilder
             public class Seeded {
                 private String name;
                 public static class Builder {
@@ -335,7 +339,7 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
         PsiFile file = myFixture.configureByText("Seeded.java",
             """
             import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder(mergeDeclaredBuilder = true)
+            @ClassBuilder
             public class Seeded {
                 private String name;
                 public static class Builder {
@@ -356,7 +360,7 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
         PsiFile file = myFixture.configureByText("Both.java",
             """
             import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder(mergeDeclaredBuilder = true)
+            @ClassBuilder
             public class Both {
                 private String name;
                 public static class Builder {
@@ -374,7 +378,7 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
         PsiFile file = myFixture.configureByText("Doc.java",
             """
             import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder(mergeDeclaredBuilder = true)
+            @ClassBuilder
             public class Doc {
                 private String fileName;
                 private int pages;

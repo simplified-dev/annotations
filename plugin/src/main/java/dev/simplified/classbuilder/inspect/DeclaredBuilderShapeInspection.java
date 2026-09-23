@@ -67,13 +67,10 @@ public class DeclaredBuilderShapeInspection extends LocalInspectionTool {
                     return;
                 }
 
-                // The merge runs on a type target and nowhere else, so the shape
-                // of a declared builder is only a question there.
-                if (executable) return;
-                if (!ClassBuilderConstants.booleanAttr(annotation,
-                    ClassBuilderConstants.ATTR_MERGE_DECLARED_BUILDER, false)) {
-                    return;
-                }
+                // The merge runs on a class or record target and nowhere else -
+                // an interface's builder is a sibling file - so the shape of a
+                // declared builder is only a question there.
+                if (executable || target.isInterface()) return;
                 PsiClass declared = ClassBuilderConstants.declaredBuilderOf(target, names.type());
                 if (declared == null || declared.getName() == null) return;
 

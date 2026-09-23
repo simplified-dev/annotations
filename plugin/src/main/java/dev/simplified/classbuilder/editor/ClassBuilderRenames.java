@@ -82,11 +82,11 @@ public final class ClassBuilderRenames {
      * The builder the target's setters were minted into.
      *
      * <p>Usually the synthesised one, which carries the generated mark. A target
-     * that asked for the merge has no such class - the setters go into the one
+     * that declares its builder has no such class - the setters go into the one
      * the author declared, which is theirs and marked nothing - so the mark
-     * alone found none and the whole collection came back empty, leaving every
-     * contributed setter under its old name until the next build re-minted them
-     * under the new one.
+     * alone finds none, and without the declared class the whole collection
+     * would come back empty, leaving every contributed setter under its old name
+     * until the next build re-minted them under the new one.
      *
      * @param target the annotated type
      * @param config resolved editor-side builder configuration
@@ -97,7 +97,6 @@ public final class ClassBuilderRenames {
         for (PsiClass nested : target.getInnerClasses()) {
             if (GeneratedMemberMarker.isGenerated(nested)) return nested;
         }
-        if (!config.mergeDeclaredBuilder()) return null;
         return ClassBuilderConstants.declaredBuilderOf(target, config.builderName());
     }
 

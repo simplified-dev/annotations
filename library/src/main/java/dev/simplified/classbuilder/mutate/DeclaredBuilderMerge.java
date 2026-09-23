@@ -34,12 +34,11 @@ import java.util.Set;
  * already declares, so a builder needing one member the generator cannot
  * express does not have to be written out in full.
  *
- * <p>Without this the whole injection is skipped: a class declaring a nested
- * type by the builder's name keeps it and gets nothing generated. That is the
- * right default - two builders of one name is not a thing to guess at - but it
- * makes a single {@code apply(GsonContributor)} or a {@code withField(String,
- * String, boolean)} that constructs its own value cost every other setter on
- * the type.
+ * <p>Runs whenever a class or record target declares a nested type by the
+ * builder's name, so a single {@code apply(GsonContributor)} or a
+ * {@code withField(String, String, boolean)} that constructs its own value
+ * costs the author that one member and nothing more - every other setter, the
+ * slot fields and {@code build()} still come from the generator.
  *
  * <h2>What wins</h2>
  * The author does, member for member. A generated member is appended only when

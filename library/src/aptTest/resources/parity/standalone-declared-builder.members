@@ -1,0 +1,13 @@
+# The three entry points are the claim. The processor emits them onto the target
+# and merges every member the author's builder does not spell into it, so the
+# editor withholding any of them is the divergence a call site walks into.
+type demo.Untouched
+
+target +builder
+target +from
+target +mutate
+
+# The author's own member stays, and the generated ones are appended beside it.
+builder +apply
+builder +name
+builder +build

@@ -218,11 +218,17 @@ public class BuilderMutatorTest {
     }
 
     // ------------------------------------------------------------------
-    // Existing nested 'Builder' is respected (skip-on-collision)
+    // Existing nested 'Builder' is merged into, the author winning each member
     // ------------------------------------------------------------------
 
+    /**
+     * A builder spelling every member itself is merged into rather than
+     * skipped: nothing generated lands beside the author's members, and the
+     * entry points still land on the target. The declaration used to suppress
+     * the entry points too.
+     */
     @Test
-    public void existingNestedBuilder_skipped() {
+    public void handWrittenBuilder_isMergedNotSkipped() throws Exception {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.HandRolled",
             "package demo;",
             "import dev.simplified.annotations.ClassBuilder;",
@@ -237,9 +243,16 @@ public class BuilderMutatorTest {
             "        public HandRolled build() { return new HandRolled(note); }",
             "    }",
             "}");
-        Compilation c = compile(src);
+        JavaFileObject consumer = JavaFileObjects.forSourceLines("demo.UseHandRolled",
+            "package demo;",
+            "public class UseHandRolled {",
+            "    public static String go() { return HandRolled.builder().note(\"n\").build().getNote(); }",
+            "}");
+        Compilation c = compile(src, consumer);
         assertThat(c).succeeded();
-        // No error, no sibling; processor emitted a NOTE.
+        assertThat(c).hadNoteContaining("already spells");
+        Object note = loadClasses(c).loadClass("demo.UseHandRolled").getMethod("go").invoke(null);
+        assertEquals("n", note);
     }
 
     // ------------------------------------------------------------------

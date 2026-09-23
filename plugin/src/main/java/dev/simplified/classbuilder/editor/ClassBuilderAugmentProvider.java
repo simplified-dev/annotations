@@ -389,20 +389,21 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         if (name == null) return null;
         PsiClass owner = declared.getContainingClass();
         if (owner == null || IN_PROGRESS.get().contains(owner)) return null;
+        // An interface's builder is a sibling file, and the processor never
+        // looks at a class nested in the interface body, so nothing merges into
+        // one - contributing here would list members javac never appends.
+        if (owner.isInterface()) return null;
         BuilderSite site = BuilderSite.of(owner);
         if (site == null || site.isExecutable()) return null;
 
         GeneratedMemberFactory.EditorBuilderConfig config =
             GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
-        if (!config.mergeDeclaredBuilder()) return null;
         if (!name.equals(config.builderName())) return null;
-        // The opt-in asks nothing about where the target sits in a chain, and
-        // the chain branch returns ahead of the declared-builder check without
-        // reading the attribute at all - so on a root, a link or a chained
-        // abstract the author's builder is left exactly as written. Merging
-        // here would list the setters, the self accessor and the build method
-        // on a class javac appends nothing to, and a call to any of them fails
-        // the build.
+        // The chain branch returns ahead of the declared-builder check, so on a
+        // root, a link or a chained abstract the author's builder is left
+        // exactly as written. Merging here would list the setters, the self
+        // accessor and the build method on a class javac appends nothing to,
+        // and a call to any of them fails the build.
         if (ClassBuilderConstants.chainRoleOf(owner).isChained()) return null;
         // The shape the processor accepts, asked of the same facts. Contributing
         // into a builder javac rejects leaves the author reading a populated
@@ -466,7 +467,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             boolean entryPointsWithheld = (!site.isExecutable()
                 && target.hasModifierProperty(PsiModifier.ABSTRACT))
                 || ClassBuilderConstants.withholdsEntryPointsOnly(target, config.builderName(),
-                    config.mergeDeclaredBuilder(), site.isExecutable());
+                    site.isExecutable());
             return CachedValueProvider.Result.create(
                 entryPointsWithheld ? members.constructorOnly() : members.allMethods(),
                 PsiModificationTracker.MODIFICATION_COUNT);
@@ -481,7 +482,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      * hand-migration off a Lombok builder produces most naturally, and it
      * resolves green all the way to {@code cannot find symbol}. The decision
      * itself is
-     * {@link ClassBuilderConstants#suppressesGeneration(PsiClass, String, boolean, boolean)},
+     * {@link ClassBuilderConstants#suppressesGeneration(PsiClass, String, boolean)},
      * so the inspection explaining the withholding and the withholding cannot
      * disagree about when it happens.
      *
@@ -507,10 +508,8 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
     private static boolean suppressesGeneration(PsiClass target,
                                                 GeneratedMemberFactory.EditorBuilderConfig config,
                                                 boolean executable) {
-        if (ClassBuilderConstants.suppressesGeneration(target, config.builderName(),
-            config.mergeDeclaredBuilder(), executable)) {
+        if (ClassBuilderConstants.suppressesGeneration(target, config.builderName(), executable))
             return true;
-        }
         return ClassBuilderConstants.ancestorBlockingGeneration(target, config.builderName(),
             executable) != null;
     }
@@ -580,7 +579,9 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      * so the editor surfaces a constructor exactly when javac will inject one.
      * Records keep their canonical constructor, a set {@code factoryMethod} means
      * {@code build()} never calls {@code new}, and any author-declared
-     * constructor suppresses synthesis outright.
+     * constructor suppresses synthesis outright. A declared nested builder never
+     * does: the generated {@code build()} merged into it still calls
+     * {@code new Target(..)}, so the constructor it calls still has to exist.
      *
      * <p>Reads {@code getOwnMethods()} rather than {@code getConstructors()}:
      * the latter is augment-aware and would recurse back into this provider.
@@ -597,13 +598,6 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         if (target instanceof PsiExtensibleClass extensible) {
             for (PsiMethod own : extensible.getOwnMethods()) {
                 if (own.isConstructor()) return false;
-            }
-            // A merged declared builder is the one case where a nested builder
-            // does not suppress the constructor: build() still calls
-            // new Target(..), so the constructor it calls still has to exist.
-            if (config.mergeDeclaredBuilder()) return true;
-            for (PsiClass nested : extensible.getOwnInnerClasses()) {
-                if (config.builderName().equals(nested.getName())) return false;
             }
         }
         return true;

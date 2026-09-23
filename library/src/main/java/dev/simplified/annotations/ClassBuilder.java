@@ -30,6 +30,30 @@ import java.lang.annotation.Target;
  * injection is skipped for that name and the user-supplied version wins -
  * a compiler {@code NOTE} is emitted for visibility.
  *
+ * <h2>A declared builder</h2>
+ * A class or record target that already declares a nested class of the
+ * builder's name - {@code Builder}, or whatever {@link BuilderNames#type()}
+ * names - has the generated members merged into it rather than a second class
+ * generated beside it. This is how a builder gets the one member the generator
+ * cannot express - a setter that builds its own value, an extension point taking
+ * the builder itself, a view onto in-progress state - while every other setter
+ * still comes from here.
+ *
+ * <p>The author wins member for member: a generated field is appended only when
+ * the declared builder spells no field of that name, and a generated method only
+ * when it spells no method of that name and parameter count. Everything skipped
+ * is reported in one compiler note rather than left silent. The target still
+ * gets the all-args constructor {@code build()} calls, and still gets the three
+ * entry points unless the declared builder has no constructor they can call. A
+ * declared shape the generated members cannot live in - an inner class, the
+ * wrong type parameters, an {@code abstract} builder the entry points would
+ * instantiate - is a compile error.
+ *
+ * <p>A target in a SuperBuilder chain and a constructor or factory target do not
+ * merge: a declared nested class of the builder's name suppresses generation
+ * there, with a compiler note. An interface target never looks at a nested
+ * class, its builder being a sibling file.
+ *
  * <p>An interface target gets its builder as a sibling
  * {@code <Name>Builder.java} (plus {@code <Name>Impl.java}), there being no
  * in-source surface for a nested class on an interface body. The bootstrap
@@ -262,6 +286,10 @@ public @interface ClassBuilder {
      * useful as a type, and that is a different question from whether
      * {@code new Target.Builder()} is an entry point. Widen it only to publish
      * that second way in deliberately.
+     *
+     * <p>A declared builder keeps the constructors its author wrote, javac's own
+     * default included where the author wrote none, so this does not reach it -
+     * declare one to narrow it, as on any other written class.
      */
     @NotNull AccessLevel builderConstructorAccess() default AccessLevel.PACKAGE;
 
@@ -332,32 +360,6 @@ public @interface ClassBuilder {
      * compile error.
      */
     boolean generateImpl() default true;
-
-    /**
-     * Whether the generated members should be appended to a {@code Builder} the
-     * target already declares, rather than the declaration suppressing them.
-     *
-     * <p>Off by default, because a declared builder normally means the author
-     * wrote the whole thing and two builders of one name is not something to
-     * guess at. Turn it on when the reason for declaring one is a single member
-     * the generator cannot express - a setter that builds its own value, an
-     * extension point taking the builder itself, a view onto in-progress state -
-     * so the other setters still come from here.
-     *
-     * <p>The author wins member for member: a generated field is appended only
-     * when the declared builder spells no field of that name, and a generated
-     * method only when it spells no method of that name and parameter count.
-     * What is skipped is reported as a compiler note rather than left silent.
-     *
-     * <p>The declared builder's constructor is the author's throughout, javac's
-     * own default included, so {@link #builderConstructorAccess()} does not
-     * reach it - declare one to narrow it, as on any other written class.
-     *
-     * <p>Ignored on an interface target, whose builder is a sibling file with
-     * nothing to merge into, and on a SuperBuilder chain, which builds its
-     * hierarchy rather than one nested class.
-     */
-    boolean mergeDeclaredBuilder() default false;
 
     /**
      * The name of a static factory method on the annotated type that

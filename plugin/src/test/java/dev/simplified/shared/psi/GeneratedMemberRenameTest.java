@@ -13,6 +13,9 @@ import com.intellij.testFramework.LightProjectDescriptor;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Exercises {@link GeneratedMemberRenameProcessor} and its two companions: a
  * generated member is spelled from the slot behind it, so renaming the slot has
@@ -154,7 +157,7 @@ public class GeneratedMemberRenameTest extends LightJavaCodeInsightFixtureTestCa
         PsiClass settings = configure("Settings",
             """
             import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder(mergeDeclaredBuilder = true)
+            @ClassBuilder
             public class Settings {
                 String label;
                 public static class Builder {
@@ -174,8 +177,13 @@ public class GeneratedMemberRenameTest extends LightJavaCodeInsightFixtureTestCa
         assertTrue("got " + caller.getText(), caller.getText().contains(".caption(\"x\")"));
     }
 
-    /** With the opt-in off nothing was contributed there, so nothing is renamed. */
-    public void testWithoutTheOptIn_aDeclaredBuilderIsNotRenamedInto() {
+    /**
+     * The author's own setter on a declared builder is a written method, never a
+     * minted one, so renaming the slot leaves it and its callers alone - while
+     * the merge contributes the setter the new name spells beside it. This used
+     * to hold only because nothing was merged into the declared builder at all.
+     */
+    public void testRenamingASlot_leavesTheAuthorsOwnSetterOnTheDeclaredBuilderAlone() {
         PsiClass settings = configure("Untouched",
             """
             import dev.simplified.annotations.ClassBuilder;
@@ -198,6 +206,13 @@ public class GeneratedMemberRenameTest extends LightJavaCodeInsightFixtureTestCa
 
         assertTrue("the author's own setter keeps its name: " + caller.getText(),
             caller.getText().contains(".label(\"x\")"));
+        PsiClass builder = settings.findInnerClassByName("Builder", false);
+        assertNotNull("the declared builder is still there", builder);
+        List<String> names = new ArrayList<>();
+        for (PsiMethod method : builder.getMethods()) names.add(method.getName());
+        assertTrue("the author's setter stays: " + names, names.contains("label"));
+        assertTrue("and the merge contributes the renamed slot's setter beside it: " + names,
+            names.contains("caption"));
     }
 
     /**

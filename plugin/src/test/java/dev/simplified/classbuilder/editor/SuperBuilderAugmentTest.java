@@ -52,7 +52,6 @@ public class SuperBuilderAugmentTest extends LightJavaCodeInsightFixtureTestCase
                 NamingStyle style() default NamingStyle.SIMPLIFIED;
                 SetterNames setters() default @SetterNames;
                 String factoryMethod() default "";
-                boolean mergeDeclaredBuilder() default false;
                 boolean retainInit() default true;
                 boolean generateCopyConstructor() default true;
                 boolean validate() default true;

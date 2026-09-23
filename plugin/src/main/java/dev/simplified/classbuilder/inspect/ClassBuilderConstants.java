@@ -117,7 +117,6 @@ public final class ClassBuilderConstants {
     public static final @NotNull String ATTR_CONSTRUCTOR_ACCESS = "constructorAccess";
     public static final @NotNull String ATTR_BUILDER_CONSTRUCTOR_ACCESS = "builderConstructorAccess";
     public static final @NotNull String ATTR_FACTORY_METHOD = "factoryMethod";
-    public static final @NotNull String ATTR_MERGE_DECLARED_BUILDER = "mergeDeclaredBuilder";
     public static final @NotNull String ATTR_GENERATE_COPY_CONSTRUCTOR = "generateCopyConstructor";
 
     /** Attribute names of {@code @SetterNames}, in declaration order. */
@@ -359,29 +358,26 @@ public final class ClassBuilderConstants {
      * Whether a declared nested type of the builder's name suppresses generation
      * outright, as opposed to being merged into.
      *
-     * <p>All three mutation paths skip on that declaration and only one of them
-     * reads the merge opt-in. A plain type target keeps its builder and its entry
-     * points when {@code mergeDeclaredBuilder} is written, the generated members
-     * going into the class the author wrote. A chain role aborts ahead of
-     * everything - the retained-initializer providers, the copy constructor and
-     * the bootstraps - without consulting the attribute at all, and an executable
-     * target aborts the same way, having no merge to opt into.
+     * <p>A class or record target merges into the declaration: it keeps its
+     * builder and its entry points, the generated members going into the class
+     * the author wrote. A chain role aborts ahead of everything - the
+     * retained-initializer providers, the copy constructor and the bootstraps -
+     * and an executable target aborts the same way, neither merging into a
+     * declared builder. An interface target never looks at a nested class, its
+     * builder being a sibling file.
      *
      * @param target the annotated type
      * @param builderName the configured builder class name
-     * @param mergeDeclaredBuilder whether the merge opt-in is written
      * @param executable whether the annotation sits on a constructor or factory method
      * @return whether the processor generates nothing because of the declaration
      */
     public static boolean suppressesGeneration(@NotNull PsiClass target,
                                                @NotNull String builderName,
-                                               boolean mergeDeclaredBuilder,
                                                boolean executable) {
         PsiClass declared = declaredBuilderOf(target, builderName);
         if (declared == null) return false;
         if (executable) return true;
-        if (chainRoleOf(target).isChained()) return true;
-        return !mergeDeclaredBuilder;
+        return chainRoleOf(target).isChained();
     }
 
     /**
@@ -398,17 +394,20 @@ public final class ClassBuilderConstants {
      * withheld that constructor too, and a same-package {@code new Target(...)}
      * went red over source that builds.
      *
+     * <p>Answers only for a class or record target. An executable target and a
+     * chain role withhold everything through {@link #suppressesGeneration}
+     * instead, and an interface's entry points call its sibling builder, never a
+     * class nested in the interface body.
+     *
      * @param target the annotated type
      * @param builderName the configured builder class name
-     * @param mergeDeclaredBuilder whether the merge opt-in is written
      * @param executable whether the annotation sits on a constructor or factory method
      * @return whether {@code builder()}, {@code from(T)} and {@code mutate()} are skipped
      */
     public static boolean withholdsEntryPointsOnly(@NotNull PsiClass target,
                                                    @NotNull String builderName,
-                                                   boolean mergeDeclaredBuilder,
                                                    boolean executable) {
-        if (executable || !mergeDeclaredBuilder) return false;
+        if (executable || target.isInterface()) return false;
         if (chainRoleOf(target).isChained()) return false;
         PsiClass declared = declaredBuilderOf(target, builderName);
         return declared != null && !hasNullaryConstructor(declared);

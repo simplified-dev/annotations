@@ -42,7 +42,6 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
             @Retention(RetentionPolicy.CLASS)
             @Target({ElementType.TYPE, ElementType.CONSTRUCTOR, ElementType.METHOD})
             public @interface ClassBuilder {
-                boolean mergeDeclaredBuilder() default false;
             }
             """);
     }
@@ -61,7 +60,7 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
         myFixture.configureByText("Inner.java",
             """
             import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder(mergeDeclaredBuilder = true)
+            @ClassBuilder
             public class Inner {
                 private String name;
                 public class Builder { }
@@ -75,7 +74,7 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
         myFixture.configureByText("Raw.java",
             """
             import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder(mergeDeclaredBuilder = true)
+            @ClassBuilder
             public class Raw<T> {
                 private T item;
                 public static class Builder { }
@@ -90,7 +89,7 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
         myFixture.configureByText("Sealed.java",
             """
             import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder(mergeDeclaredBuilder = true)
+            @ClassBuilder
             public class Sealed {
                 private String name;
                 public abstract static class Builder { }
@@ -110,7 +109,7 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
         myFixture.configureByText("Wrong.java",
             """
             import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder(mergeDeclaredBuilder = true)
+            @ClassBuilder
             public class Wrong {
                 private String name;
                 public static class Builder {
@@ -126,7 +125,7 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
         myFixture.configureByText("Fine.java",
             """
             import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder(mergeDeclaredBuilder = true)
+            @ClassBuilder
             public class Fine {
                 private String name;
                 public static class Builder {
@@ -138,8 +137,13 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
         assertEquals("a usable shape draws nothing: " + errors(), 0, errors().size());
     }
 
-    /** Without the opt-in nothing is merged, so the shape is not a question. */
-    public void testWithoutTheOptIn_isNotReported() {
+    /**
+     * A bare annotation over a non-static builder is reported, and on the
+     * builder's name identifier - the element the author acts on. This shape
+     * went unreported while the merge had to be asked for, the build then
+     * leaving the declaration alone.
+     */
+    public void testANonStaticBuilderUnderABareAnnotation_isReportedOnItsName() {
         myFixture.configureByText("Untouched.java",
             """
             import dev.simplified.annotations.ClassBuilder;
@@ -149,7 +153,39 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
                 public class Builder { }
             }
             """);
-        assertEquals("no merge, no shape requirement: " + errors(), 0, errors().size());
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("an inner class captures the enclosing instance"));
+        List<String> anchors = new ArrayList<>();
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            String description = info.getDescription();
+            if (info.getSeverity() == HighlightSeverity.ERROR && description != null
+                && description.startsWith("@ClassBuilder cannot merge into")) {
+                anchors.add(info.getText());
+            }
+        }
+        assertEquals("reported on the builder's name identifier", List.of("Builder"), anchors);
+    }
+
+    /**
+     * An interface's builder is a sibling file and the processor never looks at
+     * a class nested in the interface body, so its shape is not a question -
+     * even one missing the type parameters the merge would require on a class,
+     * and even where the annotation still writes the attribute that once asked
+     * for the merge. The inspection used to read that attribute and judge the
+     * interface's nested class, reporting an error the build never raises.
+     */
+    public void testAnInterfacesNestedBuilder_isNotJudgedUnderAStaleAttribute() {
+        myFixture.configureByText("Shape.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(mergeDeclaredBuilder = true)
+            public interface Shape<T> {
+                T value();
+                class Builder { }
+            }
+            """);
+        assertEquals("nothing merges into an interface's nested class: " + errors(),
+            0, errors().size());
     }
 
     /**

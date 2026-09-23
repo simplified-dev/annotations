@@ -18,8 +18,9 @@ import java.util.List;
  * <p>Three members and a whole nested class vanish from completion when the
  * target declares a nested type of the builder's name, and until this fires the
  * only account of it anywhere is a compiler note. What the cases pin is which
- * of the three positions reads the merge opt-in - one of them does, and the
- * message has to say so where it applies and not where it does not.
+ * positions suppress: a class or record target merges into the declaration and
+ * draws nothing, while a chain role and a constructor or factory target do not
+ * merge, and the message names which of the two the target is.
  */
 public class DeclaredBuilderSuppressesGenerationInspectionTest extends BasePlatformTestCase {
 
@@ -42,7 +43,6 @@ public class DeclaredBuilderSuppressesGenerationInspectionTest extends BasePlatf
             @Retention(RetentionPolicy.CLASS)
             @Target({ElementType.TYPE, ElementType.CONSTRUCTOR, ElementType.METHOD})
             public @interface ClassBuilder {
-                boolean mergeDeclaredBuilder() default false;
             }
             """);
     }
@@ -56,7 +56,12 @@ public class DeclaredBuilderSuppressesGenerationInspectionTest extends BasePlatf
         }
     }
 
-    public void testDeclaredNestedBuilderWithTheOptInOff_isWarned() {
+    /**
+     * A standalone target merges into its declared builder, so nothing is
+     * suppressed and nothing is said. This position used to warn and advise an
+     * attribute that asked for the merge.
+     */
+    public void testAStandaloneDeclaredBuilder_isNotWarned() {
         myFixture.configureByText("Untouched.java",
             """
             import dev.simplified.annotations.ClassBuilder;
@@ -68,27 +73,26 @@ public class DeclaredBuilderSuppressesGenerationInspectionTest extends BasePlatf
                 }
             }
             """);
-        String warning = theOnlyWarning();
-        assertTrue("names the target and the declaration: " + warning,
-            warning.contains(
-                "No builder is generated because 'Untouched' declares a nested type named 'Builder'"));
-        assertTrue("and says which attribute turns it back on: " + warning,
-            warning.contains("Write mergeDeclaredBuilder = true"));
+        assertEquals("the merge runs, so nothing is suppressed: " + weakWarnings(),
+            0, weakWarnings().size());
     }
 
-    public void testWithTheOptInOn_isNotWarned() {
-        myFixture.configureByText("Merged.java",
+    /**
+     * An interface's builder is a sibling file, so a class nested in the
+     * interface body suppresses nothing and the processor emits every entry
+     * point regardless. This position used to warn over source that builds.
+     */
+    public void testAnInterfaceDeclaringANestedBuilder_isNotWarned() {
+        myFixture.configureByText("Shape.java",
             """
             import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder(mergeDeclaredBuilder = true)
-            public class Merged {
-                private String name;
-                public static class Builder {
-                    public Builder apply(Runnable task) { return this; }
-                }
+            @ClassBuilder
+            public interface Shape {
+                String name();
+                class Builder { }
             }
             """);
-        assertEquals("the merge runs, so nothing is suppressed: " + weakWarnings(),
+        assertEquals("nothing is suppressed on an interface: " + weakWarnings(),
             0, weakWarnings().size());
     }
 
@@ -121,17 +125,16 @@ public class DeclaredBuilderSuppressesGenerationInspectionTest extends BasePlatf
     }
 
     /**
-     * The opt-in is written and reaches nothing, the chain branch never reading
-     * it - so the message must not tell the author to write what they already
-     * wrote.
+     * A link does not merge into its declared builder, and the message says so
+     * without naming an attribute - the one it used to name no longer exists.
      */
-    public void testOnAChainWithTheOptInOn_isWarnedAndDoesNotAdviseTheOptIn() {
+    public void testOnAChain_isWarnedThatAChainDoesNotMerge() {
         myFixture.configureByText("Link.java",
             """
             import dev.simplified.annotations.ClassBuilder;
             @ClassBuilder
             abstract class Base { private String label; }
-            @ClassBuilder(mergeDeclaredBuilder = true)
+            @ClassBuilder
             public class Link extends Base {
                 private String extra;
                 public static class Builder {
@@ -143,14 +146,15 @@ public class DeclaredBuilderSuppressesGenerationInspectionTest extends BasePlatf
         assertTrue("still says nothing is generated: " + warning,
             warning.contains(
                 "No builder is generated because 'Link' declares a nested type named 'Builder'"));
-        assertTrue("and that the attribute is not read here: " + warning,
-            warning.contains("not read on a SuperBuilder chain"));
-        assertFalse("never advises writing what is already written: " + warning,
-            warning.contains("Write mergeDeclaredBuilder = true"));
+        assertTrue("and that a chain does not merge: " + warning,
+            warning.contains(
+                "A SuperBuilder chain does not merge into a declared builder, so the declaration "
+                    + "suppresses generation"));
+        assertFalse("names no attribute: " + warning, warning.contains("mergeDeclaredBuilder"));
     }
 
-    /** An abstract root reads the attribute no more than a link does. */
-    public void testOnAnAbstractRootWithNoOptIn_isWarnedAsAChain() {
+    /** An abstract root merges no more than a link does. */
+    public void testOnAnAbstractRoot_isWarnedAsAChain() {
         myFixture.configureByText("Rooted.java",
             """
             import dev.simplified.annotations.ClassBuilder;
@@ -163,11 +167,11 @@ public class DeclaredBuilderSuppressesGenerationInspectionTest extends BasePlatf
             }
             """);
         assertTrue("an abstract root is a chain role: " + weakWarnings(),
-            theOnlyWarning().contains("not read on a SuperBuilder chain"));
+            theOnlyWarning().contains("A SuperBuilder chain does not merge into a declared builder"));
     }
 
-    /** A constructor target has no merge to opt into, and the message says so. */
-    public void testOnAConstructorTarget_isWarnedAsHavingNoMerge() {
+    /** A constructor target does not merge into a declared builder, and the message says so. */
+    public void testOnAConstructorTarget_isWarnedThatItDoesNotMerge() {
         myFixture.configureByText("Action.java",
             """
             import dev.simplified.annotations.ClassBuilder;
@@ -180,8 +184,10 @@ public class DeclaredBuilderSuppressesGenerationInspectionTest extends BasePlatf
                 }
             }
             """);
-        assertTrue("no merge exists on that path: " + weakWarnings(),
-            theOnlyWarning().contains("has no merge to opt into"));
+        assertTrue("no merge runs on that path: " + weakWarnings(),
+            theOnlyWarning().contains(
+                "A constructor or factory target does not merge into a declared builder, so the "
+                    + "declaration suppresses generation"));
     }
 
     /**

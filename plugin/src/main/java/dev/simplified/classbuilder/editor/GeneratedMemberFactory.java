@@ -1380,7 +1380,6 @@ public final class GeneratedMemberFactory {
     record EditorBuilderConfig(BuilderScheme names, SetterScheme setters,
                                String access, String constructorAccess,
                                String builderConstructorAccess,
-                               boolean mergeDeclaredBuilder,
                                boolean generateCopyConstructor,
                                String factoryMethod) {
         static EditorBuilderConfig fromAnnotation(PsiAnnotation annotation) {
@@ -1392,8 +1391,6 @@ public final class GeneratedMemberFactory {
             // Same default one level down, so builder() is the one way in.
             String builderConstructorAccess = ClassBuilderConstants.accessKeyword(annotation,
                 ClassBuilderConstants.ATTR_BUILDER_CONSTRUCTOR_ACCESS, "");
-            boolean mergeDeclaredBuilder = ClassBuilderConstants.booleanAttr(annotation,
-                ClassBuilderConstants.ATTR_MERGE_DECLARED_BUILDER, false);
             // Read with the annotation's own default, and part of the record for
             // the same reason every other attribute is: this record is the
             // augment cache key, and an attribute absent from it can neither be
@@ -1405,7 +1402,7 @@ public final class GeneratedMemberFactory {
             return new EditorBuilderConfig(
                 ClassBuilderConstants.builderScheme(annotation, style, targetSimpleName(annotation)),
                 ClassBuilderConstants.setterScheme(annotation, style),
-                access, constructorAccess, builderConstructorAccess, mergeDeclaredBuilder,
+                access, constructorAccess, builderConstructorAccess,
                 generateCopyConstructor, factoryMethod);
         }
 

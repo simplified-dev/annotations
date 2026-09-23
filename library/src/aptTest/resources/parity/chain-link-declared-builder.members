@@ -1,0 +1,10 @@
+# A chain does not merge: the chain branch returns ahead of the declared-builder
+# check, so the author's builder keeps exactly its own member and gains none of
+# the generated ones.
+type demo.Link
+
+builder +apply
+builder -extra
+builder -label
+builder -build
+builder -self

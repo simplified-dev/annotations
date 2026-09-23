@@ -23,8 +23,8 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 
 /**
- * {@code @ClassBuilder(mergeDeclaredBuilder = true)} - generated members landing
- * beside author-written ones inside a {@code Builder} the target declares.
+ * The declared-builder merge - generated members landing beside author-written
+ * ones inside a {@code Builder} the target declares, with the annotation bare.
  *
  * <p>The point of it is that one member the generator cannot express should not
  * cost every member it can. What the tests pin is the boundary: the author wins
@@ -105,7 +105,7 @@ public class DeclaredBuilderMergeTest {
                 "import dev.simplified.annotations.Collector;",
                 "import java.util.ArrayList;",
                 "import java.util.List;",
-                "@ClassBuilder(validate = false, mergeDeclaredBuilder = true)",
+                "@ClassBuilder(validate = false)",
                 "public class Settings {",
                 "    private String name;",
                 "    private boolean prettyPrint;",
@@ -152,7 +152,7 @@ public class DeclaredBuilderMergeTest {
             JavaFileObjects.forSourceLines("demo.Doc",
                 "package demo;",
                 "import dev.simplified.annotations.ClassBuilder;",
-                "@ClassBuilder(validate = false, mergeDeclaredBuilder = true)",
+                "@ClassBuilder(validate = false)",
                 "public class Doc {",
                 "    private String fileName;",
                 "    private int pages;",
@@ -186,7 +186,7 @@ public class DeclaredBuilderMergeTest {
             JavaFileObjects.forSourceLines("demo.Boxed",
                 "package demo;",
                 "import dev.simplified.annotations.ClassBuilder;",
-                "@ClassBuilder(validate = false, mergeDeclaredBuilder = true)",
+                "@ClassBuilder(validate = false)",
                 "public class Boxed {",
                 "    private int size;",
                 "    Boxed(int size) { this.size = size; }",
@@ -206,11 +206,13 @@ public class DeclaredBuilderMergeTest {
     }
 
     /**
-     * Without the opt-in the declaration still suppresses everything, which is
-     * the behaviour every target written before this had.
+     * An empty declared builder is merged into like any other, with nothing
+     * written beside the annotation. The declaration used to suppress every
+     * generated member unless an attribute asked for the merge, so the setter
+     * called here did not exist.
      */
     @Test
-    public void withoutTheOptIn_theDeclarationStillSuppressesEverything() {
+    public void anEmptyDeclaredBuilder_isMergedInto() throws Exception {
         Compilation c = compile(
             JavaFileObjects.forSourceLines("demo.Untouched",
                 "package demo;",
@@ -218,15 +220,19 @@ public class DeclaredBuilderMergeTest {
                 "@ClassBuilder(validate = false)",
                 "public class Untouched {",
                 "    private String name;",
+                "    public String getName() { return name; }",
                 "    public static class Builder { }",
                 "}"),
             JavaFileObjects.forSourceLines("demo.UseUntouched",
                 "package demo;",
                 "public class UseUntouched {",
-                "    public static void go() { new Untouched.Builder().name(\"x\"); }",
+                "    public static String go() {",
+                "        return new Untouched.Builder().name(\"x\").build().getName();",
+                "    }",
                 "}"));
-        assertThat(c).failed();
-        assertThat(c).hadErrorContaining("name");
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("@ClassBuilder merged into the declared 'Builder'");
+        assertEquals("x", runGo(c, "demo.UseUntouched"));
     }
 
     /** The note names what the author's version won, rather than leaving it silent. */
@@ -236,7 +242,7 @@ public class DeclaredBuilderMergeTest {
             JavaFileObjects.forSourceLines("demo.Noted",
                 "package demo;",
                 "import dev.simplified.annotations.ClassBuilder;",
-                "@ClassBuilder(validate = false, mergeDeclaredBuilder = true)",
+                "@ClassBuilder(validate = false)",
                 "public class Noted {",
                 "    private String name;",
                 "    Noted(String name) { this.name = name; }",
@@ -256,7 +262,7 @@ public class DeclaredBuilderMergeTest {
             JavaFileObjects.forSourceLines("demo.Crate",
                 "package demo;",
                 "import dev.simplified.annotations.ClassBuilder;",
-                "@ClassBuilder(validate = false, mergeDeclaredBuilder = true)",
+                "@ClassBuilder(validate = false)",
                 "public class Crate<T> {",
                 "    private T item;",
                 "    private int count;",
@@ -290,7 +296,7 @@ public class DeclaredBuilderMergeTest {
             JavaFileObjects.forSourceLines("demo.Inner",
                 "package demo;",
                 "import dev.simplified.annotations.ClassBuilder;",
-                "@ClassBuilder(validate = false, mergeDeclaredBuilder = true)",
+                "@ClassBuilder(validate = false)",
                 "public class Inner {",
                 "    private String name;",
                 "    Inner(String name) { this.name = name; }",
@@ -306,7 +312,7 @@ public class DeclaredBuilderMergeTest {
             JavaFileObjects.forSourceLines("demo.Raw",
                 "package demo;",
                 "import dev.simplified.annotations.ClassBuilder;",
-                "@ClassBuilder(validate = false, mergeDeclaredBuilder = true)",
+                "@ClassBuilder(validate = false)",
                 "public class Raw<T> {",
                 "    private T item;",
                 "    Raw(T item) { this.item = item; }",
@@ -327,7 +333,7 @@ public class DeclaredBuilderMergeTest {
             JavaFileObjects.forSourceLines("demo.Mistyped",
                 "package demo;",
                 "import dev.simplified.annotations.ClassBuilder;",
-                "@ClassBuilder(validate = false, mergeDeclaredBuilder = true)",
+                "@ClassBuilder(validate = false)",
                 "public class Mistyped {",
                 "    private int size;",
                 "    Mistyped(int size) { this.size = size; }",
@@ -352,7 +358,7 @@ public class DeclaredBuilderMergeTest {
             JavaFileObjects.forSourceLines("demo.Seeded",
                 "package demo;",
                 "import dev.simplified.annotations.ClassBuilder;",
-                "@ClassBuilder(validate = false, mergeDeclaredBuilder = true)",
+                "@ClassBuilder(validate = false)",
                 "public class Seeded {",
                 "    private String name;",
                 "    Seeded(String name) { this.name = name; }",
@@ -376,6 +382,41 @@ public class DeclaredBuilderMergeTest {
         assertEquals("the setters are still merged in", "n", runGo(c, "demo.UseSeeded"));
     }
 
+    /**
+     * The skip withholds the three entry points and nothing else: a target that
+     * declares no constructor still gets the all-args one the merged
+     * {@code build()} calls, which a same-package caller can reach directly. The
+     * declaration used to suppress that constructor along with everything else.
+     */
+    @Test
+    public void merge_whereTheAuthorsBuilderConstructorTakesParameters_keepsTheAllArgsConstructor()
+        throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Unseeded",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Unseeded {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "    public static class Builder {",
+                "        private final String origin;",
+                "        public Builder(String origin) { this.origin = origin; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseUnseeded",
+                "package demo;",
+                "public class UseUnseeded {",
+                "    public static String go() {",
+                "        return new Unseeded(\"direct\").getName() + \"/\"",
+                "            + new Unseeded.Builder(\"x\").name(\"built\").build().getName();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("so 'builder', 'from' and 'mutate' were not added");
+        assertEquals("direct/built", runGo(c, "demo.UseUnseeded"));
+    }
+
     /** A builder declaring a nullary constructor beside a seeded one keeps its entry points. */
     @Test
     public void merge_whereTheAuthorAlsoDeclaresANullaryConstructor_keepsTheBootstraps()
@@ -384,7 +425,7 @@ public class DeclaredBuilderMergeTest {
             JavaFileObjects.forSourceLines("demo.Both",
                 "package demo;",
                 "import dev.simplified.annotations.ClassBuilder;",
-                "@ClassBuilder(validate = false, mergeDeclaredBuilder = true)",
+                "@ClassBuilder(validate = false)",
                 "public class Both {",
                 "    private String name;",
                 "    Both(String name) { this.name = name; }",
@@ -414,7 +455,7 @@ public class DeclaredBuilderMergeTest {
             JavaFileObjects.forSourceLines("demo.Sealed",
                 "package demo;",
                 "import dev.simplified.annotations.ClassBuilder;",
-                "@ClassBuilder(validate = false, mergeDeclaredBuilder = true)",
+                "@ClassBuilder(validate = false)",
                 "public class Sealed {",
                 "    private String name;",
                 "    Sealed(String name) { this.name = name; }",
@@ -435,7 +476,7 @@ public class DeclaredBuilderMergeTest {
             JavaFileObjects.forSourceLines("demo.Wrong",
                 "package demo;",
                 "import dev.simplified.annotations.ClassBuilder;",
-                "@ClassBuilder(validate = false, mergeDeclaredBuilder = true)",
+                "@ClassBuilder(validate = false)",
                 "public class Wrong {",
                 "    private String name;",
                 "    Wrong(String name) { this.name = name; }",
@@ -464,7 +505,7 @@ public class DeclaredBuilderMergeTest {
                 "import dev.simplified.annotations.ClassBuilder;",
                 "import dev.simplified.annotations.Lazy;",
                 "import java.util.function.Supplier;",
-                "@ClassBuilder(validate = false, mergeDeclaredBuilder = true)",
+                "@ClassBuilder(validate = false)",
                 "public class Held {",
                 "    @Lazy private String note = compute();",
                 "    private static String compute() { return \"computed\"; }",
@@ -492,7 +533,7 @@ public class DeclaredBuilderMergeTest {
                 "package demo;",
                 "import dev.simplified.annotations.ClassBuilder;",
                 "import dev.simplified.annotations.Lazy;",
-                "@ClassBuilder(validate = false, mergeDeclaredBuilder = true)",
+                "@ClassBuilder(validate = false)",
                 "public class Natural {",
                 "    @Lazy private String note = compute();",
                 "    private static String compute() { return \"computed\"; }",
@@ -521,24 +562,52 @@ public class DeclaredBuilderMergeTest {
 
     /**
      * The entry points are the claim: a consumer calling {@code builder()} on a
-     * target that declares its own nested builder does not compile, which is
-     * what makes the editor offering it a divergence rather than a preference.
+     * target that declares its own nested builder compiles, and reaches both the
+     * author's member and the merged ones, which is what makes the editor
+     * withholding any of them a divergence rather than a preference. The
+     * declaration used to suppress all three.
      */
     @Test
-    public void declaredBuilderWithoutTheOptIn_emitsNoEntryPoints() {
-        BuilderParityFixture fixture =
-            BuilderParityFixture.load("standalone-declared-builder-opt-out");
+    public void declaredBuilder_emitsTheEntryPoints() throws Exception {
+        BuilderParityFixture fixture = BuilderParityFixture.load("standalone-declared-builder");
         Compilation c = compile(
             parity(fixture),
             JavaFileObjects.forSourceLines("demo.UseUntouchedEntryPoints",
                 "package demo;",
                 "public class UseUntouchedEntryPoints {",
-                "    public static Object go() { return Untouched.builder(); }",
+                "    public static String go() {",
+                "        Untouched u = Untouched.builder().name(\"x\").apply(() -> { }).build();",
+                "        return Untouched.from(u).build().getName() + \"/\" + u.mutate().build().getName();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("@ClassBuilder merged into the declared 'Builder'");
+        for (var diagnostic : c.diagnostics()) {
+            assertFalse("the author's apply is not a generated member, so it is never reported: "
+                    + diagnostic.getMessage(null),
+                String.valueOf(diagnostic.getMessage(null)).contains("apply"));
+        }
+        assertEquals("x/x", runGo(c, "demo.UseUntouchedEntryPoints"));
+    }
+
+    /**
+     * Writing the attribute that once asked for the merge is a compile error:
+     * the merge runs on every declared builder, so there is nothing left for it
+     * to ask.
+     */
+    @Test
+    public void theAttribute_noLongerExists() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Asked",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, mergeDeclaredBuilder = true)",
+                "public class Asked {",
+                "    private String name;",
+                "    public static class Builder { }",
                 "}"));
         assertThat(c).failed();
-        assertThat(c).hadErrorContaining("builder");
-        assertThat(c).hadNoteContaining(
-            "@ClassBuilder skipped injection: class Untouched already declares a nested 'Builder' type");
+        assertThat(c).hadErrorContaining("mergeDeclaredBuilder");
     }
 
     /**
@@ -547,9 +616,9 @@ public class DeclaredBuilderMergeTest {
      * than the whole line, the chain merge having a clause to append to it.
      */
     @Test
-    public void aDeclaredChainBuilderWithoutTheOptIn_stillNotesAndSkips() {
+    public void aDeclaredChainBuilder_stillNotesAndSkips() {
         BuilderParityFixture fixture =
-            BuilderParityFixture.load("chain-root-declared-builder-opt-out");
+            BuilderParityFixture.load("chain-root-declared-builder");
         Compilation c = compile(
             parity(fixture),
             JavaFileObjects.forSourceLines("demo.UseRooted",
@@ -573,7 +642,7 @@ public class DeclaredBuilderMergeTest {
     @Test
     public void aLinkWhoseAnnotatedSuperDeclaresItsOwnBuilder_isRejected() {
         BuilderParityFixture fixture =
-            BuilderParityFixture.load("chain-root-declared-builder-opt-out");
+            BuilderParityFixture.load("chain-root-declared-builder");
         Compilation c = compile(
             parity(fixture),
             JavaFileObjects.forSourceLines("demo.Leaf",
@@ -682,7 +751,7 @@ public class DeclaredBuilderMergeTest {
     @Test
     public void aLinkWhoseCompiledSuperDeclaresItsOwnBuilder_isRejected() throws Exception {
         BuilderParityFixture fixture =
-            BuilderParityFixture.load("chain-root-declared-builder-opt-out");
+            BuilderParityFixture.load("chain-root-declared-builder");
         Compilation ancestor = compile(parity(fixture));
         assertThat(ancestor).succeeded();
 
@@ -703,15 +772,15 @@ public class DeclaredBuilderMergeTest {
     }
 
     /**
-     * The opt-in written on a link reaches nothing, the chain branch returning
+     * A link's declared builder is not merged into, the chain branch returning
      * ahead of the declared-builder check - so a consumer calling a generated
      * setter on the author's builder fails, and the editor listing one is the
      * divergence.
      */
     @Test
-    public void aDeclaredChainBuilderWithTheOptIn_isStillSkipped() {
+    public void aDeclaredLinkBuilder_isStillSkipped() {
         BuilderParityFixture fixture =
-            BuilderParityFixture.load("chain-link-declared-builder-opt-in");
+            BuilderParityFixture.load("chain-link-declared-builder");
         Compilation c = compile(
             parity(fixture),
             JavaFileObjects.forSourceLines("demo.UseLink",
