@@ -28,12 +28,23 @@ The shapes refused, each for a reason the generated members cannot work around:
   <li><b>An unbounded trailing pair</b> on a self-typed builder - a setter
       returning it would return something with no members.</li>
   <li><b>The wrong <code>extends</code> clause</b> - a chained builder inherits
-      the parent's setters through it.</li>
+      the parent's setters through it, so it has to name the annotated
+      ancestor's builder, qualifier included, and pass it the ancestor's own
+      arguments followed by the link and its builder, or on an abstract
+      builder its own trailing pair.</li>
   <li><b>A build method returning something else</b>, on a chain only - the
       method a link inherits has to be the one its role declares. Standing
       alone nothing generated calls <code>build()</code>, so an author's own
       is kept whatever it returns.</li>
 </ul>
+
+<p>
+A target in a SuperBuilder chain merges into its declared builder as well, so
+a root, a concrete link and a chained abstract are each judged against the
+shape their role generates. A link whose annotated ancestor declares a builder
+the extends clause cannot name is reported on the annotation instead, whether
+or not the link declares its own.
+</p>
 
 <p>
 A constructor or static factory target merges into the builder its enclosing

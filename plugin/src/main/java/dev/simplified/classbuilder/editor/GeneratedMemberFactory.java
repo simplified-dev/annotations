@@ -759,10 +759,12 @@ public final class GeneratedMemberFactory {
         // cannot produce, since it decides from the builder it is writing into.
         boolean abstractMembers = builder.hasModifierProperty(PsiModifier.ABSTRACT);
 
-        // self() exists only inside a chain: abstract on a self-typed Builder,
-        // overridden to return this on a concrete link. A standalone builder
-        // chains on its own type and needs none.
-        if (role.isSelfTyped()) {
+        // self() exists only inside a chain: declared abstract on the root,
+        // overridden to return this on a concrete link. A chained abstract
+        // inherits the root's and declares neither of the pair, which is what
+        // the processor emits on it. A standalone builder chains on its own
+        // type and needs none.
+        if (role == ChainRole.ABSTRACT_ROOT) {
             methods.add(chainMethod(psiManager, target, builder, "self", selfType,
                 PsiModifier.PROTECTED, abstractMembers));
         } else if (role == ChainRole.CONCRETE_LINK) {
@@ -772,9 +774,11 @@ public final class GeneratedMemberFactory {
 
         // build() - always public (access attribute governs the enclosing
         // builder class + bootstraps, not the terminal build method). Abstract
-        // on a self-typed Builder, where each concrete link produces its own T.
-        methods.add(chainMethod(psiManager, target, builder, config.buildMethodName(), targetType,
-            PsiModifier.PUBLIC, abstractMembers));
+        // on the root, where each concrete link produces its own T.
+        if (role != ChainRole.CHAINED_ABSTRACT) {
+            methods.add(chainMethod(psiManager, target, builder, config.buildMethodName(), targetType,
+                PsiModifier.PUBLIC, abstractMembers));
+        }
 
         // The builder's own constructor, declared rather than left implicit for
         // the reason the processor declares it: an implicit one takes the

@@ -13,16 +13,31 @@ import java.util.List;
  * back.
  *
  * @param typeParameterNames the parameter names the declared builder has to re-declare, in order
- * @param superType the erased builder type the extends clause has to name, or null when the role requires none
+ * @param superType the builder type the extends clause has to name, qualified by the ancestor's simple name, or null when the role requires none
  * @param buildReturnType the erased type the build method has to return
+ * @param superTypeArguments the erased simple names the extends clause has to pass, in order, empty when none are required
  */
 public record RoleExpectation(List<String> typeParameterNames,
                               @Nullable String superType,
-                              String buildReturnType) {
+                              String buildReturnType,
+                              List<String> superTypeArguments) {
 
-    /** Defensive copy of a list the caller still owns. */
+    /** Defensive copies of lists the caller still owns. */
     public RoleExpectation {
         typeParameterNames = List.copyOf(typeParameterNames);
+        superTypeArguments = List.copyOf(superTypeArguments);
+    }
+
+    /**
+     * An expectation requiring no extends-clause arguments.
+     *
+     * @param typeParameterNames the parameter names the declared builder has to re-declare, in order
+     * @param superType the builder type the extends clause has to name, or null when the role requires none
+     * @param buildReturnType the erased type the build method has to return
+     */
+    public RoleExpectation(List<String> typeParameterNames, @Nullable String superType,
+                           String buildReturnType) {
+        this(typeParameterNames, superType, buildReturnType, List.of());
     }
 
 }

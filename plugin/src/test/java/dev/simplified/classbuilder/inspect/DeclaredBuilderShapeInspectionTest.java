@@ -191,7 +191,10 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
     /**
      * The other direction the same divergence was recorded from: the processor
      * wrote an extends clause naming a builder that could not take it, and the
-     * editor left the child's builder unrooted and reported nothing.
+     * editor left the child's builder unrooted and reported nothing. The
+     * ancestor's declaration is itself refused as a root shape, so the file
+     * carries both errors, as the build does - the cause on the root's builder
+     * and its consequence on the link.
      */
     public void testALinkWhoseAnnotatedSuperDeclaresItsOwnBuilder_isReported() {
         myFixture.configureByText("Leaf.java",
@@ -207,10 +210,14 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
                 private String extra;
             }
             """);
-        assertTrue("names the supertype: " + errors(),
-            theOnlyError().contains(
-                "@ClassBuilder generates no builder on 'Leaf' - its annotated supertype 'Rooted' "
-                    + "declares its own nested builder"));
+        List<String> errors = errors();
+        assertEquals("the cause and its consequence: " + errors, 2, errors.size());
+        assertTrue("names the supertype: " + errors, errors.contains(
+            "@ClassBuilder generates no builder on 'Leaf' - its annotated supertype 'Rooted' "
+                + "declares its own nested builder"));
+        assertTrue("and refuses the root's own shape: " + errors, errors.contains(
+            "@ClassBuilder cannot merge into 'Builder' - the builder of Rooted carries an abstract "
+                + "self() and build(), so the class holding them has to be abstract too"));
     }
 
     /**
@@ -235,11 +242,13 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
     }
 
     /**
-     * The processor asks about the target's own declaration first and returns on
-     * it with a note, so the ancestor question is never reached. Reporting it
-     * anyway was red over source javac accepts.
+     * A link declaring its own builder is asked about its ancestor too, and
+     * ahead of its own shape: that declaration's extends clause has to name the
+     * ancestor's builder as a generated one does. The target's own declaration
+     * used to end the question with a note on both halves, when the chain did
+     * not merge.
      */
-    public void testWhereBothTargetAndAncestorDeclareABuilder_isNotReportedAsAnAncestorError() {
+    public void testWhereBothTargetAndAncestorDeclareABuilder_isReportedAsAnAncestorError() {
         myFixture.configureByText("Leaf.java",
             """
             import dev.simplified.annotations.ClassBuilder;
@@ -251,7 +260,9 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
                 public static class Builder { }
             }
             """);
-        assertEquals("the build prints a note, not an error: " + errors(), 0, errors().size());
+        assertTrue("the ancestor error, as the build reports it: " + errors(),
+            theOnlyError().contains("@ClassBuilder generates no builder on 'Leaf' - its annotated "
+                + "supertype 'Rooted' declares its own nested builder"));
     }
 
     /** An ancestor whose builder is generated takes the clause, so nothing is said. */
@@ -552,6 +563,198 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
         assertTrue("the shared wording: " + errors(),
             theOnlyError().contains("@ClassBuilder merged into 'Builder' appends the seed 'origin' as "
                 + "a final field, and 'Builder' declares no constructor to assign it"));
+    }
+
+    // ------------------------------------------------------------------
+    // Chain roles
+    //
+    // A root, a link or a chained abstract merges into its declared builder, so
+    // its shape is judged. Each case asserts the sentence its apt twin asserts;
+    // the inspection used to skip every chain role.
+    // ------------------------------------------------------------------
+
+    /** A root's builder carries the abstract pair, so a concrete one cannot hold the merge. */
+    public void testARootWhoseDeclaredBuilderIsNotSelfTyped_isReported() {
+        myFixture.configureByText("Rooted.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Rooted {
+                private String label;
+                public static class Builder { }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder cannot merge into 'Builder' - the builder of Rooted "
+                + "carries an abstract self() and build(), so the class holding them has to be "
+                + "abstract too"));
+    }
+
+    /** The sentence shows the bounds the pair needs beside the ones it has. */
+    public void testAnUnboundedTrailingPair_isReported() {
+        myFixture.configureByText("Shape.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Shape {
+                private String name;
+                public abstract static class Builder<T, B> { }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder cannot merge into 'Builder' - its trailing pair has "
+                + "to be bounded as <T extends Shape, B extends Builder<T, B>> for the generated setters "
+                + "to return the caller's own builder type, and this one declares <T, B>"));
+    }
+
+    /** A root that is not generic is told about its self-typed pair, not the target's parameters. */
+    public void testARootWhoseBuilderDeclaresNoPair_namesTheSelfTypedPair() {
+        myFixture.configureByText("Shape.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Shape {
+                private String name;
+                public abstract static class Builder { }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder cannot merge into 'Builder' - a static nested "
+                + "builder for an abstract target in a builder chain has to declare the self-typed "
+                + "pair <T, B>, and this one declares none"));
+    }
+
+    /** A link's builder inherits the ancestor's setters through its extends clause. */
+    public void testALinkWhoseDeclaredBuilderOmitsTheExtendsClause_isReported() {
+        myFixture.configureByText("Link.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Link extends Base {
+                private String extra;
+                public static class Builder { }
+            }
+            @ClassBuilder
+            abstract class Base { private String label; }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder cannot merge into 'Builder' - the builder of a "
+                + "chained target has to extend Base.Builder, and this one extends nothing"));
+    }
+
+    /**
+     * Another type's builder of the same simple name is not the ancestor's; read
+     * by erased simple name it passed, and the build failed on the generated
+     * {@code super(b)}.
+     */
+    public void testALinkExtendingAnotherTypesBuilder_isReported() {
+        myFixture.configureByText("Link.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Link extends Base {
+                private String extra;
+                public static class Builder extends Other.Builder<Link, Builder> { }
+            }
+            @ClassBuilder
+            abstract class Base { private String label; }
+            @ClassBuilder
+            abstract class Other {
+                private String note;
+                public abstract static class Builder<T extends Object, B extends Builder<T, B>> { }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder cannot merge into 'Builder' - the builder of a "
+                + "chained target has to extend Base.Builder, and this one extends Other.Builder"));
+    }
+
+    /** The build method a link inherits is its role's, so the author's has to return the link. */
+    public void testALinkDeclaringBuildReturningSomethingElse_isReported() {
+        myFixture.configureByText("Link.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Link extends Base {
+                private String extra;
+                public static class Builder extends Base.Builder<Link, Builder> {
+                    public Object build() { return null; }
+                }
+            }
+            @ClassBuilder
+            abstract class Base { private String label; }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder cannot merge into 'Builder' - its build method "
+                + "returns Object where this role builds Link, so it cannot stand in for the "
+                + "generated one"));
+    }
+
+    /**
+     * The extends clause's arguments were read by neither half, so a pair
+     * written the wrong way round passed and failed inside the generated
+     * members.
+     */
+    public void testALinkPassingItsPairReversed_isReported() {
+        myFixture.configureByText("Link.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Link extends Base {
+                private String extra;
+                public static class Builder extends Base.Builder<Builder, Link> { }
+            }
+            @ClassBuilder
+            abstract class Base { private String label; }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder cannot merge into 'Builder' - the builder of a "
+                + "chained target has to pass Base.Builder the arguments <Link, Builder>, and this "
+                + "one passes <Builder, Link>"));
+    }
+
+    /** A slot field on a root's declared builder is judged as on any other. */
+    public void testAMistypedSlotOnARootsDeclaredBuilder_isReported() {
+        myFixture.configureByText("Shape.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Shape {
+                private int size;
+                public abstract static class Builder<T extends Shape, B extends Builder<T, B>> {
+                    private String size;
+                }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder merged into 'Builder' finds 'size' declared as "
+                + "String, and the slot it stands for is int - the generated setter has nothing to "
+                + "assign it to"));
+    }
+
+    /** A usable shape on every chain role draws nothing. */
+    public void testUsableChainShapes_areNotReported() {
+        myFixture.configureByText("Leaf.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Leaf extends Mid {
+                private int size;
+                public static class Builder extends Mid.Builder<Leaf, Builder> { }
+            }
+            @ClassBuilder
+            abstract class Mid extends Base {
+                private String kind;
+                public abstract static class Builder<T extends Mid, B extends Builder<T, B>>
+                        extends Base.Builder<T, B> { }
+            }
+            @ClassBuilder
+            abstract class Base {
+                private String label;
+                public abstract static class Builder<R extends Base, S extends Builder<R, S>> { }
+            }
+            """);
+        assertEquals("every role's usable shape: " + errors(), 0, errors().size());
     }
 
     private void addBuilderSeedAnnotation() {

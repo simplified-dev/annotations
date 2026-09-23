@@ -404,13 +404,11 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         GeneratedMemberFactory.EditorBuilderConfig config =
             GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
         if (!name.equals(config.builderName())) return null;
-        // The chain branch returns ahead of the declared-builder check, so on a
-        // root, a link or a chained abstract the author's builder is left
-        // exactly as written. Merging here would list the setters, the self
-        // accessor and the build method on a class javac appends nothing to,
-        // and a call to any of them fails the build. An executable target is
-        // never in a chain, whatever its enclosing type extends.
-        if (!site.isExecutable() && ClassBuilderConstants.chainRoleOf(owner).isChained()) return null;
+        // The chain pass refuses a link whose ancestor's declared builder cannot
+        // take the extends clause before it looks at the link's own declaration,
+        // so nothing is appended to that declaration either.
+        if (ClassBuilderConstants.ancestorBlockingGeneration(owner, name, site.isExecutable()) != null)
+            return null;
         // The shape the processor accepts, asked of the same facts. Contributing
         // into a builder javac rejects leaves the author reading a populated
         // completion list right up to the moment the build fails on it.
@@ -459,6 +457,15 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
                 return CachedValueProvider.Result.create(Collections.<PsiMethod>emptyList(),
                     PsiModificationTracker.MODIFICATION_COUNT);
             }
+            // A chain role's refused declaration stops the pass ahead of the copy
+            // constructor as well as the entry points, where a class target's
+            // all-args constructor is decided before the merge and kept.
+            boolean refused = rejectsDeclaredBuilder(site, config);
+            if (refused && !site.isExecutable()
+                && ClassBuilderConstants.chainRoleOf(target).isChained()) {
+                return CachedValueProvider.Result.create(Collections.<PsiMethod>emptyList(),
+                    PsiModificationTracker.MODIFICATION_COUNT);
+            }
             SynthesizedMembers members = synthesizeOrReuse(site);
             // Bootstrap methods (builder/from/mutate) only on concrete targets;
             // an abstract target gets its entry points from concrete subclasses.
@@ -482,7 +489,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
                 && target.hasModifierProperty(PsiModifier.ABSTRACT))
                 || ClassBuilderConstants.withholdsEntryPointsOnly(target, config.builderName(),
                     site.isExecutable(), site.seedCount())
-                || rejectsDeclaredBuilder(site, config);
+                || refused;
             return CachedValueProvider.Result.create(
                 entryPointsWithheld ? members.constructorOnly() : members.allMethods(),
                 PsiModificationTracker.MODIFICATION_COUNT);
@@ -497,9 +504,9 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      * offering them would leave {@code Target.builder()} green at a call site in
      * another file while the build fails. The decision is
      * {@link ClassBuilderConstants#mergeRejection}, the one the shape inspection
-     * reports, and it is asked only where a merge runs at all - a class or
-     * record target outside a chain, and a constructor or factory target - and
-     * never of an interface or a chain role.
+     * reports, and it is asked wherever a merge runs - a class or record target,
+     * a chain role among them, and a constructor or factory target - and never
+     * of an interface.
      *
      * @param site the annotated site
      * @param config the resolved configuration for it
@@ -509,50 +516,29 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
                                                   GeneratedMemberFactory.EditorBuilderConfig config) {
         PsiClass target = site.owner();
         if (target.isInterface()) return false;
-        if (!site.isExecutable() && ClassBuilderConstants.chainRoleOf(target).isChained()) return false;
         PsiClass declared = ClassBuilderConstants.declaredBuilderOf(target, config.builderName());
         return declared != null && ClassBuilderConstants.mergeRejection(target, site.executable(),
             declared, config.names()) != null;
     }
 
     /**
-     * Whether the entry points are withheld because the target declares a nested
-     * type of the configured builder name.
+     * Whether no builder is generated for this target at all - an annotated
+     * supertype whose own declared builder the extends clause cannot name - so
+     * the entry points and the copy constructor are withheld with it.
      *
-     * <p>Offering any of the three where the build emits none is the shape a
-     * hand-migration off a Lombok builder produces most naturally, and it
-     * resolves green all the way to {@code cannot find symbol}. The decision
-     * itself is
-     * {@link ClassBuilderConstants#suppressesGeneration(PsiClass, String, boolean)},
-     * so the inspection explaining the withholding and the withholding cannot
-     * disagree about when it happens.
+     * <p>The decision is
+     * {@link ClassBuilderConstants#ancestorBlockingGeneration(PsiClass, String, boolean)},
+     * the one the shape inspection reports, so the withholding and the error
+     * explaining it cannot disagree about when it happens.
      *
      * @param site the annotated site
      * @param config the resolved configuration for it
-     * @return whether {@code builder()}, {@code from(T)} and {@code mutate()} must be withheld
+     * @return whether every member the pass would contribute to the target is withheld
      */
     private static boolean suppressesEntryPoints(BuilderSite site,
                                                  GeneratedMemberFactory.EditorBuilderConfig config) {
-        return suppressesGeneration(site.owner(), config, site.isExecutable());
-    }
-
-    /**
-     * Whether no builder is generated for this target at all, from either cause -
-     * a declared nested type of the builder's name, or an annotated supertype
-     * whose own declared builder the generated extends clause cannot name.
-     *
-     * @param target the annotated type
-     * @param config the resolved configuration for it
-     * @param executable whether the annotation sits on a constructor or factory method
-     * @return whether the builder and its entry points are both withheld
-     */
-    private static boolean suppressesGeneration(PsiClass target,
-                                                GeneratedMemberFactory.EditorBuilderConfig config,
-                                                boolean executable) {
-        if (ClassBuilderConstants.suppressesGeneration(target, config.builderName(), executable))
-            return true;
-        return ClassBuilderConstants.ancestorBlockingGeneration(target, config.builderName(),
-            executable) != null;
+        return ClassBuilderConstants.ancestorBlockingGeneration(site.owner(), config.builderName(),
+            site.isExecutable()) != null;
     }
 
     private static List<PsiClass> cachedNestedClasses(PsiClass target) {
@@ -563,8 +549,8 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
                     PsiModificationTracker.MODIFICATION_COUNT);
             }
             // Skip when the target already declares a nested class with the
-            // configured Builder name - the user's hand-written version wins,
-            // whether it is being merged into or is suppressing generation - and
+            // configured Builder name - the user's hand-written version wins and
+            // is merged into rather than joined by a second class - and
             // skip when the ancestor's own declared builder leaves the extends
             // clause unformable, which is the shape the processor refuses.
             GeneratedMemberFactory.EditorBuilderConfig config =
@@ -631,10 +617,11 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      * The builder class the target declares and the merge runs into, which is
      * the class its entry points return.
      *
-     * <p>A class or record target and a constructor or factory target both
-     * merge. A chain role with a declaration generates nothing and never reaches
-     * synthesis, and an interface's entry points return its sibling builder,
-     * never a class nested in the interface body.
+     * <p>A class or record target, a chain role among them, and a constructor or
+     * factory target all merge, so the declared class is what the entry points
+     * and a chain's copy constructor are typed against. An interface's entry
+     * points return its sibling builder, never a class nested in the interface
+     * body.
      *
      * @param site the annotated site
      * @param config the resolved configuration for it

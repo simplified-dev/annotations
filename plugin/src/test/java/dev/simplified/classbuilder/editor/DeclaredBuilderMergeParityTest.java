@@ -216,17 +216,118 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
     }
 
     /**
-     * The chain branch returns ahead of the declared-builder check, so nothing
-     * merges on a link: no member is appended to the author's builder and no
-     * entry point lands on the target.
+     * A link's declared builder is merged into: its setter and the concrete pair
+     * land beside the author's verb, and all three entry points on the target.
+     * The chain branch used to return ahead of the declared-builder check, and
+     * the case pinned that nothing merged.
      */
-    public void testADeclaredLinkBuilder_isLeftAlone() {
+    public void testADeclaredLinkBuilder_isMergedInto() {
         assertParity(BuilderParityFixture.load("chain-link-declared-builder"));
     }
 
-    /** The same abort one role up. */
-    public void testADeclaredRootBuilder_isLeftAlone() {
+    /** The same merge one role up, where the pair is abstract and there are no entry points. */
+    public void testADeclaredRootBuilder_isMergedInto() {
         assertParity(BuilderParityFixture.load("chain-root-declared-builder"));
+    }
+
+    /**
+     * The chain's copy constructor takes the builder javac emits, which on a
+     * root declaring its own is the author's class - so a hand-written subclass
+     * passing that class to {@code super(b)} resolves.
+     */
+    public void testAMergedRoot_copyConstructorTakesTheDeclaredBuilder() {
+        myFixture.configureByText("Rooted.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Rooted {
+                private String label;
+                public abstract static class Builder<T extends Rooted, B extends Builder<T, B>> { }
+            }
+            class Manual extends Rooted {
+                Manual(Rooted.Builder<?, ?> b) { super(b); }
+            }
+            """);
+        assertNoErrors();
+    }
+
+    /**
+     * A link's entry points instantiate its declared builder, so one declaring
+     * only constructors that take parameters loses all three, as the processor
+     * skips them with a note - while the merge and the copy constructor still
+     * run.
+     */
+    public void testAMergedLinkWhoseBuilderTakesParameters_offersNoEntryPoints() {
+        PsiFile file = myFixture.configureByText("Link.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Link extends Base {
+                private String extra;
+                public String getExtra() { return extra; }
+                public static class Builder extends Base.Builder<Link, Builder> {
+                    public Builder(String extra) { this.extra = extra; }
+                }
+            }
+            @ClassBuilder
+            abstract class Base { private String label; }
+            class Caller {
+                String make() { return new Link.Builder("x").label("l").build().getExtra(); }
+            }
+            """);
+        PsiClass target = ((PsiJavaFile) file).getClasses()[0];
+        List<String> names = methodNamesOf(target);
+        assertFalse("no builder() without a constructor it can call: " + names, names.contains("builder"));
+        assertFalse("nor from(T): " + names, names.contains("from"));
+        assertFalse("nor mutate(): " + names, names.contains("mutate"));
+        assertEquals("the copy constructor stays: " + names, 1, target.getConstructors().length);
+        assertNoErrors();
+    }
+
+    /**
+     * A chain role's refused declaration stops the pass ahead of the copy
+     * constructor, so the editor offers neither that constructor nor a merged
+     * member - where a class target keeps the all-args constructor the
+     * processor decides before the merge.
+     */
+    public void testARefusedRootShape_offersNoCopyConstructorAndNoMembers() {
+        PsiFile file = myFixture.configureByText("Rooted.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Rooted {
+                private String label;
+                public static class Builder { }
+            }
+            """);
+        PsiClass target = ((PsiJavaFile) file).getClasses()[0];
+        assertEquals("no copy constructor beside a refused declaration", 0,
+            target.getConstructors().length);
+        List<String> nested = methodNamesOf(nestedOf(target, "Builder"));
+        assertFalse("and nothing merged into it: " + nested, nested.contains("label"));
+    }
+
+    /**
+     * A link whose ancestor's declared builder cannot take the extends clause is
+     * refused before its own declaration is looked at, so nothing is merged into
+     * that declaration - even one whose own shape, read by names, would pass.
+     */
+    public void testADeclaringLinkOverABlockingAncestor_getsNothingMerged() {
+        PsiFile file = myFixture.configureByText("Leaf.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Leaf extends Rooted {
+                private String b;
+                public static class Builder extends Rooted.Builder<Leaf, Builder> { }
+            }
+            @ClassBuilder
+            class Rooted { public static class Builder { } }
+            """);
+        PsiClass target = ((PsiJavaFile) file).getClasses()[0];
+        List<String> nested = methodNamesOf(nestedOf(target, "Builder"));
+        assertFalse("the refused link merges nothing: " + nested,
+            nested.contains("b") || nested.contains("build"));
     }
 
     /**

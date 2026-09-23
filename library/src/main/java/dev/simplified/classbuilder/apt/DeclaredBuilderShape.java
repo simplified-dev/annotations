@@ -65,12 +65,103 @@ public final class DeclaredBuilderShape {
      * extends clause.
      *
      * @param role the position the target holds in a builder chain
-     * @param superBuilderType the erased builder type of the nearest annotated ancestor, or null when there is none
+     * @param superBuilderType the nearest annotated ancestor's builder, qualified by the ancestor's simple name, or null when there is none
      * @return the required supertype name, or null when the role requires no extends clause
      */
     public static @Nullable String expectedSuperType(@NotNull ChainRole role,
                                                      @Nullable String superBuilderType) {
         return role.hasAnnotatedSuper() ? superBuilderType : null;
+    }
+
+    /**
+     * Names the two trailing parameters a self-typed role's builder is spelled
+     * in.
+     *
+     * <p>The declaration's own last two, when it declares at least the target's
+     * parameters plus two: the author names the pair, and the generated members
+     * merged into the declaration have to use those names. With fewer there is
+     * no pair to read, and the names are the ones the generator would write -
+     * {@code T} and {@code B}, each suffixed with {@code $} until it is not one
+     * of the target's own - so the parameter-list rejection names the pair the
+     * generator would have declared.
+     *
+     * @param role the position the target holds in a builder chain
+     * @param targetTypeParameters the target's own type parameter names, in declaration order
+     * @param declaredTypeParameters the declared builder's type parameter names, in declaration order
+     * @return the built-type name followed by the builder-type name
+     */
+    public static @NotNull List<String> selfNames(@NotNull ChainRole role,
+                                                  @NotNull List<String> targetTypeParameters,
+                                                  @NotNull List<String> declaredTypeParameters) {
+        int declared = declaredTypeParameters.size();
+        if (role.isSelfTyped() && declared >= targetTypeParameters.size() + 2)
+            return List.copyOf(declaredTypeParameters.subList(declared - 2, declared));
+        List<String> taken = new ArrayList<>(targetTypeParameters);
+        String built = freeName("T", taken);
+        taken.add(built);
+        return List.of(built, freeName("B", taken));
+    }
+
+    /**
+     * Names the arguments a role requires its declared builder's extends clause
+     * to pass, as erased simple names.
+     *
+     * <p>They are the ones the generated members are typed against: the
+     * ancestor's own arguments as the target passes them to its superclass, then
+     * the self-typed pair - bound to the link and its builder on a concrete
+     * link, and forwarded as the declaration's own trailing pair on a chained
+     * abstract. Erased and unqualified, because that is what both models can
+     * read of a written argument without resolving it.
+     *
+     * @param role the position the target holds in a builder chain
+     * @param superArguments the type arguments the target passes to its superclass, as either model renders them
+     * @param targetName the target's simple name
+     * @param builderName the builder's simple name
+     * @param selfNames the declaration's trailing pair, from {@link #selfNames}
+     * @return the required arguments, empty when the role requires no extends clause
+     */
+    public static @NotNull List<String> expectedSuperTypeArguments(@NotNull ChainRole role,
+                                                                   @NotNull List<String> superArguments,
+                                                                   @NotNull String targetName,
+                                                                   @NotNull String builderName,
+                                                                   @NotNull List<String> selfNames) {
+        if (!role.hasAnnotatedSuper()) return List.of();
+        List<String> out = erasedNames(superArguments);
+        if (role.isSelfTyped()) {
+            out.addAll(selfNames);
+        } else {
+            out.add(targetName);
+            out.add(builderName);
+        }
+        return List.copyOf(out);
+    }
+
+    /**
+     * Derives everything a role requires of the builder declared for it, from
+     * names both models can read.
+     *
+     * @param role the position the target holds in a builder chain
+     * @param targetName the target's simple name
+     * @param builderName the builder's simple name
+     * @param targetTypeParameters the type parameter names the builder re-declares, in declaration order
+     * @param declaredTypeParameters the declared builder's type parameter names, in declaration order
+     * @param ancestorName the annotated superclass's simple name, or null when there is none
+     * @param superArguments the type arguments the target passes to its superclass, in order
+     * @return the expectation the declaration is measured against
+     */
+    public static @NotNull RoleExpectation expectation(@NotNull ChainRole role,
+                                                       @NotNull String targetName,
+                                                       @NotNull String builderName,
+                                                       @NotNull List<String> targetTypeParameters,
+                                                       @NotNull List<String> declaredTypeParameters,
+                                                       @Nullable String ancestorName,
+                                                       @NotNull List<String> superArguments) {
+        List<String> pair = selfNames(role, targetTypeParameters, declaredTypeParameters);
+        return new RoleExpectation(
+            expectedTypeParameters(role, targetTypeParameters, pair),
+            expectedSuperType(role, ancestorName == null ? null : ancestorName + "." + builderName),
+            expectedBuildReturnType(role, targetName, pair.get(0)),
+            expectedSuperTypeArguments(role, superArguments, targetName, builderName, pair));
     }
 
     /**
@@ -123,9 +214,14 @@ public final class DeclaredBuilderShape {
         }
         String expectedSuper = expectation.superType();
         if (expectedSuper != null) {
-            if (facts.writtenSuperType() == null) return DeclaredBuilderRejection.MISSING_SUPER_TYPE;
-            if (!expectedSuper.equals(facts.writtenSuperType())) {
-                return DeclaredBuilderRejection.WRONG_SUPER_TYPE;
+            String written = facts.writtenSuperType();
+            if (written == null) return DeclaredBuilderRejection.MISSING_SUPER_TYPE;
+            if (!namesType(written, expectedSuper)) return DeclaredBuilderRejection.WRONG_SUPER_TYPE;
+            // A raw clause passes nothing to compare, and whether the members
+            // generated against it compile is not a question of names.
+            if (!facts.superTypeArguments().isEmpty()
+                && !erasedNames(facts.superTypeArguments()).equals(expectation.superTypeArguments())) {
+                return DeclaredBuilderRejection.SUPER_TYPE_ARGUMENTS;
             }
         }
         // Asked only where a generated member depends on the answer. On a chain
@@ -152,6 +248,7 @@ public final class DeclaredBuilderShape {
      * of the other.
      *
      * @param rejection what {@link #check} returned
+     * @param role the position the target holds in a builder chain
      * @param declaredName the declared builder's simple name
      * @param targetName the annotated type's simple name
      * @param builderMethodName the configured name of the static entry point
@@ -160,6 +257,7 @@ public final class DeclaredBuilderShape {
      * @return the diagnostic text
      */
     public static @NotNull String describe(@NotNull DeclaredBuilderRejection rejection,
+                                           @NotNull ChainRole role,
                                            @NotNull String declaredName,
                                            @NotNull String targetName,
                                            @NotNull String builderMethodName,
@@ -169,15 +267,89 @@ public final class DeclaredBuilderShape {
             case NOT_STATIC, ABSTRACT_ON_CONCRETE_ROLE ->
                 rejection.message(declaredName, builderMethodName);
             case NOT_ABSTRACT -> rejection.message(declaredName, targetName);
-            case TYPE_PARAMETERS, SELF_TYPE_BOUNDS -> rejection.message(declaredName,
-                names(expectation.typeParameterNames()), names(facts.typeParameterNames()));
+            case TYPE_PARAMETERS -> rejection.message(declaredName,
+                requiredParameters(role, expectation.typeParameterNames()),
+                names(facts.typeParameterNames()));
+            case SELF_TYPE_BOUNDS -> rejection.message(declaredName,
+                requiredBounds(expectation.typeParameterNames(), targetName, declaredName),
+                writtenPair(facts));
             case MISSING_SUPER_TYPE -> rejection.message(declaredName, expectation.superType());
             case WRONG_SUPER_TYPE -> rejection.message(declaredName, expectation.superType(),
                 facts.writtenSuperType());
+            case SUPER_TYPE_ARGUMENTS -> rejection.message(declaredName, expectation.superType(),
+                "<" + String.join(", ", expectation.superTypeArguments()) + ">",
+                "<" + String.join(", ", erasedNames(facts.superTypeArguments())) + ">");
             case BUILD_RETURN_TYPE -> rejection.message(declaredName,
                 facts.buildMethod() == null ? "nothing" : facts.buildMethod().returnType(),
                 expectation.buildReturnType());
         };
+    }
+
+    /**
+     * Says which parameters a builder for the role has to declare, for the
+     * parameter-list rejection.
+     *
+     * <p>A self-typed role's list is the target's own followed by the pair it
+     * declares for itself, and on a target that is not generic the pair is all
+     * of it - calling that list the target's type parameters would name
+     * parameters the target does not have.
+     *
+     * @param role the position the target holds in a builder chain
+     * @param expected the parameter names the role requires, in order
+     * @return the clause naming them
+     */
+    private static String requiredParameters(ChainRole role, List<String> expected) {
+        if (!role.isSelfTyped()) {
+            return expected.isEmpty()
+                ? "for a target with no type parameters has to declare none"
+                : "for a generic target has to re-declare the target's type parameters " + names(expected);
+        }
+        int own = Math.max(0, expected.size() - 2);
+        String pair = "the self-typed pair " + names(expected.subList(own, expected.size()));
+        String opening = "for an abstract target in a builder chain has to ";
+        return own == 0
+            ? opening + "declare " + pair
+            : opening + "re-declare the target's type parameters " + names(expected.subList(0, own))
+                + " followed by " + pair;
+    }
+
+    /**
+     * Renders the bounds a self-typed builder's trailing pair needs - the built
+     * type bounded by the target, applied to its own parameters, and the
+     * builder type bounded by the builder applied to every parameter.
+     *
+     * @param expected the parameter names the role requires, the pair last
+     * @param targetName the target's simple name
+     * @param declaredName the declared builder's simple name
+     * @return the pair with its bounds, in angle brackets
+     */
+    private static String requiredBounds(List<String> expected, String targetName, String declaredName) {
+        int own = Math.max(0, expected.size() - 2);
+        List<String> ownNames = expected.subList(0, own);
+        String built = expected.size() > own ? expected.get(own) : "T";
+        String builder = expected.size() > own + 1 ? expected.get(own + 1) : "B";
+        String target = ownNames.isEmpty() ? targetName : targetName + "<" + String.join(", ", ownNames) + ">";
+        return "<" + built + " extends " + target + ", " + builder + " extends " + declaredName
+            + "<" + String.join(", ", expected) + ">>";
+    }
+
+    /**
+     * Renders a declaration's trailing pair with the bounds written on it.
+     *
+     * @param facts the declared builder as written
+     * @return the pair in angle brackets, each parameter followed by its bound where one is written
+     */
+    private static String writtenPair(DeclaredBuilderFacts facts) {
+        List<String> names = facts.typeParameterNames();
+        List<@Nullable String> bounds = facts.typeParameterBounds();
+        List<String> out = new ArrayList<>();
+        for (int i = Math.max(0, names.size() - 2); i < names.size(); i++) {
+            String bound = i < bounds.size() ? bounds.get(i) : null;
+            out.add(bound == null || bound.isEmpty()
+                ? names.get(i)
+                : names.get(i) + " extends " + typeText(bound));
+        }
+        return out.isEmpty() ? "none" : "<" + String.join(", ", out) + ">";
     }
 
     /**
@@ -401,6 +573,61 @@ public final class DeclaredBuilderShape {
         String raw = (generics < 0 ? type : type.substring(0, generics)).trim();
         int dot = raw.lastIndexOf('.');
         return dot < 0 ? raw : raw.substring(dot + 1);
+    }
+
+    /**
+     * A written type with its type arguments removed and its qualifier kept, in
+     * the spelling {@link #typeText} gives it.
+     *
+     * <p>What an extends clause is compared by. The qualifier is what tells the
+     * ancestor's {@code Base.Builder} from another type's builder of the same
+     * simple name, and neither model can say more of a written name without
+     * resolving it.
+     *
+     * @param type the type as written
+     * @return the type without any type arguments
+     */
+    public static @NotNull String rawType(@NotNull String type) {
+        String text = typeText(type);
+        StringBuilder out = new StringBuilder(text.length());
+        int depth = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '<') depth++;
+            else if (c == '>') depth--;
+            else if (depth == 0) out.append(c);
+        }
+        return out.toString().trim();
+    }
+
+    /**
+     * Whether a written type names the expected one, reading its qualifier.
+     *
+     * <p>The written type may qualify the expected one further - a package, or
+     * the classes an ancestor nests in - so it names it when it is the expected
+     * one or ends with it after a dot.
+     *
+     * @param written the type as written
+     * @param expected the qualified name required
+     * @return whether the written type names it
+     */
+    private static boolean namesType(String written, String expected) {
+        String raw = rawType(written);
+        return raw.equals(expected) || raw.endsWith("." + expected);
+    }
+
+    /** Each type, rendered and reduced to its erased simple name. */
+    private static List<String> erasedNames(List<String> types) {
+        List<String> out = new ArrayList<>(types.size());
+        for (String type : types) out.add(erasedName(typeText(type)));
+        return out;
+    }
+
+    /** Appends {@code $} until the name is not one already taken. */
+    private static String freeName(String preferred, List<String> taken) {
+        String candidate = preferred;
+        while (taken.contains(candidate)) candidate = candidate + "$";
+        return candidate;
     }
 
     /**

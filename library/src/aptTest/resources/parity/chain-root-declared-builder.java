@@ -5,10 +5,10 @@ import dev.simplified.annotations.ClassBuilder;
 /**
  * An abstract annotated root that declares its own nested builder.
  *
- * <p>The chain path aborts on the declaration and notes why, so the root's
- * builder gains no self type, no setters and no build method. The abort is what
- * this case pins on the processor side; on the editor side the claim is that
- * nothing is contributed into the class the author wrote.
+ * <p>The declaration is a usable root shape - static, abstract, and self-typed
+ * with a bounded trailing pair - so the merge appends the slot's field and its
+ * self-typed setter, and the abstract self() and build(), beside the author's
+ * verb. The verb reaches self(), which the author never wrote.
  */
 @ClassBuilder
 public abstract class Rooted {
@@ -19,11 +19,11 @@ public abstract class Rooted {
         return label;
     }
 
-    public static class Builder {
+    public abstract static class Builder<T extends Rooted, B extends Builder<T, B>> {
 
-        public Builder apply(Runnable task) {
+        public B apply(Runnable task) {
             task.run();
-            return this;
+            return self();
         }
 
     }

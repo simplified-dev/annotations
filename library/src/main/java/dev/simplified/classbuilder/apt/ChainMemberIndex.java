@@ -129,6 +129,10 @@ public final class ChainMemberIndex {
                 if (member.getKind() != ElementKind.METHOD) continue;
                 ExecutableElement method = (ExecutableElement) member;
                 if (!method.getParameters().isEmpty()) continue;
+                // A builder the author declared carries the members merged into
+                // it as well, each with the annotation the generator writes, so
+                // they are skipped as the tree view skips a marked node.
+                if (carriesGeneratedAnnotation(method)) continue;
                 boolean methodAbstract = method.getModifiers().contains(Modifier.ABSTRACT);
                 if (!recordsConcreteMatches(ancestorRole) && !methodAbstract) continue;
                 authored.add(method.getSimpleName().toString());
@@ -158,14 +162,14 @@ public final class ChainMemberIndex {
     }
 
     /**
-     * Whether a compiled nested type carries the marker the generator writes
-     * onto everything it emits.
+     * Whether a compiled nested type or member carries the marker the generator
+     * writes onto everything it emits.
      *
-     * @param nested the ancestor's nested type
+     * @param element the ancestor's nested type, or a member of it
      * @return whether it was generated rather than written
      */
-    private static boolean carriesGeneratedAnnotation(TypeElement nested) {
-        for (AnnotationMirror mirror : nested.getAnnotationMirrors()) {
+    private static boolean carriesGeneratedAnnotation(Element element) {
+        for (AnnotationMirror mirror : element.getAnnotationMirrors()) {
             if (GENERATED_FQN.contentEquals(mirror.getAnnotationType().toString())) return true;
         }
         return false;

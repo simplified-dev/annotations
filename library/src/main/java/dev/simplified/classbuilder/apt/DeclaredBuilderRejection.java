@@ -45,17 +45,19 @@ public enum DeclaredBuilderRejection {
     /**
      * The generated members are written in the builder's own re-declared
      * parameters, which have to be there and in the same order for a generated
-     * setter to name the slot's type at all.
+     * setter to name the slot's type at all. The second operand says which
+     * parameters those are, since a self-typed role's include the pair it
+     * declares for itself.
      */
-    TYPE_PARAMETERS("@ClassBuilder cannot merge into '%s' - a static nested builder for a generic "
-        + "target has to re-declare the target's type parameters %s, and this one declares %s"),
+    TYPE_PARAMETERS("@ClassBuilder cannot merge into '%s' - a static nested builder %s, and this "
+        + "one declares %s"),
 
     /**
      * The trailing pair carries the bounds that make the builder self-typed, and
      * a setter returning the second parameter is unusable without them.
      */
     SELF_TYPE_BOUNDS("@ClassBuilder cannot merge into '%s' - its trailing pair has to be bounded "
-        + "%s for the generated setters to return the caller's own builder type, and this one "
+        + "as %s for the generated setters to return the caller's own builder type, and this one "
         + "declares %s"),
 
     /** A link's builder inherits the parent's setters through its extends clause. */
@@ -65,6 +67,15 @@ public enum DeclaredBuilderRejection {
     /** The extends clause names a builder other than the annotated ancestor's. */
     WRONG_SUPER_TYPE("@ClassBuilder cannot merge into '%s' - the builder of a chained target has "
         + "to extend %s, and this one extends %s"),
+
+    /**
+     * The extends clause passes the ancestor's builder arguments other than the
+     * ones the generated members are typed against - the ancestor's own as the
+     * target passes them, then the link and its builder, or the declaration's
+     * own trailing pair on a chained abstract.
+     */
+    SUPER_TYPE_ARGUMENTS("@ClassBuilder cannot merge into '%s' - the builder of a chained target "
+        + "has to pass %s the arguments %s, and this one passes %s"),
 
     /**
      * A build method the author wrote has to be the one the role's callers get,

@@ -167,7 +167,7 @@ final class DeclaredBuilderMerge {
         DeclaredBuilderRejection rejection = DeclaredBuilderShape.check(role, facts, expectation);
         if (rejection == null) return true;
         messager.printMessage(Diagnostic.Kind.ERROR,
-            DeclaredBuilderShape.describe(rejection, declared.name.toString(),
+            DeclaredBuilderShape.describe(rejection, role, declared.name.toString(),
                 ctx.targetSimpleName(), ctx.config().builderMethodName(), facts, expectation),
             anchor);
         return false;
@@ -176,39 +176,48 @@ final class DeclaredBuilderMerge {
     /**
      * What the role requires of the declared builder.
      *
-     * <p>The leading type parameters are the target's own. On a self-typed role
-     * the trailing pair is the one the declaration spells, since the author
-     * names it and the check compares names; with fewer than the target's own
-     * count plus two there is no pair to read, the generator's names stand in,
-     * and the check reports the parameter list. On a role with an annotated
-     * superclass the declaration has to extend that ancestor's builder, compared
-     * by erased simple name as the facts state the written clause.
+     * <p>The derivation is {@link DeclaredBuilderShape#expectation}, which the
+     * editor asks of the same names read out of PSI; what is left here is
+     * reading them off the context - the target's own parameters, and on a
+     * linked role the ancestor's simple name and the arguments the target passes
+     * it.
      *
      * @param role the target's position in a chain
      * @param facts the declared builder as written
      * @param annotatedSuper the target's annotated direct superclass, or {@code null}
-     * @return the parameter names, supertype and build return type to measure against
+     * @return the parameter names, supertype, build return type and supertype arguments to measure against
      */
     private RoleExpectation expectationFor(ChainRole role, DeclaredBuilderFacts facts,
                                            @Nullable AnnotatedSuper annotatedSuper) {
-        List<String> targetParameters = new ArrayList<>();
-        for (JCTypeParameter parameter : ctx.typeParams()) {
-            targetParameters.add(parameter.name.toString());
-        }
-        List<String> selfNames = List.of(ctx.selfTypeName(), ctx.selfBuilderName());
-        List<String> declaredNames = facts.typeParameterNames();
-        if (role.isSelfTyped() && declaredNames.size() >= targetParameters.size() + 2) {
-            int pair = declaredNames.size() - 2;
-            selfNames = List.copyOf(declaredNames.subList(pair, pair + 2));
-        }
-        String superBuilderType = annotatedSuper == null
-            ? null
-            : erasedName(annotatedSuper.simpleName() + "." + ctx.builderName());
-        return new RoleExpectation(
-            DeclaredBuilderShape.expectedTypeParameters(role, targetParameters, selfNames),
-            DeclaredBuilderShape.expectedSuperType(role, superBuilderType),
-            DeclaredBuilderShape.expectedBuildReturnType(role, ctx.targetSimpleName(),
-                selfNames.get(0)));
+        return DeclaredBuilderShape.expectation(role, ctx.targetSimpleName(), ctx.builderName(),
+            targetParameterNames(ctx), facts.typeParameterNames(),
+            annotatedSuper == null ? null : annotatedSuper.simpleName(),
+            annotatedSuper == null ? List.of() : annotatedSuper.typeArguments());
+    }
+
+    /**
+     * The names of the type parameters a builder for this target re-declares.
+     *
+     * @param ctx the per-target mutation context
+     * @return the names, in declaration order
+     */
+    static List<String> targetParameterNames(MutationContext ctx) {
+        List<String> out = new ArrayList<>();
+        for (JCTypeParameter parameter : ctx.typeParams()) out.add(parameter.name.toString());
+        return out;
+    }
+
+    /**
+     * The names of the type parameters a declared builder declares.
+     *
+     * @param declared the builder the author wrote
+     * @return the names, in declaration order
+     */
+    static List<String> declaredParameterNames(JCClassDecl declared) {
+        List<String> out = new ArrayList<>();
+        if (declared.typarams == null) return out;
+        for (JCTypeParameter parameter : declared.typarams) out.add(parameter.name.toString());
+        return out;
     }
 
     /**
@@ -231,7 +240,7 @@ final class DeclaredBuilderMerge {
         }
         String writtenSuper = declared.extending == null
             ? null
-            : erasedName(declared.extending.toString());
+            : DeclaredBuilderShape.rawType(declared.extending.toString());
         List<String> superArguments = new ArrayList<>();
         if (declared.extending instanceof JCTypeApply applied) {
             for (JCExpression argument : applied.arguments) superArguments.add(argument.toString());

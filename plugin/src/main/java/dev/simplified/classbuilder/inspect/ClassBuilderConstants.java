@@ -355,52 +355,24 @@ public final class ClassBuilderConstants {
     }
 
     /**
-     * Whether a declared nested type of the builder's name suppresses generation
-     * outright, as opposed to being merged into.
-     *
-     * <p>A class or record target merges into the declaration: it keeps its
-     * builder and its entry points, the generated members going into the class
-     * the author wrote. A constructor or factory target merges the same way into
-     * the declaration its enclosing type carries, and is never in a chain
-     * whatever that type extends. A chain role aborts ahead of everything - the
-     * retained-initializer providers, the copy constructor and the bootstraps.
-     * An interface target never looks at a nested class, its builder being a
-     * sibling file.
-     *
-     * @param target the annotated type
-     * @param builderName the configured builder class name
-     * @param executable whether the annotation sits on a constructor or factory method
-     * @return whether the processor generates nothing because of the declaration
-     */
-    public static boolean suppressesGeneration(@NotNull PsiClass target,
-                                               @NotNull String builderName,
-                                               boolean executable) {
-        if (executable) return false;
-        PsiClass declared = declaredBuilderOf(target, builderName);
-        if (declared == null) return false;
-        return chainRoleOf(target).isChained();
-    }
-
-    /**
      * Whether the entry points alone are withheld, the builder itself still
      * being generated.
      *
-     * <p>Separate from {@link #suppressesGeneration} because the two withhold
-     * different sets. Every entry point instantiates the builder with one
-     * argument per seed, and a declared builder's constructors are the author's
-     * throughout, so one that declares no constructor of that arity leaves the
-     * entry points with nothing to call and the processor skips them with a
-     * note. Everything else still runs - the merge appends every setter, and a
-     * class target still gets the all-args constructor {@code build()} calls.
-     * Folding this into the wider test withheld that constructor too, and a
-     * same-package {@code new Target(...)} went red over source that builds.
+     * <p>Every entry point instantiates the builder with one argument per seed,
+     * and a declared builder's constructors are the author's throughout, so one
+     * that declares no constructor of that arity leaves the entry points with
+     * nothing to call and the processor skips them with a note. Everything else
+     * still runs - the merge appends every setter, a class target still gets
+     * the all-args constructor {@code build()} calls, and a chain link still
+     * gets its copy constructor. Withholding the whole member list here would
+     * take that constructor with it, and put a same-package
+     * {@code new Target(...)} red over source that builds.
      *
      * <p>The arity rule is {@link DeclaredBuilderShape#instantiable}, which the
-     * processor asks of the same counts. On a class or record target the seed
-     * count is zero, so the constructor that serves is a no-argument one; on a
-     * constructor or factory target it is one taking exactly the seeds
-     * {@code builder(..)} passes. A chain role withholds everything through
-     * {@link #suppressesGeneration} instead, and an interface's entry points
+     * processor asks of the same counts. On a class or record target, a chain
+     * link among them, the seed count is zero, so the constructor that serves is
+     * a no-argument one; on a constructor or factory target it is one taking
+     * exactly the seeds {@code builder(..)} passes. An interface's entry points
      * call its sibling builder, never a class nested in the interface body.
      *
      * @param target the type the builder nests in
@@ -414,7 +386,6 @@ public final class ClassBuilderConstants {
                                                    boolean executable,
                                                    int seeds) {
         if (target.isInterface()) return false;
-        if (!executable && chainRoleOf(target).isChained()) return false;
         PsiClass declared = declaredBuilderOf(target, builderName);
         return declared != null
             && !DeclaredBuilderShape.instantiable(declaredConstructorArities(declared), seeds);
@@ -455,11 +426,11 @@ public final class ClassBuilderConstants {
      * the constant, because rendering it is where the two halves would otherwise
      * pick different operands.
      *
-     * <p>Answers only for a standalone target, because that is the only role the
-     * merge runs on - a chain role aborts ahead of the declared-builder check,
-     * so its declaration is left whole and its shape is not a question. Judging
-     * one would need the two trailing parameter names, which nothing on this
-     * side reads while no chain merges.
+     * <p>Every role merges, so every role is judged. A chain role is measured
+     * with the pair of self-type names the declaration spells and, on a linked
+     * role, against the annotated superclass's builder and the arguments the
+     * target passes that superclass - the same names the processor reads off its
+     * tree.
      *
      * <p>A constructor or factory target is standalone whatever its enclosing
      * type is, a constructor having no chain to find, and its builder re-declares
@@ -471,25 +442,26 @@ public final class ClassBuilderConstants {
      *     annotation is on the type
      * @param declared the builder it declares
      * @param names the resolved builder-member names
-     * @return the diagnostic, or {@code null} when the shape is usable or unjudged
+     * @return the diagnostic, or {@code null} when the shape is usable
      */
     public static @Nullable String mergeRejection(@NotNull PsiClass target,
                                                   @Nullable PsiMethod executable,
                                                   @NotNull PsiClass declared,
                                                   @NotNull BuilderScheme names) {
         ChainRole role = executable != null ? ChainRole.STANDALONE : chainRoleOf(target);
-        if (role.isChained()) return null;
         String declaredName = declared.getName();
         String targetName = target.getName();
         if (declaredName == null || targetName == null) return null;
         DeclaredBuilderFacts facts = declaredBuilderFacts(declared, names.build());
+        PsiClass ancestor = role.hasAnnotatedSuper() ? annotatedSuperOf(target) : null;
         RoleExpectation expectation = roleExpectation(target,
-            typeParameterSource(target, executable), role, List.of(), null);
+            typeParameterSource(target, executable), role, names.type(), facts.typeParameterNames(),
+            ancestor == null ? null : ancestor.getName(), superTypeArgumentTexts(target));
         DeclaredBuilderRejection rejection = DeclaredBuilderShape.check(role, facts, expectation);
         return rejection == null
             ? null
-            : DeclaredBuilderShape.describe(rejection, declaredName, targetName, names.builder(),
-                facts, expectation);
+            : DeclaredBuilderShape.describe(rejection, role, declaredName, targetName,
+                names.builder(), facts, expectation);
     }
 
     /**
@@ -504,7 +476,10 @@ public final class ClassBuilderConstants {
      * rather than leaving it unrooted in silence.
      *
      * <p>An ancestor declaring nothing is not blocking: the builder it gets is
-     * the generated one, in the shape the clause expects.
+     * the generated one, in the shape the clause expects. A target declaring its
+     * own builder is asked too, ahead of its own shape, as the processor asks
+     * it: that declaration's extends clause has to name the ancestor's builder
+     * just as a generated one does.
      *
      * @param target the annotated type
      * @param builderName the builder class name the chain is written in
@@ -518,33 +493,40 @@ public final class ClassBuilderConstants {
         // super. Asking anyway reads the enclosing class's own supertype and
         // withholds a builder that is emitted.
         if (executable) return null;
-        // The processor asks about the target's own declaration first and
-        // returns on it, so a target that declares its own builder never reaches
-        // the ancestor question at all. Asking it here anyway reports an error
-        // where the build prints a note.
-        if (declaredBuilderOf(target, builderName) != null) return null;
         PsiClass parent = annotatedSuperOf(target);
         if (parent == null) return null;
         PsiClass declared = declaredBuilderOf(parent, builderName);
         if (declared == null) return null;
-        return declared.getTypeParameters().length == superTypeArgumentCount(target) + 2
+        return declared.getTypeParameters().length == superTypeArgumentTexts(target).size() + 2
             ? null
             : parent;
     }
 
     /**
-     * How many type arguments the target passes to its superclass.
+     * The type arguments the target passes to its superclass, as written.
      *
      * @param target the annotated type
-     * @return the count, read off the extends clause as written
+     * @return the argument texts, read off the extends clause, in order
      */
-    private static int superTypeArgumentCount(@NotNull PsiClass target) {
+    private static @NotNull List<String> superTypeArgumentTexts(@NotNull PsiClass target) {
         PsiReferenceList extendsList = target.getExtendsList();
-        if (extendsList == null) return 0;
-        PsiJavaCodeReferenceElement[] references = extendsList.getReferenceElements();
-        if (references.length == 0) return 0;
+        return extendsList == null ? List.of() : firstReferenceArguments(extendsList);
+    }
+
+    /**
+     * The type arguments of a reference list's first entry, each as written.
+     *
+     * @param list the extends list to read
+     * @return the argument texts, empty when the list is empty or its first entry is raw
+     */
+    private static @NotNull List<String> firstReferenceArguments(@NotNull PsiReferenceList list) {
+        PsiJavaCodeReferenceElement[] references = list.getReferenceElements();
+        if (references.length == 0) return List.of();
         PsiReferenceParameterList parameters = references[0].getParameterList();
-        return parameters == null ? 0 : parameters.getTypeParameterElements().length;
+        if (parameters == null) return List.of();
+        List<String> out = new ArrayList<>();
+        for (PsiTypeElement argument : parameters.getTypeParameterElements()) out.add(argument.getText());
+        return out;
     }
 
     /**
@@ -570,13 +552,14 @@ public final class ClassBuilderConstants {
             parameterNames.add(parameter.getName() == null ? "" : parameter.getName());
             parameterBounds.add(firstReferenceText(parameter.getExtendsList()));
         }
-        String writtenSuper = firstReferenceText(declared.getExtendsList());
+        PsiReferenceList extendsList = declared.getExtendsList();
+        String writtenSuper = firstReferenceText(extendsList);
         return new DeclaredBuilderFacts(
             declared.hasModifierProperty(PsiModifier.STATIC),
             declared.hasModifierProperty(PsiModifier.ABSTRACT),
             parameterNames, parameterBounds,
-            writtenSuper == null ? null : DeclaredBuilderShape.erasedName(writtenSuper),
-            List.of(),
+            writtenSuper == null ? null : DeclaredBuilderShape.rawType(writtenSuper),
+            extendsList == null ? List.of() : firstReferenceArguments(extendsList),
             declaredBuildMethod(declared, buildMethodName));
     }
 
@@ -601,31 +584,32 @@ public final class ClassBuilderConstants {
     }
 
     /**
-     * What the role requires of a declared builder, expressed the way the
-     * processor expresses it.
+     * What the role requires of a declared builder, derived by
+     * {@link DeclaredBuilderShape#expectation} from the names PSI holds.
      *
      * @param target the type the builder nests in
      * @param typeParameters the parameters the builder re-declares, from {@link #typeParameterSource}
      * @param role its position in a chain
-     * @param selfNames the two trailing parameter names a self-typed role appends
-     * @param superBuilderType the erased builder type of the nearest annotated ancestor, or null
+     * @param builderName the builder class name
+     * @param declaredTypeParameters the declared builder's type parameter names, in declaration order
+     * @param ancestorName the annotated superclass's simple name, or null when there is none
+     * @param superArguments the type arguments the target passes to its superclass, as written
      * @return the expectation to measure the declaration against
      */
     public static @NotNull RoleExpectation roleExpectation(@NotNull PsiClass target,
                                                            PsiTypeParameter[] typeParameters,
                                                            @NotNull ChainRole role,
-                                                           @NotNull List<String> selfNames,
-                                                           @Nullable String superBuilderType) {
+                                                           @NotNull String builderName,
+                                                           @NotNull List<String> declaredTypeParameters,
+                                                           @Nullable String ancestorName,
+                                                           @NotNull List<String> superArguments) {
         List<String> targetParameters = new ArrayList<>();
         for (PsiTypeParameter parameter : typeParameters) {
             targetParameters.add(parameter.getName() == null ? "" : parameter.getName());
         }
         String targetName = target.getName() == null ? "" : target.getName();
-        String builtName = selfNames.isEmpty() ? targetName : selfNames.get(0);
-        return new RoleExpectation(
-            DeclaredBuilderShape.expectedTypeParameters(role, targetParameters, selfNames),
-            DeclaredBuilderShape.expectedSuperType(role, superBuilderType),
-            DeclaredBuilderShape.expectedBuildReturnType(role, targetName, builtName));
+        return DeclaredBuilderShape.expectation(role, targetName, builderName, targetParameters,
+            declaredTypeParameters, ancestorName, superArguments);
     }
 
     /**

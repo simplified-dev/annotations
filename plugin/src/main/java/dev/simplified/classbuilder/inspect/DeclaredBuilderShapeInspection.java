@@ -23,11 +23,12 @@ import org.jetbrains.annotations.NotNull;
  *
  * <p>The processor refuses these shapes with an error and the editor has had no
  * analogue, so an author whose builder is non-static, carries the wrong
- * parameter list, is declared abstract where the entry points instantiate it, or
- * spells a build method that cannot stand in for the generated one saw a fully
- * populated class until the build failed. The rejection and its wording both
- * come from the shared decision, so what is red here is red there, in the same
- * sentence.
+ * parameter list, is declared abstract where the entry points instantiate it,
+ * extends a builder other than the chain ancestor's or passes it the wrong
+ * arguments, or spells a build method that cannot stand in for the generated
+ * one saw a fully populated class until the build failed. The rejection and its
+ * wording both come from the shared decision, so what is red here is red there,
+ * in the same sentence.
  *
  * <p>A shape rejection is reported on the declared builder's name identifier -
  * the element the author would act on, and one no other {@code classbuilder}
@@ -85,10 +86,11 @@ public class DeclaredBuilderShapeInspection extends LocalInspectionTool {
                     return;
                 }
 
-                // The merge runs on a class or record target and on a constructor
-                // or factory target, into the builder the type declares, and
-                // nowhere else - an interface's builder is a sibling file - so
-                // the shape of a declared builder is only a question there.
+                // The merge runs on a class or record target, a chain role among
+                // them, and on a constructor or factory target, into the builder
+                // the type declares, and nowhere else - an interface's builder is
+                // a sibling file - so the shape of a declared builder is only a
+                // question there.
                 if (target.isInterface()) return;
                 PsiClass declared = ClassBuilderConstants.declaredBuilderOf(target, names.type());
                 if (declared == null || declared.getName() == null) return;
@@ -102,11 +104,8 @@ public class DeclaredBuilderShapeInspection extends LocalInspectionTool {
                 }
 
                 // The processor judges the slot fields only once the shape is
-                // accepted, and only where it merges - a chain role leaves its
-                // declared builder whole, and an executable target is never one.
-                // It keeps merging after reporting one, so this reports and the
-                // augment provider keeps contributing.
-                if (!executable && ClassBuilderConstants.chainRoleOf(target).isChained()) return;
+                // accepted, on every role. It keeps merging after reporting one,
+                // so this reports and the augment provider keeps contributing.
                 for (MergedSlotStorage.Mistyped mistyped
                     : MergedSlotStorage.mistypedFields(target, member, declared, annotation)) {
                     PsiTypeElement anchor = mistyped.field().getTypeElement();

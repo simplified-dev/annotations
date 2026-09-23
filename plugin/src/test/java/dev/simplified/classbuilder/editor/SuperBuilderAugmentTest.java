@@ -556,4 +556,210 @@ public class SuperBuilderAugmentTest extends LightJavaCodeInsightFixtureTestCase
         assertEquals(1, cBuilder.findMethodsByName("n", true).length);
     }
 
+    /**
+     * A chained abstract inherits the root's {@code self()} and {@code build()},
+     * and the processor declares neither on its builder. The editor declared
+     * both again, abstract, on every chained-abstract builder it synthesised.
+     */
+    public void testChainedAbstractBuilder_declaresNoSelfOrBuild() {
+        myFixture.addFileToProject("h/R.java",
+            """
+            package h;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class R { String a; }
+            """);
+        myFixture.configureByText("M.java",
+            """
+            package h;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class M extends R { String b; }
+            """);
+        PsiClass builder = ((PsiJavaFile) myFixture.getFile()).getClasses()[0].getInnerClasses()[0];
+        List<String> names = new ArrayList<>();
+        for (PsiMethod method : builder.getMethods()) names.add(method.getName());
+        assertTrue("the setter is its own: " + names, names.contains("b"));
+        assertFalse("and the pair is inherited, not redeclared: " + names,
+            names.contains("self") || names.contains("build"));
+    }
+
+    // ------------------------------------------------------------------
+    // The chain merge
+    //
+    // A root, a link or a chained abstract declaring its own builder has the
+    // role's members merged into it. The editor left each declaration exactly
+    // as written, the processor having aborted on it.
+    // ------------------------------------------------------------------
+
+    /** A root's author verb calls a merged setter and returns the declared self type. */
+    public void testMergeOnARoot_offersSelfTypedSettersBesideTheAuthorsVerbs() {
+        myFixture.addFileToProject("m/Shape.java",
+            """
+            package m;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Shape {
+                String name;
+                public String getName() { return name; }
+                public abstract static class Builder<T extends Shape, B extends Builder<T, B>> {
+                    public B named(String first, String last) { return name(first + " " + last); }
+                }
+            }
+            """);
+        myFixture.addFileToProject("m/Circle.java",
+            """
+            package m;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Circle extends Shape {
+                int radius;
+                public int getRadius() { return radius; }
+            }
+            """);
+        myFixture.configureByText("Use.java",
+            """
+            import m.Circle;
+            public class Use {
+                public static String go() {
+                    return Circle.builder().named("a", "b").radius(2).build().getName();
+                }
+            }
+            """);
+        assertNoErrors();
+        myFixture.configureFromTempProjectFile("m/Shape.java");
+        assertNoErrors();
+    }
+
+    /**
+     * A link's author verb reads a merged slot field, and the entry points
+     * return the declared class, so a chain through the verb and the inherited
+     * setter resolves from every entry point.
+     */
+    public void testMergeOnALink_offersInheritedAndOwnSetters() {
+        myFixture.addFileToProject("n/Base.java",
+            """
+            package n;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Base {
+                String label;
+                public String getLabel() { return label; }
+            }
+            """);
+        myFixture.configureByText("Link.java",
+            """
+            package n;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Link extends Base {
+                String extra;
+                public String getExtra() { return extra; }
+                public static class Builder extends Base.Builder<Link, Builder> {
+                    public Builder shout() { this.extra = this.extra.toUpperCase(); return this; }
+                }
+            }
+            class Use {
+                String go(Link link) {
+                    return Link.builder().extra("x").shout().label("l").build().getLabel()
+                        + Link.from(link).shout().build().getExtra()
+                        + link.mutate().shout().label("m").build().getExtra();
+                }
+            }
+            """);
+        assertNoErrors();
+    }
+
+    /**
+     * A chained abstract's declared builder keeps its verbs and is given its own
+     * setters, which every level below resolves through; it declares neither of
+     * the root's pair, as the processor leaves it.
+     */
+    public void testMergeOnAThreeLevelChain_everyLevelsSettersResolve() {
+        myFixture.addFileToProject("o/R.java",
+            """
+            package o;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class R {
+                String a;
+                public String getA() { return a; }
+            }
+            """);
+        myFixture.addFileToProject("o/M.java",
+            """
+            package o;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class M extends R {
+                String b;
+                public abstract static class Builder<T extends M, B extends Builder<T, B>>
+                        extends R.Builder<T, B> {
+                    public B shapeless() { return b("none"); }
+                }
+            }
+            """);
+        myFixture.addFileToProject("o/L.java",
+            """
+            package o;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class L extends M {
+                int c;
+            }
+            """);
+        myFixture.configureByText("Use.java",
+            """
+            import o.L;
+            public class Use {
+                public static String go() {
+                    return L.builder().a("A").shapeless().c(3).b("B").build().getA();
+                }
+            }
+            """);
+        assertNoErrors();
+        PsiClass declared = myFixture.findClass("o.M").getInnerClasses()[0];
+        List<String> names = new ArrayList<>();
+        for (PsiMethod method : declared.getMethods()) names.add(method.getName());
+        assertTrue("the setter is merged in: " + names, names.contains("b"));
+        assertFalse("and neither of the root's pair: " + names,
+            names.contains("self") || names.contains("build"));
+    }
+
+    /** A generic root's declared builder forwards its parameter to a generic link. */
+    public void testMergeOnAGenericChain_forwardsTheParameter() {
+        myFixture.addFileToProject("p/Base.java",
+            """
+            package p;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Base<V> {
+                V item;
+                public V getItem() { return item; }
+                public abstract static class Builder<V, T extends Base<V>, B extends Builder<V, T, B>> {
+                    public B cleared() { return item(null); }
+                }
+            }
+            """);
+        myFixture.addFileToProject("p/Impl.java",
+            """
+            package p;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Impl<V> extends Base<V> {
+                int n;
+            }
+            """);
+        myFixture.configureByText("Use.java",
+            """
+            import p.Impl;
+            public class Use {
+                public static String go() {
+                    return Impl.<String>builder().cleared().item("x").n(1).build().getItem();
+                }
+            }
+            """);
+        assertNoErrors();
+    }
+
 }

@@ -4,28 +4,17 @@ Reports a <code>@ClassBuilder</code> that generates nothing, because the target
 already declares a nested type named the same as the builder.
 
 <p>
-A class or record target, and a constructor or static factory target, merge the
-generated members into that declaration, the author winning every collision. A
-target in a SuperBuilder chain does not merge and skips on it instead, and the
-only signal the build gives is a compiler note. Without this
-the entry points
-(<code>builder()</code>, <code>from(T)</code>, <code>mutate()</code>) and the
-whole generated surface are simply absent from completion with nothing on the
-screen saying why - which reads as the annotation being broken rather than as
-the declaration having turned it off.
+No position does. A class or record target, every role in a SuperBuilder
+chain, and a constructor or static factory target merge the generated members
+into that declaration, the author winning every collision, and an interface
+target's builder is a sibling file. This inspection reports nothing.
 </p>
 
 <!-- tooltip end -->
 
 <p>
-A target in a SuperBuilder chain - abstract, or extending an annotated class -
-aborts ahead of everything the pass would emit, including the
-retained-initializer providers, the copy constructor and the bootstraps.
-</p>
-
-<p>
-Reported at weak-warning severity because the code is correct: the author's own
-builder is what runs. What is worth knowing is that the generated half is off.
+A declared builder whose shape cannot carry the generated members is reported
+as an error by the declared-builder shape inspection instead.
 </p>
 
 </body>

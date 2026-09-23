@@ -217,8 +217,128 @@ public class DeclaredBuilderShapeTest {
     public void message_keepsTheWordingBothSuitesAssertOn() {
         assertTrue(DeclaredBuilderRejection.NOT_STATIC.message("Builder", "builder")
             .contains("an inner class captures the enclosing instance"));
-        assertTrue(DeclaredBuilderRejection.TYPE_PARAMETERS.message("Builder", "<V>", "none")
-            .contains("re-declare the target's type parameters"));
+        assertEquals("@ClassBuilder cannot merge into 'Builder' - a static nested builder for a "
+                + "generic target has to re-declare the target's type parameters <V>, and this one "
+                + "declares none",
+            DeclaredBuilderShape.describe(DeclaredBuilderRejection.TYPE_PARAMETERS,
+                ChainRole.STANDALONE, "Builder", "Target", "builder", usableStandalone(),
+                new RoleExpectation(List.of("V"), null, "Target")));
+    }
+
+    /**
+     * On a root that is not generic the missing parameters are the self-typed
+     * pair, not the target's - the sentence used to call the root generic and the
+     * pair its type parameters.
+     */
+    @Test
+    public void describe_typeParametersOnANonGenericRoot_namesTheSelfTypedPair() {
+        assertEquals("@ClassBuilder cannot merge into 'Builder' - a static nested builder for an "
+                + "abstract target in a builder chain has to declare the self-typed pair <T, B>, and "
+                + "this one declares none",
+            DeclaredBuilderShape.describe(DeclaredBuilderRejection.TYPE_PARAMETERS,
+                ChainRole.ABSTRACT_ROOT, "Builder", "Shape", "builder",
+                facts(true, true, List.of(), List.of(), null, null),
+                new RoleExpectation(List.of("T", "B"), null, "T")));
+        assertEquals("@ClassBuilder cannot merge into 'Builder' - a static nested builder for an "
+                + "abstract target in a builder chain has to re-declare the target's type parameters "
+                + "<V> followed by the self-typed pair <T, B>, and this one declares <V>",
+            DeclaredBuilderShape.describe(DeclaredBuilderRejection.TYPE_PARAMETERS,
+                ChainRole.ABSTRACT_ROOT, "Builder", "Shape", "builder",
+                facts(true, true, List.of("V"), Arrays.asList((String) null), null, null),
+                new RoleExpectation(List.of("V", "T", "B"), null, "T")));
+        assertEquals("@ClassBuilder cannot merge into 'Builder' - a static nested builder for a "
+                + "target with no type parameters has to declare none, and this one declares <T>",
+            DeclaredBuilderShape.describe(DeclaredBuilderRejection.TYPE_PARAMETERS,
+                ChainRole.STANDALONE, "Builder", "Plain", "builder",
+                facts(true, false, List.of("T"), Arrays.asList((String) null), null, null),
+                standaloneExpectation()));
+    }
+
+    /**
+     * The bounds rejection only fires once the names matched, so rendering the
+     * two name lists printed one list twice and never a bound. The sentence shows
+     * the bounds the pair needs beside the pair as written.
+     */
+    @Test
+    public void describe_selfTypeBounds_showsTheBoundsBesideThePairAsWritten() {
+        assertEquals("@ClassBuilder cannot merge into 'Builder' - its trailing pair has to be bounded "
+                + "as <T extends Box<V>, B extends Builder<V, T, B>> for the generated setters to "
+                + "return the caller's own builder type, and this one declares <T extends Box<V>, B>",
+            DeclaredBuilderShape.describe(DeclaredBuilderRejection.SELF_TYPE_BOUNDS,
+                ChainRole.ABSTRACT_ROOT, "Builder", "Box", "builder",
+                facts(true, true, List.of("V", "T", "B"), Arrays.asList(null, "Box<V>", null), null, null),
+                new RoleExpectation(List.of("V", "T", "B"), null, "T")));
+    }
+
+    // ------------------------------------------------------------------
+    // The extends clause of a linked role
+    // ------------------------------------------------------------------
+
+    /**
+     * The clause is compared with its qualifier, so a fully qualified spelling
+     * of the ancestor's builder is the ancestor's builder. Compared by erased
+     * simple name, the expectation was bare and this spelling passed only by
+     * accident of the erasure.
+     */
+    @Test
+    public void check_onALinkNamingTheAncestorsBuilderFullyQualified_isAccepted() {
+        assertNull(DeclaredBuilderShape.check(ChainRole.CONCRETE_LINK,
+            facts(true, false, List.of(), List.of(), "demo.Base.Builder", null),
+            new RoleExpectation(List.of(), "Base.Builder", "Link")));
+    }
+
+    /** The link's pair written the wrong way round is named, not left to a generated line. */
+    @Test
+    public void check_onALinkPassingItsPairReversed_isSuperTypeArguments() {
+        DeclaredBuilderFacts reversed = new DeclaredBuilderFacts(true, false, List.of(), List.of(),
+            "Base.Builder", List.of("Builder", "Link"), null);
+        RoleExpectation expectation = DeclaredBuilderShape.expectation(ChainRole.CONCRETE_LINK,
+            "Link", "Builder", List.of(), List.of(), "Base", List.of());
+        assertEquals(DeclaredBuilderRejection.SUPER_TYPE_ARGUMENTS,
+            DeclaredBuilderShape.check(ChainRole.CONCRETE_LINK, reversed, expectation));
+        assertEquals("@ClassBuilder cannot merge into 'Builder' - the builder of a chained target has "
+                + "to pass Base.Builder the arguments <Link, Builder>, and this one passes <Builder, Link>",
+            DeclaredBuilderShape.describe(DeclaredBuilderRejection.SUPER_TYPE_ARGUMENTS,
+                ChainRole.CONCRETE_LINK, "Builder", "Link", "builder", reversed, expectation));
+    }
+
+    /**
+     * Arguments are compared by erased simple name, as each model can read
+     * them: the processor renders the ancestor's argument qualified, the author
+     * writes it however they import it, and a generic link applies its own
+     * parameters to both of its names.
+     */
+    @Test
+    public void check_onAGenericLinkPassingItsArgumentsInAnySpelling_isAccepted() {
+        DeclaredBuilderFacts written = new DeclaredBuilderFacts(true, false, List.of("V"),
+            Arrays.asList((String) null), "Box.Builder", List.of("String", "Impl<V>", "Impl.Builder<V>"),
+            null);
+        RoleExpectation expectation = DeclaredBuilderShape.expectation(ChainRole.CONCRETE_LINK,
+            "Impl", "Builder", List.of("V"), List.of("V"), "Box", List.of("java.lang.String"));
+        assertNull(DeclaredBuilderShape.check(ChainRole.CONCRETE_LINK, written, expectation));
+    }
+
+    /** A chained abstract forwards its own trailing pair, in the author's names. */
+    @Test
+    public void expectation_onAChainedAbstract_forwardsTheDeclaredPair() {
+        RoleExpectation expectation = DeclaredBuilderShape.expectation(ChainRole.CHAINED_ABSTRACT,
+            "Mid", "Builder", List.of(), List.of("R", "S"), "Base", List.of());
+        assertEquals(List.of("R", "S"), expectation.typeParameterNames());
+        assertEquals("Base.Builder", expectation.superType());
+        assertEquals(List.of("R", "S"), expectation.superTypeArguments());
+        assertEquals("R", expectation.buildReturnType());
+    }
+
+    /**
+     * A declaration too short to carry the pair is measured against the pair
+     * the generator would have written, whose names dodge the target's own.
+     */
+    @Test
+    public void selfNames_withNoDeclaredPair_areTheGeneratorsDodgingTheTargets() {
+        assertEquals(List.of("T$", "B"), DeclaredBuilderShape.selfNames(ChainRole.ABSTRACT_ROOT,
+            List.of("T"), List.of("T")));
+        assertEquals(List.of("R", "S"), DeclaredBuilderShape.selfNames(ChainRole.ABSTRACT_ROOT,
+            List.of("T"), List.of("T", "R", "S")));
     }
 
     @Test

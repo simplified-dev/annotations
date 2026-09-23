@@ -57,10 +57,17 @@ import java.lang.annotation.Target;
  * taking exactly those. A seed is appended as a {@code final} field that the
  * author's constructors assign.
  *
- * <p>A target in a SuperBuilder chain does not merge: a declared nested class of
- * the builder's name suppresses generation there, with a compiler note. An
- * interface target never looks at a nested class, its builder being a sibling
- * file.
+ * <p>A target in a SuperBuilder chain merges too, into a declaration of the shape
+ * its role generates: on an abstract root, a {@code static abstract} class
+ * re-declaring the target's type parameters followed by a bounded self-typed
+ * pair, whose names are the author's to choose and are the ones the merged
+ * setters return; on a chained abstract, the same, extending the ancestor's
+ * builder with that pair forwarded; on a concrete link, a {@code static} class
+ * re-declaring the target's parameters and extending the ancestor's builder
+ * with the link and its builder bound. A root receives the abstract
+ * {@code self()} and {@code build()}, a link their overrides, and a chained
+ * abstract neither. An interface target never looks at a nested class, its
+ * builder being a sibling file.
  *
  * <p>An interface target gets its builder as a sibling
  * {@code <Name>Builder.java} (plus {@code <Name>Impl.java}), there being no

@@ -21,6 +21,7 @@ import java.util.List;
 import static com.google.testing.compile.CompilationSubject.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 /**
  * The declared-builder merge - generated members landing beside author-written
@@ -924,6 +925,554 @@ public class DeclaredBuilderMergeTest {
             .inFile(hook).onLine(6);
     }
 
+    // ------------------------------------------------------------------
+    // The chain merge
+    //
+    // A root, a concrete link or a chained abstract whose builder is declared
+    // has the role's members merged into it. The chain path used to abort on
+    // the declaration with a note, so none of these compiled.
+    // ------------------------------------------------------------------
+
+    /** The abstract {@code Base} most chain cases hang a link below. */
+    private static JavaFileObject base() {
+        return JavaFileObjects.forSourceLines("demo.Base",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Base {",
+            "    private String label;",
+            "    public String getLabel() { return label; }",
+            "}");
+    }
+
+    /** A root's author verb calls a generated setter and returns the merged self type. */
+    @Test
+    public void merge_onAnAbstractRoot_keepsTheAuthorsVerbs() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public abstract class Shape {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "    public abstract static class Builder<T extends Shape, B extends Builder<T, B>> {",
+                "        public B named(String first, String last) { return name(first + \" \" + last); }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.Circle",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Circle extends Shape {",
+                "    private int radius;",
+                "    public int getRadius() { return radius; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseShape",
+                "package demo;",
+                "public class UseShape {",
+                "    public static String go() {",
+                "        Circle c = Circle.builder().named(\"a\", \"b\").radius(2).build();",
+                "        return c.getName() + \"/\" + c.getRadius();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("a b/2", runGo(c, "demo.UseShape"));
+    }
+
+    /** A link's author verb reads a merged slot field and chains into the inherited setter. */
+    @Test
+    public void merge_onAConcreteLink_appendsToTheAuthorsBuilder() throws Exception {
+        Compilation c = compile(base(),
+            JavaFileObjects.forSourceLines("demo.Link",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Link extends Base {",
+                "    private String extra;",
+                "    public String getExtra() { return extra; }",
+                "    public static class Builder extends Base.Builder<Link, Builder> {",
+                "        public Builder shout() { this.extra = this.extra.toUpperCase(); return this; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseLink",
+                "package demo;",
+                "public class UseLink {",
+                "    public static String go() {",
+                "        Link link = Link.builder().extra(\"x\").shout().label(\"l\").build();",
+                "        return link.getLabel() + \"/\" + link.getExtra();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("l/X", runGo(c, "demo.UseLink"));
+    }
+
+    /**
+     * A chained abstract keeps its builder abstract and is given the setters
+     * only - {@code self()} and {@code build()} stay the root's, inherited, so
+     * the declared class carries neither.
+     */
+    @Test
+    public void merge_onAChainedAbstract_keepsTheAuthorsVerbsAndStaysAbstract() throws Exception {
+        Compilation c = compile(base(),
+            JavaFileObjects.forSourceLines("demo.Mid",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public abstract class Mid extends Base {",
+                "    private String kind;",
+                "    public String getKind() { return kind; }",
+                "    public abstract static class Builder<T extends Mid, B extends Builder<T, B>>",
+                "            extends Base.Builder<T, B> {",
+                "        public B shapeless() { return kind(\"none\"); }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.Leaf",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Leaf extends Mid {",
+                "    private int size;",
+                "    public int getSize() { return size; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseLeaf",
+                "package demo;",
+                "public class UseLeaf {",
+                "    public static String go() {",
+                "        Leaf leaf = Leaf.builder().label(\"l\").shapeless().size(3).build();",
+                "        return leaf.getLabel() + \"/\" + leaf.getKind() + \"/\" + leaf.getSize();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("l/none/3", runGo(c, "demo.UseLeaf"));
+        Class<?> builder = Class.forName("demo.Mid$Builder", false, loadClasses(c));
+        assertTrue("the declared class stays abstract",
+            java.lang.reflect.Modifier.isAbstract(builder.getModifiers()));
+        List<String> declared = new ArrayList<>();
+        for (java.lang.reflect.Method method : builder.getDeclaredMethods()) declared.add(method.getName());
+        assertTrue("the setter is merged in: " + declared, declared.contains("kind"));
+        assertFalse("and neither of the root's pair: " + declared,
+            declared.contains("self") || declared.contains("build"));
+    }
+
+    /**
+     * The trailing pair is spelled in the author's names, so every merged setter
+     * returns the author's builder parameter rather than the generator's
+     * {@code B} - a name the declaration does not have.
+     */
+    @Test
+    public void merge_onARootWhoseSelfTypesAreNamedByTheAuthor_generatesSettersReturningThatName()
+        throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Node",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public abstract class Node {",
+                "    private String tag;",
+                "    public String getTag() { return tag; }",
+                "    public abstract static class Builder<R extends Node, S extends Builder<R, S>> {",
+                "        public S tagged() { return tag(\"t\"); }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.Leaf",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Leaf extends Node {",
+                "    private String extra;",
+                "    public String getExtra() { return extra; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseNode",
+                "package demo;",
+                "public class UseNode {",
+                "    public static String go() {",
+                "        Leaf leaf = Leaf.builder().tagged().extra(\"x\").build();",
+                "        return leaf.getTag() + \"/\" + leaf.getExtra();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("t/x", runGo(c, "demo.UseNode"));
+        Class<?> builder = Class.forName("demo.Node$Builder", false, loadClasses(c));
+        assertEquals("the setter returns the author's parameter", "S",
+            builder.getDeclaredMethod("tag", String.class).getGenericReturnType().getTypeName());
+        assertEquals("and build() the author's other one", "R",
+            builder.getDeclaredMethod("build").getGenericReturnType().getTypeName());
+    }
+
+    /**
+     * A generic root declaring {@code T} itself leaves the generator's names
+     * dodging it, and the author's pair is spelled however the author spells
+     * it - the merged members take the declaration's names, not the dodge.
+     */
+    @Test
+    public void merge_onARootDeclaringATypeParameterNamedT_doesNotCollide() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Holder",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public abstract class Holder<T> {",
+                "    private T value;",
+                "    public T getValue() { return value; }",
+                "    public abstract static class Builder<T, H extends Holder<T>, B extends Builder<T, H, B>> {",
+                "        public B cleared() { return value(null); }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.SHolder",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class SHolder extends Holder<String> {",
+                "    private int n;",
+                "    public int getN() { return n; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseHolder",
+                "package demo;",
+                "public class UseHolder {",
+                "    public static String go() {",
+                "        SHolder h = SHolder.builder().cleared().value(\"v\").n(1).build();",
+                "        return h.getValue() + \"/\" + h.getN();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("v/1", runGo(c, "demo.UseHolder"));
+    }
+
+    /**
+     * A root spelling its own abstract {@code build()} keeps it, and nothing
+     * generated lands beside it; the link below still gets its one override.
+     * Counted over the declared methods, since a lookup cannot tell an
+     * inherited method from a redeclared one.
+     */
+    @Test
+    public void merge_onARootDeclaringBuild_linksDoNotGenerateASecond() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public abstract class Shape {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "    public abstract static class Builder<T extends Shape, B extends Builder<T, B>> {",
+                "        public abstract T build();",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.Circle",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Circle extends Shape {",
+                "    private int radius;",
+                "    public int getRadius() { return radius; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseShape",
+                "package demo;",
+                "public class UseShape {",
+                "    public static String go() {",
+                "        return Circle.builder().name(\"c\").radius(1).build().getName();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("Builder already spells build(0 args)");
+        assertEquals("c", runGo(c, "demo.UseShape"));
+        ClassLoader loader = loadClasses(c);
+        assertEquals("one build() on the root's builder", 1,
+            countDeclared(Class.forName("demo.Shape$Builder", false, loader), "build"));
+        assertEquals("and one on the link's", 1,
+            countDeclared(Class.forName("demo.Circle$Builder", false, loader), "build"));
+    }
+
+    /**
+     * A link's author writing {@code self()} and {@code build()} keeps both, and
+     * the merge adds neither beside them.
+     */
+    @Test
+    public void merge_onALink_doesNotRedeclareSelfOrBuild() throws Exception {
+        Compilation c = compile(base(),
+            JavaFileObjects.forSourceLines("demo.Link",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Link extends Base {",
+                "    private String extra;",
+                "    public String getExtra() { return extra; }",
+                "    public static class Builder extends Base.Builder<Link, Builder> {",
+                "        @Override protected Builder self() { return this; }",
+                "        @Override public Link build() { return new Link(this); }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseLink",
+                "package demo;",
+                "public class UseLink {",
+                "    public static String go() {",
+                "        return Link.builder().label(\"l\").extra(\"x\").build().getExtra();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("Builder already spells self(0 args), build(0 args)");
+        assertEquals("x", runGo(c, "demo.UseLink"));
+        Class<?> builder = Class.forName("demo.Link$Builder", false, loadClasses(c));
+        assertEquals("one self()", 1, countDeclared(builder, "self"));
+        assertEquals("one build()", 1, countDeclared(builder, "build"));
+    }
+
+    /**
+     * A root's builder carries the abstract pair, so a concrete one cannot hold
+     * the merge. This is the shape the root's parity case held while a chain
+     * did not merge.
+     */
+    @Test
+    public void merge_onARootWhoseDeclaredBuilderIsNotSelfTyped_isRejected() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Rooted",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public abstract class Rooted {",
+                "    private String label;",
+                "    public String getLabel() { return label; }",
+                "    public static class Builder {",
+                "        public Builder apply(Runnable task) { task.run(); return this; }",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder cannot merge into 'Builder' - the builder "
+            + "of Rooted carries an abstract self() and build(), so the class holding them has to "
+            + "be abstract too");
+    }
+
+    /**
+     * An unbounded pair leaves a setter returning something with no members.
+     * The sentence shows the bounds the pair needs beside the ones it has.
+     */
+    @Test
+    public void merge_whereTheTrailingPairIsUnbounded_isRejected() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public abstract class Shape {",
+                "    private String name;",
+                "    public abstract static class Builder<T, B> { }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder cannot merge into 'Builder' - its trailing "
+            + "pair has to be bounded as <T extends Shape, B extends Builder<T, B>> for the generated "
+            + "setters to return the caller's own builder type, and this one declares <T, B>");
+    }
+
+    /**
+     * A link's builder inherits the ancestor's setters through its extends
+     * clause. This is the shape the link's parity case held while a chain did
+     * not merge.
+     */
+    @Test
+    public void merge_onALinkWhoseDeclaredBuilderOmitsTheExtendsClause_isRejected() {
+        Compilation c = compile(base(),
+            JavaFileObjects.forSourceLines("demo.Link",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Link extends Base {",
+                "    private String extra;",
+                "    public static class Builder {",
+                "        public Builder apply(Runnable task) { task.run(); return this; }",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder cannot merge into 'Builder' - the builder of "
+            + "a chained target has to extend Base.Builder, and this one extends nothing");
+    }
+
+    /**
+     * Another type's builder of the same simple name is not the ancestor's. Read
+     * by erased simple name alone the clause passed as {@code Builder}, and the
+     * build failed on the generated {@code super(b)}, whose parameter is the
+     * ancestor's builder.
+     */
+    @Test
+    public void merge_onALinkExtendingAnotherTypesBuilder_isRejected() {
+        Compilation c = compile(base(),
+            JavaFileObjects.forSourceLines("demo.Other",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public abstract class Other {",
+                "    private String note;",
+                "    public abstract static class Builder<T extends Object, B extends Builder<T, B>> { }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.Link",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Link extends Base {",
+                "    private String extra;",
+                "    public static class Builder extends Other.Builder<Link, Builder> { }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder cannot merge into 'Builder' - the builder of "
+            + "a chained target has to extend Base.Builder, and this one extends Other.Builder");
+    }
+
+    /**
+     * The build method a link inherits is the one its role declares, so the
+     * author's has to return the link.
+     */
+    @Test
+    public void merge_onALinkDeclaringBuildReturningSomethingElse_isRejected() {
+        Compilation c = compile(base(),
+            JavaFileObjects.forSourceLines("demo.Link",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Link extends Base {",
+                "    private String extra;",
+                "    public static class Builder extends Base.Builder<Link, Builder> {",
+                "        public Object build() { return null; }",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder cannot merge into 'Builder' - its build "
+            + "method returns Object where this role builds Link, so it cannot stand in for the "
+            + "generated one");
+    }
+
+    /**
+     * The extends clause's arguments are the ones the generated members are
+     * typed against, so a pair written the wrong way round is named on the
+     * author's line rather than left to fail inside the generated members.
+     */
+    @Test
+    public void merge_onALinkPassingItsPairReversed_isRejected() {
+        Compilation c = compile(base(),
+            JavaFileObjects.forSourceLines("demo.Link",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Link extends Base {",
+                "    private String extra;",
+                "    public static class Builder extends Base.Builder<Builder, Link> { }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder cannot merge into 'Builder' - the builder of "
+            + "a chained target has to pass Base.Builder the arguments <Link, Builder>, and this "
+            + "one passes <Builder, Link>");
+    }
+
+    /**
+     * A root that is not generic still declares the self-typed pair, and the
+     * sentence names the pair rather than the target's parameters.
+     */
+    @Test
+    public void merge_onARootWhoseBuilderDeclaresNoPair_namesTheSelfTypedPair() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public abstract class Shape {",
+                "    private String name;",
+                "    public abstract static class Builder { }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder cannot merge into 'Builder' - a static nested "
+            + "builder for an abstract target in a builder chain has to declare the self-typed pair "
+            + "<T, B>, and this one declares none");
+    }
+
+    /** A slot field on a root's declared builder is judged as on any other. */
+    @Test
+    public void merge_onAnAbstractRoot_ontoAMistypedSlot_isRejected() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public abstract class Shape {",
+                "    private int size;",
+                "    public abstract static class Builder<T extends Shape, B extends Builder<T, B>> {",
+                "        private String size;",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds 'size' declared as "
+            + "String, and the slot it stands for is int - the generated setter has nothing to "
+            + "assign it to");
+    }
+
+    /**
+     * A link's entry points instantiate its declared builder, so one declaring
+     * only constructors that take parameters loses all three with the note the
+     * type path gives - rather than a {@code builder()} whose {@code new Builder()}
+     * fails on a generated line.
+     */
+    @Test
+    public void merge_onAConcreteLinkWhoseBuilderTakesParameters_skipsTheEntryPointsWithANote()
+        throws Exception {
+        Compilation c = compile(base(),
+            JavaFileObjects.forSourceLines("demo.Link",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Link extends Base {",
+                "    private String extra;",
+                "    public String getExtra() { return extra; }",
+                "    public static class Builder extends Base.Builder<Link, Builder> {",
+                "        public Builder(String extra) { this.extra = extra; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseLink",
+                "package demo;",
+                "public class UseLink {",
+                "    public static String go() {",
+                "        return new Link.Builder(\"x\").label(\"l\").build().getExtra();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("@ClassBuilder merged into 'Builder' but every constructor "
+            + "it declares takes parameters, so 'builder', 'from' and 'mutate' were not added");
+        assertEquals("x", runGo(c, "demo.UseLink"));
+    }
+
+    /**
+     * A link declaring its own builder is still asked whether its ancestor's
+     * can take the extends clause, the processor asking ahead of the merge. A
+     * concrete ancestor's declared builder binds nothing and cannot, so the
+     * link is refused on the ancestor rather than merged into.
+     */
+    @Test
+    public void aDeclaringLinkOverAConcreteAncestor_isRefusedOnTheAncestor() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Rooted",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public class Rooted { public static class Builder { } }"),
+            JavaFileObjects.forSourceLines("demo.Leaf",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Leaf extends Rooted {",
+                "    private String b;",
+                "    public static class Builder { }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder generates no builder on 'Leaf' - its "
+            + "annotated supertype 'Rooted' declares its own nested builder");
+    }
+
+    /** Declared methods of that name, bridges excluded. */
+    private static long countDeclared(Class<?> type, String name) {
+        long found = 0;
+        for (java.lang.reflect.Method method : type.getDeclaredMethods()) {
+            if (method.getName().equals(name) && !method.isBridge()) found++;
+        }
+        return found;
+    }
+
     //
     // Each of these compiles the same source the editor suite configures and
     // asserts the same claim from the other side. The declared-builder-on-a-
@@ -987,36 +1536,13 @@ public class DeclaredBuilderMergeTest {
     }
 
     /**
-     * The chain path aborts on the same declaration by a different route, and
-     * neither half asserted it. Pinned on a stable prefix of the note rather
-     * than the whole line, the chain merge having a clause to append to it.
+     * A root's declared builder is merged into, so a link generated below it
+     * extends the author's class and reaches the merged setter, the author's
+     * verb and the merged {@code self()} it calls. The chain path used to abort
+     * on the declaration with a note, leaving the class exactly as written.
      */
     @Test
-    public void aDeclaredChainBuilder_stillNotesAndSkips() {
-        BuilderParityFixture fixture =
-            BuilderParityFixture.load("chain-root-declared-builder");
-        Compilation c = compile(
-            parity(fixture),
-            JavaFileObjects.forSourceLines("demo.UseRooted",
-                "package demo;",
-                "public class UseRooted {",
-                "    public static Object go() { return new Rooted.Builder(); }",
-                "}"));
-        assertThat(c).succeeded();
-        assertThat(c).hadNoteContaining(
-            "@ClassBuilder skipped injection: class Rooted already declares a nested 'Builder' type");
-    }
-
-    /**
-     * A link's extends clause names its ancestor's builder and passes it the
-     * ancestor's own arguments plus the self-typed pair. Where the ancestor's
-     * author wrote that class themselves it takes none of them, and the clause
-     * used to be emitted anyway and fail at attribution on a line nobody wrote,
-     * with the editor silently leaving the child's builder unrooted and saying
-     * nothing at all.
-     */
-    @Test
-    public void aLinkWhoseAnnotatedSuperDeclaresItsOwnBuilder_isRejected() {
+    public void aDeclaredRootBuilder_isMergedInto() throws Exception {
         BuilderParityFixture fixture =
             BuilderParityFixture.load("chain-root-declared-builder");
         Compilation c = compile(
@@ -1028,10 +1554,56 @@ public class DeclaredBuilderMergeTest {
                 "public class Leaf extends Rooted {",
                 "    private String extra;",
                 "    public String getExtra() { return extra; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseRooted",
+                "package demo;",
+                "public class UseRooted {",
+                "    public static String go() {",
+                "        Leaf leaf = Leaf.builder().label(\"l\").apply(() -> { }).extra(\"x\").build();",
+                "        return leaf.getLabel() + \"/\" + leaf.getExtra();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("l/x", runGo(c, "demo.UseRooted"));
+    }
+
+    /**
+     * A link's extends clause names its ancestor's builder and passes it the
+     * ancestor's own arguments plus the self-typed pair. Where the ancestor's
+     * author wrote that class with none of them it cannot take the clause, and
+     * the clause used to be emitted anyway and fail at attribution on a line
+     * nobody wrote. The ancestor's declaration is itself refused as a root
+     * shape, so the compilation carries both errors: the cause on the root and
+     * its consequence on the link.
+     */
+    @Test
+    public void aLinkWhoseAnnotatedSuperDeclaresItsOwnBuilder_isRejected() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Rooted",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public abstract class Rooted {",
+                "    private String label;",
+                "    public String getLabel() { return label; }",
+                "    public static class Builder {",
+                "        public Builder apply(Runnable task) { task.run(); return this; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.Leaf",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public class Leaf extends Rooted {",
+                "    private String extra;",
+                "    public String getExtra() { return extra; }",
                 "}"));
         assertThat(c).failed();
         assertThat(c).hadErrorContaining(
             "its annotated supertype 'Rooted' declares its own nested builder");
+        assertThat(c).hadErrorContaining("@ClassBuilder cannot merge into 'Builder' - the builder "
+            + "of Rooted carries an abstract self() and build(), so the class holding them has to "
+            + "be abstract too");
     }
 
     /**
@@ -1123,12 +1695,25 @@ public class DeclaredBuilderMergeTest {
      * and no settled element model, one compiled earlier has an element model and
      * no tree. A read that used only the first would say nothing here, and every
      * consumer compiling against a published chain is in exactly this position.
+     *
+     * <p>The ancestor is compiled without the processor, which is the only form
+     * in which a declared, unmerged root builder still exists: with the
+     * processor on, the root's own declaration is merged into or refused.
      */
     @Test
     public void aLinkWhoseCompiledSuperDeclaresItsOwnBuilder_isRejected() throws Exception {
-        BuilderParityFixture fixture =
-            BuilderParityFixture.load("chain-root-declared-builder");
-        Compilation ancestor = compile(parity(fixture));
+        Compilation ancestor = Compiler.javac().compile(
+            JavaFileObjects.forSourceLines("demo.Rooted",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public abstract class Rooted {",
+                "    private String label;",
+                "    public String getLabel() { return label; }",
+                "    public static class Builder {",
+                "        public Builder apply(Runnable task) { task.run(); return this; }",
+                "    }",
+                "}"));
         assertThat(ancestor).succeeded();
 
         Compilation c = Compiler.javac()
@@ -1148,13 +1733,14 @@ public class DeclaredBuilderMergeTest {
     }
 
     /**
-     * A link's declared builder is not merged into, the chain branch returning
-     * ahead of the declared-builder check - so a consumer calling a generated
-     * setter on the author's builder fails, and the editor listing one is the
-     * divergence.
+     * A link's declared builder is merged into: its own setter and the concrete
+     * pair land beside the author's verb, the ancestor's setter arrives through
+     * the author's extends clause, and all three entry points return the
+     * author's class. The chain path used to abort on the declaration, so a
+     * consumer calling a generated setter on it failed.
      */
     @Test
-    public void aDeclaredLinkBuilder_isStillSkipped() {
+    public void aDeclaredLinkBuilder_isMergedInto() throws Exception {
         BuilderParityFixture fixture =
             BuilderParityFixture.load("chain-link-declared-builder");
         Compilation c = compile(
@@ -1162,12 +1748,14 @@ public class DeclaredBuilderMergeTest {
             JavaFileObjects.forSourceLines("demo.UseLink",
                 "package demo;",
                 "public class UseLink {",
-                "    public static Object go() { return new Link.Builder().extra(\"x\"); }",
+                "    public static String go() {",
+                "        Link link = Link.builder().label(\"l\").apply(() -> { }).extra(\"x\").build();",
+                "        Link copy = Link.from(link).apply(() -> { }).build();",
+                "        return copy.getLabel() + \"/\" + link.mutate().extra(\"y\").build().getExtra();",
+                "    }",
                 "}"));
-        assertThat(c).failed();
-        assertThat(c).hadErrorContaining("extra");
-        assertThat(c).hadNoteContaining(
-            "@ClassBuilder skipped injection: class Link already declares a nested 'Builder' type");
+        assertThat(c).succeeded();
+        assertEquals("l/y", runGo(c, "demo.UseLink"));
     }
 
 }

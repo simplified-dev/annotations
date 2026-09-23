@@ -13,6 +13,7 @@ import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
 import dev.simplified.classbuilder.apt.ChainMemberIndex;
+import dev.simplified.classbuilder.apt.ChainRole;
 import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.shared.javac.AstMarkers;
@@ -43,7 +44,15 @@ import java.util.Collection;
  *       {@code new Target(this)}. The target gains {@code protected Target(Builder b)}
  *       whose body is {@code super(b); this.ownField = b.ownField; ...} plus
  *       the regular bootstrap methods ({@code builder}, {@code from}, {@code mutate}).</li>
+ *   <li><b>Abstract target, direct super annotated</b> - chained abstract. The
+ *       injected {@code Builder} stays abstract and self-typed, forwarding its
+ *       pair to {@code Super.Builder<T, B>}, and carries the setters only -
+ *       {@code self()} and {@code build()} are inherited.</li>
  * </ul>
+ *
+ * <p>A target that declares a nested class of the builder's name has the same
+ * members merged into that class instead, spelled in the declaration's own
+ * self-type names, once the declaration passes the shape its role requires.
  */
 final class SuperBuilderMutator {
 
@@ -75,21 +84,20 @@ final class SuperBuilderMutator {
             ? false
             : (ctx.target().getModifiers().flags & Flags.ABSTRACT) != 0;
 
-        // Guard against duplicate-nested from a re-run.
-        if (hasExistingNested(ctx.target(), ctx.builderName())) {
-            messager.printMessage(Diagnostic.Kind.NOTE,
-                "@ClassBuilder skipped injection: class " + ctx.targetSimpleName()
-                    + " already declares a nested '" + ctx.builderName() + "' type",
-                ctx.targetElement());
-            return;
-        }
+        // A declared class of the builder's name is merged into below. One this
+        // pipeline generated is a builder an earlier run already produced, and
+        // merging into it would skip every member by name and report them all.
+        JCClassDecl declared = DeclaredBuilderMerge.declaredBuilder(ctx.target(), ctx.builderName());
+        if (declared != null && AstMarkers.isGenerated(declared)) return;
 
         // The extends clause a link generates names the ancestor's builder and
         // passes it the ancestor's own arguments plus the self-typed pair, so a
         // builder the ancestor's author wrote - which takes whatever they
         // declared, usually none - cannot receive it. Emitting the clause anyway
         // fails at attribution on a generated line, which is the one place an
-        // author cannot act. Absent means "not generated yet" rather than "not
+        // author cannot act. Asked of a target declaring its own builder too,
+        // whose extends clause has to name the ancestor's builder just as a
+        // generated one does. Absent means "not generated yet" rather than "not
         // there", so only a builder that is present and cannot take the
         // arguments is refused.
         if (annotatedSuper != null && ancestorBuilderCannotBeExtended()) {
@@ -107,18 +115,16 @@ final class SuperBuilderMutator {
         // ctx.targetSimpleName() - always the field's own class.
         new RetainedInitFactory(ctx, messager).appendAll();
 
-        JCClassDecl nested;
-        if (annotatedSuper == null) {
-            // Abstract root
-            nested = buildAbstractRootBuilder();
-        } else if (!isAbstract) {
-            // Concrete link
-            nested = buildConcreteLinkBuilder();
-        } else {
-            // Chained abstract - abstract builder extending super's abstract builder
-            nested = buildChainedAbstractBuilder();
+        // A declared builder gets the role's members appended into it, in the
+        // declaration's own names for the self-typed pair; a refused shape has
+        // been reported, and nothing below it can compile against that class.
+        ChainRole role = ChainRole.of(isAbstract, annotatedSuper != null);
+        if (declared == null) {
+            ctx.bridge().compat().appendDef(ctx.target(), buildBuilder(role));
+        } else if (!new DeclaredBuilderMerge(ctx, messager).merge(ctx.target(), ctx.targetElement(),
+            declared, role, membersFor(role, declared), annotatedSuper)) {
+            return;
         }
-        ctx.bridge().compat().appendDef(ctx.target(), nested);
 
         // Copy constructor. Its parameter type follows the builder's shape, not
         // the target's: a root and a chained abstract both carry the self-typed
@@ -133,10 +139,49 @@ final class SuperBuilderMutator {
             ctx.bridge().compat().appendDef(ctx.target(), ctor);
         }
 
-        // Bootstrap methods only on concrete targets.
+        // Bootstrap methods only on concrete targets. Handed the declared builder
+        // when there is one, since every entry point instantiates it and an
+        // author's class may have no constructor they can call.
         if (!isAbstract) {
-            new BootstrapMethodFactory(ctx, messager, chainFields).appendAll();
+            new BootstrapMethodFactory(ctx, messager, chainFields, declared).appendAll();
         }
+    }
+
+    /**
+     * Builds the nested class the role generates when the target declares none.
+     *
+     * @param role the target's position in the chain
+     * @return the generated builder class
+     */
+    private JCClassDecl buildBuilder(ChainRole role) {
+        return switch (role) {
+            case CONCRETE_LINK -> buildConcreteLinkBuilder();
+            case CHAINED_ABSTRACT -> buildChainedAbstractBuilder();
+            default -> buildAbstractRootBuilder();
+        };
+    }
+
+    /**
+     * Produces the members the role merges into a declared builder.
+     *
+     * <p>The self-typed roles spell them in the declaration's own trailing pair,
+     * which is the pair the shape check measured. A declaration too short to
+     * carry one is refused by that check before any member is appended, so the
+     * generator's names the list is then spelled in are never emitted.
+     *
+     * @param role the target's position in the chain
+     * @param declared the builder the author wrote
+     * @return the members, in emission order
+     */
+    private List<JCTree> membersFor(ChainRole role, JCClassDecl declared) {
+        java.util.List<String> pair = DeclaredBuilderShape.selfNames(role,
+            DeclaredBuilderMerge.targetParameterNames(ctx),
+            DeclaredBuilderMerge.declaredParameterNames(declared));
+        return switch (role) {
+            case CONCRETE_LINK -> linkBuilderMembers();
+            case CHAINED_ABSTRACT -> chainedAbstractBuilderMembers(pair.get(0), pair.get(1));
+            default -> rootBuilderMembers(pair.get(0), pair.get(1));
+        };
     }
 
     // ------------------------------------------------------------------
@@ -451,13 +496,6 @@ final class SuperBuilderMutator {
         );
         AstMarkers.markGenerated(m, ctx.generated());
         return m;
-    }
-
-    private static boolean hasExistingNested(JCClassDecl target, String nestedName) {
-        for (JCTree def : target.defs) {
-            if (def instanceof JCClassDecl c && c.name.toString().equals(nestedName)) return true;
-        }
-        return false;
     }
 
 }

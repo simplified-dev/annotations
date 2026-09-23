@@ -17,10 +17,10 @@ import java.util.List;
  *
  * <p>Three members and a whole nested class vanish from completion when the
  * target declares a nested type of the builder's name, and until this fires the
- * only account of it anywhere is a compiler note. What the cases pin is which
- * positions suppress: a class or record target and a constructor or factory
- * target merge into the declaration and draw nothing, while a chain role does
- * not merge and the message says so.
+ * only account of it anywhere is a compiler note. What the cases pin is that no
+ * position suppresses: a class or record target, a chain role and a
+ * constructor or factory target all merge into the declaration and draw
+ * nothing.
  */
 public class DeclaredBuilderSuppressesGenerationInspectionTest extends BasePlatformTestCase {
 
@@ -125,52 +125,6 @@ public class DeclaredBuilderSuppressesGenerationInspectionTest extends BasePlatf
     }
 
     /**
-     * A link does not merge into its declared builder, and the message says so
-     * without naming an attribute - the one it used to name no longer exists.
-     */
-    public void testOnAChain_isWarnedThatAChainDoesNotMerge() {
-        myFixture.configureByText("Link.java",
-            """
-            import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder
-            abstract class Base { private String label; }
-            @ClassBuilder
-            public class Link extends Base {
-                private String extra;
-                public static class Builder {
-                    public Builder apply(Runnable task) { return this; }
-                }
-            }
-            """);
-        String warning = theOnlyWarning();
-        assertTrue("still says nothing is generated: " + warning,
-            warning.contains(
-                "No builder is generated because 'Link' declares a nested type named 'Builder'"));
-        assertTrue("and that a chain does not merge: " + warning,
-            warning.contains(
-                "A SuperBuilder chain does not merge into a declared builder, so the declaration "
-                    + "suppresses generation"));
-        assertFalse("names no attribute: " + warning, warning.contains("mergeDeclaredBuilder"));
-    }
-
-    /** An abstract root merges no more than a link does. */
-    public void testOnAnAbstractRoot_isWarnedAsAChain() {
-        myFixture.configureByText("Rooted.java",
-            """
-            import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder
-            public abstract class Rooted {
-                private String label;
-                public static class Builder {
-                    public Builder apply(Runnable task) { return this; }
-                }
-            }
-            """);
-        assertTrue("an abstract root is a chain role: " + weakWarnings(),
-            theOnlyWarning().contains("A SuperBuilder chain does not merge into a declared builder"));
-    }
-
-    /**
      * A constructor target merges into its enclosing type's declared builder, so
      * nothing is suppressed and nothing is said. This position used to warn that
      * the declaration turned generation off.
@@ -211,21 +165,6 @@ public class DeclaredBuilderSuppressesGenerationInspectionTest extends BasePlatf
             """);
         assertEquals("an executable target is never a chain role: " + weakWarnings(),
             0, weakWarnings().size());
-    }
-
-    /**
-     * The one warning the file draws, asserting on the way that it drew exactly
-     * one - a second highlight means the visitor fired on a nested annotation.
-     *
-     * @return the warning's text
-     */
-    private String theOnlyWarning() {
-        List<String> warnings = weakWarnings();
-        assertEquals("expected exactly one highlight, got: " + warnings, 1, warnings.size());
-        // get(0) rather than getFirst(): the plugin compiles against the Java 17
-        // API, which is the oldest IDE it supports, and the sequenced-collection
-        // accessors arrived in 21.
-        return warnings.get(0);
     }
 
     private List<String> weakWarnings() {
