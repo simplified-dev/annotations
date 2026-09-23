@@ -1,6 +1,5 @@
 package dev.simplified.shared.psi;
 
-import com.intellij.psi.PsiClassType;
 import com.intellij.psi.PsiDocCommentOwner;
 import com.intellij.psi.PsiManager;
 import com.intellij.psi.PsiTypeParameter;
@@ -57,7 +56,9 @@ public class DocProxyingLightMethodBuilder extends GeneratedLightMethod {
      *
      * <p>The copies are distinct {@link PsiTypeParameter}s from the sources, so
      * a return or parameter type meant to reference them must be built from
-     * {@link #getTypeParameters()} rather than from the source owner's.
+     * {@link #getTypeParameters()} rather than from the source owner's. Their
+     * bounds name the copies too, through {@link TypeParameterCopies#copyBounds},
+     * which is how javac's generated member declares them.
      *
      * @param sources the type parameters to copy
      * @return this builder
@@ -65,13 +66,12 @@ public class DocProxyingLightMethodBuilder extends GeneratedLightMethod {
     public DocProxyingLightMethodBuilder withTypeParameters(PsiTypeParameter @NotNull [] sources) {
         if (sources.length == 0) return this;
         LightTypeParameterListBuilder list = new LightTypeParameterListBuilder(getManager(), getLanguage());
+        LightTypeParameterBuilder[] copies = new LightTypeParameterBuilder[sources.length];
         for (int i = 0; i < sources.length; i++) {
-            LightTypeParameterBuilder copy = new LightTypeParameterBuilder(sources[i].getName(), this, i);
-            for (PsiClassType bound : sources[i].getExtendsListTypes()) {
-                copy.getExtendsList().addReference(bound);
-            }
-            list.addParameter(copy);
+            copies[i] = new LightTypeParameterBuilder(sources[i].getName(), this, i);
+            list.addParameter(copies[i]);
         }
+        TypeParameterCopies.copyBounds(sources, copies);
         this.typeParameterList = list;
         return this;
     }

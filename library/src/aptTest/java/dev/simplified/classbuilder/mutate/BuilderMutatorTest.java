@@ -297,4 +297,64 @@ public class BuilderMutatorTest {
         assertEquals(7, inner.getMethod("getInnerField").invoke(innerBuilder.getMethod("build").invoke(ib)));
     }
 
+    // ------------------------------------------------------------------
+    // The builder's slot fields, as author code sees them
+    // ------------------------------------------------------------------
+
+    /**
+     * The generated builder declares one private field per slot, and the target
+     * encloses the builder, so a static helper in the target reads a slot
+     * straight off a builder - the read the editor resolves against the same
+     * fields.
+     */
+    @Test
+    public void generatedBuilderSlotField_isReadableFromTheTarget() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Note",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Note {",
+            "    String text;",
+            "    static String peek(Builder b) { return b.text; }",
+            "    public static String go() { return peek(Note.builder().text(\"hi\")); }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        Class<?> note = Class.forName("demo.Note", true, loadClasses(c));
+        assertEquals("hi", note.getMethod("go").invoke(null));
+    }
+
+    /**
+     * Each slot field is declared in the type the builder holds the slot in: an
+     * {@code Optional} and a collection as written, a {@code @Lazy} field as a
+     * supplier of its declared type. The editor's copies of the fields carry the
+     * same types.
+     */
+    @Test
+    public void generatedBuilderSlotFields_areDeclaredInTheirStorageTypes() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Holder",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Lazy;",
+            "import java.util.List;",
+            "import java.util.Optional;",
+            "@ClassBuilder(validate = false)",
+            "public class Holder {",
+            "    Optional<String> nick;",
+            "    List<String> tags;",
+            "    @Lazy String heavy = \"h\";",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        Class<?> builder = nested(Class.forName("demo.Holder", true, loadClasses(c)), "Builder");
+        assertEquals("java.util.Optional<java.lang.String>",
+            builder.getDeclaredField("nick").getGenericType().getTypeName());
+        assertEquals("java.util.List<java.lang.String>",
+            builder.getDeclaredField("tags").getGenericType().getTypeName());
+        assertEquals("java.util.function.Supplier<java.lang.String>",
+            builder.getDeclaredField("heavy").getGenericType().getTypeName());
+    }
+
 }

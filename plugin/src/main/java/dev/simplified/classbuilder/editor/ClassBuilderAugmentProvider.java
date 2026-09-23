@@ -52,18 +52,21 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      * invocations ({@link IdempotenceChecker}). Building a
      * fresh {@code LightPsiClassBuilder} / {@code LightMethodBuilder} on each
      * call yields new-identity instances that fail that check, so we keep one
-     * cached pair on the target's user data keyed by the resolved
-     * {@link GeneratedMemberFactory.EditorBuilderConfig} and the builder class
-     * the target declares, if any. When the annotation or the declaration
-     * changes, the key differs, and the lambda synthesises fresh members
-     * (and replaces the cache). When the producer is re-invoked for the same
-     * key, it returns the already-stored instances - idempotent.
+     * cached set on the target's user data keyed by the resolved
+     * {@link GeneratedMemberFactory.EditorBuilderConfig}, the builder class the
+     * target declares, if any, and the {@link SynthesisFingerprint} of every
+     * declaration the synthesis reads. The target's class survives an edit as
+     * the same instance, so an edit to any of those is what makes the key
+     * differ, and the lambda synthesises fresh members (and replaces the
+     * cache). When the producer is re-invoked over unchanged text, the key is
+     * equal and it returns the already-stored instances - idempotent.
      */
     private static final Key<SynthesizedMembers> SYNTHESIZED =
         Key.create("dev.simplified.classbuilder.synthesized");
 
     private record SynthesizedMembers(GeneratedMemberFactory.EditorBuilderConfig config,
                                       @Nullable PsiClass declaredBuilder,
+                                      String fingerprint,
                                       List<PsiMethod> bootstrapMethods,
                                       PsiClass builderClass,
                                       DeferredConstructor allArgsConstructor) {
@@ -112,12 +115,13 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      * resolve is the request that no longer triggers one. The method request
      * still builds it, and nothing resolving a type name makes that request.
      *
-     * <p>Memoised, and the value that wins the race is the value every caller
-     * gets: {@link IdempotenceChecker} re-runs the producers around this one and
-     * compares what they return, so a second call handing back an equal-but-new
-     * {@link PsiMethod} fails the check. Held through an {@link Optional} so a
-     * target that needs no constructor is a computed answer rather than an
-     * unread one.
+     * <p>Memoised for the life of the members it is synthesised with, which are
+     * replaced whenever a declaration it reads is edited, and the value that
+     * wins the race is the value every caller gets: {@link IdempotenceChecker}
+     * re-runs the producers around this one and compares what they return, so a
+     * second call handing back an equal-but-new {@link PsiMethod} fails the
+     * check. Held through an {@link Optional} so a target that needs no
+     * constructor is a computed answer rather than an unread one.
      */
     private static final class DeferredConstructor {
 
@@ -227,8 +231,8 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         // our synth Builder class, materialise the setters + build() now.
         // GeneratedBuilderClass.getMethods() routes through here too, so
         // there is exactly one source of truth for the inner class's members.
-        if (target instanceof GeneratedBuilderClass synthBuilder
-            && PsiMethod.class.isAssignableFrom(type)) {
+        if (target instanceof GeneratedBuilderClass synthBuilder) {
+            if (!PsiMethod.class.isAssignableFrom(type)) return Collections.emptyList();
             @SuppressWarnings("unchecked")
             List<Psi> methods = (List<Psi>) cachedSynthBuilderMethods(synthBuilder);
             return methods;
@@ -294,6 +298,44 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             List<PsiMethod> methods = GeneratedMemberFactory.synthesizeBuilderMethods(
                 site, config, synthBuilder);
             return CachedValueProvider.Result.create(methods,
+                PsiModificationTracker.MODIFICATION_COUNT);
+        });
+    }
+
+    /**
+     * The slot fields the processor declares on a synthesised builder, as
+     * {@link GeneratedBuilderClass#getOwnFields()} answers them.
+     *
+     * <p>The processor appends one field per slot to every builder it writes -
+     * a standalone target's and each chain role's - so an author's own code
+     * reading a slot off one, a chain copy constructor's {@code b.name} or a
+     * static helper in the target, builds. Each field is minted by
+     * {@link GeneratedMemberFactory#synthesizeBuilderFields}, the producer of a
+     * merged builder's fields, in the type the processor holds the slot in.
+     * Cached on the builder against
+     * {@link PsiModificationTracker#MODIFICATION_COUNT}, as its methods are.
+     *
+     * <p>The site lookup is the gate and runs first; the guard on the target is
+     * opened after it, since {@link BuilderSite#of} answers {@code null} for a
+     * class already in progress, and the slots resolve the types their fields
+     * are written with.
+     *
+     * @param synthBuilder the synthesised builder
+     * @return its slot fields, in slot order
+     */
+    static List<PsiField> generatedBuilderFields(GeneratedBuilderClass synthBuilder) {
+        return CachedValuesManager.getCachedValue(synthBuilder, () -> {
+            PsiClass parentTarget = synthBuilder.getContainingClass();
+            BuilderSite site = parentTarget == null ? null : BuilderSite.of(parentTarget);
+            if (site == null) {
+                return CachedValueProvider.Result.create(Collections.<PsiField>emptyList(),
+                    PsiModificationTracker.MODIFICATION_COUNT);
+            }
+            GeneratedMemberFactory.EditorBuilderConfig config =
+                GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
+            List<PsiField> fields = withInProgress(parentTarget,
+                () -> GeneratedMemberFactory.synthesizeBuilderFields(site, config, synthBuilder));
+            return CachedValueProvider.Result.create(fields,
                 PsiModificationTracker.MODIFICATION_COUNT);
         });
     }
@@ -594,13 +636,17 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
     }
 
     /**
-     * Returns cached {@link SynthesizedMembers} when the stored config and the
-     * declared builder both match the current source, otherwise re-synthesises
-     * and replaces the cache. Pairs with {@link #SYNTHESIZED} to defeat
-     * {@link IdempotenceChecker} re-invocation failures:
-     * whoever wins the synthesis race stores its result under the key, and
-     * subsequent calls (including the checker's rerun) retrieve the same
-     * {@link PsiClass} / {@link PsiMethod} instances.
+     * Returns cached {@link SynthesizedMembers} when the stored config, the
+     * declared builder and the {@link SynthesisFingerprint} all match the
+     * current source, otherwise re-synthesises and replaces the cache. Pairs
+     * with {@link #SYNTHESIZED} to defeat {@link IdempotenceChecker}
+     * re-invocation failures: whoever wins the synthesis race stores its result
+     * under the key, and subsequent calls over unchanged text (including the
+     * checker's rerun) retrieve the same {@link PsiClass} / {@link PsiMethod}
+     * instances. An edit to anything the synthesis reads - a
+     * {@code @BuilderSeed} written on a parameter, a field added, an
+     * {@code exclude} changed - changes the fingerprint, and the members, the
+     * constructor deferred among them included, are synthesised again.
      *
      * <p>The entry points return the builder javac emits, which on a target
      * declaring its own is the author's class with the merged members in it,
@@ -616,9 +662,10 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         GeneratedMemberFactory.EditorBuilderConfig config =
             GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
         PsiClass declared = entryPointBuilderOf(site, config);
+        String fingerprint = SynthesisFingerprint.of(site, declared);
         SynthesizedMembers cached = target.getUserData(SYNTHESIZED);
         if (cached != null && Objects.equals(cached.config(), config)
-            && cached.declaredBuilder() == declared) {
+            && cached.declaredBuilder() == declared && cached.fingerprint().equals(fingerprint)) {
             return cached;
         }
         // Wrap synthesis in the recursion guard. Eagerly resolving the self-
@@ -631,7 +678,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             PsiClass builderClass = GeneratedMemberFactory.synthesizeBuilderClass(site, config);
             PsiClass emitted = declared != null ? declared : builderClass;
             List<PsiMethod> bootstrap = GeneratedMemberFactory.bootstrapMethods(site, config, emitted);
-            SynthesizedMembers fresh = new SynthesizedMembers(config, declared, bootstrap,
+            SynthesizedMembers fresh = new SynthesizedMembers(config, declared, fingerprint, bootstrap,
                 builderClass, new DeferredConstructor(site, config, emitted));
             target.putUserData(SYNTHESIZED, fresh);
             return fresh;

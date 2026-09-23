@@ -223,6 +223,38 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   test answered no for every member of every chain and each fell through to a sentence written for
   something else - the self accessor coming out documented as the build method.
 
+- **The editor's generated members follow an edit to what they are built from.** They were reused
+  for as long as the annotation's configuration and the declared builder stayed the same, and the
+  target's class survives an edit, so a `@BuilderSeed` written on a constructor parameter, a field
+  added or an `exclude` changed after the file was first highlighted left the members built before
+  it: `builder("o")` red and a bare `builder()` green where javac answers the opposite, and the
+  all-args constructor keeping its old arity. Opening the same text fresh was always right. The
+  members are now rebuilt whenever the written declarations they are built from change - the
+  target's annotations, fields, constructors and methods, and a declared builder's - and reused as
+  the same instances while the text stands.
+
+- **Every refusal of a constructor or static factory target is reported in the editor.** The build
+  refuses `@ClassBuilder` on an instance method, on a `void` method, on a member of a type that
+  carries it too, on a second annotated member of one type, and on a member of a type declaring a
+  `@Lazy` field, each with one error on the member; the editor said nothing on any of them, and on
+  the last it offered a builder the build never generates. Each is now an error on the annotation in
+  the build's own sentence, and the editor offers no builder for a refused member.
+
+- **A generated builder's slot fields resolve in the editor.** The processor declares one private
+  field per slot on every builder it writes - a standalone target's and each chain role's - and the
+  editor declared none, so an author copy constructor reading `b.name` off a generated chain builder,
+  or a helper in the target reading a builder's slot, was `Cannot resolve symbol` over source that
+  builds. Each field is offered in the type the builder holds it in: a `@Lazy` slot as a supplier of
+  its declared type, and an `Optional` or a collection as written.
+
+- **A static factory with a self-bounded type parameter gets a `builder()` the editor accepts.**
+  `@ClassBuilder public static <T extends Comparable<T>> Range<T> of(T low, T high)` builds and runs
+  `Range.<Integer>builder().low(1).high(5).build()`, and the editor marked the witness out of bounds:
+  the editor's copies of the type parameters, on the entry point and on the builder class, kept
+  bounds naming the factory's own parameters, which no witness for the copy satisfies. Each bound
+  now names the copy it is declared beside, as javac's generated method declares it, a bound naming
+  another parameter of the list included.
+
 ### Changed
 
 - **BREAKING: `mergeDeclaredBuilder` is removed, and a declared builder is always merged into.** A
@@ -346,8 +378,9 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   fields as they stand before the merge and leaves the seed unassigned, which javac refuses on the
   builder's line as `variable ... might not have been initialized`; the editor names that appended
   constructor there, the flow error's own words being javac's. The editor
-  judges only the annotation the processor builds from: an instance or `void` method, or a member
-  beside an annotated type, is refused by the build and gets none of the merge's diagnostics.
+  judges only the annotation the processor builds from: an instance or `void` method, a member
+  beside an annotated type, a second annotated member and a member of a type with a `@Lazy` field
+  are refused by the build, and get none of the merge's diagnostics but the build's refusal.
 
 - **An inspection for a declared builder the merge cannot append to.** Non-static, the wrong type
   parameters, or declared abstract where the entry points instantiate it. The processor refuses these

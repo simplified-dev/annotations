@@ -179,6 +179,56 @@ public class SuperBuilderMutatorTest {
     }
 
     /**
+     * Every chain role's generated builder declares one field per slot of its
+     * own target, so an author copy constructor on a root, a chained abstract
+     * and a concrete link each reads its own slots off the builder it is handed.
+     */
+    @Test
+    public void userWrittenCopyCtorsOnEveryRole_readTheirOwnSlots() throws Exception {
+        JavaFileObject root = JavaFileObjects.forSourceLines("s.Shape",
+            "package s;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Shape {",
+            "    String name;",
+            "    public String getName() { return name; }",
+            "    protected Shape(Builder<?, ?> b) { this.name = b.name + \"!\"; }",
+            "}");
+        JavaFileObject middle = JavaFileObjects.forSourceLines("s.Polygon",
+            "package s;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Polygon extends Shape {",
+            "    int sides;",
+            "    public int getSides() { return sides; }",
+            "    protected Polygon(Builder<?, ?> b) { super(b); this.sides = b.sides; }",
+            "}");
+        JavaFileObject link = JavaFileObjects.forSourceLines("s.Square",
+            "package s;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Square extends Polygon {",
+            "    double edge;",
+            "    public double getEdge() { return edge; }",
+            "    protected Square(Builder b) { super(b); this.edge = b.edge; }",
+            "}");
+        Compilation c = compile(root, middle, link);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> square = Class.forName("s.Square", true, cl);
+        Class<?> squareBuilder = nested(square, "Builder");
+        Object b = square.getMethod("builder").invoke(null);
+        squareBuilder.getMethod("name", String.class).invoke(b, "sq");
+        squareBuilder.getMethod("sides", int.class).invoke(b, 4);
+        squareBuilder.getMethod("edge", double.class).invoke(b, 2.5);
+        Object built = squareBuilder.getMethod("build").invoke(b);
+        assertEquals("sq!", square.getMethod("getName").invoke(built));
+        assertEquals(4, square.getMethod("getSides").invoke(built));
+        assertEquals(2.5, square.getMethod("getEdge").invoke(built));
+    }
+
+    /**
      * A hand-written copy constructor that leaves a {@code final} field to its
      * initializer keeps that initializer on a generated builder too. The lift
      * took it off for the generated copy constructor the author's replaces, and

@@ -13,6 +13,7 @@ import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
+import com.intellij.psi.PsiModifierList;
 import com.intellij.psi.PsiPrimitiveType;
 import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiType;
@@ -56,6 +57,10 @@ import java.util.Map;
  *       always-generated builder class can carry</li>
  *   <li>{@code @ClassBuilder(builderConstructorAccess = NONE)}, which names no
  *       modifier a builder's constructor can carry</li>
+ *   <li>{@code @ClassBuilder} on a constructor or static factory the processor
+ *       refuses - an instance method, a {@code void} method, a member of an
+ *       annotated type, a second annotated member, or a member of a type
+ *       declaring a {@code @Lazy} field</li>
  * </ul>
  */
 public class ClassBuilderFieldInspection extends LocalInspectionTool {
@@ -95,6 +100,7 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
                 } else if (ClassBuilderConstants.ANNOTATION_FQN.equals(qualifiedName)) {
                     checkAccess(holder, annotation);
                     checkBuilderConstructorAccess(holder, annotation);
+                    checkExecutableTarget(holder, annotation);
                 }
             }
 
@@ -182,6 +188,25 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
         if (!AccessLevel.NONE.name().equals(reference.getReferenceName())) return;
         holder.registerProblem(value, BuilderConstructorAccess.notExpressible(),
             ProblemHighlightType.GENERIC_ERROR);
+    }
+
+    /**
+     * Reports {@code @ClassBuilder} on a constructor or static factory the
+     * processor refuses, on the annotation, in the sentence
+     * {@link ClassBuilderConstants#executableRefusal} answers - the one javac
+     * prints on the member. The processor generates nothing for a refused
+     * member, and the augment provider contributes nothing for it either.
+     *
+     * @param holder sink for the diagnostic
+     * @param annotation the {@code @ClassBuilder} annotation
+     */
+    private static void checkExecutableTarget(@NotNull ProblemsHolder holder, @NotNull PsiAnnotation annotation) {
+        if (!(annotation.getOwner() instanceof PsiModifierList modifiers)) return;
+        if (!(modifiers.getParent() instanceof PsiMethod member)) return;
+        PsiClass owner = member.getContainingClass();
+        if (owner == null) return;
+        String refusal = ClassBuilderConstants.executableRefusal(owner, member);
+        if (refusal != null) holder.registerProblem(annotation, refusal, ProblemHighlightType.GENERIC_ERROR);
     }
 
     /**

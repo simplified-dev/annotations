@@ -7,9 +7,11 @@ import com.intellij.openapi.application.AccessToken;
 import com.intellij.testFramework.LightProjectDescriptor;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
+import dev.simplified.classbuilder.apt.ExecutableTargetRefusal;
 import dev.simplified.testutil.JSvgErrorSuppressor;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
@@ -51,7 +53,8 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
             """
             package dev.simplified.annotations;
             import java.lang.annotation.*;
-            @Retention(RetentionPolicy.CLASS) @Target(ElementType.TYPE)
+            @Retention(RetentionPolicy.CLASS)
+            @Target({ElementType.TYPE, ElementType.CONSTRUCTOR, ElementType.METHOD})
             public @interface ClassBuilder {
                 BuilderNames builder() default @BuilderNames;
                 AccessLevel access() default AccessLevel.PUBLIC;
@@ -145,6 +148,13 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
             import java.lang.annotation.*;
             @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
             public @interface BuilderIgnore { }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/Lazy.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
+            public @interface Lazy { }
             """);
     }
 
@@ -547,5 +557,148 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
             }
             """);
         assertTrue(hasErrorContaining("Naming pattern for 'from' expands to an invalid Java identifier"));
+    }
+
+    // ------------------------------------------------------------------
+    // A constructor or static factory the processor refuses
+    //
+    // Each is one javac error on the annotated member, in the sentence the
+    // shared rule holds, and the processor generates nothing for it. The editor
+    // reports the same sentence on the annotation.
+    // ------------------------------------------------------------------
+
+    /**
+     * The ERROR highlights whose description starts with {@code @ClassBuilder},
+     * each as {@code [highlighted text] description}.
+     */
+    private List<String> classBuilderErrors() {
+        List<String> out = new ArrayList<>();
+        for (HighlightInfo h : myFixture.doHighlighting()) {
+            if (h.getSeverity() != HighlightSeverity.ERROR || h.getDescription() == null) continue;
+            if (!h.getDescription().startsWith("@ClassBuilder")) continue;
+            out.add("[" + myFixture.getEditor().getDocument().getText()
+                .substring(h.getStartOffset(), h.getEndOffset()) + "] " + h.getDescription());
+        }
+        return out;
+    }
+
+    public void testAnInstanceMethodTarget_isTheProcessorsErrorOnTheAnnotation() {
+        myFixture.configureByText("Job.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Job {
+                private final String name;
+                Job(String name) { this.name = name; }
+                @ClassBuilder
+                public Job copy(String name) { return new Job(name); }
+            }
+            """);
+        assertEquals(List.of("[@ClassBuilder] " + ExecutableTargetRefusal.instanceMethod()),
+            classBuilderErrors());
+    }
+
+    public void testAVoidMethodTarget_isTheProcessorsErrorOnTheAnnotation() {
+        myFixture.configureByText("Voided.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Voided {
+                @ClassBuilder
+                public static void go(int n) { }
+            }
+            """);
+        assertEquals(List.of("[@ClassBuilder] " + ExecutableTargetRefusal.voidMethod()),
+            classBuilderErrors());
+    }
+
+    public void testAMemberOfAnAnnotatedType_isTheProcessorsErrorOnTheAnnotation() {
+        myFixture.configureByText("Both.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public final class Both {
+                private final int n;
+                @ClassBuilder(access = dev.simplified.annotations.AccessLevel.PUBLIC)
+                Both(int n) { this.n = n; }
+            }
+            """);
+        assertEquals(List.of("[@ClassBuilder(access = dev.simplified.annotations.AccessLevel.PUBLIC)] "
+                + ExecutableTargetRefusal.besideAnnotatedType("Both")),
+            classBuilderErrors());
+    }
+
+    public void testASecondAnnotatedMember_isTheProcessorsErrorOnItsAnnotation() {
+        myFixture.configureByText("Twice.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Twice {
+                private final int n;
+                @ClassBuilder
+                Twice(int n) { this.n = n; }
+                @ClassBuilder(access = dev.simplified.annotations.AccessLevel.PUBLIC)
+                public static Twice of(int n) { return new Twice(n); }
+            }
+            """);
+        assertEquals(List.of("[@ClassBuilder(access = dev.simplified.annotations.AccessLevel.PUBLIC)] "
+                + ExecutableTargetRefusal.secondMember("Twice")),
+            classBuilderErrors());
+    }
+
+    public void testAMemberOfATypeWithALazyField_isTheProcessorsErrorOnTheAnnotation() {
+        myFixture.configureByText("Deferred.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Lazy;
+            public final class Deferred {
+                @Lazy private final String value;
+                @ClassBuilder
+                Deferred(String value) { this.value = value; }
+            }
+            """);
+        assertEquals(List.of("[@ClassBuilder] " + ExecutableTargetRefusal.lazyField("Deferred", "value")),
+            classBuilderErrors());
+    }
+
+    /** A refused member ahead of a usable one takes nothing, so the usable one is not a second member. */
+    public void testAUsableMemberAfterARefusedOne_isNotASecondMember() {
+        myFixture.configureByText("After.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class After {
+                private final int n;
+                After(int n) { this.n = n; }
+                @ClassBuilder
+                public After copy(int n) { return new After(n); }
+                @ClassBuilder(access = dev.simplified.annotations.AccessLevel.PUBLIC)
+                public static After of(int n) { return new After(n); }
+            }
+            """);
+        assertEquals(List.of("[@ClassBuilder] " + ExecutableTargetRefusal.instanceMethod()),
+            classBuilderErrors());
+    }
+
+    public void testAStaticFactoryTarget_isClean() {
+        myFixture.configureByText("Span.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Span {
+                private Span(String label) { }
+                @ClassBuilder
+                public static Span of(String label) { return new Span(label); }
+            }
+            """);
+        assertEquals(List.of(), classBuilderErrors());
+    }
+
+    public void testAConstructorTarget_isClean() {
+        myFixture.configureByText("Range.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Range {
+                private final int min;
+                @ClassBuilder
+                Range(int min) { this.min = min; }
+            }
+            """);
+        assertEquals(List.of(), classBuilderErrors());
     }
 }

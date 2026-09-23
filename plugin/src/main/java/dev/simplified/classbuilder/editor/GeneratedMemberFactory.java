@@ -1009,12 +1009,14 @@ public final class GeneratedMemberFactory {
     }
 
     /**
-     * The slot fields the merge appends into a builder the author declared.
+     * The slot fields the processor appends to a builder - one the author
+     * declared and the merge runs into, or one it writes whole, on a standalone
+     * target and on every chain role.
      *
-     * <p>Contributed because the merge writes them and the editor wrote none, so
-     * an author's own verb inside that class referencing a slot was red over
-     * source that builds - which lands on exactly the hand-written verb the
-     * merge exists to allow.
+     * <p>Contributed because the processor writes them, so an author's own verb
+     * inside a declared builder, a chain copy constructor reading
+     * {@code b.name}, or a helper in the target reading a builder's slot all
+     * build, and each would be red in an editor that wrote none.
      *
      * <p>Each slot is contributed as the type the processor holds it in, which
      * {@link MergedSlotStorage#holdingOf} reads and
@@ -1028,7 +1030,7 @@ public final class GeneratedMemberFactory {
      *
      * @param site the annotated site
      * @param config the resolved configuration
-     * @param builder the declared builder being merged into
+     * @param builder the builder the fields are declared in
      * @return the fields to add, in slot order
      */
     static List<PsiField> synthesizeBuilderFields(BuilderSite site, EditorBuilderConfig config,

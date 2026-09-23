@@ -43,6 +43,14 @@ Flags misuse of the per-field companion annotations that travel with
   <li><code>@ClassBuilder(builderConstructorAccess = NONE)</code> names no
       modifier a constructor can carry, and every builder has a constructor.
       The build generates as under the default beside the error.</li>
+  <li><code>@ClassBuilder</code> on a constructor or static factory the build
+      refuses, reported on the annotation in the build's own words: an
+      instance method, which <code>builder()</code> has no receiver to call; a
+      <code>void</code> method, which leaves <code>build()</code> nothing to
+      return; a member of a type that carries the annotation itself; a second
+      annotated member of one type; and a member of a type declaring a
+      <code>@Lazy</code> field. The build generates no builder for the member,
+      and the editor offers none.</li>
 </ul>
 
 <!-- tooltip end -->

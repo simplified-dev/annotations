@@ -15,6 +15,7 @@ import com.intellij.psi.impl.light.LightTypeParameterListBuilder;
 import com.intellij.psi.impl.source.PsiExtensibleClass;
 import com.intellij.psi.util.CachedValuesManager;
 import com.intellij.psi.util.PsiModificationTracker;
+import dev.simplified.shared.psi.TypeParameterCopies;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -39,10 +40,10 @@ import java.util.List;
  * the platform's standard merge logic (own members + augment results) kick
  * in for our synth class too.
  *
- * <p>{@link #getOwnMethods()}, {@link #getOwnFields()},
- * {@link #getOwnInnerClasses()} all return empty - methods come solely
- * from the augment-provider re-entry handled in
- * {@link ClassBuilderAugmentProvider#getAugments}. {@link SyntheticElement}
+ * <p>{@link #getOwnMethods()} and {@link #getOwnInnerClasses()} return empty -
+ * methods come solely from the augment-provider re-entry handled in
+ * {@link ClassBuilderAugmentProvider#getAugments}. {@link #getOwnFields()}
+ * answers the slot fields the processor declares here. {@link SyntheticElement}
  * is also asserted explicitly so anything walking the PSI tree treats this
  * class as a synthetic node.
  */
@@ -81,20 +82,20 @@ final class GeneratedBuilderClass extends LightPsiClassBuilder
      *
      * <p>The copies are distinct {@link PsiTypeParameter}s from the source's,
      * matching what javac emits, so callers building a type for use inside this
-     * class must apply <em>these</em> parameters rather than the originals.
+     * class must apply <em>these</em> parameters rather than the originals. Their
+     * bounds name the copies as well, through
+     * {@link TypeParameterCopies#copyBounds}.
      */
     private void copyTypeParameters(@NotNull PsiTypeParameter[] sources) {
         if (sources.length == 0) return;
         LightTypeParameterListBuilder list = typeParameterList();
         if (list == null) return;
+        LightTypeParameterBuilder[] copies = new LightTypeParameterBuilder[sources.length];
         for (int i = 0; i < sources.length; i++) {
-            LightTypeParameterBuilder copy =
-                new LightTypeParameterBuilder(sources[i].getName(), this, i);
-            for (PsiClassType bound : sources[i].getExtendsListTypes()) {
-                copy.getExtendsList().addReference(bound);
-            }
-            list.addParameter(copy);
+            copies[i] = new LightTypeParameterBuilder(sources[i].getName(), this, i);
+            list.addParameter(copies[i]);
         }
+        TypeParameterCopies.copyBounds(sources, copies);
     }
 
     /**
@@ -165,9 +166,27 @@ final class GeneratedBuilderClass extends LightPsiClassBuilder
         return containing != null ? containing.getScope() : super.getScope();
     }
 
+    /**
+     * The slot fields the processor declares on this builder - one per slot,
+     * private, in the type the builder holds the slot in, a seed's
+     * {@code final} - on a standalone builder and on every chain role alike,
+     * each role's builder declaring its own target's slots.
+     *
+     * <p>Answered here rather than through the augment re-entry the methods
+     * take, because a field reference resolves through this class's own field
+     * lists. The list is built by
+     * {@link GeneratedMemberFactory#synthesizeBuilderFields}, the producer a
+     * merged builder's fields come from, and cached against the PSI
+     * modification count for the reason {@link #getMethods()} gives.
+     */
     @Override
     public @NotNull List<PsiField> getOwnFields() {
-        return Collections.emptyList();
+        return ClassBuilderAugmentProvider.generatedBuilderFields(this);
+    }
+
+    @Override
+    public PsiField @NotNull [] getFields() {
+        return getOwnFields().toArray(PsiField.EMPTY_ARRAY);
     }
 
     @Override

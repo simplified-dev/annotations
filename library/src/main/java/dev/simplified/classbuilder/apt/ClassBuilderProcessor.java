@@ -612,8 +612,9 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     }
 
     /**
-     * Reports every reason an annotated executable cannot produce a builder,
-     * each at the declaration that causes it.
+     * Reports the reason an annotated executable cannot produce a builder, at
+     * the member, in the sentence {@link ExecutableTargetRefusal} answers - the
+     * one the editor reports on the same source.
      *
      * @param executable the annotated member
      * @param enclosing the type it is declared in
@@ -626,46 +627,22 @@ public class ClassBuilderProcessor extends AbstractProcessor {
                                           Set<TypeElement> typeTargets, Set<TypeElement> claimed,
                                           Messager messager) {
         boolean method = executable.getKind() == ElementKind.METHOD;
-        if (method && !executable.getModifiers().contains(Modifier.STATIC)) {
-            messager.printMessage(Diagnostic.Kind.ERROR,
-                "@ClassBuilder on an instance method has no receiver to call it on - builder() is "
-                    + "static, so the factory it builds through must be static too",
-                executable);
-            return false;
-        }
-        if (method && executable.getReturnType().getKind() == javax.lang.model.type.TypeKind.VOID) {
-            messager.printMessage(Diagnostic.Kind.ERROR,
-                "@ClassBuilder on a void method has nothing for build() to return",
-                executable);
-            return false;
-        }
-        if (typeTargets.contains(enclosing) || lookup.hasAnnotation(enclosing, ANNOTATION_FQN)) {
-            messager.printMessage(Diagnostic.Kind.ERROR,
-                "@ClassBuilder is on " + enclosing.getSimpleName() + " as well as on this member - "
-                    + "one type carries one builder, so keep whichever set of slots is wanted and "
-                    + "drop the other annotation",
-                executable);
-            return false;
-        }
-        if (claimed.contains(enclosing)) {
-            messager.printMessage(Diagnostic.Kind.ERROR,
-                "@ClassBuilder is already on another member of " + enclosing.getSimpleName()
-                    + " - one type carries one builder",
-                executable);
-            return false;
-        }
+        String lazyField = null;
         for (Element enclosed : enclosing.getEnclosedElements()) {
             if (enclosed.getKind() != ElementKind.FIELD) continue;
             if (!lookup.hasAnnotation(enclosed, LAZY_FQN)) continue;
-            messager.printMessage(Diagnostic.Kind.ERROR,
-                "@ClassBuilder on a member of " + enclosing.getSimpleName() + ", whose field '"
-                    + enclosed.getSimpleName() + "' is @Lazy - that rewrites the field's storage "
-                    + "and every constructor parameter feeding it, so the slots this builder passes "
-                    + "would no longer match. Move @ClassBuilder onto the type",
-                executable);
-            return false;
+            lazyField = enclosed.getSimpleName().toString();
+            break;
         }
-        return true;
+        String refusal = ExecutableTargetRefusal.refusal(method,
+            executable.getModifiers().contains(Modifier.STATIC),
+            method && executable.getReturnType().getKind() == javax.lang.model.type.TypeKind.VOID,
+            enclosing.getSimpleName().toString(),
+            typeTargets.contains(enclosing) || lookup.hasAnnotation(enclosing, ANNOTATION_FQN),
+            claimed.contains(enclosing), lazyField);
+        if (refusal == null) return true;
+        messager.printMessage(Diagnostic.Kind.ERROR, refusal, executable);
+        return false;
     }
 
     /**

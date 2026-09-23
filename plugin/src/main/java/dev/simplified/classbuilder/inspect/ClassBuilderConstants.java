@@ -25,6 +25,7 @@ import com.intellij.psi.PsiReferenceList;
 import com.intellij.psi.PsiReferenceParameterList;
 import com.intellij.psi.PsiTypeElement;
 import com.intellij.psi.PsiTypeParameter;
+import com.intellij.psi.PsiTypes;
 import com.intellij.psi.impl.source.PsiExtensibleClass;
 import com.intellij.psi.util.PsiTreeUtil;
 import dev.simplified.annotations.NamingStyle;
@@ -37,6 +38,7 @@ import dev.simplified.classbuilder.apt.DeclaredBuildMethod;
 import dev.simplified.classbuilder.apt.DeclaredBuilderFacts;
 import dev.simplified.classbuilder.apt.DeclaredBuilderRejection;
 import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
+import dev.simplified.classbuilder.apt.ExecutableTargetRefusal;
 import dev.simplified.classbuilder.apt.RoleExpectation;
 import dev.simplified.classbuilder.apt.SetterScheme;
 import dev.simplified.classbuilder.editor.MergedSlotStorage;
@@ -588,6 +590,76 @@ public final class ClassBuilderConstants {
             if (builderName.equals(nested.getName())) return nested;
         }
         return null;
+    }
+
+    /**
+     * Why the processor refuses {@code @ClassBuilder} on this constructor or
+     * static factory, in the sentence it reports, or {@code null} when the
+     * member can carry a builder.
+     *
+     * <p>The decision is {@link ExecutableTargetRefusal#refusal}, asked of what
+     * PSI holds without resolving: the member's kind, {@code static} modifier and
+     * written return type, the owner's own annotation and first {@code @Lazy}
+     * field matched by name, and whether an earlier annotated member of the owner
+     * is itself refused nothing - which is the member that took the owner's
+     * builder, as the processor claims it in declaration order. Members and
+     * fields are the owner's own, so nothing here re-enters an augment provider.
+     *
+     * @param owner the type the member is declared in
+     * @param member the member carrying {@code @ClassBuilder}
+     * @return the refusal, or {@code null} when the member is usable
+     */
+    public static @Nullable String executableRefusal(@NotNull PsiClass owner, @NotNull PsiMethod member) {
+        String ownerName = owner.getName() == null ? "" : owner.getName();
+        boolean ownerAnnotated = WrittenAnnotations.find(owner, ANNOTATION_FQN) != null;
+        String lazyField = null;
+        for (PsiField field : ownFields(owner)) {
+            if (WrittenAnnotations.findOnMember(field, LAZY_FQN) == null) continue;
+            lazyField = field.getName();
+            break;
+        }
+        boolean claimed = false;
+        for (PsiMethod earlier : ownMethodsOf(owner)) {
+            if (earlier.equals(member)) break;
+            if (WrittenAnnotations.findOnMember(earlier, ANNOTATION_FQN) == null) continue;
+            if (refusalOf(earlier, ownerName, ownerAnnotated, false, lazyField) == null) {
+                claimed = true;
+                break;
+            }
+        }
+        return refusalOf(member, ownerName, ownerAnnotated, claimed, lazyField);
+    }
+
+    /**
+     * Asks {@link ExecutableTargetRefusal#refusal} of one member.
+     *
+     * @param member the annotated member
+     * @param ownerName the simple name of its type
+     * @param ownerAnnotated whether that type carries {@code @ClassBuilder}
+     * @param claimed whether an earlier member already took the type's builder
+     * @param lazyField the type's first {@code @Lazy} field, or {@code null}
+     * @return the refusal, or {@code null} when the member is usable
+     */
+    private static @Nullable String refusalOf(PsiMethod member, String ownerName, boolean ownerAnnotated,
+                                              boolean claimed, @Nullable String lazyField) {
+        boolean method = !member.isConstructor();
+        return ExecutableTargetRefusal.refusal(method, member.hasModifierProperty(PsiModifier.STATIC),
+            method && PsiTypes.voidType().equals(member.getReturnType()), ownerName, ownerAnnotated,
+            claimed, lazyField);
+    }
+
+    /** The class's own methods, without anything a provider contributed. */
+    private static List<PsiMethod> ownMethodsOf(PsiClass owner) {
+        return owner instanceof PsiExtensibleClass extensible
+            ? extensible.getOwnMethods()
+            : List.of(owner.getMethods());
+    }
+
+    /** The class's own fields, without anything a provider contributed. */
+    private static List<PsiField> ownFields(PsiClass owner) {
+        return owner instanceof PsiExtensibleClass extensible
+            ? extensible.getOwnFields()
+            : List.of(owner.getFields());
     }
 
     /**

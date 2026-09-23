@@ -919,6 +919,50 @@ public class SuperBuilderAugmentTest extends LightJavaCodeInsightFixtureTestCase
         assertEquals("the root's builder", 0, builderOf(doc).getConstructors().length);
     }
 
+    /**
+     * Every chain role's generated builder declares one field per slot of its
+     * own target, so an author copy constructor reads its slots off the builder
+     * it is handed - on a root, a chained abstract and a concrete link. The
+     * generated builder carried no fields in the editor, and each read was
+     * {@code Cannot resolve symbol} over source that builds.
+     */
+    public void testAuthorCopyConstructorsReadingTheirSlots_resolveOnEveryRole() {
+        myFixture.addFileToProject("s/Shape.java",
+            """
+            package s;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Shape {
+                String name;
+                protected Shape(Builder<?, ?> b) { this.name = b.name + "!"; }
+            }
+            """);
+        myFixture.addFileToProject("s/Polygon.java",
+            """
+            package s;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Polygon extends Shape {
+                int sides;
+                protected Polygon(Builder<?, ?> b) { super(b); this.sides = b.sides; }
+            }
+            """);
+        myFixture.addFileToProject("s/Square.java",
+            """
+            package s;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Square extends Polygon {
+                double edge;
+                protected Square(Builder b) { super(b); this.edge = b.edge; }
+            }
+            """);
+        for (String path : List.of("s/Shape.java", "s/Polygon.java", "s/Square.java")) {
+            myFixture.configureFromTempProjectFile(path);
+            assertNoErrors();
+        }
+    }
+
     /** The builder the editor lists on a target. */
     private static PsiClass builderOf(PsiClass target) {
         for (PsiClass nested : target.getInnerClasses()) {

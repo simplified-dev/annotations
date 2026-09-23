@@ -3,10 +3,7 @@ package dev.simplified.classbuilder.editor;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiMethod;
-import com.intellij.psi.PsiModifier;
-import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypeParameter;
-import com.intellij.psi.PsiTypes;
 import com.intellij.psi.impl.source.PsiExtensibleClass;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
@@ -70,24 +67,27 @@ public record BuilderSite(@NotNull PsiClass owner, @Nullable PsiMethod executabl
             PsiAnnotation written =
                 WrittenAnnotations.findOnMember(own, ClassBuilderConstants.ANNOTATION_FQN);
             if (written == null) continue;
-            if (!usable(own)) continue;
+            if (!usable(target, own)) continue;
             return new BuilderSite(target, own, written);
         }
         return null;
     }
 
     /**
-     * Whether the annotated member can produce a builder at all, on the same
-     * terms the processor applies: a factory has to be reachable without an
-     * instance, and has to return something for {@code build()} to hand back.
-     * A member failing either is one javac rejects, so synthesising for it would
-     * put a builder in completion that the build then refuses.
+     * Whether the annotated member can produce a builder at all, on the terms
+     * the processor applies: {@link ClassBuilderConstants#executableRefusal}
+     * answers nothing for it. An instance method, a {@code void} method, a
+     * member of a type declaring a {@code @Lazy} field and a second annotated
+     * member are each refused with an error and generate nothing, so
+     * synthesising for one would put a builder in completion that the build
+     * never produces.
+     *
+     * @param owner the type the member is declared in
+     * @param method the annotated member
+     * @return whether the processor builds from it
      */
-    private static boolean usable(PsiMethod method) {
-        if (method.isConstructor()) return true;
-        if (!method.hasModifierProperty(PsiModifier.STATIC)) return false;
-        PsiType returnType = method.getReturnType();
-        return returnType != null && !PsiTypes.voidType().equals(returnType);
+    private static boolean usable(PsiClass owner, PsiMethod method) {
+        return ClassBuilderConstants.executableRefusal(owner, method) == null;
     }
 
     private static List<PsiMethod> ownMethods(PsiClass target) {

@@ -5,9 +5,12 @@ import com.intellij.lang.annotation.HighlightSeverity;
 import com.intellij.openapi.application.AccessToken;
 import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiFile;
+import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
+import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.testFramework.LightProjectDescriptor;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
@@ -1463,6 +1466,96 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
             }
             """);
         assertTrue("javac compiles this; editor errors: " + errors, errors.isEmpty());
+    }
+
+    // ------------------------------------------------------------------
+    // The generated builder's slot fields
+    // ------------------------------------------------------------------
+
+    /**
+     * The generated builder declares one private field per slot, and the target
+     * encloses it, so a static helper in the target reads a slot off a builder;
+     * javac builds and runs it. The editor's generated builder carried no
+     * fields, and the read was {@code Cannot resolve symbol 'text'}.
+     */
+    public void testAStaticHelperReadingAGeneratedBuildersSlot_resolves() {
+        myFixture.configureByText("Note.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Note {
+                String text;
+                static String peek(Builder b) { return b.text; }
+                public static String go() { return peek(Note.builder().text("hi")); }
+            }
+            """);
+        assertEquals("javac compiles this", List.of(), errors());
+    }
+
+    /**
+     * Each slot field carries the type the processor declares it in: an
+     * {@code Optional} and a collection as written, a {@code @Lazy} field as a
+     * supplier of its declared type, every one private.
+     */
+    public void testTheGeneratedBuildersSlotFields_carryTheProcessorsStorageTypes() {
+        myFixture.addFileToProject("dev/simplified/annotations/Lazy.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
+            public @interface Lazy { }
+            """);
+        PsiClass builder = builderFor("Holder",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Lazy;
+            import java.util.List;
+            import java.util.Optional;
+            @ClassBuilder
+            public class Holder {
+                Optional<String> nick;
+                List<String> tags;
+                @Lazy String heavy = "h";
+            }
+            """);
+        List<String> fields = new ArrayList<>();
+        for (PsiField field : builder.getFields()) {
+            fields.add((field.hasModifierProperty(PsiModifier.PRIVATE) ? "private " : "")
+                + field.getType().getCanonicalText() + " " + field.getName());
+        }
+        assertEquals(List.of(
+            "private java.util.Optional<java.lang.String> nick",
+            "private java.util.List<java.lang.String> tags",
+            "private java.util.function.Supplier<java.lang.String> heavy"), fields);
+        assertNotNull("the lookup the platform resolves a reference through",
+            builder.findFieldByName("heavy", false));
+    }
+
+    /**
+     * A read of the builder's slot is a read of the builder's field, not of the
+     * target's, so Find Usages on the target's field still finds its own reads
+     * alone, as javac binds them.
+     */
+    public void testFindUsagesOnTheTargetsField_findsItsOwnReadsAlone() {
+        myFixture.configureByText("Note.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Note {
+                String text;
+                String echo() { return text; }
+                static String peek(Builder b) { return b.text; }
+            }
+            """);
+        PsiClass note = ((PsiJavaFile) myFixture.getFile()).getClasses()[0];
+        PsiField text = note.findFieldByName("text", false);
+        assertNotNull(text);
+        List<String> usages = new ArrayList<>();
+        for (var usage : myFixture.findUsages(text)) {
+            PsiMethod in = PsiTreeUtil.getParentOfType(usage.getElement(), PsiMethod.class);
+            usages.add(in == null ? "?" : in.getName());
+        }
+        assertEquals(List.of("echo"), usages);
     }
 
     // ------------------------------------------------------------------
