@@ -100,6 +100,56 @@ public class DeclaredBuilderMergeTest {
     }
 
     /**
+     * A builder class named through a {@code String} constant is merged into the
+     * nested class the constant names, and a nested class of the default name
+     * is left as the author wrote it - the shape the editor mirrors.
+     */
+    @Test
+    public void merge_intoTheClassATypeConstantNames() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Order",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderNames;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, builder = @BuilderNames(type = Order.MAKER))",
+                "public class Order {",
+                "    static final String MAKER = \"Maker\";",
+                "    String item;",
+                "    public static class Maker { }",
+                "    public static class Builder {",
+                "        public String describe() { return \"helper\"; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseOrder",
+                "package demo;",
+                "public class UseOrder {",
+                "    public static Object go() { Order.Maker m = Order.builder(); return m.item(\"x\").build().item; }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("x", runGo(c, "demo.UseOrder"));
+
+        Compilation helper = compile(
+            JavaFileObjects.forSourceLines("demo.Order",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderNames;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, builder = @BuilderNames(type = Order.MAKER))",
+                "public class Order {",
+                "    static final String MAKER = \"Maker\";",
+                "    String item;",
+                "    public static class Maker { }",
+                "    public static class Builder { }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseOrder",
+                "package demo;",
+                "public class UseOrder {",
+                "    void helper() { new Order.Builder().item(\"y\"); }",
+                "}"));
+        assertThat(helper).failed();
+        assertThat(helper).hadErrorContaining("cannot find symbol");
+    }
+
+    /**
      * The shape the feature exists for: one extension point taking the builder
      * itself, and every other setter still generated around it.
      */

@@ -306,6 +306,10 @@ public @interface ClassBuilder {
     /**
      * The access level of the generated bootstrap methods and the generated
      * builder class.
+     *
+     * <p>{@link AccessLevel#NONE} is a compile error on every target, since the
+     * builder class is always generated; the builder and its entry points are
+     * then generated public beside the error.
      */
     @NotNull AccessLevel access() default AccessLevel.PUBLIC;
 

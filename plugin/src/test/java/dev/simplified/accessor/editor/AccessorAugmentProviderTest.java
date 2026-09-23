@@ -1,5 +1,7 @@
 package dev.simplified.accessor.editor;
 
+import com.intellij.codeInsight.daemon.impl.HighlightInfo;
+import com.intellij.lang.annotation.HighlightSeverity;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiFile;
@@ -8,6 +10,9 @@ import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Exercises {@link AccessorAugmentProvider}: accessors must resolve in the
@@ -332,6 +337,73 @@ public class AccessorAugmentProviderTest extends LightJavaCodeInsightFixtureTest
             0, leaf.findMethodsByName("getOwner", false).length);
         assertEquals("but it is still reachable through the supertype",
             1, leaf.findMethodsByName("getOwner", true).length);
+    }
+
+    /**
+     * A getter at {@code AccessLevel.PACKAGE} is refused from another package,
+     * as javac refuses it. The light getter carried no access modifier, which
+     * the platform's access check reads as public.
+     */
+    public void testPackageGetter_isClosedToAnotherPackage() {
+        addNamed();
+        List<String> errors = errorsIn("q/UseNamed.java",
+            """
+            package q;
+            public class UseNamed {
+                void go(p.Named n) { n.getCount(); }
+            }
+            """);
+        assertEquals("javac: cannot be accessed from outside package; editor: " + errors, 1, errors.size());
+    }
+
+    /** A setter at {@code AccessLevel.PACKAGE} is refused from another package too. */
+    public void testPackageSetter_isClosedToAnotherPackage() {
+        addNamed();
+        List<String> errors = errorsIn("q/UseNamed.java",
+            """
+            package q;
+            public class UseNamed {
+                void go(p.Named n) { n.setCount(1); }
+            }
+            """);
+        assertEquals("javac: cannot be accessed from outside package; editor: " + errors, 1, errors.size());
+    }
+
+    /** From its own package both accessors stay reachable. */
+    public void testPackageAccessors_resolveFromTheirOwnPackage() {
+        addNamed();
+        List<String> errors = errorsIn("p/UseNamed.java",
+            """
+            package p;
+            public class UseNamed {
+                void go(Named n) { n.setCount(n.getCount()); }
+            }
+            """);
+        assertTrue("javac compiles this; editor errors: " + errors, errors.isEmpty());
+    }
+
+    private void addNamed() {
+        myFixture.addFileToProject("p/Named.java",
+            """
+            package p;
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.Getter;
+            import dev.simplified.annotations.Setter;
+            public class Named {
+                @Getter(AccessLevel.PACKAGE) @Setter(AccessLevel.PACKAGE) private int count;
+            }
+            """);
+    }
+
+    /** Opens a new file at the given path and returns the errors highlighted in it. */
+    private List<String> errorsIn(String path, String source) {
+        myFixture.addFileToProject(path, source);
+        myFixture.configureFromTempProjectFile(path);
+        List<String> errors = new ArrayList<>();
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            if (info.getSeverity() == HighlightSeverity.ERROR) errors.add(info.getDescription());
+        }
+        return errors;
     }
 
 }

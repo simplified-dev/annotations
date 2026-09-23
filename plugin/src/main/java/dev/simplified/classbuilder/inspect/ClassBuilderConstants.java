@@ -1,11 +1,21 @@
 package dev.simplified.classbuilder.inspect;
 
+import com.intellij.openapi.util.TextRange;
+import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.psi.CommonClassNames;
+import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationMemberValue;
 import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiCompiledElement;
+import com.intellij.psi.PsiConstantEvaluationHelper;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiExpression;
 import com.intellij.psi.PsiField;
+import com.intellij.psi.PsiImportList;
+import com.intellij.psi.PsiImportStaticStatement;
 import com.intellij.psi.PsiJavaCodeReferenceElement;
+import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
@@ -16,7 +26,9 @@ import com.intellij.psi.PsiReferenceParameterList;
 import com.intellij.psi.PsiTypeElement;
 import com.intellij.psi.PsiTypeParameter;
 import com.intellij.psi.impl.source.PsiExtensibleClass;
+import com.intellij.psi.util.PsiTreeUtil;
 import dev.simplified.annotations.NamingStyle;
+import dev.simplified.annotations.SetterNames;
 import dev.simplified.args.apt.ArgsMode;
 import dev.simplified.args.inspect.ArgsConstants;
 import dev.simplified.classbuilder.apt.BuilderScheme;
@@ -28,11 +40,13 @@ import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.RoleExpectation;
 import dev.simplified.classbuilder.apt.SetterScheme;
 import dev.simplified.classbuilder.editor.MergedSlotStorage;
+import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
 import dev.simplified.shared.psi.WrittenAnnotations;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -132,6 +146,14 @@ public final class ClassBuilderConstants {
     /** Attribute names of {@code @BuilderNames}, in declaration order. */
     public static final @NotNull String[] BUILDER_ROLES = {"type", "builder", "build", "from", "toBuilder"};
 
+    /** The two naming annotations by their fully qualified names, which is how a static import spells them. */
+    private static final @NotNull Set<String> NAMING_CLASSES_QUALIFIED =
+        Set.of(SETTER_NAMES_FQN, "dev.simplified.annotations.BuilderNames");
+
+    /** Every spelling a qualified {@code NONE} or {@code INHERIT} reference gives the class it is declared on. */
+    private static final @NotNull Set<String> NAMING_CLASSES =
+        Set.of("SetterNames", "BuilderNames", SETTER_NAMES_FQN, "dev.simplified.annotations.BuilderNames");
+
     private ClassBuilderConstants() {}
 
     public static @NotNull String stringAttr(@Nullable PsiAnnotation annotation, @NotNull String attr, @NotNull String fallback) {
@@ -142,11 +164,22 @@ public final class ClassBuilderConstants {
     }
 
     /**
-     * Reads a string attribute only when it is written at the annotation,
-     * mirroring the processor's {@code getElementValues()} view rather than
-     * {@code findAttributeValue}'s defaults-included one. Returning
-     * {@code null} for an unwritten attribute is what lets the schemes tell
-     * "inherit from the style" from an explicit value, empty ones included.
+     * Reads a naming attribute of {@code @BuilderNames} or {@code @SetterNames}
+     * only when it is written at the annotation, mirroring the processor's
+     * {@code getElementValues()} view rather than {@code findAttributeValue}'s
+     * defaults-included one. Returning {@code null} for an unwritten attribute
+     * is what lets the schemes tell "inherit from the style" from an explicit
+     * value, empty ones included.
+     *
+     * <p>javac hands the processor the value a constant holds, so a written
+     * constant is read as that value rather than as unwritten. The two the
+     * annotations declare, {@code NONE} and {@code INHERIT}, are recognised by
+     * name without resolving - qualified by either annotation's simple or fully
+     * qualified name, or unqualified where the file statically imports them
+     * from one of the two. Any other expression goes to the platform's constant
+     * evaluator under the owning class's re-entry guard, since resolving it can
+     * reach the augment pass that is reading this attribute; one the evaluator
+     * cannot answer stays unwritten.
      *
      * @param annotation the annotation to read, or {@code null}
      * @param attr the attribute name
@@ -155,8 +188,205 @@ public final class ClassBuilderConstants {
     public static @Nullable String writtenStringAttr(@Nullable PsiAnnotation annotation, @NotNull String attr) {
         if (annotation == null) return null;
         PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(attr);
-        if (value instanceof PsiLiteralExpression literal && literal.getValue() instanceof String s) return s;
+        if (value == null) return null;
+        if (value instanceof PsiLiteralExpression literal)
+            return literal.getValue() instanceof String s ? s : null;
+        String named = namingConstant(value);
+        return named != null ? named : evaluatedString(value);
+    }
+
+    /**
+     * The value of {@code NONE} or {@code INHERIT} when the expression names one
+     * of the two as declared on {@code @BuilderNames} or {@code @SetterNames},
+     * read from the reference and the file's static imports alone.
+     *
+     * @param value the written attribute value
+     * @return the constant's value, or {@code null} when the expression names neither
+     */
+    private static @Nullable String namingConstant(@NotNull PsiAnnotationMemberValue value) {
+        if (!(value instanceof PsiReferenceExpression reference)) return null;
+        String name = reference.getReferenceName();
+        String constant = namingConstantValue(name);
+        if (constant == null) return null;
+        PsiExpression qualifier = reference.getQualifierExpression();
+        if (qualifier != null)
+            return NAMING_CLASSES.contains(qualifier.getText().replaceAll("\\s", "")) ? constant : null;
+        return staticallyImported(reference, name) ? constant : null;
+    }
+
+    /**
+     * What a constant of that name holds on both naming annotations.
+     *
+     * @param name the referenced name, or {@code null}
+     * @return the value, or {@code null} when the name is neither constant
+     */
+    private static @Nullable String namingConstantValue(@Nullable String name) {
+        if ("NONE".equals(name)) return SetterNames.NONE;
+        if ("INHERIT".equals(name)) return SetterNames.INHERIT;
         return null;
+    }
+
+    /**
+     * Whether the file statically imports the name from one of the naming
+     * annotations, by a single import of it or an import on demand.
+     *
+     * @param reference the unqualified reference
+     * @param name its name
+     * @return whether an import brings it in
+     */
+    private static boolean staticallyImported(@NotNull PsiElement reference, @NotNull String name) {
+        if (!(reference.getContainingFile() instanceof PsiJavaFile file)) return false;
+        PsiImportList imports = file.getImportList();
+        if (imports == null) return false;
+        for (PsiImportStaticStatement statement : imports.getImportStaticStatements()) {
+            PsiJavaCodeReferenceElement imported = statement.getImportReference();
+            if (imported == null) continue;
+            String text = imported.getText().replaceAll("\\s", "");
+            String declaring;
+            if (statement.isOnDemand()) declaring = text;
+            else if (text.endsWith("." + name)) declaring = text.substring(0, text.length() - name.length() - 1);
+            else continue;
+            if (NAMING_CLASSES_QUALIFIED.contains(declaring)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Evaluates a written constant expression to the {@code String} javac
+     * would read from it.
+     *
+     * @param value the written attribute value
+     * @return the string it evaluates to, or {@code null} when it evaluates to none
+     */
+    private static @Nullable String evaluatedString(@NotNull PsiAnnotationMemberValue value) {
+        PsiConstantEvaluationHelper evaluator =
+            JavaPsiFacade.getInstance(value.getProject()).getConstantEvaluationHelper();
+        PsiClass owner = PsiTreeUtil.getParentOfType(value, PsiClass.class);
+        Object result = owner == null
+            ? constantValue(evaluator, value, new HashSet<>())
+            : AbstractRecursionSafeAugmentProvider.withInProgress(owner,
+                () -> constantValue(evaluator, value, new HashSet<>()));
+        return result instanceof String s ? s : null;
+    }
+
+    /**
+     * Evaluates an expression through the platform's constant evaluator, with
+     * every reference to a {@code final} field in it replaced by the literal of
+     * the value that field holds, followed through its initializer rather than
+     * asked of the field.
+     *
+     * <p>The field's own answer reads its declared type first, and this runs
+     * inside the augment pass a resolve of that very type can have started -
+     * a {@code String} constant declared on the target is the ordinary case -
+     * so asking it re-enters the resolve in progress. The initializer is what
+     * the field's value is computed from, so following it gives the same
+     * answer without the type, and the evaluator is then handed an expression
+     * of literals and operators only. A compiled field has no source type to
+     * resolve and answers for itself.
+     *
+     * @param evaluator the platform's constant evaluator
+     * @param expression the expression to evaluate
+     * @param following the fields whose initializers are being followed, which ends a cycle
+     * @return the constant value, or {@code null} when the expression is not a constant
+     */
+    private static @Nullable Object constantValue(@NotNull PsiConstantEvaluationHelper evaluator,
+                                                  @NotNull PsiElement expression,
+                                                  @NotNull Set<PsiField> following) {
+        PsiField field = finalField(expression);
+        if (field != null) return fieldValue(evaluator, field, following);
+        List<PsiReferenceExpression> references = finalFieldReferences(expression);
+        if (references.isEmpty()) return evaluator.computeConstantExpression(expression);
+
+        int start = expression.getTextRange().getStartOffset();
+        StringBuilder text = new StringBuilder(expression.getText());
+        for (int i = references.size() - 1; i >= 0; i--) {
+            PsiReferenceExpression reference = references.get(i);
+            String literal = literalText(constantValue(evaluator, reference, following));
+            if (literal == null) return null;
+            TextRange range = reference.getTextRange().shiftLeft(start);
+            text.replace(range.getStartOffset(), range.getEndOffset(), literal);
+        }
+        PsiExpression literals = JavaPsiFacade.getElementFactory(expression.getProject())
+            .createExpressionFromText(text.toString(), expression);
+        return evaluator.computeConstantExpression(literals);
+    }
+
+    /**
+     * The value a {@code final} field holds, from its initializer.
+     *
+     * @param evaluator the platform's constant evaluator
+     * @param field the field to read
+     * @param following the fields whose initializers are being followed
+     * @return the constant value, or {@code null} when it holds none
+     */
+    private static @Nullable Object fieldValue(@NotNull PsiConstantEvaluationHelper evaluator,
+                                               @NotNull PsiField field,
+                                               @NotNull Set<PsiField> following) {
+        if (field instanceof PsiCompiledElement) return field.computeConstantValue();
+        PsiExpression initializer = field.getInitializer();
+        if (initializer == null || !following.add(field)) return null;
+        try {
+            return constantValue(evaluator, initializer, following);
+        } finally {
+            following.remove(field);
+        }
+    }
+
+    /**
+     * The {@code final} field an expression is a reference to.
+     *
+     * @param expression the expression to read
+     * @return the field, or {@code null} when the expression names none
+     */
+    private static @Nullable PsiField finalField(@NotNull PsiElement expression) {
+        return expression instanceof PsiReferenceExpression reference
+            && reference.resolve() instanceof PsiField field
+            && field.hasModifierProperty(PsiModifier.FINAL) ? field : null;
+    }
+
+    /**
+     * The outermost references to a {@code final} field inside an expression,
+     * in source order.
+     *
+     * @param expression the expression to read
+     * @return the references, none nested in another
+     */
+    private static @NotNull List<PsiReferenceExpression> finalFieldReferences(@NotNull PsiElement expression) {
+        List<PsiReferenceExpression> out = new ArrayList<>();
+        for (PsiReferenceExpression reference : PsiTreeUtil.findChildrenOfType(expression,
+            PsiReferenceExpression.class)) {
+            if (!out.isEmpty() && out.get(out.size() - 1).getTextRange().contains(reference.getTextRange()))
+                continue;
+            if (finalField(reference) != null) out.add(reference);
+        }
+        return out;
+    }
+
+    /**
+     * A constant value spelled as the Java literal that evaluates to it.
+     *
+     * @param value the value, or {@code null}
+     * @return the literal, or {@code null} when the value has none
+     */
+    private static @Nullable String literalText(@Nullable Object value) {
+        if (value instanceof String s) return "\"" + StringUtil.escapeStringCharacters(s) + "\"";
+        if (value instanceof Character c) return "'" + StringUtil.escapeCharCharacters(String.valueOf(c)) + "'";
+        if (value instanceof Boolean || value instanceof Integer) return value.toString();
+        if (value instanceof Long l) return l + "L";
+        if (value instanceof Short || value instanceof Byte) return "((" + primitiveName(value) + ") " + value + ")";
+        if (value instanceof Double d) return Double.isFinite(d) ? d.toString() : null;
+        if (value instanceof Float f) return Float.isFinite(f) ? f + "f" : null;
+        return null;
+    }
+
+    /**
+     * The primitive a boxed {@code short} or {@code byte} unboxes to.
+     *
+     * @param value the boxed value
+     * @return the primitive's keyword
+     */
+    private static @NotNull String primitiveName(@NotNull Object value) {
+        return value instanceof Short ? "short" : "byte";
     }
 
     /** Reads the {@code style} attribute, defaulting to {@link NamingStyle#SIMPLIFIED}. */

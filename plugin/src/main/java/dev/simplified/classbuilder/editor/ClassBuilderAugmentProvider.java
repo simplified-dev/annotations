@@ -491,12 +491,14 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             }
             SynthesizedMembers members = synthesizeOrReuse(site);
             // Bootstrap methods (builder/from/mutate) only on concrete targets;
-            // an abstract target gets its entry points from concrete subclasses.
+            // an abstract class gets its entry points from concrete subclasses.
             // Its constructor is a separate question and is answered separately,
             // the processor emitting the chain's copy constructor above the gate
             // that withholds the entry points. An executable target is never in a
             // chain, so an abstract enclosing type is no reason to withhold its
-            // entry point.
+            // entry point. PSI answers ABSTRACT for every interface, and an
+            // interface target takes its three onto its own body, typed to the
+            // sibling builder, so the test is of an abstract class alone.
             // The second cause is a merged builder with no constructor taking
             // what the entry points pass - nothing on a type target, the seeds'
             // types in order on an executable one. It withholds the entry points and nothing
@@ -508,7 +510,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             // processor reports it and returns before the entry points, having
             // already decided the all-args constructor, so the split is the
             // second cause's.
-            boolean entryPointsWithheld = (!site.isExecutable()
+            boolean entryPointsWithheld = (!site.isExecutable() && !target.isInterface()
                 && target.hasModifierProperty(PsiModifier.ABSTRACT))
                 || ClassBuilderConstants.withholdsEntryPointsOnly(target, config.builderName(),
                     site.isExecutable(), site.seedTypes())

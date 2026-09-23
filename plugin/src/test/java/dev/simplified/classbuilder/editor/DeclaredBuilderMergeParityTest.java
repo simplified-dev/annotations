@@ -207,6 +207,43 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
     }
 
     /**
+     * A builder class named through a {@code String} constant merges into the
+     * nested class the constant names, as javac merges it, and a nested class
+     * of the default name is left alone. The editor used to read only a
+     * literal, so it took the constant for an unwritten name and merged into
+     * {@code Builder} instead.
+     */
+    public void testATypeNamedByAConstant_mergesIntoTheClassItNames() {
+        myFixture.addFileToProject("demo/Order.java",
+            """
+            package demo;
+            import dev.simplified.annotations.BuilderNames;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builder = @BuilderNames(type = Order.MAKER))
+            public class Order {
+                static final String MAKER = "Maker";
+                String item;
+                public static class Maker { }
+                public static class Builder {
+                    public String describe() { return "helper"; }
+                }
+            }
+            """);
+        myFixture.addFileToProject("demo/UseOrder.java",
+            """
+            package demo;
+            public class UseOrder {
+                Order make() { Order.Maker m = Order.builder(); return m.item("x").build(); }
+                void helper() { new Order.Builder().item("y"); }
+            }
+            """);
+        myFixture.configureFromTempProjectFile("demo/UseOrder.java");
+        List<String> errors = errors();
+        assertEquals("javac refuses only helper(): " + errors, 1, errors.size());
+        assertTrue(errors.get(0), errors.get(0).contains("item"));
+    }
+
+    /**
      * The processor merges into a nested type of the builder's name on a plain
      * standalone target and emits all three entry points onto it, so an editor
      * withholding any of them, or any merged member, is red over source that

@@ -681,6 +681,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
                                    Messager messager) {
         BuilderConfig config = extractConfig(executable, enclosing.getSimpleName().toString());
         validateNaming(executable, config, messager);
+        validateAccess(executable, messager);
         validateBuilderConstructorAccess(executable, messager);
         if (!config.excludeSet().isEmpty()) {
             messager.printMessage(Diagnostic.Kind.ERROR,
@@ -756,6 +757,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     private void processClass(TypeElement target, Messager messager) {
         BuilderConfig config = extractConfig(target);
         validateNaming(target, config, messager);
+        validateAccess(target, messager);
         validateBuilderConstructorAccess(target, messager);
         List<FieldSpec> fields = collectFields(target, config);
         validateSlotNaming(fields, config.setters(), target, messager);
@@ -1143,6 +1145,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     private void processInterface(TypeElement target, Messager messager) throws IOException {
         BuilderConfig config = extractConfig(target);
         validateNaming(target, config, messager);
+        validateAccess(target, messager);
         validateBuilderConstructorAccess(target, messager);
 
         // generateImpl=false means the user takes responsibility for producing
@@ -1248,7 +1251,13 @@ public class ClassBuilderProcessor extends AbstractProcessor {
      */
     private BuilderConfig extractConfig(Element target, String nameSubject) {
         NamingStyle style = parseStyle(lookup.stringAttr(target, ANNOTATION_FQN, "style", "SIMPLIFIED"));
-        AccessLevel access = parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, "access", "PUBLIC"));
+        // NONE is reported at the annotation by validateAccess, and the builder
+        // class and entry points are then generated at the default, on the
+        // class, record, executable and interface paths alike.
+        AccessLevel access = parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, BuilderAccess.ATTRIBUTE,
+            BuilderAccess.DEFAULT.name()));
+        if (!BuilderAccess.expressible(access))
+            access = BuilderAccess.DEFAULT;
         AccessLevel constructorAccess =
             parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, "constructorAccess", "PACKAGE"));
         // NONE is reported at the annotation by validateBuilderConstructorAccess,
@@ -1417,6 +1426,24 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         String written = lookup.stringAttr(target, ANNOTATION_FQN, BuilderConstructorAccess.ATTRIBUTE, null);
         if (written == null || BuilderConstructorAccess.expressible(parseAccess(written))) return;
         messager.printMessage(Diagnostic.Kind.ERROR, BuilderConstructorAccess.notExpressible(), target,
+            lookup.findMirror(target, ANNOTATION_FQN));
+    }
+
+    /**
+     * Reports {@code access = NONE} at the annotation.
+     *
+     * <p>The builder class is generated whatever else is suppressed, so the
+     * value names no member it could withhold. The configuration generates at
+     * the default beside the error, which keeps every generated line compilable
+     * and leaves this the one diagnostic, on every kind of target alike.
+     *
+     * @param target the annotated element
+     * @param messager sink for diagnostics
+     */
+    private void validateAccess(Element target, Messager messager) {
+        String written = lookup.stringAttr(target, ANNOTATION_FQN, BuilderAccess.ATTRIBUTE, null);
+        if (written == null || BuilderAccess.expressible(parseAccess(written))) return;
+        messager.printMessage(Diagnostic.Kind.ERROR, BuilderAccess.notExpressible(), target,
             lookup.findMirror(target, ANNOTATION_FQN));
     }
 

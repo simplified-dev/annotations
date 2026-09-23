@@ -6,6 +6,7 @@ import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiManager;
 import com.intellij.psi.PsiMethod;
+import com.intellij.psi.PsiModifier;
 import com.intellij.psi.impl.light.LightMethodBuilder;
 import com.intellij.psi.util.CachedValueProvider;
 import com.intellij.psi.util.CachedValuesManager;
@@ -115,9 +116,12 @@ public final class ArgsAugmentProvider extends AbstractRecursionSafeAugmentProvi
                 }
                 if (!emitted.add(signature.toString())) continue;
                 // An enum constructor is private whatever is written, and the
-                // language permits nothing else.
-                if (target.isEnum()) ctor.addModifier(com.intellij.psi.PsiModifier.PRIVATE);
-                else if (!access.isEmpty()) ctor.addModifier(access);
+                // language permits nothing else. Package-private is spelled
+                // out: a light modifier list carrying none of the four access
+                // modifiers reads as public to the platform's access check,
+                // which would resolve a call from another package javac refuses.
+                if (target.isEnum()) ctor.addModifier(PsiModifier.PRIVATE);
+                else ctor.addModifier(access.isEmpty() ? PsiModifier.PACKAGE_LOCAL : access);
                 ctor.setNavigationElement(target);
                 GeneratedMemberMarker.mark(ctor);
                 out.add(ctor);

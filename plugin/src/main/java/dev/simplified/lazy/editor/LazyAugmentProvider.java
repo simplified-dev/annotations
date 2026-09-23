@@ -213,7 +213,10 @@ public final class LazyAugmentProvider extends AbstractRecursionSafeAugmentProvi
 
         AnnotatedLightModifierList modifiers = new AnnotatedLightModifierList(manager, JavaLanguage.INSTANCE);
         String accessKeyword = readAccessKeyword(field);
-        if (!accessKeyword.isEmpty()) modifiers.addModifier(accessKeyword);
+        // Package-private is spelled out: a light modifier list carrying none of
+        // the four access modifiers reads as public to the platform's access
+        // check, which would resolve a call from another package javac refuses.
+        modifiers.addModifier(accessKeyword.isEmpty() ? PsiModifier.PACKAGE_LOCAL : accessKeyword);
         for (Map.Entry<String, PsiAnnotation> entry : propagated.entrySet()) {
             modifiers.add(entry.getKey(), entry.getValue());
         }

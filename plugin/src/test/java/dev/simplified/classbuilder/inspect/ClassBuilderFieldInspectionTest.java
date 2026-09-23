@@ -53,7 +53,24 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
             import java.lang.annotation.*;
             @Retention(RetentionPolicy.CLASS) @Target(ElementType.TYPE)
             public @interface ClassBuilder {
+                BuilderNames builder() default @BuilderNames;
+                AccessLevel access() default AccessLevel.PUBLIC;
                 AccessLevel builderConstructorAccess() default AccessLevel.PACKAGE;
+            }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/BuilderNames.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target({})
+            public @interface BuilderNames {
+                String INHERIT = "";
+                String NONE = "-";
+                String type() default INHERIT;
+                String builder() default INHERIT;
+                String build() default INHERIT;
+                String from() default INHERIT;
+                String toBuilder() default INHERIT;
             }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/AccessLevel.java",
@@ -450,5 +467,85 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
             }
             """);
         assertFalse(hasErrorContaining("builderConstructorAccess"));
+    }
+
+    /**
+     * {@code access = NONE} is an error on the written value, in the
+     * processor's sentence. It used to pass here in silence while the processor
+     * failed the target with an internal message.
+     */
+    public void testAccessNone_isAnErrorOnTheAttribute() {
+        myFixture.configureByText("Closed.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(access = AccessLevel.NONE)
+            public class Closed {
+                String name;
+            }
+            """);
+        HighlightInfo found = null;
+        for (HighlightInfo h : myFixture.doHighlighting()) {
+            if (h.getSeverity() == HighlightSeverity.ERROR && h.getDescription() != null
+                && h.getDescription().startsWith("@ClassBuilder(access")) {
+                found = h;
+            }
+        }
+        assertNotNull("an error on the attribute", found);
+        assertEquals("@ClassBuilder(access = NONE) is not expressible - the builder class is always "
+                + "generated, so choose PRIVATE, PACKAGE, PROTECTED or PUBLIC",
+            found.getDescription());
+        assertEquals("AccessLevel.NONE", myFixture.getEditor().getDocument().getText()
+            .substring(found.getStartOffset(), found.getEndOffset()));
+    }
+
+    /** Every other level is legal, so nothing is said. */
+    public void testAccessPackage_isClean() {
+        myFixture.configureByText("Open.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(access = AccessLevel.PACKAGE)
+            public class Open {
+                String name;
+            }
+            """);
+        assertFalse(hasErrorContaining("@ClassBuilder(access"));
+    }
+
+    /**
+     * {@code type = BuilderNames.NONE} is refused as the literal is: the
+     * constant is recognised by name. The check used to read only a literal,
+     * so the constant passed in silence while javac refused it.
+     */
+    public void testTypeSuppressedByConstant_isAnError() {
+        myFixture.configureByText("Named.java",
+            """
+            import dev.simplified.annotations.BuilderNames;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builder = @BuilderNames(type = BuilderNames.NONE))
+            public class Named {
+                String name;
+            }
+            """);
+        assertTrue(hasErrorContaining("'type' cannot be suppressed"));
+    }
+
+    /**
+     * A pattern written as a {@code String} constant is judged by the value it
+     * holds, as javac judges it. The check used to read only a literal.
+     */
+    public void testPatternWrittenAsAConstant_isJudgedByItsValue() {
+        myFixture.configureByText("Named.java",
+            """
+            import dev.simplified.annotations.BuilderNames;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builder = @BuilderNames(from = Named.COPY))
+            public class Named {
+                static final String COPY = "1copy";
+                String name;
+            }
+            """);
+        assertTrue(hasErrorContaining("Naming pattern for 'from' expands to an invalid Java identifier"));
     }
 }

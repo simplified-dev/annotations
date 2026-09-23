@@ -21,6 +21,7 @@ import com.intellij.psi.util.InheritanceUtil;
 import com.intellij.psi.util.PsiUtil;
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.SetterNames;
+import dev.simplified.classbuilder.apt.BuilderAccess;
 import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
 import dev.simplified.classbuilder.apt.NamePattern;
 import org.jetbrains.annotations.NotNull;
@@ -51,6 +52,8 @@ import java.util.Map;
  *       accessor, where nothing will read it</li>
  *   <li>a {@code @SetterNames} pattern that cannot expand to a Java
  *       identifier, or that suppresses the setter role</li>
+ *   <li>{@code @ClassBuilder(access = NONE)}, which names no modifier the
+ *       always-generated builder class can carry</li>
  *   <li>{@code @ClassBuilder(builderConstructorAccess = NONE)}, which names no
  *       modifier a builder's constructor can carry</li>
  * </ul>
@@ -90,6 +93,7 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
                     checkNotSuppressed(holder, annotation, "build",
                         "a builder with no way to finish is not a builder");
                 } else if (ClassBuilderConstants.ANNOTATION_FQN.equals(qualifiedName)) {
+                    checkAccess(holder, annotation);
                     checkBuilderConstructorAccess(holder, annotation);
                 }
             }
@@ -143,6 +147,22 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
                 checkBuildFlag(holder, flag, method.getReturnType());
             }
         };
+    }
+
+    /**
+     * Reports {@code access = NONE} on the written value, in the processor's
+     * sentence. The builder class is always generated, so the value suppresses
+     * nothing; the processor then generates at the default, which is what the
+     * augment provider contributes.
+     *
+     * @param holder sink for the diagnostic
+     * @param annotation the {@code @ClassBuilder} annotation
+     */
+    private static void checkAccess(@NotNull ProblemsHolder holder, @NotNull PsiAnnotation annotation) {
+        PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(BuilderAccess.ATTRIBUTE);
+        if (!(value instanceof PsiReferenceExpression reference)) return;
+        if (!AccessLevel.NONE.name().equals(reference.getReferenceName())) return;
+        holder.registerProblem(value, BuilderAccess.notExpressible(), ProblemHighlightType.GENERIC_ERROR);
     }
 
     /**
@@ -279,13 +299,15 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
 
     /**
      * Reports a naming pattern that cannot expand to a Java identifier,
-     * highlighting the attribute value rather than the whole annotation.
+     * highlighting the attribute value rather than the whole annotation. The
+     * value is read as {@link ClassBuilderConstants#writtenStringAttr} reads it,
+     * so a constant is judged by what it holds.
      */
     private static void checkPattern(@NotNull ProblemsHolder holder, @NotNull PsiAnnotation annotation,
                                      @NotNull String attr, boolean placeholderRequired) {
         PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(attr);
-        if (!(value instanceof PsiLiteralExpression literal)) return;
-        if (!(literal.getValue() instanceof String pattern)) return;
+        String pattern = ClassBuilderConstants.writtenStringAttr(annotation, attr);
+        if (value == null || pattern == null) return;
         String error = NamePattern.patternError(pattern, placeholderRequired);
         if (error != null) {
             holder.registerProblem(value, "Naming pattern for '" + attr + "' " + error,
@@ -305,8 +327,8 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
     private static void checkNotSuppressed(@NotNull ProblemsHolder holder, @NotNull PsiAnnotation annotation,
                                            @NotNull String attr, @NotNull String because) {
         PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(attr);
-        if (!(value instanceof PsiLiteralExpression literal)) return;
-        if (!SetterNames.NONE.equals(literal.getValue())) return;
+        if (value == null) return;
+        if (!SetterNames.NONE.equals(ClassBuilderConstants.writtenStringAttr(annotation, attr))) return;
         holder.registerProblem(value,
             "'" + attr + "' cannot be suppressed - " + because,
             ProblemHighlightType.GENERIC_ERROR);
@@ -377,7 +399,7 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
 
     private static int intAttr(@NotNull PsiAnnotation annotation, @NotNull String attr) {
         var value = annotation.findAttributeValue(attr);
-        if (value instanceof com.intellij.psi.PsiLiteralExpression literal && literal.getValue() instanceof Integer i) return i;
+        if (value instanceof PsiLiteralExpression literal && literal.getValue() instanceof Integer i) return i;
         return -1;
     }
 

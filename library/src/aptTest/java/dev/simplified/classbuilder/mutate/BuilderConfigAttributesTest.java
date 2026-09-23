@@ -825,4 +825,134 @@ public class BuilderConfigAttributesTest {
         assertThat(c).failed();
         assertThat(c).hadErrorContaining(NONE_REJECTED);
     }
+
+    /** The sentence both halves report for {@code access = NONE}. */
+    private static final String ACCESS_NONE_REJECTED =
+        "@ClassBuilder(access = NONE) is not expressible - the builder class is always generated, "
+            + "so choose PRIVATE, PACKAGE, PROTECTED or PUBLIC";
+
+    /**
+     * {@code access = NONE} is one error at the annotation, and the builder and
+     * its entry points are generated public beside it, so a caller of them
+     * compiles. The value used to reach the modifier switch and fail the target
+     * with {@code AccessLevel.NONE has no modifier flag - callers must check
+     * emits() first}.
+     */
+    @Test
+    public void access_noneIsRejectedAtTheAnnotation() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Closed",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, access = AccessLevel.NONE)",
+                "public class Closed {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseClosed",
+                "package demo;",
+                "public class UseClosed {",
+                "    public static String go() {",
+                "        Closed.Builder b = Closed.builder().name(\"x\");",
+                "        return Closed.from(b.build()).build().getName() + b.build().mutate().build().getName();",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(ACCESS_NONE_REJECTED);
+        assertEquals("the one error, with the members generated at the default beside it: " + c.errors(),
+            1, c.errors().size());
+    }
+
+    /** A record target reads the attribute through the same rule. */
+    @Test
+    public void access_noneIsRejectedOnARecord() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Point",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, access = AccessLevel.NONE)",
+                "public record Point(int x, int y) { }"),
+            JavaFileObjects.forSourceLines("demo.UsePoint",
+                "package demo;",
+                "public class UsePoint {",
+                "    public static int go() { return Point.builder().x(1).y(2).build().y(); }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(ACCESS_NONE_REJECTED);
+        assertEquals(c.errors().toString(), 1, c.errors().size());
+    }
+
+    /**
+     * An interface target's sibling builder takes its access from the attribute
+     * as well, and is generated public beside the same error rather than
+     * failing on the keyword the value has none of.
+     */
+    @Test
+    public void access_noneIsRejectedOnAnInterface() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, access = AccessLevel.NONE)",
+                "public interface Shape {",
+                "    String name();",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseShape",
+                "package demo;",
+                "public class UseShape {",
+                "    public static String go() { return Shape.builder().name(\"x\").build().name(); }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(ACCESS_NONE_REJECTED);
+        assertEquals(c.errors().toString(), 1, c.errors().size());
+    }
+
+    /**
+     * {@code from = NONE} brought in by a static import withholds {@code from(T)},
+     * so a call to it does not compile. The editor twin reads the import list.
+     */
+    @Test
+    public void builderNames_noneByStaticImportSuppressesFrom() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Config",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderNames;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import static dev.simplified.annotations.BuilderNames.NONE;",
+                "@ClassBuilder(validate = false, builder = @BuilderNames(from = NONE))",
+                "public class Config {",
+                "    private String name;",
+                "    static Object go(Config c) { return Config.from(c); }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("cannot find symbol");
+        assertEquals(c.errors().toString(), 1, c.errors().size());
+    }
+
+    /** A {@code String} constant the target declares names the member it is written on. */
+    @Test
+    public void builderNames_buildNamedByATargetConstant() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Config",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderNames;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, builder = @BuilderNames(build = Config.FINISH))",
+                "public class Config {",
+                "    static final String FINISH = \"make\";",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseConfig",
+                "package demo;",
+                "public class UseConfig {",
+                "    public static String go() { return Config.builder().name(\"x\").make().getName(); }",
+                "}"));
+        assertThat(c).succeeded();
+        Class<?> use = Class.forName("demo.UseConfig", true, loadClasses(c));
+        assertEquals("x", use.getMethod("go").invoke(null));
+    }
 }

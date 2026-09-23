@@ -1,5 +1,7 @@
 package dev.simplified.args.editor;
 
+import com.intellij.codeInsight.daemon.impl.HighlightInfo;
+import com.intellij.lang.annotation.HighlightSeverity;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiJavaFile;
@@ -345,6 +347,60 @@ public class ArgsAugmentProviderTest extends LightJavaCodeInsightFixtureTestCase
         for (PsiMethod ctor : nope.getConstructors()) {
             assertFalse(GeneratedMemberMarker.isGenerated(ctor));
         }
+    }
+
+    /**
+     * A constructor at {@code access = PACKAGE} is refused from another package,
+     * as javac refuses it. The light constructor carried no access modifier,
+     * which the platform's access check reads as public.
+     */
+    public void testPackageAccessConstructor_isClosedToAnotherPackage() {
+        addPair();
+        List<String> errors = errorsIn("q/UsePair.java",
+            """
+            package q;
+            public class UsePair {
+                void go() { new p.Pair(1); }
+            }
+            """);
+        assertEquals("javac: cannot be accessed from outside package; editor: " + errors, 1, errors.size());
+    }
+
+    /** From its own package the same constructor stays reachable. */
+    public void testPackageAccessConstructor_resolvesFromItsOwnPackage() {
+        addPair();
+        List<String> errors = errorsIn("p/UsePair.java",
+            """
+            package p;
+            public class UsePair {
+                void go() { new Pair(1); }
+            }
+            """);
+        assertTrue("javac compiles this; editor errors: " + errors, errors.isEmpty());
+    }
+
+    private void addPair() {
+        myFixture.addFileToProject("p/Pair.java",
+            """
+            package p;
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.AllArgsConstructor;
+            @AllArgsConstructor(access = AccessLevel.PACKAGE)
+            public class Pair {
+                private int left;
+            }
+            """);
+    }
+
+    /** Opens a new file at the given path and returns the errors highlighted in it. */
+    private List<String> errorsIn(String path, String source) {
+        myFixture.addFileToProject(path, source);
+        myFixture.configureFromTempProjectFile(path);
+        List<String> errors = new ArrayList<>();
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            if (info.getSeverity() == HighlightSeverity.ERROR) errors.add(info.getDescription());
+        }
+        return errors;
     }
 
 }

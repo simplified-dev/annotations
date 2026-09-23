@@ -160,15 +160,44 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   on the annotation of every target, and the builder is generated as under `PACKAGE` so that error
   is the only one.
 
+- **`access = NONE` is one error on the annotation.** It failed the build with `Failed to generate
+  builder for ...: AccessLevel.NONE has no modifier flag - callers must check emits() first` (`has no
+  keyword` on an interface target) and was green in the editor. Both halves now report
+  `@ClassBuilder(access = NONE) is not expressible - the builder class is always generated, so choose PRIVATE, PACKAGE, PROTECTED or PUBLIC`
+  on the annotation of every target, and the builder and its entry points are generated public so
+  that error is the only one.
+
+- **An interface target's entry points are offered in the editor.** The processor appends
+  `builder()`, `from(T)` and `mutate()` to an interface target's body - public, the first two
+  `static` and re-declaring a generic interface's type parameters, the third `default` - returning
+  the sibling `<Name>Builder` it writes beside the interface. The editor withheld all three, reading
+  every interface as abstract, so `Shape.builder()`, `Shape.from(s)` and `s.mutate()` were
+  unresolved over source that builds. They are offered under the names `@BuilderNames` gives them,
+  none named `NONE`, typed to the sibling by its qualified name, which resolves once the sibling has
+  been generated.
+
+- **A naming attribute written as a constant is read as its value in the editor.** `@BuilderNames`
+  and `@SetterNames` values were read only as string literals, so `from = BuilderNames.NONE` - the
+  spelling the documentation shows - was taken for an unwritten name and the editor offered a
+  `from(T)` javac never emits, and `type = Order.MAKER` merged the editor's members into the nested
+  class of the default name rather than the one the constant names. `NONE` and `INHERIT` are
+  recognised by name, qualified or statically imported; any other constant is evaluated, so it
+  names the member in the editor as javac names it, and the naming checks judge it by the value it
+  holds.
+
 - **The editor no longer invents a chain builder's constructor.** It gave every chain builder a
   constructor at `builderConstructorAccess`, and no chain builder the processor writes declares one:
   javac's default stands, at the class's access. A `new Link.Builder()` or a subclass builder in
   another package was red in the editor over source that builds.
 
-- **A package-private builder constructor is closed to another package in the editor too.** The
-  editor's constructor carried no modifier for package-private access, and the platform's access
-  check reads a modifier list with no access keyword as `public`, so a cross-package
-  `new Target.Builder()` resolved in the editor while javac refused it.
+- **A package-private generated member is closed to another package in the editor too.** The
+  editor's members carried no modifier for package-private access, and the platform's access check
+  reads a modifier list with no access keyword as `public`, so a cross-package reference resolved in
+  the editor while javac refused it: `new Target.Builder()`, the all-args constructor at its default
+  `constructorAccess`, the entry points and the builder class under `access = PACKAGE`, a
+  constructor `@AllArgsConstructor`, `@RequiredArgsConstructor` or `@NoArgsConstructor` appends at
+  `PACKAGE`, and an accessor `@Getter`, `@Setter` or `@Lazy` generates at `PACKAGE`. Each carries
+  package-private explicitly, and stays reachable from its own package.
 
 - **A second processor run over one compilation adds nothing.** Every pass leaves its marks where a
   second `ClassBuilderProcessor` handed the same trees sees them, and the builder passes stopped only

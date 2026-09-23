@@ -20,6 +20,7 @@ import com.intellij.psi.PsiParameter;
 import com.intellij.psi.PsiSubstitutor;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypeParameter;
+import com.intellij.psi.PsiTypeParameterList;
 import com.intellij.psi.PsiTypes;
 import com.intellij.psi.PsiWildcardType;
 import com.intellij.psi.TypeAnnotationProvider;
@@ -31,6 +32,7 @@ import com.intellij.psi.impl.light.LightParameter;
 import com.intellij.psi.impl.light.LightTypeParameterBuilder;
 import com.intellij.psi.impl.source.PsiExtensibleClass;
 import com.intellij.psi.util.PsiTreeUtil;
+import com.intellij.psi.util.PsiUtil;
 import com.intellij.util.IncorrectOperationException;
 import dev.simplified.annotations.NamingStyle;
 import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
@@ -122,6 +124,7 @@ public final class GeneratedMemberFactory {
             return List.of(buildEntryPoint(psiManager, elements, site, builderClass,
                 config.builderMethodName(), config.access()));
         }
+        if (target.isInterface()) return interfaceBootstrapMethods(psiManager, elements, target, config);
 
         // Use createType(builderClass) instead of createTypeFromText(FQN):
         // textual resolution requires the IDE's symbol-lookup chain to find
@@ -149,6 +152,104 @@ public final class GeneratedMemberFactory {
             out.add(buildInstanceNoArg(psiManager, target, config.toBuilderMethodName(), builderType, config.access()));
         }
         return out;
+    }
+
+    /**
+     * The entry points the processor appends to an interface target's body:
+     * {@code static builder()} and {@code static from(T)}, each re-declaring the
+     * interface's type parameters, and {@code default mutate()} under the
+     * interface's own - every one public whatever {@code access} says, as the
+     * processor writes them. The collision rule is the one the class path asks.
+     *
+     * <p>They return the sibling top-level {@code <Name>Builder} the processor
+     * writes into the interface's package. No augment pass contributes that
+     * class, so every type naming it is parsed from its qualified name rather
+     * than built from a class: the reference resolves once the sibling has been
+     * generated and is an unresolved class type until then, and nothing here
+     * resolves it. Each signature is parsed as a whole method in the
+     * interface's context, which is what binds a static entry point's type
+     * arguments to its own copies of the type parameters and {@code mutate()}'s
+     * to the interface's; the light method takes that method's type parameters,
+     * return type and parameter types.
+     *
+     * @param manager the PSI manager
+     * @param elements the element factory
+     * @param target the annotated interface
+     * @param config the resolved configuration for it
+     * @return the entry points, in the order the processor appends them
+     */
+    private static List<PsiMethod> interfaceBootstrapMethods(PsiManager manager, PsiElementFactory elements,
+                                                             PsiClass target, EditorBuilderConfig config) {
+        String name = target.getName();
+        String qualified = target.getQualifiedName();
+        if (name == null || qualified == null) return List.of();
+        String typeArguments = typeArgumentsText(target);
+        String packageName = PsiUtil.getPackageName(target);
+        String sibling = (packageName == null || packageName.isEmpty() ? "" : packageName + ".")
+            + name + "Builder" + typeArguments;
+        PsiTypeParameterList declared = target.getTypeParameterList();
+        String typeParameters = declared == null ? "" : declared.getText();
+
+        List<PsiMethod> out = new ArrayList<>(3);
+        String builder = config.builderMethodName();
+        if (!builder.isEmpty() && !declaresNullary(target, builder)) {
+            out.add(interfaceEntryPoint(manager, elements, target, PsiModifier.STATIC,
+                "static " + typeParameters + " " + sibling + " " + builder + "()"));
+        }
+        String from = config.fromMethodName();
+        if (!from.isEmpty() && !declaresCopyFactory(target, from)) {
+            out.add(interfaceEntryPoint(manager, elements, target, PsiModifier.STATIC,
+                "static " + typeParameters + " " + sibling + " " + from + "(" + qualified + typeArguments
+                    + " instance)"));
+        }
+        String mutate = config.toBuilderMethodName();
+        if (!mutate.isEmpty() && !declaresNullary(target, mutate)) {
+            out.add(interfaceEntryPoint(manager, elements, target, PsiModifier.DEFAULT,
+                "default " + sibling + " " + mutate + "()"));
+        }
+        return out;
+    }
+
+    /**
+     * One interface entry point, its signature parsed in the interface's
+     * context and carried onto a light method.
+     *
+     * @param manager the PSI manager
+     * @param elements the element factory
+     * @param target the annotated interface
+     * @param kind {@link PsiModifier#STATIC} or {@link PsiModifier#DEFAULT}
+     * @param signature the method's header, without a body
+     * @return the light method
+     */
+    private static PsiMethod interfaceEntryPoint(PsiManager manager, PsiElementFactory elements,
+                                                 PsiClass target, String kind, String signature) {
+        PsiMethod parsed = elements.createMethodFromText(signature + " { return null; }", target);
+        LightMethodBuilder m = new GeneratedLightMethod(manager, parsed.getName());
+        for (PsiTypeParameter parameter : parsed.getTypeParameters()) m.addTypeParameter(parameter);
+        m.setMethodReturnType(parsed.getReturnType());
+        for (PsiParameter parameter : parsed.getParameterList().getParameters())
+            m.addParameter(buildParam(m, parameter.getName(), parameter.getType(), false));
+        m.addModifier(PsiModifier.PUBLIC);
+        m.addModifier(kind);
+        m.setContainingClass(target);
+        GeneratedMemberMarker.mark(m);
+        m.setNavigationElement(target);
+        return m;
+    }
+
+    /**
+     * The interface's type parameters as type arguments, {@code <K, V>}, or
+     * nothing for a non-generic interface.
+     *
+     * @param target the annotated interface
+     * @return the argument list as source text
+     */
+    private static String typeArgumentsText(PsiClass target) {
+        PsiTypeParameter[] parameters = target.getTypeParameters();
+        if (parameters.length == 0) return "";
+        List<String> names = new ArrayList<>(parameters.length);
+        for (PsiTypeParameter parameter : parameters) names.add(parameter.getName());
+        return "<" + String.join(", ", names) + ">";
     }
 
     /**
@@ -537,12 +638,19 @@ public final class GeneratedMemberFactory {
     }
 
     /**
-     * Adds the PUBLIC/PROTECTED/PRIVATE modifier to a light-method builder when
-     * the access level requires one; PACKAGE-private is represented by the
-     * absence of any of those three modifiers.
+     * Adds the access modifier a light-method builder carries, spelling
+     * package-private out as {@link PsiModifier#PACKAGE_LOCAL}.
+     *
+     * <p>A light modifier list reports only what was added to it, and the
+     * platform's access check reads a list carrying none of the four as
+     * public, which would resolve a call from another package that javac
+     * refuses.
+     *
+     * @param m the member to modify
+     * @param access the PSI keyword, empty for package-private
      */
     private static void applyAccess(LightMethodBuilder m, String access) {
-        if (!access.isEmpty()) m.addModifier(access);
+        m.addModifier(access.isEmpty() ? PsiModifier.PACKAGE_LOCAL : access);
     }
 
     /**
@@ -568,7 +676,9 @@ public final class GeneratedMemberFactory {
 
         GeneratedBuilderClass builder =
             new GeneratedBuilderClass(target, config.builderName(), site.typeParameterSource());
-        if (!config.access().isEmpty()) builder.getModifierList().addModifier(config.access());
+        // Package-private spelled out, for the reason applyAccess gives.
+        builder.getModifierList().addModifier(
+            config.access().isEmpty() ? PsiModifier.PACKAGE_LOCAL : config.access());
         builder.getModifierList().addModifier(PsiModifier.STATIC);
         if (role.isSelfTyped()) {
             builder.getModifierList().addModifier(PsiModifier.ABSTRACT);
@@ -1515,6 +1625,8 @@ public final class GeneratedMemberFactory {
                                boolean retainInit) {
         static EditorBuilderConfig fromAnnotation(PsiAnnotation annotation) {
             NamingStyle style = ClassBuilderConstants.namingStyle(annotation);
+            // NONE falls to the public default: the processor reports that value
+            // at the annotation and generates at the default beside the error.
             String access = ClassBuilderConstants.accessKeyword(annotation);
             // Package-private default, matching the ctor Lombok @Builder supplies.
             String constructorAccess = ClassBuilderConstants.accessKeyword(annotation,

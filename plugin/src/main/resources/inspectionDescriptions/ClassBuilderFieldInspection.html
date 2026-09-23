@@ -34,7 +34,12 @@ Flags misuse of the per-field companion annotations that travel with
   <li>Four members cannot be set to <code>NONE</code>:
       <code>set</code>, or a field would have no way to be assigned; and
       <code>type</code> / <code>build</code>, since a builder with no
-      class to name or no way to finish is not a builder.</li>
+      class to name or no way to finish is not a builder. A name written as
+      a constant is judged by the value it holds, <code>NONE</code> included.</li>
+  <li><code>@ClassBuilder(access = NONE)</code> names no modifier the
+      builder class can carry, and the builder class is always generated.
+      The build generates the builder and its entry points public beside the
+      error.</li>
   <li><code>@ClassBuilder(builderConstructorAccess = NONE)</code> names no
       modifier a constructor can carry, and every builder has a constructor.
       The build generates as under the default beside the error.</li>

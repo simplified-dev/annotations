@@ -203,7 +203,10 @@ public final class AccessorAugmentProvider extends AbstractRecursionSafeAugmentP
                                                         PsiClass target) {
         AnnotatedLightModifierList modifiers =
             new AnnotatedLightModifierList(manager, JavaLanguage.INSTANCE);
-        if (!access.isEmpty()) modifiers.addModifier(access);
+        // Package-private is spelled out: a light modifier list carrying none of
+        // the four access modifiers reads as public to the platform's access
+        // check, which would resolve a call from another package javac refuses.
+        modifiers.addModifier(access.isEmpty() ? PsiModifier.PACKAGE_LOCAL : access);
         if (field.hasModifierProperty(PsiModifier.STATIC)) modifiers.addModifier(PsiModifier.STATIC);
         for (PsiAnnotation a : nullness(elements, target, field)) {
             String fqn = WrittenAnnotations.spelledAmong(a,

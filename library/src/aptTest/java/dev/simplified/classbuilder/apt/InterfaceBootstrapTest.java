@@ -8,6 +8,7 @@ import org.junit.Test;
 import javax.tools.JavaFileObject;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.lang.reflect.Method;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
@@ -15,6 +16,7 @@ import java.nio.file.Path;
 
 import static com.google.testing.compile.CompilationSubject.assertThat;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 
 /**
  * Bootstrap methods on a {@code @ClassBuilder} interface. The builder for an
@@ -177,6 +179,43 @@ public class InterfaceBootstrapTest {
                 "}"));
         assertThat(c).failed();
         assertThat(c).hadErrorContaining("builder");
+    }
+
+    /**
+     * A {@code @BuilderNames} rename moves each entry point on an interface as
+     * on a class, and a member named {@code NONE} is not emitted - the shapes
+     * the editor mirrors.
+     */
+    @Test
+    public void renamedEntryPoints_moveAndANoneMemberIsAbsent() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Named",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderNames;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, builder = @BuilderNames(builder = \"create\", from = \"copyOf\", "
+                    + "toBuilder = BuilderNames.NONE))",
+                "public interface Named {",
+                "    String name();",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseNamed",
+                "package demo;",
+                "public class UseNamed {",
+                "    public static String go() {",
+                "        Named n = Named.create().name(\"a\").build();",
+                "        return Named.copyOf(n).name(\"b\").build().name();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+
+        ClassLoader loader = loadClasses(c);
+        assertEquals("b", Class.forName("demo.UseNamed", true, loader).getMethod("go").invoke(null));
+        Class<?> named = Class.forName("demo.Named", true, loader);
+        for (Method method : named.getDeclaredMethods()) {
+            assertFalse("no mutate() and no default name: " + method,
+                method.getName().equals("mutate") || method.getName().equals("builder")
+                    || method.getName().equals("from"));
+        }
     }
 
     /** {@code generateImpl = false} routes build() through a factory and still bootstraps. */
