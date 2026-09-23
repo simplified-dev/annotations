@@ -417,7 +417,10 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
     returns `void`, a primitive or a type the builder is not assignable to, reported on the builder
     naming the method and the supertype declaring it where javac refused the override on the
     target's line, `Object`'s final `wait(long)` meeting the setter of a `long wait` slot - drop
-    `final` or return a supertype of the builder there, or rename the slot or its setter;
+    `final` or return a supertype of the builder there, or rename the slot or its setter. This refusal
+    withholds nothing: the build appends the setter before reporting it, and the editor keeps
+    offering that setter, the rest of the builder and the entry points in completion, beside the
+    error on the builder's name;
   - on a constructor or factory target, a `@BuilderSeed` a constructor of the builder leaves
     unassigned - one a constructor annotation on the builder appends among them - or may assign
     where it is already assigned, by an instance initializer, by the constructor it delegates to or
