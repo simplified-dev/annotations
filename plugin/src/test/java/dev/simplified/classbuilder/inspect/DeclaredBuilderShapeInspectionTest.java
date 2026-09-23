@@ -175,17 +175,17 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
 
     /**
      * An interface's builder is a sibling file and the processor never looks at
-     * a class nested in the interface body, so its shape is not a question -
-     * even one missing the type parameters the merge would require on a class,
-     * and even where the annotation still writes the attribute that once asked
-     * for the merge. The inspection used to read that attribute and judge the
-     * interface's nested class, reporting an error the build never raises.
+     * a class nested in the interface body, so its shape is not a question
+     * under a bare annotation - even one missing the type parameters the merge
+     * would require on a class. An inspection that did not ask whether the
+     * owner is an interface type target would judge that class and report an
+     * error the build never raises.
      */
-    public void testAnInterfacesNestedBuilder_isNotJudgedUnderAStaleAttribute() {
+    public void testAClassNestedInAnInterface_isNotJudged() {
         myFixture.configureByText("Shape.java",
             """
             import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder(mergeDeclaredBuilder = true)
+            @ClassBuilder
             public interface Shape<T> {
                 T value();
                 class Builder { }

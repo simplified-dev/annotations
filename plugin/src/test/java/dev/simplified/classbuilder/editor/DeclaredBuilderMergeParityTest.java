@@ -376,20 +376,17 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
 
     /**
      * An interface's builder is a sibling file and the processor never looks at
-     * a class nested in the interface body, so nothing is appended to it - and
-     * that holds even where the annotation still writes the attribute that once
-     * asked for the merge, which is the source an upgrading author has open.
-     * The editor used to read that attribute and merge into the interface's
-     * nested class, listing setters and a build method javac never emits there;
-     * with the merge running on every declared builder, an editor that did not
-     * ask whether the owner is an interface would do the same with or without
-     * it.
+     * a class nested in the interface body, so nothing is appended to it under
+     * a bare annotation. With the merge running on every declared builder, an
+     * editor that did not ask whether the owner is an interface type target
+     * would list setters and a build method on that class which javac never
+     * emits there.
      */
-    public void testAnInterfacesNestedBuilder_isNotMergedIntoUnderAStaleAttribute() {
+    public void testAClassNestedInAnInterface_isNotMergedInto() {
         PsiFile file = myFixture.configureByText("Shape.java",
             """
             import dev.simplified.annotations.ClassBuilder;
-            @ClassBuilder(mergeDeclaredBuilder = true)
+            @ClassBuilder
             public interface Shape {
                 String name();
                 class Builder {
