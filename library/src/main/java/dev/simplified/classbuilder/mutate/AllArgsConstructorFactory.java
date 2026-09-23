@@ -19,6 +19,7 @@ import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.lazy.mutate.LazyHolders;
 import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.NullnessAnnotations;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Shapes the parameters of the constructor the generated {@code build()}
@@ -67,6 +68,12 @@ final class AllArgsConstructorFactory {
      */
     JCMethodDecl build(AccessLevel access) {
         ListBuffer<JCVariableDecl> params = new ListBuffer<>();
+        // Every @Lazy holder is assigned ahead of every other field, whatever
+        // the declaration order: an instance default is computed here, and one
+        // reading a lazy field - through its getter or through a helper calling
+        // it - dereferences the holder. The parameters keep field order, which
+        // is the order build() passes them in.
+        ListBuffer<JCStatement> holders = new ListBuffer<>();
         ListBuffer<JCStatement> body = new ListBuffer<>();
         for (FieldSpec f : ctx.fields()) {
             // A collected instance default arrives as the container the caller
@@ -117,12 +124,39 @@ final class AllArgsConstructorFactory {
                 null
             ));
             JCExpression lhs = make.Select(make.Ident(names._this), names.fromString(f.name));
-            body.append(make.Exec(make.Assign(lhs, instanceDefault ? defaultingRhs(f) : make.Ident(names.fromString(f.name)))));
+            (f.lazy ? holders : body).append(make.Exec(make.Assign(lhs,
+                instanceDefault ? defaultingRhs(f) : make.Ident(names.fromString(f.name)))));
         }
         // A @ClassBuilder target is never an enum - the processor rejects the
         // kind before reaching here - so the enum access override is moot.
         return new ArgsConstructorFactory(make, names)
-            .mint(access, false, params.toList(), body.toList(), ctx.generated());
+            .mint(access, false, params.toList(), holders.toList().appendList(body.toList()), ctx.generated());
+    }
+
+    /**
+     * Whether a target has no constructor but the one the builder calls, once
+     * javac's own default - which the round drops beside any other - is set
+     * aside.
+     *
+     * <p>Where that holds, every instance of the target is built through the
+     * builder's constructor, which assigns each instance default itself; the
+     * field's own initializer, run ahead of that constructor's body, only
+     * computes a value the body overwrites, and computes it before any
+     * {@code @Lazy} holder exists.
+     *
+     * @param target the target's tree
+     * @param builderConstructor the builder's constructor when it is already in the tree, or
+     *     {@code null} when it is still to be appended
+     * @return whether no other constructor is declared
+     */
+    static boolean onlyBuilderConstructor(JCClassDecl target, @Nullable JCMethodDecl builderConstructor) {
+        for (JCTree def : target.defs) {
+            if (!(def instanceof JCMethodDecl m)) continue;
+            if (!m.name.toString().equals("<init>")) continue;
+            if ((m.mods.flags & Flags.GENERATEDCONSTR) != 0) continue;
+            if (m != builderConstructor) return false;
+        }
+        return true;
     }
 
     /**

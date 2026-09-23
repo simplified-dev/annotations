@@ -65,10 +65,7 @@ final class RetainedInitFactory {
     private final JavacTypeFactory types;
     private final Messager messager;
     private final boolean allArgsConstructorWithheld;
-
-    RetainedInitFactory(MutationContext ctx, Messager messager) {
-        this(ctx, messager, false);
-    }
+    private final boolean onlyBuilderConstructor;
 
     /**
      * Creates the factory for a target whose all-args constructor may be
@@ -78,14 +75,18 @@ final class RetainedInitFactory {
      * @param messager the processor's messager
      * @param allArgsConstructorWithheld whether the all-args constructor is withheld, which leaves every
      *     {@code final} initializer on its field
+     * @param onlyBuilderConstructor whether the constructor the builder calls is the target's only one,
+     *     which drops every instance default's initializer from its field
      */
-    RetainedInitFactory(MutationContext ctx, Messager messager, boolean allArgsConstructorWithheld) {
+    RetainedInitFactory(MutationContext ctx, Messager messager, boolean allArgsConstructorWithheld,
+                        boolean onlyBuilderConstructor) {
         this.ctx = ctx;
         this.make = ctx.make();
         this.names = ctx.names();
         this.types = ctx.types();
         this.messager = messager;
         this.allArgsConstructorWithheld = allArgsConstructorWithheld;
+        this.onlyBuilderConstructor = onlyBuilderConstructor;
     }
 
     /** The convention-named static provider for a field's retained initializer. */
@@ -174,6 +175,29 @@ final class RetainedInitFactory {
             // it either, and the initializer stays on the field.
             if (BlankFinalLift.lifts(f.name, authored, allArgsConstructorWithheld))
                 stripToBlankFinal(target, f.name);
+            // An instance default is computed by the builder's constructor, and
+            // where that constructor is the only one its initializer is dead
+            // code - but code that runs, ahead of the constructor body and so
+            // ahead of every @Lazy holder, which a default reading a lazy field
+            // dereferences. A non-final field would otherwise keep it.
+            if (onlyBuilderConstructor && ctx.isInstanceDefault(f.name))
+                dropInitializer(target, f.name);
+        }
+    }
+
+    /**
+     * Removes a non-{@code final} field's declared initializer, leaving a
+     * {@code final} one to {@link #stripToBlankFinal}.
+     *
+     * @param target the target's tree
+     * @param fieldName the field whose initializer the constructor recomputes
+     */
+    private static void dropInitializer(JCClassDecl target, String fieldName) {
+        for (JCTree def : target.defs) {
+            if (!(def instanceof JCVariableDecl decl)) continue;
+            if (!decl.name.toString().equals(fieldName)) continue;
+            if ((decl.mods.flags & Flags.FINAL) == 0) decl.init = null;
+            return;
         }
     }
 

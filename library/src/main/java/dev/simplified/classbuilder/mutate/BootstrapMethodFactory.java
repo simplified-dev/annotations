@@ -14,6 +14,7 @@ import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
 import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.lazy.mutate.LazyFieldMutator;
 import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.ContractAnnotations;
 import dev.simplified.shared.javac.JavacBridge;
@@ -396,12 +397,13 @@ final class BootstrapMethodFactory {
      *       override, which outranks everything.</li>
      *   <li>A record component, read through its canonical accessor.</li>
      *   <li>A {@code @Lazy} field, pinned to the getter that unwraps its
-     *       storage.</li>
+     *       storage, under the name its own scheme spells.</li>
      *   <li>An author-declared zero-argument accessor, in any spelling a getter
-     *       generator produces. Above the direct field read on purpose: when
-     *       the author wrote the accessor, a normalising or defensive-copying
-     *       body is the behaviour they asked for, and calling it preserves
-     *       that.</li>
+     *       generator produces, returning a type the field's setter accepts.
+     *       Above the direct field read on purpose: when the author wrote the
+     *       accessor, a normalising or defensive-copying body is the behaviour
+     *       they asked for, and calling it preserves that. A method of that
+     *       name returning something else is not the field's reader.</li>
      *   <li>A direct field read, where one is legal.</li>
      *   <li>The bean accessor, as before, with a note naming the field.</li>
      * </ol>
@@ -430,11 +432,12 @@ final class BootstrapMethodFactory {
         // @Lazy rewrites storage to a deferred holder, so the synthesised getter is the
         // only read that yields the field's declared type. Pinned rather than
         // probed because LazyFieldMutator appends that getter after this
-        // context snapshotted the target's methods.
-        if (f.lazy) return call(receiver, "get" + capitalise(f.name));
+        // context snapshotted the target's methods, and named by the call that
+        // names it there.
+        if (f.lazy) return call(receiver, LazyFieldMutator.getterName(f));
 
         for (String candidate : accessorCandidates(f)) {
-            if (ctx.declaresAccessor(candidate)) return call(receiver, candidate);
+            if (ctx.declaresAccessor(candidate, f)) return call(receiver, candidate);
         }
 
         if (isDirectlyReadable(f)) return make.Select(receiver, names.fromString(f.name));

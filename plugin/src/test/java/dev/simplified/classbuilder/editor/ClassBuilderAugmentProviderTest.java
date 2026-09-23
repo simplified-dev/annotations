@@ -1532,6 +1532,44 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
     }
 
     /**
+     * A primitive {@code @Lazy} field's supplier setter and all-args constructor
+     * parameter take the boxed supplier the processor declares. Both read
+     * {@code Supplier<int>}, a type javac refuses to name.
+     */
+    public void testAPrimitiveLazyFieldsSupplierSetterAndConstructorParameter_areBoxed() {
+        myFixture.addFileToProject("dev/simplified/annotations/Lazy.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
+            public @interface Lazy { }
+            """);
+        PsiClass builder = builderFor("Counted",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Lazy;
+            @ClassBuilder
+            public class Counted {
+                @Lazy private int count = compute();
+                private static int compute() { return 7; }
+            }
+            """);
+        List<String> setters = new ArrayList<>();
+        for (PsiMethod setter : builder.findMethodsByName("count", false))
+            setters.add(setter.getParameterList().getParameters()[0].getType().getCanonicalText());
+        assertEquals(List.of("int", "java.util.function.Supplier<java.lang.Integer>"), setters);
+
+        PsiClass target = builder.getContainingClass();
+        assertNotNull(target);
+        List<String> parameters = new ArrayList<>();
+        for (PsiMethod constructor : target.getConstructors()) {
+            for (var parameter : constructor.getParameterList().getParameters())
+                parameters.add(parameter.getType().getCanonicalText());
+        }
+        assertEquals(List.of("java.util.function.Supplier<java.lang.Integer>"), parameters);
+    }
+
+    /**
      * A read of the builder's slot is a read of the builder's field, not of the
      * target's, so Find Usages on the target's field still finds its own reads
      * alone, as javac binds them.

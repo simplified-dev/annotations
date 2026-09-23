@@ -31,7 +31,8 @@ import dev.simplified.shared.javac.JavacTypeFactory;
  * protected Target(Builder b) { super(b); this.ownField = b.ownField; ... }
  * }</pre>
  *
- * <p>Fields are assigned in declaration order. Nested {@code Builder.field}
+ * <p>Fields are assigned in declaration order, every {@code @Lazy} holder
+ * ahead of the rest. Nested {@code Builder.field}
  * access is legal here because {@code Builder} is declared inside
  * {@code Target}, so private members are reachable from the enclosing class.
  */
@@ -74,7 +75,12 @@ final class CopyConstructorFactory {
                 List.of(make.Ident(names.fromString("b")))
             )));
         }
-        for (FieldSpec f : ctx.fields()) body.append(assignFromBuilder(f));
+        // Every @Lazy holder is assigned ahead of the other fields, so an
+        // instance default computed here that reads a lazy field finds it.
+        for (FieldSpec f : ctx.fields())
+            if (f.lazy) body.append(assignFromBuilder(f));
+        for (FieldSpec f : ctx.fields())
+            if (!f.lazy) body.append(assignFromBuilder(f));
         return buildCtor(List.of(param), body.toList(), Flags.PROTECTED);
     }
 

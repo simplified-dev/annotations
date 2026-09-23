@@ -113,7 +113,12 @@ final class SuperBuilderMutator {
         // chain fields keep their providers on their respective declaring
         // classes. FieldMutators.defaultInitializer references them by
         // ctx.targetSimpleName() - always the field's own class.
-        new RetainedInitFactory(ctx, messager).appendAll();
+        // The copy constructor is appended below, so the target's only one when
+        // it will be generated and no other is declared.
+        boolean onlyBuilderConstructor = ctx.config().generateCopyConstructor()
+            && !CopyConstructorFactory.hasCopyConstructor(ctx.target(), ctx.builderName())
+            && AllArgsConstructorFactory.onlyBuilderConstructor(ctx.target(), null);
+        new RetainedInitFactory(ctx, messager, false, onlyBuilderConstructor).appendAll();
 
         // A declared builder gets the role's members appended into it, in the
         // declaration's own names for the self-typed pair; a refused shape has

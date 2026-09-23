@@ -512,13 +512,14 @@ final class FieldMutators {
     /**
      * {@code Builder withFoo(Supplier<T> supplier)} - true lazy form.
      * Stores the supplier verbatim; first call to the target's getter
-     * evaluates the supplier and memoizes the result.
+     * evaluates the supplier and memoizes the result. A primitive field's
+     * supplier is boxed, as its slot is.
      */
     private JCMethodDecl lazySupplierSetter(FieldSpec field) {
         String setterName = field.setters.setName(field.name, field.isBoolean);
         JCExpression supplierType = make.TypeApply(
             types.qualIdent("java.util.function.Supplier"),
-            List.of(types.parseType(field.typeDisplay))
+            List.of(types.parseBoxedType(field.typeDisplay))
         );
         return methodDef(setterName, param(field.name, supplierType), assignAndReturnThis(field.name));
     }

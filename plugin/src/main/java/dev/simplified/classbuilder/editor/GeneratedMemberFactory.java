@@ -38,6 +38,7 @@ import dev.simplified.annotations.NamingStyle;
 import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
 import dev.simplified.classbuilder.apt.BuilderScheme;
 import dev.simplified.classbuilder.apt.ChainRole;
+import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.SetterScheme;
 import dev.simplified.classbuilder.apt.SetterShape;
 import dev.simplified.classbuilder.apt.SlotHolding;
@@ -366,7 +367,7 @@ public final class GeneratedMemberFactory {
         for (PsiFieldShape field : fields) {
             PsiType type = field.lazy
                 ? elements.createTypeFromText(
-                    "java.util.function.Supplier<" + field.type.getCanonicalText() + ">", target)
+                    DeclaredBuilderShape.supplierOf(field.type.getCanonicalText()), target)
                 : field.type;
             // The field's nullness describes T. A @Lazy parameter is Supplier<T>,
             // whose null is the slot's own sentinel for "never set", so copying
@@ -1277,10 +1278,10 @@ public final class GeneratedMemberFactory {
         return m;
     }
 
-    /** {@code Builder withFoo(Supplier<T> supplier)} - true lazy form for a @Lazy field. */
+    /** {@code Builder withFoo(Supplier<T> supplier)} - true lazy form for a @Lazy field, boxed for a primitive. */
     private static PsiMethod lazySupplierSetter(SetterCtx ctx, PsiFieldShape field) {
         PsiType supplierType = ctx.elements.createTypeFromText(
-            "java.util.function.Supplier<" + field.type.getCanonicalText() + ">", ctx.target);
+            DeclaredBuilderShape.supplierOf(field.type.getCanonicalText()), ctx.target);
         LightMethodBuilder m = newSetter(ctx, field, field.setters.setName(field.name, field.isBoolean));
         m.addParameter(buildParam(m, field.name, supplierType, false, NOT_NULL_FQN));
         return m;

@@ -164,12 +164,12 @@ final class SelfTypedSetters {
         return method(setterName, List.of(p), List.of(assign, returnSelf()));
     }
 
-    /** {@code B withFoo(Supplier<T> supplier)} - true lazy form, stores the supplier. */
+    /** {@code B withFoo(Supplier<T> supplier)} - true lazy form, stores the supplier, boxed for a primitive. */
     private JCMethodDecl lazySupplierSetter(FieldSpec field) {
         String setterName = field.setters.setName(field.name, field.isBoolean);
         JCExpression supplierType = make.TypeApply(
             types.qualIdent("java.util.function.Supplier"),
-            List.of(types.parseType(field.typeDisplay))
+            List.of(types.parseBoxedType(field.typeDisplay))
         );
         return method(setterName, List.of(param(field.name, supplierType)),
             assignAndReturnSelf(field.name));

@@ -112,6 +112,7 @@ public final class BuilderMutator {
         // Beside an author's own build() nothing generated calls it, and it is
         // withheld so javac's no-argument default stays.
         boolean allArgsWithheld = allArgsConstructorWithheld(targetElement, target, ctx, isAbstract, annotatedSuper);
+        boolean onlyBuilderConstructor = false;
         if (needsAllArgsConstructor(targetElement, target, ctx, isAbstract, annotatedSuper)) {
             JCMethodDecl ctor = new AllArgsConstructorFactory(ctx).build(
                 constructorAccess(targetElement, ctx));
@@ -126,6 +127,7 @@ public final class BuilderMutator {
                     targetElement);
             } else {
                 bridge.compat().appendDef(target, ctor);
+                onlyBuilderConstructor = AllArgsConstructorFactory.onlyBuilderConstructor(target, ctor);
             }
         }
 
@@ -162,7 +164,7 @@ public final class BuilderMutator {
         // $default$<fieldName>() providers for retained-initializer fields.
         // Must run before the nested Builder is built so FieldMutators'
         // Target.$default$<name>() references resolve at javac attribution.
-        new RetainedInitFactory(ctx, messager, allArgsWithheld).appendAll();
+        new RetainedInitFactory(ctx, messager, allArgsWithheld, onlyBuilderConstructor).appendAll();
 
         if (declared != null) {
             if (!new DeclaredBuilderMerge(ctx, messager).merge(target, targetElement, declared,

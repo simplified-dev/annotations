@@ -271,6 +271,35 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   what the build appends, so the error on the annotation stands alone; with `force = true` the
   constructor is contributed as before.
 
+- **A primitive `@Lazy` field compiles under `@ClassBuilder`.** The builder's supplier setter and the
+  all-args constructor's parameter for it were typed `Supplier<int>`, so
+  `@Lazy private int count = compute();` failed with `unexpected type / required: reference / found:
+  int` on the field's line - on a plain target, with a `factoryMethod`, beside a refused declared
+  builder under the refusal, and on a chain role - while the editor was green. Both are now the
+  boxed `Supplier<Integer>` the field's storage already held, in the build and in the editor alike,
+  so `count(() -> 9)` and `count(4)` both build.
+
+- **An instance default reading a `@Lazy` field builds.** `String f = getBase() + "x"` beside
+  `@Lazy String base`, or the same read through a helper method, compiled and threw
+  `NullPointerException` at `build()`: the default was computed by its own field initializer, which
+  runs ahead of every constructor body, before the lazy holder existed. The constructor `build()`
+  calls now assigns every `@Lazy` holder before it computes any instance default, whatever the
+  declaration order, and where it is the target's only constructor an instance default's initializer
+  is dropped from its field, so the default is computed once, by that constructor. The chain's copy
+  constructor orders its assignments the same way.
+
+- **`from(T)` and `mutate()` read a `@Lazy` field through the getter its scheme names.** Both called
+  `getX()` whatever the field's `@Lazy` spelled, so `@Lazy(name = "load{}")`, a `FLUENT` style and a
+  `boolean` field's `isX()` failed with `cannot find symbol method getHeavy()` on a generated line.
+  The read is named by the call that names the getter.
+
+- **`from(T)` and `mutate()` no longer read a field through a method of another type.** A method
+  named like the field's accessor was taken as its reader by its name alone, so
+  `Runnable reset = () -> touch()` beside `public String reset()` - or any field beside a method of
+  its name returning something else - passed the setter a value javac refused with
+  `incompatible types` on a generated line. An author accessor is used only where it returns a type
+  the field's setter accepts; otherwise the field is read directly.
+
 ### Changed
 
 - **BREAKING: `mergeDeclaredBuilder` is removed, and a declared builder is always merged into.** A
