@@ -17,6 +17,10 @@ The shapes refused, each for a reason the generated members cannot work around:
 </p>
 
 <ul>
+  <li><b>A record, an enum or an interface</b> - a record takes no instance
+      field, an enum no <code>new</code> and an interface neither, so only a
+      class can hold the slot fields and the constructor the entry points
+      call.</li>
   <li><b>Not <code>static</code></b> - an inner class captures the enclosing
       instance, so the static entry point has nothing to create one from.</li>
   <li><b><code>abstract</code> where the entry points instantiate it</b> - the
@@ -25,6 +29,12 @@ The shapes refused, each for a reason the generated members cannot work around:
   <li><b>The wrong type parameters</b> - the generated members are written in
       the builder's own re-declared parameters, so they have to be present and
       in the same order for a setter to name a slot's type at all.</li>
+  <li><b>Other bounds on them</b> - the generated members apply the builder's
+      parameters to the target and the target's to the builder, so each
+      re-declared parameter carries the bounds the target writes on it, compared
+      by simple name in any order; a looser bound fails the generated
+      <code>build()</code> and a narrower one the generated
+      <code>builder()</code>.</li>
   <li><b>An unbounded trailing pair</b> on a self-typed builder - a setter
       returning it would return something with no members.</li>
   <li><b>The wrong <code>extends</code> clause</b> - a chained builder inherits
@@ -57,14 +67,19 @@ factory's own, and the enclosing type's for a constructor.
 <p>
 On a shape the merge accepts, a field the author declares in the builder under
 a slot's name is also checked against the type the generated setters assign,
-type arguments included. That is the field's declared type, except for a
+type arguments included, a primitive and its box being accepted for each other
+since the setter assigns and <code>build()</code> reads back under boxing. A
+field written C-style, <code>String tags[]</code>, is read with its brackets.
+That is the field's declared type, except for a
 <code>@Lazy</code> field and a field whose kept initializer reads the instance -
 names <code>this</code>, <code>super</code> or an instance member - which the
 builder holds as a <code>Supplier</code> of it: so <code>private String
 note;</code> beside a <code>@Lazy String note</code> is reported, and
 <code>private Supplier&lt;String&gt; note;</code> is not. A <code>@Collector</code>
 slot whose initializer reads the instance is held in a scratch container and is
-not checked here.
+not checked here. A field under a slot's name declared <code>final</code> is
+reported whatever its type, the generated setter assigning it; a
+<code>@BuilderSeed</code> is the exception, appended <code>final</code> itself.
 </p>
 
 <p>

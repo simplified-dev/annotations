@@ -34,6 +34,12 @@ public final class DeclaredBuilderShape {
     /** A type punctuation character with the whitespace on either side of it. */
     private static final Pattern AROUND_PUNCTUATION = Pattern.compile("\\s*([<>,\\[\\].])\\s*");
 
+    /**
+     * The qualifier in front of a name, which the element model spells and a
+     * name read as written may not.
+     */
+    private static final Pattern QUALIFIER = Pattern.compile("(?:[A-Za-z_$][\\w$]*\\.)+(?=[A-Za-z_$])");
+
     private DeclaredBuilderShape() {
     }
 
@@ -156,13 +162,41 @@ public final class DeclaredBuilderShape {
                                                        @NotNull List<String> declaredTypeParameters,
                                                        @Nullable String ancestorName,
                                                        @NotNull List<String> superArguments) {
+        return expectation(role, targetName, builderName, targetTypeParameters, List.of(),
+            declaredTypeParameters, ancestorName, superArguments);
+    }
+
+    /**
+     * Derives everything a role requires of the builder declared for it, the
+     * bounds on the target's own type parameters included.
+     *
+     * @param role the position the target holds in a chain
+     * @param targetName the target's simple name
+     * @param builderName the builder's simple name
+     * @param targetTypeParameters the type parameter names the builder re-declares, in declaration order
+     * @param targetTypeParameterBounds the bounds written on each of those parameters, as
+     *     {@link DeclaredBuilderFacts#typeParameterBounds} holds a declaration's, null where none is written
+     * @param declaredTypeParameters the declared builder's type parameter names, in declaration order
+     * @param ancestorName the annotated superclass's simple name, or null when there is none
+     * @param superArguments the type arguments the target passes to its superclass, in order
+     * @return the expectation the declaration is measured against
+     */
+    public static @NotNull RoleExpectation expectation(@NotNull ChainRole role,
+                                                       @NotNull String targetName,
+                                                       @NotNull String builderName,
+                                                       @NotNull List<String> targetTypeParameters,
+                                                       @NotNull List<@Nullable String> targetTypeParameterBounds,
+                                                       @NotNull List<String> declaredTypeParameters,
+                                                       @Nullable String ancestorName,
+                                                       @NotNull List<String> superArguments) {
         List<String> pair = selfNames(role, targetTypeParameters, declaredTypeParameters);
         return new RoleExpectation(
             expectedTypeParameters(role, targetTypeParameters, pair),
             expectedSuperType(role, ancestorName == null ? null : ancestorName + "." + builderName),
             expectedBuildReturnType(role, targetName, pair.get(0)),
             expectedSuperTypeArguments(role, superArguments, targetName, builderName, pair),
-            acceptedBuildReturnTypes(role, targetName, pair.get(0)));
+            acceptedBuildReturnTypes(role, targetName, pair.get(0)),
+            targetTypeParameterBounds);
     }
 
     /**
@@ -208,12 +242,19 @@ public final class DeclaredBuilderShape {
     /**
      * Reports why a declared builder cannot carry the generated members.
      *
-     * <p>Ordered so the first answer is the one worth acting on: the modifiers
-     * decide whether the class can hold the members at all, the parameter list
-     * decides whether their types can be named, and the extends clause and the
-     * build method decide whether what they resolve to is right. Reporting the
-     * later ones over an unusable class would send the author after the
-     * consequence rather than the cause.
+     * <p>Ordered so the first answer is the one worth acting on: the kind and
+     * the modifiers decide whether the class can hold the members at all, the
+     * parameter list and its bounds decide whether their types can be named, and
+     * the extends clause and the build method decide whether what they resolve
+     * to is right. Reporting the later ones over an unusable class would send
+     * the author after the consequence rather than the cause.
+     *
+     * <p>The kind comes first because a record, an enum and an interface are
+     * each implicitly {@code static}, which the javac tree does not record on
+     * the declaration and PSI does, so asking the modifier of one would split the
+     * halves - and none of the three can be a builder whatever its modifiers: a
+     * record takes no instance field, an enum no {@code new}, an interface
+     * neither.
      *
      * @param role the position the target holds in a builder chain
      * @param facts the declared builder as written
@@ -223,6 +264,7 @@ public final class DeclaredBuilderShape {
     public static @Nullable DeclaredBuilderRejection check(@NotNull ChainRole role,
                                                            @NotNull DeclaredBuilderFacts facts,
                                                            @NotNull RoleExpectation expectation) {
+        if (!DeclaredBuilderFacts.CLASS.equals(facts.kind())) return DeclaredBuilderRejection.NOT_A_CLASS;
         if (!facts.nestedStatic()) return DeclaredBuilderRejection.NOT_STATIC;
         if (role.isSelfTyped() && !facts.nestedAbstract()) {
             return DeclaredBuilderRejection.NOT_ABSTRACT;
@@ -233,6 +275,7 @@ public final class DeclaredBuilderShape {
         if (!facts.typeParameterNames().equals(expectation.typeParameterNames())) {
             return DeclaredBuilderRejection.TYPE_PARAMETERS;
         }
+        if (!targetBoundsKept(facts, expectation)) return DeclaredBuilderRejection.TYPE_PARAMETER_BOUNDS;
         if (role.isSelfTyped() && !selfTypeBoundsWritten(facts, expectation)) {
             return DeclaredBuilderRejection.SELF_TYPE_BOUNDS;
         }
@@ -288,12 +331,18 @@ public final class DeclaredBuilderShape {
                                            @NotNull DeclaredBuilderFacts facts,
                                            @NotNull RoleExpectation expectation) {
         return switch (rejection) {
+            case NOT_A_CLASS -> rejection.message(declaredName, kindPhrase(facts.kind()), builderMethodName);
             case NOT_STATIC, ABSTRACT_ON_CONCRETE_ROLE ->
                 rejection.message(declaredName, builderMethodName);
             case NOT_ABSTRACT -> rejection.message(declaredName, targetName);
             case TYPE_PARAMETERS -> rejection.message(declaredName,
                 requiredParameters(role, expectation.typeParameterNames()),
                 names(facts.typeParameterNames()));
+            case TYPE_PARAMETER_BOUNDS -> rejection.message(declaredName,
+                boundedParameters(facts.typeParameterNames(), expectation.typeParameterBounds(),
+                    expectation.typeParameterBounds().size()),
+                boundedParameters(facts.typeParameterNames(), facts.typeParameterBounds(),
+                    expectation.typeParameterBounds().size()));
             case SELF_TYPE_BOUNDS -> rejection.message(declaredName,
                 requiredBounds(expectation.typeParameterNames(), targetName, declaredName),
                 writtenPair(facts));
@@ -377,6 +426,106 @@ public final class DeclaredBuilderShape {
     }
 
     /**
+     * Renders the leading type parameters with the bounds given for them, for
+     * the bound rejection.
+     *
+     * @param names the declaration's parameter names, which lead with the target's own
+     * @param bounds the bounds to show beside them, in the same order, null where none is written
+     * @param count how many leading parameters to render
+     * @return the parameters in angle brackets, each followed by its bounds where there are any
+     */
+    private static String boundedParameters(List<String> names, List<@Nullable String> bounds, int count) {
+        List<String> out = new ArrayList<>();
+        for (int i = 0; i < count && i < names.size(); i++) {
+            List<String> written = new ArrayList<>();
+            for (String bound : boundList(i < bounds.size() ? bounds.get(i) : null))
+                written.add(QUALIFIER.matcher(bound).replaceAll(""));
+            out.add(written.isEmpty()
+                ? names.get(i)
+                : names.get(i) + " extends " + String.join(" & ", written));
+        }
+        return out.isEmpty() ? "none" : "<" + String.join(", ", out) + ">";
+    }
+
+    /** A declared kind as a sentence names it - {@code a record}, {@code an enum}. */
+    private static String kindPhrase(String kind) {
+        return switch (kind) {
+            case DeclaredBuilderFacts.ENUM -> "an enum";
+            case DeclaredBuilderFacts.INTERFACE -> "an interface";
+            case DeclaredBuilderFacts.ANNOTATION -> "an annotation interface";
+            default -> "a " + kind;
+        };
+    }
+
+    /**
+     * Whether the declared builder bounds each of the target's own type
+     * parameters as the target does.
+     *
+     * <p>The generated members apply the builder's parameters to the target and
+     * the target's to the builder - {@code build()} returns {@code Target<T>}
+     * from inside the builder, {@code builder()} returns {@code Builder<T>} from
+     * the target - so a bound looser on either side fails the other's bound
+     * check on a line the author never wrote. The bounds are compared as simple
+     * names at every level, in any order, a written {@code Object} being what no
+     * bound means.
+     *
+     * @param facts the declared builder as written
+     * @param expectation what the role requires, the target's bounds among it
+     * @return whether every leading parameter carries the target's bounds
+     */
+    private static boolean targetBoundsKept(DeclaredBuilderFacts facts, RoleExpectation expectation) {
+        List<@Nullable String> expected = expectation.typeParameterBounds();
+        List<@Nullable String> written = facts.typeParameterBounds();
+        for (int i = 0; i < expected.size(); i++) {
+            if (!sameBounds(boundList(expected.get(i)), boundList(i < written.size() ? written.get(i) : null)))
+                return false;
+        }
+        return true;
+    }
+
+    /** Whether two bound lists name the same types, in any order. */
+    private static boolean sameBounds(List<String> expected, List<String> written) {
+        if (expected.size() != written.size()) return false;
+        List<String> unmatched = new ArrayList<>(written);
+        for (String bound : expected) {
+            boolean found = false;
+            for (int i = 0; i < unmatched.size() && !found; i++) {
+                if (sameSimpleType(bound, unmatched.get(i))) {
+                    unmatched.remove(i);
+                    found = true;
+                }
+            }
+            if (!found) return false;
+        }
+        return true;
+    }
+
+    /**
+     * Splits a parameter's bounds as written at their top-level {@code &},
+     * each rendered through {@link #typeText}, dropping an {@code Object} bound.
+     *
+     * @param bounds the bounds as written, or null when none is
+     * @return the bounds, in order
+     */
+    private static List<String> boundList(@Nullable String bounds) {
+        List<String> out = new ArrayList<>();
+        if (bounds == null || bounds.isBlank()) return out;
+        String text = typeText(bounds);
+        int depth = 0;
+        int start = 0;
+        for (int i = 0; i <= text.length(); i++) {
+            char c = i < text.length() ? text.charAt(i) : '&';
+            if (c == '<') depth++;
+            if (c == '>') depth--;
+            if (c != '&' || depth != 0) continue;
+            String bound = text.substring(start, i).trim();
+            if (!bound.isEmpty() && !"Object".equals(erasedName(bound))) out.add(bound);
+            start = i + 1;
+        }
+        return out;
+    }
+
+    /**
      * The diagnostic for a link whose annotated supertype declares its own
      * nested builder.
      *
@@ -417,7 +566,9 @@ public final class DeclaredBuilderShape {
      * the generated setter assigns into it and {@code build()} reads it back out,
      * so an argument differing at any depth is reported, a wildcard among them.
      * A raw spelling on either side is not, assigning and reading back with an
-     * unchecked warning rather than an error. Both types are rendered through
+     * unchecked warning rather than an error, and neither is a primitive spelled
+     * over its box or the reverse, which the setter assigns and {@code build()}
+     * reads back under boxing and unboxing. Both types are rendered through
      * {@link #typeText} before they are compared or printed, so the sentence does
      * not depend on which model spelled them.
      *
@@ -435,7 +586,7 @@ public final class DeclaredBuilderShape {
                                                 @NotNull SlotHolding holding) {
         String written = typeText(writtenType);
         String storage = typeText(storageType);
-        if (sameSimpleType(written, storage)) return null;
+        if (sameSimpleType(written, storage) || boxedTwins(written, storage)) return null;
         return "@ClassBuilder merged into '" + declaredName + "' finds '" + slotName
             + "' declared as " + written + ", and the slot it stands for is " + storage
             + " - the generated setter has nothing to assign it to" + holding.clause();
@@ -452,7 +603,13 @@ public final class DeclaredBuilderShape {
      */
     public static @NotNull String supplierOf(@NotNull String declaredType) {
         String type = typeText(declaredType);
-        String boxed = switch (type) {
+        String boxed = boxOf(type);
+        return "java.util.function.Supplier<" + (boxed == null ? type : boxed) + ">";
+    }
+
+    /** The qualified box of a primitive, or {@code null} when the type is not one. */
+    private static @Nullable String boxOf(String type) {
+        return switch (type) {
             case "boolean" -> "java.lang.Boolean";
             case "byte" -> "java.lang.Byte";
             case "char" -> "java.lang.Character";
@@ -461,9 +618,59 @@ public final class DeclaredBuilderShape {
             case "long" -> "java.lang.Long";
             case "float" -> "java.lang.Float";
             case "double" -> "java.lang.Double";
-            default -> type;
+            default -> null;
         };
-        return "java.util.function.Supplier<" + boxed + ">";
+    }
+
+    /** Whether one rendered type is a primitive and the other its box, by simple name. */
+    private static boolean boxedTwins(String written, String storage) {
+        String writtenBox = boxOf(written);
+        if (writtenBox != null) return writtenBox.equals(storage) || erasedName(writtenBox).equals(storage);
+        String storageBox = boxOf(storage);
+        return storageBox != null && (storageBox.equals(written) || erasedName(storageBox).equals(written));
+    }
+
+    /**
+     * Reports a declared builder field under a slot's name that is
+     * {@code final}, which the generated setter assigns on a line the author
+     * never wrote.
+     *
+     * <p>Asked of every slot the setters assign, which is every slot but a
+     * seed: a seed is appended {@code final} itself and assigned by the author's
+     * constructor alone.
+     *
+     * @param declaredName the declared builder's simple name
+     * @param slotName the slot's name, which the declared field shares
+     * @return the diagnostic text both halves report
+     */
+    public static @NotNull String finalSlot(@NotNull String declaredName, @NotNull String slotName) {
+        return "@ClassBuilder merged into '" + declaredName + "' finds '" + slotName
+            + "' declared final, and the generated setter assigns it";
+    }
+
+    /**
+     * Keys a method by what decides whether the declared builder already spells
+     * it - its name and the erasure of each parameter type, by simple name.
+     *
+     * <p>That is the signature Java itself refuses to see twice: an author
+     * method matching a generated one under it is the setter they wrote instead,
+     * and appending the generated one beside it would be a duplicate. A method
+     * sharing only the name and arity takes another type, is an overload rather
+     * than a replacement, and leaves the generated setter to be appended -
+     * {@code from(T)} and {@code mutate()} pass the slot's own type to it. A
+     * varargs parameter is keyed as the array it is.
+     *
+     * @param name the method's name
+     * @param parameterTypes each parameter's type as either model renders it, in order
+     * @return the key both halves compare
+     */
+    public static @NotNull String methodKey(@NotNull String name, @NotNull List<String> parameterTypes) {
+        List<String> erased = new ArrayList<>(parameterTypes.size());
+        for (String type : parameterTypes) {
+            String text = typeText(type.replace("...", "[]"));
+            erased.add(erasedName(withoutDimensions(text)) + "[]".repeat(dimensions(text)));
+        }
+        return name + "(" + String.join(",", erased) + ")";
     }
 
     /**
@@ -481,8 +688,45 @@ public final class DeclaredBuilderShape {
      * @return whether a constructor the entry points can call exists
      */
     public static boolean instantiable(@NotNull List<Integer> declaredArities, int seeds) {
+        return instantiable(declaredArities, declaredArities, seeds);
+    }
+
+    /**
+     * Decides whether the entry points can instantiate a declared builder,
+     * reading which constructors declare a throws clause.
+     *
+     * <p>A constructor declaring one is not one the entry points can call: each
+     * of them calls it with nothing around the call to handle what it throws,
+     * and whether a thrown type is checked is a question of what it resolves
+     * to, which neither half asks. So a throws clause of any type takes the
+     * constructor out of the count.
+     *
+     * @param declaredArities the parameter count of each constructor the author declared
+     * @param callableArities the parameter count of each of those declaring no throws clause
+     * @param seeds how many arguments the entry points pass the constructor
+     * @return whether a constructor the entry points can call exists
+     */
+    public static boolean instantiable(@NotNull List<Integer> declaredArities,
+                                       @NotNull List<Integer> callableArities,
+                                       int seeds) {
         if (declaredArities.isEmpty()) return seeds == 0;
-        return declaredArities.contains(seeds);
+        return callableArities.contains(seeds);
+    }
+
+    /**
+     * Whether the entry points are skipped only because every constructor of
+     * the arity they pass declares a throws clause, which decides the note's
+     * wording.
+     *
+     * @param declaredArities the parameter count of each constructor the author declared
+     * @param callableArities the parameter count of each of those declaring no throws clause
+     * @param seeds how many arguments the entry points pass the constructor
+     * @return whether a constructor of that arity exists and none of them is callable
+     */
+    public static boolean skippedForAThrowsClause(@NotNull List<Integer> declaredArities,
+                                                  @NotNull List<Integer> callableArities,
+                                                  int seeds) {
+        return declaredArities.contains(seeds) && !callableArities.contains(seeds);
     }
 
     /**
@@ -505,6 +749,26 @@ public final class DeclaredBuilderShape {
                                                       @NotNull BuilderScheme names,
                                                       boolean executable,
                                                       @NotNull List<String> seedNames) {
+        return entryPointsSkipped(declaredName, names, executable, seedNames, false);
+    }
+
+    /**
+     * Renders the note for entry points skipped because the declared builder has
+     * no constructor they can call, worded by why.
+     *
+     * @param declaredName the declared builder's simple name
+     * @param names the resolved names, an entry point named {@code NONE} being empty
+     * @param executable whether the annotation sits on a constructor or factory method
+     * @param seedNames the seeded slots the entry points pass, in parameter order
+     * @param throwsClause whether a constructor of the arity they pass exists and declares a throws
+     *     clause, from {@link #skippedForAThrowsClause}
+     * @return the note text, or {@code null} when the path emits no entry point
+     */
+    public static @Nullable String entryPointsSkipped(@NotNull String declaredName,
+                                                      @NotNull BuilderScheme names,
+                                                      boolean executable,
+                                                      @NotNull List<String> seedNames,
+                                                      boolean throwsClause) {
         List<String> entryPoints = new ArrayList<>();
         entryPoints.add(names.builder());
         if (!executable) {
@@ -513,7 +777,32 @@ public final class DeclaredBuilderShape {
         }
         entryPoints.removeIf(String::isEmpty);
         if (entryPoints.isEmpty()) return null;
-        return uninstantiable(declaredName, entryPoints, seedNames);
+        return throwsClause
+            ? throwingConstructor(declaredName, entryPoints, seedNames)
+            : uninstantiable(declaredName, entryPoints, seedNames);
+    }
+
+    /**
+     * Renders the note for entry points skipped because the constructor they
+     * would call declares a throws clause.
+     *
+     * @param declaredName the declared builder's simple name
+     * @param entryPoints the names of the entry points that were not added
+     * @param seedNames the seeded slots the entry points pass, in parameter order
+     * @return the note text
+     */
+    public static @NotNull String throwingConstructor(@NotNull String declaredName,
+                                                      @NotNull List<String> entryPoints,
+                                                      @NotNull List<String> seedNames) {
+        boolean single = entryPoints.size() == 1;
+        String skipped = quotedList(entryPoints) + (single ? " was" : " were") + " not added";
+        String constructor = seedNames.isEmpty()
+            ? "its no-argument constructor"
+            : "its constructor taking " + (seedNames.size() == 1 ? "the seed" : "the " + seedNames.size()
+                + " seeds") + " " + quotedList(entryPoints) + " passes";
+        return "@ClassBuilder merged into '" + declaredName + "' but " + constructor
+            + " declares a throws clause, so " + skipped + " - declare one that throws nothing or write "
+            + (single ? "it" : "them");
     }
 
     /**

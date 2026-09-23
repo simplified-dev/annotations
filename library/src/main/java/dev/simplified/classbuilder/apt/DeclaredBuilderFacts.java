@@ -19,10 +19,11 @@ import java.util.List;
  * @param nestedStatic whether the declared class carries the {@code static} modifier
  * @param nestedAbstract whether the declared class carries the {@code abstract} modifier
  * @param typeParameterNames the declared type parameter names, in declaration order
- * @param typeParameterBounds the first bound written on each type parameter, in the same order, null where none is written
+ * @param typeParameterBounds the bounds written on each type parameter, joined by {@code " & "}, in the same order, null where none is written
  * @param writtenSuperType the type written in the extends clause with its type arguments removed and its qualifier kept, or null when none is written
  * @param superTypeArguments the type arguments written in the extends clause, in order
  * @param buildMethod the declared build method as written, or null when the class declares none
+ * @param kind the keyword the type is declared with - {@link #CLASS}, {@link #RECORD}, {@link #ENUM}, {@link #INTERFACE} or {@link #ANNOTATION}
  */
 public record DeclaredBuilderFacts(boolean nestedStatic,
                                    boolean nestedAbstract,
@@ -30,7 +31,23 @@ public record DeclaredBuilderFacts(boolean nestedStatic,
                                    List<@Nullable String> typeParameterBounds,
                                    @Nullable String writtenSuperType,
                                    List<String> superTypeArguments,
-                                   @Nullable DeclaredBuildMethod buildMethod) {
+                                   @Nullable DeclaredBuildMethod buildMethod,
+                                   String kind) {
+
+    /** A class, the one kind a builder can be. */
+    public static final String CLASS = "class";
+
+    /** A record. */
+    public static final String RECORD = "record";
+
+    /** An enum. */
+    public static final String ENUM = "enum";
+
+    /** An interface other than an annotation interface. */
+    public static final String INTERFACE = "interface";
+
+    /** An annotation interface. */
+    public static final String ANNOTATION = "@interface";
 
     /**
      * Defensive copies, the two models both handing over lists they still own.
@@ -41,6 +58,24 @@ public record DeclaredBuilderFacts(boolean nestedStatic,
         typeParameterNames = List.copyOf(typeParameterNames);
         typeParameterBounds = Collections.unmodifiableList(new ArrayList<>(typeParameterBounds));
         superTypeArguments = List.copyOf(superTypeArguments);
+    }
+
+    /**
+     * Facts about a type declared as a class.
+     *
+     * @param nestedStatic whether the declared class carries the {@code static} modifier
+     * @param nestedAbstract whether the declared class carries the {@code abstract} modifier
+     * @param typeParameterNames the declared type parameter names, in declaration order
+     * @param typeParameterBounds the bounds written on each type parameter, in the same order, null where none is written
+     * @param writtenSuperType the type written in the extends clause without its arguments, or null when none is written
+     * @param superTypeArguments the type arguments written in the extends clause, in order
+     * @param buildMethod the declared build method as written, or null when the class declares none
+     */
+    public DeclaredBuilderFacts(boolean nestedStatic, boolean nestedAbstract, List<String> typeParameterNames,
+                                List<@Nullable String> typeParameterBounds, @Nullable String writtenSuperType,
+                                List<String> superTypeArguments, @Nullable DeclaredBuildMethod buildMethod) {
+        this(nestedStatic, nestedAbstract, typeParameterNames, typeParameterBounds, writtenSuperType,
+            superTypeArguments, buildMethod, CLASS);
     }
 
 }

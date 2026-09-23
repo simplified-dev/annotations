@@ -426,6 +426,106 @@ public class DeclaredBuilderShapeTest {
     }
 
     /**
+     * A method is keyed by its name and each parameter's erasure by simple
+     * name, so a same-arity method taking another type is another key, and one
+     * spelling the same signature in another form is the same key.
+     */
+    @Test
+    public void methodKey_readsTheErasedParameterTypes() {
+        assertEquals("port(int)", DeclaredBuilderShape.methodKey("port", List.of("int")));
+        assertFalse("another type is another key", DeclaredBuilderShape.methodKey("port", List.of("String"))
+            .equals(DeclaredBuilderShape.methodKey("port", List.of("int"))));
+        assertEquals("qualifier and arguments drop out",
+            DeclaredBuilderShape.methodKey("items", List.of("List<Integer>")),
+            DeclaredBuilderShape.methodKey("items", List.of("java.util.List<java.lang.String>")));
+        assertEquals("varargs is the array it is",
+            DeclaredBuilderShape.methodKey("tags", List.of("String[]")),
+            DeclaredBuilderShape.methodKey("tags", List.of("java.lang.String...")));
+        assertEquals("build()", DeclaredBuilderShape.methodKey("build", List.of()));
+    }
+
+    /**
+     * A record, an enum and an interface cannot be a builder, and the kind is
+     * asked ahead of the modifier the javac tree does not record on them.
+     */
+    @Test
+    public void check_onANonClassKind_isNotAClass() {
+        DeclaredBuilderFacts record = new DeclaredBuilderFacts(false, false, List.of(), List.of(), null,
+            List.of(), null, DeclaredBuilderFacts.RECORD);
+        assertEquals(DeclaredBuilderRejection.NOT_A_CLASS,
+            DeclaredBuilderShape.check(ChainRole.STANDALONE, record, standaloneExpectation()));
+        assertEquals("@ClassBuilder cannot merge into 'Builder' - it is declared as an enum, and only a "
+                + "class can hold the builder's fields and the constructor builder() calls",
+            DeclaredBuilderShape.describe(DeclaredBuilderRejection.NOT_A_CLASS, ChainRole.STANDALONE,
+                "Builder", "Note", "builder",
+                new DeclaredBuilderFacts(true, false, List.of(), List.of(), null, List.of(), null,
+                    DeclaredBuilderFacts.ENUM), standaloneExpectation()));
+    }
+
+    /**
+     * The target's own bounds are compared by simple name, in any order, with
+     * a written {@code Object} bound standing for none.
+     */
+    @Test
+    public void check_onTheTargetsBounds_isTypeParameterBoundsOnlyWhereTheyDiffer() {
+        RoleExpectation expectation = DeclaredBuilderShape.expectation(ChainRole.STANDALONE, "Box",
+            "Builder", List.of("T"), Arrays.asList("java.lang.Number & java.lang.Comparable<T>"),
+            List.of("T"), null, List.of());
+        assertNull(DeclaredBuilderShape.check(ChainRole.STANDALONE,
+            facts(true, false, List.of("T"), List.of("Comparable<T> & Number"), null, null), expectation));
+        DeclaredBuilderFacts looser = facts(true, false, List.of("T"), Arrays.asList((String) null), null, null);
+        assertEquals(DeclaredBuilderRejection.TYPE_PARAMETER_BOUNDS,
+            DeclaredBuilderShape.check(ChainRole.STANDALONE, looser, expectation));
+        assertEquals("@ClassBuilder cannot merge into 'Builder' - a static nested builder has to bound "
+                + "the target's type parameters as <T extends Number & Comparable<T>>, and this one "
+                + "declares <T>",
+            DeclaredBuilderShape.describe(DeclaredBuilderRejection.TYPE_PARAMETER_BOUNDS,
+                ChainRole.STANDALONE, "Builder", "Box", "builder", looser, expectation));
+
+        RoleExpectation unbounded = DeclaredBuilderShape.expectation(ChainRole.STANDALONE, "Box", "Builder",
+            List.of("T"), Arrays.asList((String) null), List.of("T"), null, List.of());
+        assertNull("Object is no bound", DeclaredBuilderShape.check(ChainRole.STANDALONE,
+            facts(true, false, List.of("T"), List.of("Object"), null, null), unbounded));
+    }
+
+    /** The final-field and throwing-constructor sentences both halves print. */
+    @Test
+    public void finalSlotAndThrowingConstructor_renderTheSharedSentences() {
+        assertEquals("@ClassBuilder merged into 'Builder' finds 'items' declared final, and the generated "
+            + "setter assigns it", DeclaredBuilderShape.finalSlot("Builder", "items"));
+        assertFalse("a throwing constructor serves nothing",
+            DeclaredBuilderShape.instantiable(List.of(0), List.of(), 0));
+        assertTrue("and says so", DeclaredBuilderShape.skippedForAThrowsClause(List.of(0), List.of(), 0));
+        assertFalse("not where no constructor has the arity",
+            DeclaredBuilderShape.skippedForAThrowsClause(List.of(1), List.of(), 0));
+        assertEquals("@ClassBuilder merged into 'Builder' but its constructor taking the seed 'builder' "
+                + "passes declares a throws clause, so 'builder' was not added - declare one that throws "
+                + "nothing or write it",
+            DeclaredBuilderShape.throwingConstructor("Builder", List.of("builder"), List.of("origin")));
+    }
+
+    /**
+     * A primitive and its box take each other's values under boxing and
+     * unboxing, so either spelled over the other is a field the generated
+     * members can assign and read back. Both were refused as mistyped. Only the
+     * top level: a type argument is never primitive, and an array of one is no
+     * array of the other.
+     */
+    @Test
+    public void mistypedSlot_acceptsABoxedOrPrimitiveTwin() {
+        assertNull(DeclaredBuilderShape.mistypedSlot("Builder", "count", "Integer", "int",
+            SlotHolding.DECLARED));
+        assertNull(DeclaredBuilderShape.mistypedSlot("Builder", "count", "int", "java.lang.Integer",
+            SlotHolding.DECLARED));
+        assertNull(DeclaredBuilderShape.mistypedSlot("Builder", "on", "java.lang.Boolean", "boolean",
+            SlotHolding.DECLARED));
+        assertNotNull("another box", DeclaredBuilderShape.mistypedSlot("Builder", "count", "Long", "int",
+            SlotHolding.DECLARED));
+        assertNotNull("an array of the box", DeclaredBuilderShape.mistypedSlot("Builder", "counts",
+            "Integer[]", "int[]", SlotHolding.DECLARED));
+    }
+
+    /**
      * The field has to hold the storage type exactly - the setter assigns into
      * it and {@code build()} reads it back out - so a type argument that differs
      * at any depth is reported. The erasure alone was compared, and passed both.

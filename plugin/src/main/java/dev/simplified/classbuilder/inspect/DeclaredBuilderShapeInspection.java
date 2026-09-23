@@ -25,8 +25,9 @@ import org.jetbrains.annotations.NotNull;
  * Reports a declared builder the merge cannot append to.
  *
  * <p>The processor refuses these shapes with an error and the editor has had no
- * analogue, so an author whose builder is non-static, carries the wrong
- * parameter list, is declared abstract where the entry points instantiate it,
+ * analogue, so an author whose builder is a record, an enum or an interface, is
+ * non-static, carries the wrong parameter list or other bounds on it, is
+ * declared abstract where the entry points instantiate it,
  * extends a builder other than the chain ancestor's or passes it the wrong
  * arguments, or spells a build method that cannot stand in for the generated
  * one saw a fully populated class until the build failed. The rejection and its
@@ -42,8 +43,8 @@ import org.jetbrains.annotations.NotNull;
  * where the factory is static.
  *
  * <p>On a shape the merge accepts, a declared field sharing a slot's name and
- * holding a type the generated setters cannot assign is reported on that field's
- * type, again in the processor's sentence. The slot's storage is classified by
+ * holding a type the generated setters cannot assign, or declared {@code final},
+ * is reported on that field's type, again in the processor's sentence. The slot's storage is classified by
  * {@link MergedSlotStorage}, as the processor classifies it - an initialised
  * slot included, held as a supplier where its kept initializer reads the
  * instance.

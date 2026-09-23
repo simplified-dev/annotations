@@ -21,6 +21,7 @@ import com.intellij.psi.PsiSubstitutor;
 import com.intellij.psi.PsiSuperExpression;
 import com.intellij.psi.PsiThisExpression;
 import com.intellij.psi.PsiTypeElement;
+import com.intellij.psi.PsiVariable;
 import com.intellij.psi.controlFlow.AnalysisCanceledException;
 import com.intellij.psi.controlFlow.ControlFlow;
 import com.intellij.psi.controlFlow.ControlFlowFactory;
@@ -71,7 +72,8 @@ public final class MergedSlotStorage {
 
     /**
      * Reports each field of a declared builder whose type is not the storage type
-     * of the slot it shares a name with.
+     * of the slot it shares a name with, or which is declared {@code final} under
+     * a slot the generated setter assigns.
      *
      * <p>Reads the slots with the extractor the builder synthesis uses, so the
      * set of names judged is the set the merge assigns - the target's fields or
@@ -108,10 +110,16 @@ public final class MergedSlotStorage {
             GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(annotation).retainInit();
         List<Mistyped> out = new ArrayList<>();
         for (PsiField field : ownFields(declared)) {
-            PsiTypeElement written = field.getTypeElement();
+            String written = writtenTypeText(field);
             if (written == null) continue;
             for (PsiFieldShape slot : slots) {
                 if (!slot.name.equals(field.getName())) continue;
+                // A seed is appended final itself and assigned by the author's
+                // constructor alone; every other slot the setter assigns.
+                if (field.hasModifierProperty(PsiModifier.FINAL) && !slot.seed) {
+                    out.add(new Mistyped(field, DeclaredBuilderShape.finalSlot(declaredName, slot.name)));
+                    continue;
+                }
                 // A parameter carries no initializer and cannot be lazy, so the
                 // merge holds it as declared - a field of the enclosing type
                 // sharing its name is no part of it.
@@ -124,7 +132,7 @@ public final class MergedSlotStorage {
                     ? DeclaredBuilderShape.supplierOf(declaredType)
                     : declaredType;
                 String message = DeclaredBuilderShape.mistypedSlot(declaredName, slot.name,
-                    written.getText(), storage, holding);
+                    written, storage, holding);
                 if (message != null) out.add(new Mistyped(field, message));
             }
         }
@@ -410,6 +418,26 @@ public final class MergedSlotStorage {
     private static boolean instanceMember(PsiMember member, boolean own) {
         if (member.hasModifierProperty(PsiModifier.STATIC)) return false;
         return own || !member.hasModifierProperty(PsiModifier.PRIVATE);
+    }
+
+    /**
+     * A variable's type as written, with the brackets a C-style declaration puts
+     * after its name.
+     *
+     * <p>javac folds {@code String tags[]} into the declared type, so the
+     * processor reads {@code String[]}; the type element PSI keeps in front of
+     * the name covers {@code String} alone. The trailing dimensions are counted
+     * off the variable's type, which PSI builds from the same brackets without
+     * resolving anything.
+     *
+     * @param variable the field or parameter
+     * @return the type as the processor reads it, or {@code null} when none is written
+     */
+    static @Nullable String writtenTypeText(@NotNull PsiVariable variable) {
+        PsiTypeElement written = variable.getTypeElement();
+        if (written == null) return null;
+        int trailing = variable.getType().getArrayDimensions() - written.getType().getArrayDimensions();
+        return written.getText() + "[]".repeat(Math.max(0, trailing));
     }
 
     /** The class's own fields, without anything a provider contributed. */

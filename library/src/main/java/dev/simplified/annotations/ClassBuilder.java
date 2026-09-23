@@ -41,18 +41,22 @@ import java.lang.annotation.Target;
  *
  * <p>The author wins member for member: a generated field is appended only when
  * the declared builder spells no field of that name, and a generated method only
- * when it spells no method of that name and parameter count. Everything skipped
+ * when it spells no method of that name and those erased parameter types - an
+ * author method of a setter's name taking another type is an overload beside
+ * the generated setter rather than a replacement for it. Everything skipped
  * is reported in one compiler note rather than left silent. The target still
  * gets the all-args constructor {@code build()} calls, and still gets the three
- * entry points unless the declared builder has no constructor they can call, in
+ * entry points unless the declared builder has no constructor they can call -
+ * none of the arity they pass, or only ones declaring a throws clause - in
  * which case all three are skipped with a note naming the constructor they
  * need. A
  * declared builder that declares no constructor has its implicit default
  * retyped to {@link #builderConstructorAccess()}, so {@code new Target.Builder()}
  * is closed off exactly as on a generated builder. A
- * declared shape the generated members cannot live in - an inner class, the
- * wrong type parameters, an {@code abstract} builder the entry points would
- * instantiate - is a compile error.
+ * declared shape the generated members cannot live in - a record, enum or
+ * interface, an inner class, the wrong type parameters or bounds on them, an
+ * {@code abstract} builder the entry points would instantiate, a slot field the
+ * generated setter cannot assign - is a compile error.
  *
  * <p>A constructor or static factory target merges the same way into the class
  * its enclosing type declares. Its builder re-declares the type parameters the

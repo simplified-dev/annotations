@@ -968,6 +968,163 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
         assertEquals("the retype takes it: " + accessWarnings(), 0, accessWarnings().size());
     }
 
+    // ------------------------------------------------------------------
+    // Reviewed reproductions: each shape was green here while javac failed on
+    // a generated line, or red here over source javac compiles.
+    // ------------------------------------------------------------------
+
+    /**
+     * A {@code final} field under a slot's name is refused, in the sentence the
+     * apt twin asserts. The editor contributed the setter assigning it and said
+     * nothing, while javac refused the assignment on the class line.
+     */
+    public void testAFinalSlotField_isReported() {
+        myFixture.configureByText("Bag.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import java.util.ArrayList;
+            import java.util.List;
+            @ClassBuilder
+            public class Bag {
+                List<String> items;
+                public static class Builder {
+                    private final List<String> items = new ArrayList<>();
+                    public Builder item(String item) { items.add(item); return this; }
+                }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder merged into 'Builder' finds 'items' declared final, "
+                + "and the generated setter assigns it"));
+    }
+
+    /** A looser bound on the re-declared parameter fails the generated build(). */
+    public void testABuilderBoundingATypeParameterLooser_isReported() {
+        myFixture.configureByText("Box.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Box<T extends Number> {
+                T value;
+                public static class Builder<T> {
+                    public Builder<T> twice(T v) { this.value = v; return this; }
+                }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder cannot merge into 'Builder' - a static nested builder "
+                + "has to bound the target's type parameters as <T extends Number>, and this one "
+                + "declares <T>"));
+    }
+
+    /** A narrower bound on the re-declared parameter fails the generated builder(). */
+    public void testABuilderBoundingATypeParameterNarrower_isReported() {
+        myFixture.configureByText("Box.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Box<T> {
+                T value;
+                public static class Builder<T extends Number> {
+                    public Builder<T> twice(T v) { this.value = v; return this; }
+                }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder cannot merge into 'Builder' - a static nested builder "
+                + "has to bound the target's type parameters as <T>, and this one declares "
+                + "<T extends Number>"));
+    }
+
+    /**
+     * A C-style array field is read with its brackets, as javac folds them into
+     * the declared type. The editor read the type element alone, {@code String},
+     * and reported a field javac accepts.
+     */
+    public void testACStyleArrayFieldOverAnArraySlot_isNotReported() {
+        myFixture.configureByText("Tags.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Tags {
+                String[] tags;
+                public static class Builder {
+                    private String tags[];
+                    public Builder only(String t) { this.tags = new String[] { t }; return this; }
+                }
+            }
+            """);
+        assertEquals("javac accepts it: " + errors(), 0, errors().size());
+    }
+
+    /** The other direction: javac refuses {@code String label[]} over a {@code String} slot. */
+    public void testACStyleArrayFieldOverAPlainSlot_isReported() {
+        myFixture.configureByText("Tags.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Tags {
+                String label;
+                public static class Builder {
+                    private String label[];
+                }
+            }
+            """);
+        assertTrue("the shared wording: " + errors(),
+            theOnlyError().contains("@ClassBuilder merged into 'Builder' finds 'label' declared as "
+                + "String[], and the slot it stands for is java.lang.String - the generated setter has "
+                + "nothing to assign it to"));
+    }
+
+    /**
+     * A nested record, enum or interface is refused in the processor's
+     * sentence. The editor read the implicit {@code static} of each and merged
+     * into a record or an enum, and gave an interface the abstract sentence.
+     */
+    public void testANestedRecordEnumOrInterface_isReportedAsNotAClass() {
+        String[][] shapes = {
+            {"record Builder(int unused) { }", "a record"},
+            {"static enum Builder { ; }", "an enum"},
+            {"interface Builder { }", "an interface"},
+        };
+        for (int i = 0; i < shapes.length; i++) {
+            String[] shape = shapes[i];
+            myFixture.configureByText("Note" + i + ".java",
+                """
+                import dev.simplified.annotations.ClassBuilder;
+                @ClassBuilder
+                public class Note%d {
+                    String text;
+                    %s
+                }
+                """.formatted(i, shape[0]));
+            assertTrue(shape[0] + " in the shared wording: " + errors(),
+                theOnlyError().contains("@ClassBuilder cannot merge into 'Builder' - it is declared as "
+                    + shape[1] + ", and only a class can hold the builder's fields and the constructor "
+                    + "builder() calls"));
+        }
+    }
+
+    /**
+     * A boxed field over a primitive slot takes everything the generated
+     * members assign and read back, and javac accepts it.
+     */
+    public void testABoxedTwinOfAPrimitiveSlot_isNotReported() {
+        myFixture.configureByText("Counter.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Counter {
+                int count;
+                public static class Builder {
+                    private Integer count;
+                    public Builder bump() { this.count = count == null ? 1 : count + 1; return this; }
+                }
+            }
+            """);
+        assertEquals("javac accepts it: " + errors(), 0, errors().size());
+    }
+
     /** The warnings this inspection raises about {@code builderConstructorAccess}. */
     private List<HighlightInfo> accessWarnings() {
         List<HighlightInfo> out = new ArrayList<>();

@@ -113,6 +113,29 @@ public class DeclaredBuilderSkipsEntryPointsInspectionTest extends BasePlatformT
         assertEquals(ALL_THREE_SKIPPED, theOnlyWarning());
     }
 
+    /**
+     * A no-argument constructor declaring a throws clause serves no entry
+     * point, so the processor skips all three with a note naming why. The
+     * editor offered them and said nothing, while javac reported the unhandled
+     * exception on the class line.
+     */
+    public void testADeclaredBuilderWhoseNoArgConstructorThrows_isWarned() {
+        myFixture.configureByText("Conn.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Conn {
+                private String host;
+                public static class Builder {
+                    Builder() throws java.io.IOException { }
+                }
+            }
+            """);
+        assertEquals("@ClassBuilder merged into 'Builder' but its no-argument constructor declares a "
+            + "throws clause, so 'builder', 'from' and 'mutate' were not added - declare one that throws "
+            + "nothing or write them", theOnlyWarning());
+    }
+
     /** A no-argument constructor beside a parameterised one serves the entry points. */
     public void testADeclaredBuilderWithANoArgumentConstructor_isNotWarned() {
         myFixture.configureByText("Both.java",

@@ -15,6 +15,7 @@ import com.intellij.psi.util.PsiModificationTracker;
 import com.intellij.util.IdempotenceChecker;
 import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
 import dev.simplified.classbuilder.apt.ChainRole;
+import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
 import dev.simplified.shared.psi.WrittenAnnotations;
@@ -298,8 +299,9 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      * whole generated surface, which is the drift in its most literal form.
      *
      * <p>The collision rule is the processor's: a generated method is offered
-     * only when the declared class spells no method of that name and parameter
-     * count, and the generated constructor is never offered, that class always
+     * only when the declared class spells no method of that name and those
+     * erased parameter types, {@link DeclaredBuilderShape#methodKey}, and the
+     * generated constructor is never offered, that class always
      * having one by the time either half looks. Where the author wrote none on a
      * class, record, constructor or factory target, the default javac retypes
      * to {@code builderConstructorAccess} is offered in its place. Read through
@@ -426,9 +428,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         MergeTarget merge = mergeTargetOf(declared);
         if (merge == null) return Collections.emptyList();
         Set<String> spelled = new HashSet<>();
-        for (PsiMethod own : GeneratedMemberFactory.ownMethods(declared)) {
-            spelled.add(own.getName() + "/" + own.getParameterList().getParametersCount());
-        }
+        for (PsiMethod own : GeneratedMemberFactory.ownMethods(declared)) spelled.add(writtenKey(own));
         // Guarded for the reason the field contribution is, and opened in the
         // same place: synthesising a setter resolves the type of the slot it
         // assigns, which re-enters this provider for the class that wrote it.
@@ -439,10 +439,7 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
                 // The generated constructor is never appended as it stands; the
                 // one below takes its place where the author wrote none.
                 if (generated.isConstructor()) continue;
-                if (spelled.contains(generated.getName() + "/"
-                    + generated.getParameterList().getParametersCount())) {
-                    continue;
-                }
+                if (spelled.contains(generatedKey(generated))) continue;
                 out.add(generated);
             }
             // The processor retypes javac's default to builderConstructorAccess
@@ -457,6 +454,37 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
             }
             return out;
         });
+    }
+
+    /**
+     * The key an author method is compared under, from its parameter types as
+     * written.
+     *
+     * @param method a method the author declared
+     * @return its {@link DeclaredBuilderShape#methodKey}
+     */
+    private static String writtenKey(PsiMethod method) {
+        List<String> types = new ArrayList<>();
+        for (PsiParameter parameter : method.getParameterList().getParameters()) {
+            String written = MergedSlotStorage.writtenTypeText(parameter);
+            types.add(written == null ? "" : written);
+        }
+        return DeclaredBuilderShape.methodKey(method.getName(), types);
+    }
+
+    /**
+     * The key a contributed method is compared under, from the presentable text
+     * of its parameter types - rendered from the names they were built with
+     * rather than resolved.
+     *
+     * @param method a method this provider synthesised
+     * @return its {@link DeclaredBuilderShape#methodKey}
+     */
+    private static String generatedKey(PsiMethod method) {
+        List<String> types = new ArrayList<>();
+        for (PsiParameter parameter : method.getParameterList().getParameters())
+            types.add(parameter.getType().getPresentableText());
+        return DeclaredBuilderShape.methodKey(method.getName(), types);
     }
 
     private static List<PsiMethod> cachedMethods(PsiClass target) {

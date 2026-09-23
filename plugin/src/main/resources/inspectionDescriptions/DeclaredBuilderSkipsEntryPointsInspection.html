@@ -9,7 +9,9 @@ the author's, and the author's constructors are the builder's constructors.
 Every entry point creates the builder with one argument per
 <code>@BuilderSeed</code>, so where the declared builder declares constructors
 and none of that arity, <code>builder()</code>, <code>from(T)</code> and
-<code>mutate()</code> are not generated. The processor says so in a compiler
+<code>mutate()</code> are not generated - and neither are they where every
+constructor of that arity declares a throws clause, since the entry points call
+it with nothing around the call to handle what it throws. The processor says so in a compiler
 note and completion leaves the three out; this warning is the note, in the
 same words, on the annotation.
 </p>

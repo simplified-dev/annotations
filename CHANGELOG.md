@@ -65,7 +65,10 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   primitive's `Supplier<java.lang.Integer>` read alike in the build and in the editor. The types are
   compared argument by argument, so `List<Integer>` beside a `List<String>` slot is refused on the
   author's field rather than passing on its erasure and failing inside the generated setter; a raw
-  spelling on either side still passes. The editor classifies an initialised slot as the build does -
+  spelling on either side still passes, and so does a primitive spelled over its box or the reverse,
+  which the setter assigns and `build()` reads back under boxing. A C-style `String tags[]` is read
+  with its brackets in the editor as javac reads it, where it had been judged as `String`. The editor
+  classifies an initialised slot as the build does -
   as a supplier where its kept initializer names `this`, `super` or an instance member, from one rule
   both halves ask of the names the initializer spells - and judges its field the same way.
 
@@ -97,7 +100,10 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   constructors are the author's, so one declaring constructors and none of that arity left the entry
   points with nothing to call. Both halves withhold them together, and the note names only the entry
   points the path emits - `builder(..)` alone on a constructor or factory target, and never one
-  named `NONE`; with every entry point named `NONE` there is nothing to skip and no note. The note
+  named `NONE`; with every entry point named `NONE` there is nothing to skip and no note. A
+  constructor of the right arity that declares a throws clause serves no entry point either, each of
+  them calling it with nothing to handle what it throws, so they are skipped with a note saying so
+  rather than failing as `unreported exception ... in default constructor` on the class line. The note
   sits on the member the annotation is written on, the constructor or factory on that path, where the
   editor's weak warning sits.
 
@@ -158,16 +164,22 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   A bare declared builder, which 2.6.x left alone, now gains the generated slot fields, setters and
   `build()` it does not spell, and its target gains the all-args constructor `build()` calls and the
   entry points `builder()`, `from(T)` and `mutate()`, typed against the declared class. Each skipped
-  member the author already spells is listed in one note. A declared shape the generated members
-  cannot live in is an error on both halves, where it used to pass because nothing was merged:
+  member the author already spells is listed in one note - a method counting as spelled where it has
+  the generated one's name and erased parameter types, so an author's `port(String)` beside an
+  `int port` slot is an overload and the generated `port(int)` that `from(T)` and `mutate()` call is
+  still appended. A declared shape the generated members cannot live in is an error on both halves,
+  where it used to pass because nothing was merged:
 
+  - a record, an enum or an interface - declare a class;
   - an inner class - declare it `static`;
   - the wrong type parameters on a generic target - re-declare the target's, in order, or on a
     static factory the factory's own;
+  - other bounds on those type parameters than the target writes - bound each as the target does;
   - `abstract` where the entry points instantiate it - drop `abstract`;
   - a field sharing a slot's name whose type the generated setter cannot assign, type arguments
     included - give it the slot's type, or `Supplier<T>` for a `@Lazy` slot or one whose kept
     initializer reads the instance, or rename it;
+  - a field sharing a slot's name declared `final` - drop `final`, the generated setter assigning it;
   - on a chain root, a builder that is not abstract or not self-typed - declare it
     `abstract static class Builder<T extends Target, B extends Builder<T, B>>`;
   - below a chain root, a missing or wrong `extends` clause or the wrong arguments to it - extend
@@ -179,7 +191,8 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
     unassigned - assign it there, the merge appending it as a `final` field.
 
   A declared builder whose constructors all take parameters keeps its setters and loses only the
-  entry points, with a note; declaring a no-argument constructor restores them.
+  entry points, with a note; declaring a no-argument constructor restores them. So does one whose
+  no-argument constructor declares a throws clause; declaring one that throws nothing restores them.
 
 - **The README documents the dependency scope the artifact is actually built for.** It showed
   `implementation`, which puts a jar on a consumer's runtime classpath that nothing ever loads: every

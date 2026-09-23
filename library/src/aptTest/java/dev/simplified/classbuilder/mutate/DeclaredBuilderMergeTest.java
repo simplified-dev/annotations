@@ -1382,6 +1382,280 @@ public class DeclaredBuilderMergeTest {
     }
 
     // ------------------------------------------------------------------
+    // What a declared member covers, and the shapes it cannot take
+    //
+    // Each case is a reviewed reproduction: the merge accepted the shape and
+    // javac then failed on a generated line the author never wrote, or refused
+    // a shape whose hand expansion compiles.
+    // ------------------------------------------------------------------
+
+    /**
+     * An author method sharing a slot setter's name and arity but taking
+     * another type is an overload rather than the setter, so the generated
+     * setter is appended beside it. It used to be skipped on the name and arity
+     * alone, and {@code from(T)} and {@code mutate()} then passed the slot's
+     * {@code int} to the author's {@code port(String)} on the class line.
+     */
+    @Test
+    public void merge_anAuthorMethodTakingAnotherTypeUnderASettersName_keepsTheGeneratedSetter()
+        throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Server",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public class Server {",
+                "    int port;",
+                "    public static class Builder {",
+                "        public Builder port(String text) {",
+                "            this.port = Integer.parseInt(text);",
+                "            return this;",
+                "        }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseServer",
+                "package demo;",
+                "public class UseServer {",
+                "    public static String go() {",
+                "        Server fresh = Server.builder().port(\"80\").build();",
+                "        Server copy = Server.from(fresh).port(9090).build();",
+                "        Server edit = copy.mutate().port(\"1\").build();",
+                "        return fresh.port + \":\" + copy.port + \":\" + edit.port;",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("80:9090:1", runGo(c, "demo.UseServer"));
+    }
+
+    /**
+     * One author method covers only the generated overload it spells: an
+     * {@code Optional} slot's {@code label(Optional<String>)} is still appended
+     * beside the author's {@code label(String)}, and it is the one
+     * {@code from(T)} passes the slot to. Both used to be dropped for the one.
+     */
+    @Test
+    public void merge_anAuthorMethodCoveringOneOptionalOverload_keepsTheOther() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Labelled",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import java.util.Optional;",
+                "@ClassBuilder",
+                "public class Labelled {",
+                "    Optional<String> label;",
+                "    public static class Builder {",
+                "        public Builder label(String l) { this.label = Optional.ofNullable(l); return this; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseLabelled",
+                "package demo;",
+                "public class UseLabelled {",
+                "    public static String go() {",
+                "        Labelled first = Labelled.builder().label(\"a\").build();",
+                "        return Labelled.from(first).build().label.orElse(\"none\");",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("a", runGo(c, "demo.UseLabelled"));
+    }
+
+    /**
+     * A {@code final} field under a slot's name cannot take what the generated
+     * setter assigns, so it is refused on the author's declaration. It passed
+     * every check, and javac then reported {@code cannot assign a value to final
+     * variable items} on the class line. {@code DeclaredBuilderShapeInspectionTest}
+     * asserts the same sentence.
+     */
+    @Test
+    public void merge_ontoAFinalSlotField_isRejected() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Bag",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import java.util.ArrayList;",
+                "import java.util.List;",
+                "@ClassBuilder",
+                "public class Bag {",
+                "    List<String> items;",
+                "    public static class Builder {",
+                "        private final List<String> items = new ArrayList<>();",
+                "        public Builder item(String item) {",
+                "            items.add(item);",
+                "            return this;",
+                "        }",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds 'items' declared "
+            + "final, and the generated setter assigns it");
+    }
+
+    /**
+     * A standalone builder re-declaring the target's type parameters has to
+     * bound them as the target does, in either direction: a looser bound fails
+     * the generated {@code build()}, a narrower one the generated
+     * {@code builder()}. Only the names were compared, and javac reported
+     * {@code type argument T is not within bounds of type-variable T} on the
+     * class line.
+     */
+    @Test
+    public void merge_ontoABuilderBoundingATypeParameterOtherwise_isRejected() {
+        Compilation looser = compile(
+            JavaFileObjects.forSourceLines("demo.Box",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public class Box<T extends Number> {",
+                "    T value;",
+                "    public static class Builder<T> {",
+                "        public Builder<T> twice(T v) { this.value = v; return this; }",
+                "    }",
+                "}"));
+        assertThat(looser).failed();
+        assertThat(looser).hadErrorContaining("@ClassBuilder cannot merge into 'Builder' - a static "
+            + "nested builder has to bound the target's type parameters as <T extends Number>, and this "
+            + "one declares <T>");
+
+        Compilation narrower = compile(
+            JavaFileObjects.forSourceLines("demo.Box",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public class Box<T> {",
+                "    T value;",
+                "    public static class Builder<T extends Number> {",
+                "        public Builder<T> twice(T v) { this.value = v; return this; }",
+                "    }",
+                "}"));
+        assertThat(narrower).failed();
+        assertThat(narrower).hadErrorContaining("@ClassBuilder cannot merge into 'Builder' - a static "
+            + "nested builder has to bound the target's type parameters as <T>, and this one declares "
+            + "<T extends Number>");
+    }
+
+    /** The same bound spelled with its qualifier is the same bound. */
+    @Test
+    public void merge_ontoABuilderBoundingATypeParameterAsTheTargetDoes_isMergedInto() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Box",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public class Box<T extends Number> {",
+                "    T value;",
+                "    public static class Builder<T extends java.lang.Number> {",
+                "        public Builder<T> twice(T v) { this.value = v; return this; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseBox",
+                "package demo;",
+                "public class UseBox {",
+                "    public static Object go() { return Box.<Integer>builder().value(1).build().value; }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals(1, runGo(c, "demo.UseBox"));
+    }
+
+    /**
+     * A record, an enum and an interface are each implicitly static, and none
+     * can be a builder: a record takes no instance field, an enum no
+     * {@code new}, an interface neither. Each was refused as an inner class the
+     * editor saw as static, and written {@code static} each was merged into and
+     * failed on a line the author never wrote.
+     */
+    @Test
+    public void merge_intoANestedRecordEnumOrInterface_isRejectedAsNotAClass() {
+        String[][] shapes = {
+            {"record Builder(int unused) { }", "a record"},
+            {"static record Builder(int unused) { }", "a record"},
+            {"enum Builder { ; }", "an enum"},
+            {"static enum Builder { ; }", "an enum"},
+            {"interface Builder { }", "an interface"},
+        };
+        for (String[] shape : shapes) {
+            Compilation c = compile(
+                JavaFileObjects.forSourceLines("demo.Note",
+                    "package demo;",
+                    "import dev.simplified.annotations.ClassBuilder;",
+                    "@ClassBuilder",
+                    "public class Note {",
+                    "    String text;",
+                    "    " + shape[0],
+                    "}"));
+            assertThat(c).failed();
+            assertThat(c).hadErrorContaining("@ClassBuilder cannot merge into 'Builder' - it is declared "
+                + "as " + shape[1] + ", and only a class can hold the builder's fields and the "
+                + "constructor builder() calls");
+            assertThat(c).hadErrorCount(1);
+        }
+    }
+
+    /**
+     * A boxed field over a primitive slot takes every value the generated
+     * members assign and read back, under boxing and unboxing, so it is merged
+     * into. It was refused as mistyped though its hand expansion compiles.
+     */
+    @Test
+    public void merge_ontoABoxedTwinOfAPrimitiveSlot_isMergedInto() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Counter",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public class Counter {",
+                "    int count;",
+                "    public static class Builder {",
+                "        private Integer count;",
+                "        public Builder bump() {",
+                "            this.count = count == null ? 1 : count + 1;",
+                "            return this;",
+                "        }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseCounter",
+                "package demo;",
+                "public class UseCounter {",
+                "    public static Object go() {",
+                "        Counter first = Counter.builder().bump().bump().build();",
+                "        return Counter.from(first).build().count;",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals(2, runGo(c, "demo.UseCounter"));
+    }
+
+    /**
+     * A no-argument constructor declaring a throws clause is not one the entry
+     * points can call, each of them calling it with nothing to handle what it
+     * throws, so they are skipped with a note - the setters are still merged
+     * in. javac used to report {@code unreported exception java.io.IOException
+     * in default constructor} on the class line.
+     */
+    @Test
+    public void merge_intoABuilderWhoseNoArgConstructorThrows_skipsTheEntryPointsWithANote() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Conn",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public class Conn {",
+                "    String host;",
+                "    public static class Builder {",
+                "        Builder() throws java.io.IOException { }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseConn",
+                "package demo;",
+                "public class UseConn {",
+                "    Conn make() throws java.io.IOException { return new Conn.Builder().host(\"h\").build(); }",
+                "}"));
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("@ClassBuilder merged into 'Builder' but its no-argument "
+            + "constructor declares a throws clause, so 'builder', 'from' and 'mutate' were not added - "
+            + "declare one that throws nothing or write them");
+    }
+
+    // ------------------------------------------------------------------
     // The chain merge
     //
     // A root, a concrete link or a chained abstract whose builder is declared

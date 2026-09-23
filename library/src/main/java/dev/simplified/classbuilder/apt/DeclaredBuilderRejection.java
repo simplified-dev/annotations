@@ -22,6 +22,14 @@ import org.jetbrains.annotations.Nullable;
 public enum DeclaredBuilderRejection {
 
     /**
+     * A record takes no instance field, an enum no {@code new}, and an
+     * interface neither, so only a class can hold the slot fields and the
+     * constructor the entry points call.
+     */
+    NOT_A_CLASS("@ClassBuilder cannot merge into '%s' - it is declared as %s, and only a class can "
+        + "hold the builder's fields and the constructor %s() calls"),
+
+    /**
      * An inner class captures the enclosing instance, so no {@code static} entry
      * point can create one.
      */
@@ -51,6 +59,15 @@ public enum DeclaredBuilderRejection {
      */
     TYPE_PARAMETERS("@ClassBuilder cannot merge into '%s' - a static nested builder %s, and this "
         + "one declares %s"),
+
+    /**
+     * The generated members apply the builder's re-declared parameters to the
+     * target and the target's to the builder, so each has to carry the bounds
+     * the target writes on it - a looser one fails the generated build method's
+     * bound check, a narrower one the generated entry point's.
+     */
+    TYPE_PARAMETER_BOUNDS("@ClassBuilder cannot merge into '%s' - a static nested builder has to "
+        + "bound the target's type parameters as %s, and this one declares %s"),
 
     /**
      * The trailing pair carries the bounds that make the builder self-typed, and

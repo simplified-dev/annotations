@@ -26,7 +26,8 @@ import java.util.List;
  * <p>Every entry point instantiates the builder with one argument per seed, and
  * a declared builder's constructors are the author's, so one declaring no
  * constructor of that arity leaves {@code builder()}, {@code from(T)} and
- * {@code mutate()} nothing to call. The processor skips them with a note and the
+ * {@code mutate()} nothing to call, and so does one whose constructor of that
+ * arity declares a throws clause. The processor skips them with a note and the
  * augment provider withholds them from completion through the same
  * {@link ClassBuilderConstants#withholdsEntryPointsOnly} decision; this is the
  * account on screen of why they are missing, reported as a weak warning on the
@@ -80,7 +81,7 @@ public class DeclaredBuilderSkipsEntryPointsInspection extends LocalInspectionTo
                 if (ClassBuilderConstants.mergeRejection(target, member, declared, names) != null) return;
 
                 String note = DeclaredBuilderShape.entryPointsSkipped(declared.getName(), names,
-                    executable, seeds);
+                    executable, seeds, ClassBuilderConstants.skippedForAThrowsClause(declared, seeds.size()));
                 if (note != null) holder.registerProblem(annotation, note, ProblemHighlightType.WEAK_WARNING);
             }
         };

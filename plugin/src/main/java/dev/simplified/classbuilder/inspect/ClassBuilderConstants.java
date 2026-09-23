@@ -374,7 +374,8 @@ public final class ClassBuilderConstants {
      * {@code new Target(...)} red over source that builds.
      *
      * <p>The arity rule is {@link DeclaredBuilderShape#instantiable}, which the
-     * processor asks of the same counts. On a class or record target, a chain
+     * processor asks of the same counts - a constructor declaring a throws
+     * clause counted as none the entry points can call. On a class or record target, a chain
      * link among them, the seed count is zero, so the constructor that serves is
      * a no-argument one; on a constructor or factory target it is one taking
      * exactly the seeds {@code builder(..)} passes. An interface's entry points
@@ -393,7 +394,24 @@ public final class ClassBuilderConstants {
         if (target.isInterface()) return false;
         PsiClass declared = declaredBuilderOf(target, builderName);
         return declared != null
-            && !DeclaredBuilderShape.instantiable(declaredConstructorArities(declared), seeds);
+            && !DeclaredBuilderShape.instantiable(declaredConstructorArities(declared, false),
+                declaredConstructorArities(declared, true), seeds);
+    }
+
+    /**
+     * Whether the entry points are skipped only because the declared builder's
+     * constructors of the arity they pass all declare a throws clause, which
+     * decides the wording of the note, as
+     * {@link DeclaredBuilderShape#skippedForAThrowsClause} decides it for the
+     * processor.
+     *
+     * @param declared the builder the author wrote
+     * @param seeds how many arguments the entry points pass the builder's constructor
+     * @return whether a constructor of that arity exists and every one declares a throws clause
+     */
+    public static boolean skippedForAThrowsClause(@NotNull PsiClass declared, int seeds) {
+        return DeclaredBuilderShape.skippedForAThrowsClause(declaredConstructorArities(declared, false),
+            declaredConstructorArities(declared, true), seeds);
     }
 
     /**
@@ -405,13 +423,17 @@ public final class ClassBuilderConstants {
      * {@link DeclaredBuilderShape#instantiable} expects.
      *
      * @param declared the builder the author wrote
+     * @param callableOnly whether to count only the constructors declaring no throws clause
      * @return the arities, in declaration order
      */
-    private static @NotNull List<Integer> declaredConstructorArities(@NotNull PsiClass declared) {
+    private static @NotNull List<Integer> declaredConstructorArities(@NotNull PsiClass declared,
+                                                                     boolean callableOnly) {
         List<Integer> out = new ArrayList<>();
         if (!(declared instanceof PsiExtensibleClass extensible)) return out;
         for (PsiMethod own : extensible.getOwnMethods()) {
-            if (own.isConstructor()) out.add(own.getParameterList().getParametersCount());
+            if (!own.isConstructor()) continue;
+            if (callableOnly && own.getThrowsList().getReferenceElements().length > 0) continue;
+            out.add(own.getParameterList().getParametersCount());
         }
         return out;
     }
@@ -427,7 +449,7 @@ public final class ClassBuilderConstants {
      * @return whether it declares any constructor
      */
     public static boolean declaresConstructor(@NotNull PsiClass declared) {
-        return !declaredConstructorArities(declared).isEmpty();
+        return !declaredConstructorArities(declared, false).isEmpty();
     }
 
     /**
@@ -594,7 +616,7 @@ public final class ClassBuilderConstants {
         List<String> parameterBounds = new ArrayList<>();
         for (PsiTypeParameter parameter : declared.getTypeParameters()) {
             parameterNames.add(parameter.getName() == null ? "" : parameter.getName());
-            parameterBounds.add(firstReferenceText(parameter.getExtendsList()));
+            parameterBounds.add(boundsText(parameter));
         }
         PsiReferenceList extendsList = declared.getExtendsList();
         String writtenSuper = firstReferenceText(extendsList);
@@ -604,7 +626,38 @@ public final class ClassBuilderConstants {
             parameterNames, parameterBounds,
             writtenSuper == null ? null : DeclaredBuilderShape.rawType(writtenSuper),
             extendsList == null ? List.of() : firstReferenceArguments(extendsList),
-            declaredBuildMethod(declared, buildMethodName));
+            declaredBuildMethod(declared, buildMethodName),
+            kindOf(declared));
+    }
+
+    /**
+     * The keyword a declared type is written with, as the processor reads it
+     * off the parser's flags.
+     *
+     * @param declared the type the author wrote
+     * @return one of the {@link DeclaredBuilderFacts} kind constants
+     */
+    private static @NotNull String kindOf(@NotNull PsiClass declared) {
+        if (declared.isAnnotationType()) return DeclaredBuilderFacts.ANNOTATION;
+        if (declared.isInterface()) return DeclaredBuilderFacts.INTERFACE;
+        if (declared.isEnum()) return DeclaredBuilderFacts.ENUM;
+        if (declared.isRecord()) return DeclaredBuilderFacts.RECORD;
+        return DeclaredBuilderFacts.CLASS;
+    }
+
+    /**
+     * The bounds written on a type parameter, read rather than resolved and
+     * joined as {@link DeclaredBuilderFacts#typeParameterBounds} holds them.
+     *
+     * @param parameter the parameter to read
+     * @return the bounds, or {@code null} when none is written
+     */
+    private static @Nullable String boundsText(@NotNull PsiTypeParameter parameter) {
+        PsiJavaCodeReferenceElement[] references = parameter.getExtendsList().getReferenceElements();
+        if (references.length == 0) return null;
+        List<String> out = new ArrayList<>(references.length);
+        for (PsiJavaCodeReferenceElement reference : references) out.add(reference.getText());
+        return String.join(" & ", out);
     }
 
     /**
@@ -648,12 +701,14 @@ public final class ClassBuilderConstants {
                                                            @Nullable String ancestorName,
                                                            @NotNull List<String> superArguments) {
         List<String> targetParameters = new ArrayList<>();
+        List<String> targetBounds = new ArrayList<>();
         for (PsiTypeParameter parameter : typeParameters) {
             targetParameters.add(parameter.getName() == null ? "" : parameter.getName());
+            targetBounds.add(boundsText(parameter));
         }
         String targetName = target.getName() == null ? "" : target.getName();
         return DeclaredBuilderShape.expectation(role, targetName, builderName, targetParameters,
-            declaredTypeParameters, ancestorName, superArguments);
+            targetBounds, declaredTypeParameters, ancestorName, superArguments);
     }
 
     /**

@@ -103,15 +103,27 @@ final class BootstrapMethodFactory {
      * constructor it needs. The author's is theirs throughout - javac's own
      * default included - so a class that declares constructors and none of the
      * arity the entry points pass leaves them with nothing to call, and they are
-     * skipped with a note rather than emitted onto a line javac rejects. The
-     * decision is {@link DeclaredBuilderShape#instantiable}, which the editor
-     * asks of the same arities read out of PSI.
+     * skipped with a note rather than emitted onto a line javac rejects - and so
+     * does one whose constructor of that arity declares a throws clause, which
+     * the entry points call with nothing to handle it. The decision is
+     * {@link DeclaredBuilderShape#instantiable}, which the editor asks of the
+     * same arities read out of PSI.
      *
      * @param seeds how many arguments the entry point passes the constructor
      * @return whether the entry points can be emitted
      */
     private boolean builderCanBeInstantiated(int seeds) {
         if (mergedInto == null) return true;
+        return DeclaredBuilderShape.instantiable(constructorArities(false), constructorArities(true), seeds);
+    }
+
+    /**
+     * The parameter count of each constructor the merged builder declares.
+     *
+     * @param callableOnly whether to count only the ones declaring no throws clause
+     * @return the arities, in declaration order
+     */
+    private java.util.List<Integer> constructorArities(boolean callableOnly) {
         java.util.List<Integer> arities = new ArrayList<>();
         for (JCTree def : mergedInto.defs) {
             if (!(def instanceof JCMethodDecl method)) continue;
@@ -119,9 +131,10 @@ final class BootstrapMethodFactory {
             // javac's own default is in the tree by now; it is what a class
             // declaring nothing falls back to, not a constructor the author wrote.
             if ((method.mods.flags & Flags.GENERATEDCONSTR) != 0) continue;
+            if (callableOnly && method.thrown != null && !method.thrown.isEmpty()) continue;
             arities.add(method.params.size());
         }
-        return DeclaredBuilderShape.instantiable(arities, seeds);
+        return arities;
     }
 
     /**
@@ -134,8 +147,10 @@ final class BootstrapMethodFactory {
     private @Nullable String uninstantiableNote() {
         java.util.List<String> seedNames = new ArrayList<>();
         for (FieldSpec seed : ctx.seeds()) seedNames.add(seed.name);
+        boolean throwsClause = DeclaredBuilderShape.skippedForAThrowsClause(constructorArities(false),
+            constructorArities(true), ctx.seeds().size());
         return DeclaredBuilderShape.entryPointsSkipped(mergedInto.name.toString(), ctx.config().names(),
-            ctx.isExecutableTarget(), seedNames);
+            ctx.isExecutableTarget(), seedNames, throwsClause);
     }
 
     /** Appends whichever bootstrap methods are missing from the target. */

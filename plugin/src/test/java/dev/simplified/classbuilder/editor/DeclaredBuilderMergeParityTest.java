@@ -1108,6 +1108,125 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
     }
 
     // ------------------------------------------------------------------
+    // Reviewed reproductions: what a declared member covers, and the shapes
+    // whose entry points javac never emits
+    // ------------------------------------------------------------------
+
+    /**
+     * An author method sharing a slot setter's name and arity but taking
+     * another type is an overload, and the generated setter is offered beside
+     * it as the processor appends it. The editor dropped it on the name and
+     * arity, and the processor's {@code from(T)} then failed on it unreported.
+     */
+    public void testMerge_anAuthorMethodTakingAnotherTypeUnderASettersName_keepsTheGeneratedSetter() {
+        PsiFile file = myFixture.configureByText("Server.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Server {
+                int port;
+                public static class Builder {
+                    public Builder port(String text) { this.port = Integer.parseInt(text); return this; }
+                }
+                static Server copy(Server s) { return Server.from(s).port(9090).port("1").build(); }
+            }
+            """);
+        List<String> names = methodNamesOf(nestedOf(((PsiJavaFile) file).getClasses()[0], "Builder"));
+        assertEquals("the author's port(String) and the generated port(int): " + names, 2, count(names, "port"));
+        assertNoErrors();
+    }
+
+    /** One author method covers only the {@code Optional} overload it spells. */
+    public void testMerge_anAuthorMethodCoveringOneOptionalOverload_keepsTheOther() {
+        PsiFile file = myFixture.configureByText("Labelled.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import java.util.Optional;
+            @ClassBuilder
+            public class Labelled {
+                Optional<String> label;
+                public static class Builder {
+                    public Builder label(String l) { this.label = Optional.ofNullable(l); return this; }
+                }
+                static Labelled copy(Labelled l) { return Labelled.from(l).label(Optional.of("b")).build(); }
+            }
+            """);
+        List<String> names = methodNamesOf(nestedOf(((PsiJavaFile) file).getClasses()[0], "Builder"));
+        assertEquals("the author's label(String) and the generated label(Optional): " + names,
+            2, count(names, "label"));
+        assertNoErrors();
+    }
+
+    /**
+     * A builder bounding a re-declared parameter otherwise than the target is
+     * refused, and javac then emits no entry point beside it.
+     */
+    public void testABuilderBoundingATypeParameterOtherwise_offersNoEntryPoints() {
+        PsiFile file = myFixture.configureByText("Box.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Box<T extends Number> {
+                T value;
+                public static class Builder<T> { }
+            }
+            """);
+        List<String> names = methodNamesOf(((PsiJavaFile) file).getClasses()[0]);
+        assertFalse("javac emits no builder(): " + names, names.contains("builder"));
+        assertFalse("nor from(T): " + names, names.contains("from"));
+        assertFalse("nor mutate(): " + names, names.contains("mutate"));
+    }
+
+    /**
+     * A nested record named for the builder is refused, so nothing is merged
+     * into it and no entry point is offered. The editor read its implicit
+     * {@code static}, merged a setter, a {@code build()} and a constructor into
+     * the record, and offered all three entry points.
+     */
+    public void testANestedRecordBuilder_offersNoEntryPointsAndNoMembers() {
+        PsiFile file = myFixture.configureByText("Note.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Note {
+                String text;
+                record Builder(int unused) { }
+            }
+            """);
+        PsiClass target = ((PsiJavaFile) file).getClasses()[0];
+        List<String> names = methodNamesOf(target);
+        assertFalse("javac emits no builder(): " + names, names.contains("builder"));
+        List<String> merged = methodNamesOf(nestedOf(target, "Builder"));
+        assertFalse("nothing is merged into the record: " + merged, merged.contains("text"));
+        assertFalse("nor a build(): " + merged, merged.contains("build"));
+    }
+
+    /**
+     * A no-argument builder constructor declaring a throws clause serves no
+     * entry point, so all three are withheld while the setters stay merged in.
+     */
+    public void testMergedBuilderWhoseNoArgConstructorThrows_offersNoEntryPoints() {
+        PsiFile file = myFixture.configureByText("Conn.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Conn {
+                String host;
+                public static class Builder {
+                    Builder() throws java.io.IOException { }
+                }
+            }
+            """);
+        PsiClass target = ((PsiJavaFile) file).getClasses()[0];
+        List<String> names = methodNamesOf(target);
+        assertFalse("javac emits no builder(): " + names, names.contains("builder"));
+        assertFalse("nor from(T): " + names, names.contains("from"));
+        assertFalse("nor mutate(): " + names, names.contains("mutate"));
+        assertTrue("the setters are still merged in: " + methodNamesOf(nestedOf(target, "Builder")),
+            methodNamesOf(nestedOf(target, "Builder")).contains("host"));
+    }
+
+    // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
 

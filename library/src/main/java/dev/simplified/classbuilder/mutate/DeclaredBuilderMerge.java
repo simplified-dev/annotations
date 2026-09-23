@@ -52,13 +52,14 @@ import java.util.Set;
  * <ul>
  *   <li>a <b>field</b> by name, so the generated setters assign the author's
  *       slot rather than a second one beside it;</li>
- *   <li>a <b>method</b> by name and parameter count. That is deliberately looser
- *       than the rule {@code BootstrapCollisions} applies on the target, and for
- *       the opposite reason: an unrelated {@code from(String)} there is a
- *       parser that happens to share a name, while a same-named,
- *       same-arity method <em>on the author's own builder</em> is the setter
- *       they wrote instead of the generated one, which is what merging is
- *       for;</li>
+ *   <li>a <b>method</b> by name and the erasure of each parameter type, which
+ *       {@link DeclaredBuilderShape#methodKey} states for both halves - the
+ *       signature javac would refuse to see twice. A method under it on the
+ *       author's own builder is the setter they wrote instead of the generated
+ *       one, which is what merging is for; one sharing only the name and arity
+ *       takes another type, is an overload beside the generated setter, and
+ *       leaves it to be appended, {@code from(T)} and {@code mutate()} passing
+ *       the slot's own type to it;</li>
  *   <li>the builder's <b>constructor</b>, always. The declared class has one by
  *       the time this runs whether the author wrote it or not, javac having
  *       entered a default before the round began, and a second no-arg form
@@ -202,7 +203,7 @@ final class DeclaredBuilderMerge {
     private RoleExpectation expectationFor(ChainRole role, DeclaredBuilderFacts facts,
                                            @Nullable AnnotatedSuper annotatedSuper) {
         return DeclaredBuilderShape.expectation(role, ctx.targetSimpleName(), ctx.builderName(),
-            targetParameterNames(ctx), facts.typeParameterNames(),
+            targetParameterNames(ctx), boundsOf(ctx.typeParams()), facts.typeParameterNames(),
             annotatedSuper == null ? null : annotatedSuper.simpleName(),
             annotatedSuper == null ? List.of() : annotatedSuper.typeArguments());
     }
@@ -216,6 +217,28 @@ final class DeclaredBuilderMerge {
     static List<String> targetParameterNames(MutationContext ctx) {
         List<String> out = new ArrayList<>();
         for (JCTypeParameter parameter : ctx.typeParams()) out.add(parameter.name.toString());
+        return out;
+    }
+
+    /**
+     * The bounds written on each type parameter, joined as
+     * {@link DeclaredBuilderFacts#typeParameterBounds} holds them.
+     *
+     * @param parameters the parameters to read, the target's or the declared builder's
+     * @return the bounds, in declaration order, null where a parameter has none
+     */
+    private static List<String> boundsOf(@Nullable Iterable<JCTypeParameter> parameters) {
+        List<String> out = new ArrayList<>();
+        if (parameters == null) return out;
+        for (JCTypeParameter parameter : parameters) {
+            if (parameter.bounds == null || parameter.bounds.isEmpty()) {
+                out.add(null);
+                continue;
+            }
+            List<String> bounds = new ArrayList<>();
+            for (JCExpression bound : parameter.bounds) bounds.add(bound.toString());
+            out.add(String.join(" & ", bounds));
+        }
         return out;
     }
 
@@ -240,16 +263,8 @@ final class DeclaredBuilderMerge {
      * @return the facts the shape decision measures
      */
     private DeclaredBuilderFacts factsOf(JCClassDecl declared) {
-        List<String> parameterNames = new ArrayList<>();
-        List<String> parameterBounds = new ArrayList<>();
-        if (declared.typarams != null) {
-            for (JCTypeParameter parameter : declared.typarams) {
-                parameterNames.add(parameter.name.toString());
-                parameterBounds.add(parameter.bounds == null || parameter.bounds.isEmpty()
-                    ? null
-                    : parameter.bounds.head.toString());
-            }
-        }
+        List<String> parameterNames = declaredParameterNames(declared);
+        List<String> parameterBounds = boundsOf(declared.typarams);
         String writtenSuper = declared.extending == null
             ? null
             : DeclaredBuilderShape.rawType(declared.extending.toString());
@@ -260,7 +275,25 @@ final class DeclaredBuilderMerge {
         return new DeclaredBuilderFacts((declared.mods.flags & Flags.STATIC) != 0,
             (declared.mods.flags & Flags.ABSTRACT) != 0,
             parameterNames, parameterBounds, writtenSuper, superArguments,
-            declaredBuildMethod(declared));
+            declaredBuildMethod(declared), kindOf(declared));
+    }
+
+    /**
+     * The keyword the declared type is written with, read off the flags the
+     * parser sets for it - an implicit {@code static} on a member record, enum
+     * or interface is recorded on the symbol only, which is why the kind is
+     * asked rather than the modifier.
+     *
+     * @param declared the type the author wrote
+     * @return one of the {@link DeclaredBuilderFacts} kind constants
+     */
+    private static String kindOf(JCClassDecl declared) {
+        long flags = declared.mods.flags;
+        if ((flags & Flags.ANNOTATION) != 0) return DeclaredBuilderFacts.ANNOTATION;
+        if ((flags & Flags.INTERFACE) != 0) return DeclaredBuilderFacts.INTERFACE;
+        if ((flags & Flags.ENUM) != 0) return DeclaredBuilderFacts.ENUM;
+        if ((flags & Flags.RECORD) != 0) return DeclaredBuilderFacts.RECORD;
+        return DeclaredBuilderFacts.CLASS;
     }
 
     /**
@@ -291,6 +324,11 @@ final class DeclaredBuilderMerge {
      * each slot's storage from the tree, through {@link SlotHolding#of}, which
      * the editor asks of the same facts.
      *
+     * <p>A field declared {@code final} is reported too, through
+     * {@link DeclaredBuilderShape#finalSlot}, whatever its type: the generated
+     * setter assigns it. A seed is the exception, being appended {@code final}
+     * itself and assigned by the author's constructor alone.
+     *
      * <p>The merge continues after a report, so javac also refuses the generated
      * member that assigns the slot - the report is what says why on a line the
      * author wrote.
@@ -302,6 +340,11 @@ final class DeclaredBuilderMerge {
             String name = field.name.toString();
             for (FieldSpec slot : ctx.fields()) {
                 if (!slot.name.equals(name)) continue;
+                if ((field.mods.flags & Flags.FINAL) != 0 && !slot.seed) {
+                    messager.printMessage(Diagnostic.Kind.ERROR,
+                        DeclaredBuilderShape.finalSlot(declared.name.toString(), name), anchor);
+                    continue;
+                }
                 SlotHolding holding = holdingOf(slot);
                 String message = DeclaredBuilderShape.mistypedSlot(declared.name.toString(), name,
                     field.vartype.toString(), storageType(slot, holding), holding);
@@ -349,7 +392,7 @@ final class DeclaredBuilderMerge {
         return out;
     }
 
-    /** {@code name/arity} keys the declared builder already spells. */
+    /** {@link DeclaredBuilderShape#methodKey} keys the declared builder already spells. */
     private static Set<String> declaredMethodKeys(JCClassDecl declared) {
         Set<String> out = new HashSet<>();
         for (JCTree def : declared.defs) {
@@ -434,7 +477,10 @@ final class DeclaredBuilderMerge {
 
 
     private static String key(JCMethodDecl method) {
-        return method.name + "/" + method.params.size();
+        List<String> types = new ArrayList<>(method.params.size());
+        for (JCVariableDecl parameter : method.params)
+            types.add(parameter.vartype == null ? "" : parameter.vartype.toString());
+        return DeclaredBuilderShape.methodKey(method.name.toString(), types);
     }
 
     private static String signature(JCMethodDecl method) {
