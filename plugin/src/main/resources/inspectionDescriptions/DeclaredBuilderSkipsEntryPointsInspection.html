@@ -1,0 +1,42 @@
+<html>
+<body>
+Reports the entry points a <code>@ClassBuilder</code> skips because the builder
+the target declares has no constructor they can call.
+
+<p>
+A declared builder is merged into: the generated members are appended beside
+the author's, and the author's constructors are the builder's constructors.
+Every entry point creates the builder with one argument per
+<code>@BuilderSeed</code>, so where the declared builder declares constructors
+and none of that arity, <code>builder()</code>, <code>from(T)</code> and
+<code>mutate()</code> are not generated. The processor says so in a compiler
+note and completion leaves the three out; this warning is the note, in the
+same words, on the annotation.
+</p>
+
+<!-- tooltip end -->
+
+<p>
+On a class or record target, and on a concrete link of a SuperBuilder chain,
+the entry points pass nothing, so the constructor they need is a no-argument
+one. A builder that declares no constructor at all keeps its implicit default,
+which serves them. On a constructor or static factory target the one entry
+point is <code>builder(..)</code>, and it needs a constructor taking exactly the
+seeds.
+</p>
+
+<p>
+Either declare that constructor, or write the entry points by hand. An entry
+point named <code>NONE</code> through <code>@BuilderNames</code> is not
+generated, so it is not reported as skipped.
+</p>
+
+<p>
+Nothing is reported on an interface, whose entry points create its sibling
+builder; on an abstract target, which has no entry points of its own; or beside
+a declared shape the merge refuses, which the declared-builder shape
+inspection reports as an error.
+</p>
+
+</body>
+</html>

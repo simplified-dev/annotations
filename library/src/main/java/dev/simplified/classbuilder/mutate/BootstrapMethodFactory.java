@@ -126,22 +126,16 @@ final class BootstrapMethodFactory {
 
     /**
      * The note for entry points skipped because the merged builder has no
-     * constructor they can call.
+     * constructor they can call, in the text the editor's weak warning shows.
      *
-     * @return the note text, naming only the entry points this path emits
+     * @return the note text naming only the entry points this path emits, or
+     *     {@code null} when it emits none
      */
-    private String uninstantiableNote() {
-        var config = ctx.config();
-        java.util.List<String> entryPoints = new ArrayList<>();
-        entryPoints.add(config.builderMethodName());
-        if (!ctx.isExecutableTarget()) {
-            entryPoints.add(config.fromMethodName());
-            entryPoints.add(config.toBuilderMethodName());
-        }
-        entryPoints.removeIf(String::isEmpty);
+    private @Nullable String uninstantiableNote() {
         java.util.List<String> seedNames = new ArrayList<>();
         for (FieldSpec seed : ctx.seeds()) seedNames.add(seed.name);
-        return DeclaredBuilderShape.uninstantiable(mergedInto.name.toString(), entryPoints, seedNames);
+        return DeclaredBuilderShape.entryPointsSkipped(mergedInto.name.toString(), ctx.config().names(),
+            ctx.isExecutableTarget(), seedNames);
     }
 
     /** Appends whichever bootstrap methods are missing from the target. */
@@ -157,7 +151,8 @@ final class BootstrapMethodFactory {
         // generate-flag to consult.
         int seeds = ctx.seeds().size();
         if (!builderCanBeInstantiated(seeds)) {
-            messager.printMessage(Diagnostic.Kind.NOTE, uninstantiableNote(), ctx.targetElement());
+            String note = uninstantiableNote();
+            if (note != null) messager.printMessage(Diagnostic.Kind.NOTE, note, ctx.targetElement());
             return;
         }
         if (!builderMethod.isEmpty())

@@ -361,7 +361,9 @@ public final class ClassBuilderConstants {
      * <p>Every entry point instantiates the builder with one argument per seed,
      * and a declared builder's constructors are the author's throughout, so one
      * that declares no constructor of that arity leaves the entry points with
-     * nothing to call and the processor skips them with a note. Everything else
+     * nothing to call and the processor skips them with a note, which
+     * {@link DeclaredBuilderSkipsEntryPointsInspection} reports in the editor in
+     * the same words. Everything else
      * still runs - the merge appends every setter, a class target still gets
      * the all-args constructor {@code build()} calls, and a chain link still
      * gets its copy constructor. Withholding the whole member list here would

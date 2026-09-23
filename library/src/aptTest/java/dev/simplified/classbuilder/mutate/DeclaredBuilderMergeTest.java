@@ -455,6 +455,42 @@ public class DeclaredBuilderMergeTest {
         assertEquals("direct/built", runGo(c, "demo.UseUnseeded"));
     }
 
+    /**
+     * With every entry point named {@code NONE} there is nothing to skip, so a
+     * declared builder whose constructors all take parameters draws no note. The
+     * note used to be printed anyway, reporting an empty list as not added.
+     */
+    @Test
+    public void merge_whereEveryEntryPointIsNamedNone_notesNothingSkipped() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Closed",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderNames;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, builder = @BuilderNames(builder = BuilderNames.NONE,",
+                "    from = BuilderNames.NONE, toBuilder = BuilderNames.NONE))",
+                "public class Closed {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "    public static class Builder {",
+                "        public Builder(String name) { this.name = name; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseClosed",
+                "package demo;",
+                "public class UseClosed {",
+                "    public static String go() {",
+                "        return new Closed.Builder(\"x\").build().getName();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        for (var note : c.notes()) {
+            assertFalse("no entry point is emitted, so none is skipped: " + note.getMessage(null),
+                String.valueOf(note.getMessage(null)).contains("were not added"));
+        }
+        assertEquals("x", runGo(c, "demo.UseClosed"));
+    }
+
     /** A builder declaring a nullary constructor beside a seeded one keeps its entry points. */
     @Test
     public void merge_whereTheAuthorAlsoDeclaresANullaryConstructor_keepsTheBootstraps()

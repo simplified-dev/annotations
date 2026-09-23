@@ -4,7 +4,6 @@ import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
-import com.intellij.psi.PsiParameter;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypeParameter;
 import com.intellij.psi.PsiTypes;
@@ -124,13 +123,7 @@ record BuilderSite(@NotNull PsiClass owner, @Nullable PsiMethod executable,
      * @return the seed count, zero when the annotation is on the type
      */
     int seedCount() {
-        if (executable == null) return 0;
-        int seeds = 0;
-        for (PsiParameter parameter : executable.getParameterList().getParameters()) {
-            if (PsiFieldShapeExtractor.hasAnnotation(parameter, ClassBuilderConstants.BUILDER_SEED_FQN))
-                seeds++;
-        }
-        return seeds;
+        return executable == null ? 0 : MergedSlotStorage.seedNames(executable).size();
     }
 
 }

@@ -130,6 +130,22 @@ public final class MergedSlotStorage {
     public record UnassignedSeed(@NotNull PsiElement anchor, @NotNull String message) { }
 
     /**
+     * Names the annotated member's seeds, each of which {@code builder(..)} takes
+     * and passes to the builder's constructor.
+     *
+     * @param executable the annotated constructor or static factory
+     * @return the seeded parameters' names, in parameter order
+     */
+    public static @NotNull List<String> seedNames(@NotNull PsiMethod executable) {
+        List<String> out = new ArrayList<>();
+        for (PsiParameter parameter : executable.getParameterList().getParameters()) {
+            if (PsiFieldShapeExtractor.hasAnnotation(parameter, ClassBuilderConstants.BUILDER_SEED_FQN))
+                out.add(parameter.getName());
+        }
+        return out;
+    }
+
+    /**
      * Reports each seed the merge appends into a declared builder that a
      * constructor there leaves unassigned.
      *

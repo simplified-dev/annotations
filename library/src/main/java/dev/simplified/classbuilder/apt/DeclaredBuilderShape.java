@@ -460,6 +460,37 @@ public final class DeclaredBuilderShape {
 
     /**
      * Renders the note for entry points skipped because the declared builder has
+     * no constructor they can call, as both halves report it - the processor as a
+     * note, the editor as a weak warning on the annotation.
+     *
+     * <p>Names the entry points the path emits and no others: all three on a type
+     * target, {@code builder(..)} alone on a constructor or factory target, and
+     * never one named {@code NONE}. A path emitting none skips nothing, so there
+     * is no note.
+     *
+     * @param declaredName the declared builder's simple name
+     * @param names the resolved names, an entry point named {@code NONE} being empty
+     * @param executable whether the annotation sits on a constructor or factory method
+     * @param seedNames the seeded slots the entry points pass, in parameter order
+     * @return the note text, or {@code null} when the path emits no entry point
+     */
+    public static @Nullable String entryPointsSkipped(@NotNull String declaredName,
+                                                      @NotNull BuilderScheme names,
+                                                      boolean executable,
+                                                      @NotNull List<String> seedNames) {
+        List<String> entryPoints = new ArrayList<>();
+        entryPoints.add(names.builder());
+        if (!executable) {
+            entryPoints.add(names.from());
+            entryPoints.add(names.toBuilder());
+        }
+        entryPoints.removeIf(String::isEmpty);
+        if (entryPoints.isEmpty()) return null;
+        return uninstantiable(declaredName, entryPoints, seedNames);
+    }
+
+    /**
+     * Renders the note for entry points skipped because the declared builder has
      * no constructor they can call.
      *
      * <p>Worded by what the entry points pass: with no seed the missing

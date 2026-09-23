@@ -426,6 +426,44 @@ public class DeclaredBuilderShapeTest {
             DeclaredBuilderShape.uninstantiable("Builder", List.of("builder"), List.of("origin", "kind")));
     }
 
+    /**
+     * The skip note both halves render names the entry points the path emits and
+     * no others - all three on a type target, {@code builder(..)} alone on a
+     * constructor or factory target, and never one the author named {@code NONE}.
+     */
+    @Test
+    public void entryPointsSkipped_namesOnlyTheEntryPointsThePathEmits() {
+        BuilderScheme all = new BuilderScheme("Builder", "builder", "build", "from", "mutate");
+        assertEquals("@ClassBuilder merged into 'Builder' but every constructor it declares takes "
+                + "parameters, so 'builder', 'from' and 'mutate' were not added - declare a no-argument "
+                + "constructor or write them",
+            DeclaredBuilderShape.entryPointsSkipped("Builder", all, false, List.of()));
+        BuilderScheme noFrom = new BuilderScheme("Builder", "builder", "build", "", "mutate");
+        assertEquals("@ClassBuilder merged into 'Builder' but every constructor it declares takes "
+                + "parameters, so 'builder' and 'mutate' were not added - declare a no-argument "
+                + "constructor or write them",
+            DeclaredBuilderShape.entryPointsSkipped("Builder", noFrom, false, List.of()));
+        assertEquals("@ClassBuilder merged into 'Builder' but none of its constructors takes the seed "
+                + "'builder' passes, so 'builder' was not added - declare a constructor taking "
+                + "(origin) or write it",
+            DeclaredBuilderShape.entryPointsSkipped("Builder", all, true, List.of("origin")));
+    }
+
+    /**
+     * A path whose every entry point is named {@code NONE} skips nothing, so
+     * there is no note to render - rather than one reporting an empty list as
+     * not added.
+     */
+    @Test
+    public void entryPointsSkipped_isNullWhereThePathEmitsNone() {
+        assertNull("a type target with all three named NONE",
+            DeclaredBuilderShape.entryPointsSkipped("Builder",
+                new BuilderScheme("Builder", "", "build", "", ""), false, List.of()));
+        assertNull("an executable target emits builder(..) alone",
+            DeclaredBuilderShape.entryPointsSkipped("Builder",
+                new BuilderScheme("Builder", "", "build", "from", "mutate"), true, List.of("origin")));
+    }
+
     /** The unassigned-seed sentence names the constructor, or the absence of one. */
     @Test
     public void unassignedSeed_rendersTheSharedSentence() {

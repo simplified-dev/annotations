@@ -44,7 +44,9 @@ import java.lang.annotation.Target;
  * when it spells no method of that name and parameter count. Everything skipped
  * is reported in one compiler note rather than left silent. The target still
  * gets the all-args constructor {@code build()} calls, and still gets the three
- * entry points unless the declared builder has no constructor they can call. A
+ * entry points unless the declared builder has no constructor they can call, in
+ * which case all three are skipped with a note naming the constructor they
+ * need. A
  * declared builder that declares no constructor has its implicit default
  * retyped to {@link #builderConstructorAccess()}, so {@code new Target.Builder()}
  * is closed off exactly as on a generated builder. A

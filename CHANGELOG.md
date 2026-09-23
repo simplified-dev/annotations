@@ -38,32 +38,41 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   which is what `package-info` is, keeps the name it was read under. A collision that survives that
   is reported rather than written over.
 
-- **The editor stopped offering three entry points beside a hand-written builder.** All three
-  mutation paths skip generation when the target declares a nested type of the configured builder
-  name, and only one of them reads `mergeDeclaredBuilder`: a plain type target keeps its entry points
-  when the opt-in is written, while a chain role and a constructor or factory target abort ahead of
-  the bootstraps without consulting it at all. The editor asked none of those questions, so
-  `Target.builder()`, `from(T)` and `mutate()` completed green on a target whose build answers
-  `cannot find symbol` - reachable on a plain standalone class with no chain and no opt-in anywhere
-  in it, which is the shape a hand-migration off a Lombok builder produces most naturally.
+- **The editor's entry points beside a declared builder are the ones the build emits.** In 2.6.x
+  the processor skipped `builder()`, `from(T)` and `mutate()` on every target declaring a nested
+  class of the builder's name that was not merged into, while the editor offered all three - so
+  `Target.builder()` completed green on a target whose build answered `cannot find symbol`, on a
+  plain standalone class with nothing unusual in it, which is the shape a hand-migration off a
+  Lombok builder produces most naturally. Every declared builder is merged into now, and the three
+  are typed against the declared class rather than a synthesised one the target never lists, so
+  `Target.builder().name("x").apply(..)` resolves the author's own verb. They are withheld exactly
+  where the processor skips them: beside a declared shape the merge refuses, and where the declared
+  builder has no constructor they can call.
 
-- **The editor stopped synthesising a chain's members onto a builder javac never touches.** The
-  merged path asked about the opt-in and the builder's name and nothing about the chain role, so on a
-  root, a link or a chained abstract it listed the setters, the self accessor and the build method on
-  a class the processor appends nothing to.
+- **The editor merges a chain's members into the builder javac merges them into.** A root, a
+  concrete link and a chained abstract each receive their role's setters, and the editor
+  contributes the abstract `self()` and `build()` on the root only, their overrides on a link and
+  neither on a chained abstract, which inherits them - as the processor does. It had appended the
+  abstract pair into every chained-abstract builder, synthesised or not.
 
 - **A merged slot is compared against the type the builder holds it in.** The check read the field's
   declared type, and the builder does not always hold a slot as declared: a `@Lazy` field and a slot
   whose retained initializer reads instance state are both held as a supplier. On a lazy slot that
   was wrong in both directions at once - it rejected the supplier spelling, which is the only one the
   generated setters can assign, and accepted the natural one, which then failed on a line the author
-  never wrote.
+  never wrote. The editor reports the same error in the same sentence on the field's type, and both
+  halves print a type in one spelling, so a generic slot's `Map<String, Integer>` and a lazy
+  primitive's `Supplier<java.lang.Integer>` read alike in the build and in the editor. A non-lazy slot
+  whose field carries an initializer is not judged in the editor, whether the builder holds it as a
+  supplier depending on what the initializer reads.
 
-- **A chain whose ancestor declares its own builder is refused rather than emitted.** A link's
-  builder extends the ancestor's and passes it the ancestor's arguments plus the self-typed pair, so
-  a builder the ancestor's author wrote cannot receive it. The clause was emitted anyway and failed
-  at attribution on a generated line, while the editor left the child's builder with no supertype and
-  reported nothing at all.
+- **A chain whose ancestor declares a builder the extends clause cannot name is refused rather than
+  emitted.** A link's builder extends the ancestor's and passes it the ancestor's arguments plus the
+  self-typed pair, so an ancestor's declared builder without that parameter list - a concrete
+  ancestor's, or one compiled without the processor - cannot receive it. The clause was emitted
+  anyway and failed at attribution on a generated line, while the editor left the child's builder
+  with no supertype and reported nothing at all. An ancestor whose declared builder has the root's
+  shape is merged into and extended like a generated one.
 
 - **The chain's copy constructor is offered in the editor.** The processor emits
   `protected Target(Builder)` on every chain role and the editor synthesised none, so a hand-written
@@ -73,13 +82,46 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
 
 - **A merged builder's slot fields resolve in the editor.** The merge appends them and the editor
   contributed none, so an author's own verb inside that class referencing a slot was red over source
-  that builds - which lands on exactly the hand-written verb the merge exists to allow. Renaming a
-  slot now follows through to the setters contributed there, which it silently skipped.
+  that builds - which lands on exactly the hand-written verb the merge exists to allow. One shape is
+  still left out: on a class or record target, a non-lazy slot whose field carries an initializer,
+  which the builder may hold as a supplier depending on what the initializer reads - a question the
+  editor does not answer, so a reference to that slot inside the builder stays unresolved rather
+  than resolving to a type that may be wrong. Renaming a slot now follows through to the setters
+  contributed there, which it silently skipped.
 
 - **The entry points a merged builder has no constructor for are skipped with a note.** Every entry
-  point instantiates the builder and a declared builder's constructors are the author's throughout,
-  so one that declares constructors and no nullary one left all three with nothing to call. Both
-  halves withhold them together.
+  point instantiates the builder with one argument per `@BuilderSeed`, and a declared builder's
+  constructors are the author's, so one declaring constructors and none of that arity left the entry
+  points with nothing to call. Both halves withhold them together, and the note names only the entry
+  points the path emits - `builder(..)` alone on a constructor or factory target, and never one
+  named `NONE`; with every entry point named `NONE` there is nothing to skip and no note.
+
+- **A declared builder with no constructor takes `builderConstructorAccess`.** javac's implicit
+  default takes the builder class's own access, `public` on the usual shape, so a merged builder
+  published `new Target.Builder()` beside `Target.builder()` - the second entry point the attribute
+  exists to close. 2.6.0 recorded that retyping that default does not take; it does once javac's
+  generated-constructor flag is cleared, so on a class or record target and on a constructor or
+  factory target the default is retyped to the attribute, `PACKAGE` unless written, and the editor
+  contributes the matching constructor. A declared builder with a constructor of its own keeps it as
+  written, and a chain role keeps javac's default, no chain builder being given a constructor at all.
+
+- **`builderConstructorAccess = NONE` is one error on the annotation.** It reached a switch with no
+  case for it and failed the build with `Failed to generate builder for ...: AccessLevel.NONE has no
+  modifier flag - callers must check emits() first`, was accepted in silence on an interface, and
+  was green in the editor. Both halves now report
+  `@ClassBuilder(builderConstructorAccess = NONE) is not expressible - every builder has a constructor, so choose PRIVATE, PACKAGE, PROTECTED or PUBLIC`
+  on the annotation of every target, and the builder is generated as under `PACKAGE` so that error
+  is the only one.
+
+- **The editor no longer invents a chain builder's constructor.** It gave every chain builder a
+  constructor at `builderConstructorAccess`, and no chain builder the processor writes declares one:
+  javac's default stands, at the class's access. A `new Link.Builder()` or a subclass builder in
+  another package was red in the editor over source that builds.
+
+- **A package-private builder constructor is closed to another package in the editor too.** The
+  editor's constructor carried no modifier for package-private access, and the platform's access
+  check reads a modifier list with no access keyword as `public`, so a cross-package
+  `new Target.Builder()` resolved in the editor while javac refused it.
 
 - **The expansion stopped documenting a chain's members as each other.** A self-typed builder's
   setters and its self accessor return the builder's own self type rather than its name, so the owner
@@ -87,6 +129,39 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   something else - the self accessor coming out documented as the build method.
 
 ### Changed
+
+- **BREAKING: `mergeDeclaredBuilder` is removed, and a declared builder is always merged into.** A
+  nested class of the builder's name - `Builder`, or what `@BuilderNames(type)` names - is treated
+  the way the library treats every other hand-written member: the author's declaration wins for what
+  it spells and the generator fills in the rest. That holds on every path, a class or record target,
+  each SuperBuilder chain role and a constructor or factory target, where 2.6.x merged only on a
+  class or record target and only with the attribute written; everywhere else the declaration turned
+  generation off. Writing the attribute is now a compile error. **Migration: delete
+  `mergeDeclaredBuilder = true`.**
+
+  A bare declared builder, which 2.6.x left alone, now gains the generated slot fields, setters and
+  `build()` it does not spell, and its target gains the all-args constructor `build()` calls and the
+  entry points `builder()`, `from(T)` and `mutate()`, typed against the declared class. Each skipped
+  member the author already spells is listed in one note. A declared shape the generated members
+  cannot live in is an error on both halves, where it used to pass because nothing was merged:
+
+  - an inner class - declare it `static`;
+  - the wrong type parameters on a generic target - re-declare the target's, in order, or on a
+    static factory the factory's own;
+  - `abstract` where the entry points instantiate it - drop `abstract`;
+  - a field sharing a slot's name whose type the generated setter cannot assign - give it the slot's
+    type, or `Supplier<T>` for a `@Lazy` slot, or rename it;
+  - on a chain root, a builder that is not abstract or not self-typed - declare it
+    `abstract static class Builder<T extends Target, B extends Builder<T, B>>`;
+  - below a chain root, a missing or wrong `extends` clause or the wrong arguments to it - extend
+    the ancestor's builder as `Ancestor.Builder<Link, Builder>` on a concrete link, or forward the
+    builder's own self-typed pair on a chained abstract;
+  - on a chain, a build method returning something other than the built type - return that type;
+  - on a constructor or factory target, a `@BuilderSeed` a constructor of the builder leaves
+    unassigned - assign it there, the merge appending it as a `final` field.
+
+  A declared builder whose constructors all take parameters keeps its setters and loses only the
+  entry points, with a note; declaring a no-argument constructor restores them.
 
 - **The README documents the dependency scope the artifact is actually built for.** It showed
   `implementation`, which puts a jar on a consumer's runtime classpath that nothing ever loads: every
@@ -97,18 +172,47 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
 
 ### Added
 
+- **A SuperBuilder chain merges into a builder it declares.** An abstract root, a concrete link and a
+  chained abstract each append their role's members to a declared nested builder of the shape the
+  role generates: on a root, an abstract static class re-declaring the target's type parameters and a
+  bounded self-typed pair, whose names are the author's to choose and are what the merged setters
+  return; on a chained abstract the same, extending the ancestor's builder with that pair forwarded;
+  on a concrete link a static class extending the ancestor's builder with the link and its builder
+  bound. A root receives the abstract `self()` and `build()`, a link their overrides, and a chained
+  abstract neither. The extends clause is compared with its qualifier and its arguments are checked,
+  so `extends Other.Builder<Link, Builder>` or a reversed pair is refused before it fails inside a
+  generated member. A link whose annotated ancestor declares a builder the extends clause cannot name
+  is still refused on the ancestor.
+
+- **A constructor or static factory target merges into the builder its enclosing type declares.**
+  The merged members are the parameters' slots, and the builder re-declares the type parameters they
+  are written in - a static factory's own, the enclosing type's for a constructor, on both halves.
+  `builder(..)` passes each `@BuilderSeed` to the builder's constructor, so it is emitted only where
+  the author declares a constructor taking exactly the seeds; a seed is appended as a `final` field,
+  and the editor reports a constructor of the builder that leaves it unassigned, or the builder's name
+  when it declares none, where javac refuses the same declaration.
+
 - **An inspection for a declared builder the merge cannot append to.** Non-static, the wrong type
   parameters, or declared abstract where the entry points instantiate it. The processor refuses these
   with a compile error and the editor had no analogue, so the whole generated surface appeared in
-  completion on a class the build was going to reject. Three further shapes - an unbounded self-type
-  pair, a wrong `extends` clause, and a build method that cannot stand in for the generated one - are
-  stated in the same decision and asked only of a chain, where a generated member depends on the
-  answer; standing alone the author's `build()` is simply kept, as it always was.
+  completion on a class the build was going to reject. Further shapes - an unbounded self-type pair,
+  a missing or wrong `extends` clause, the wrong arguments to it, and a build method that cannot
+  stand in for the generated one - are stated in the same decision and asked only of a chain, where a
+  generated member depends on the answer; standing alone the author's `build()` is simply kept, as it
+  always was. Every role is judged, and so is a constructor or factory target's builder, each in the
+  processor's sentence.
 
-- **A weak warning where a declared builder turns generation off.** Three members and a whole nested
-  class leave completion and the only account of it was a compiler note. The message names the
-  declaration and says whether the merge opt-in is read where the target sits, rather than advising
-  an attribute one of the three positions ignores.
+- **A warning where `builderConstructorAccess` cannot reach the declared builder.** The author's own
+  constructor keeps the access it is written with, so the attribute written beside it changes
+  nothing. Both halves warn on the attribute on a class or record target and on a constructor or
+  factory target:
+  `@ClassBuilder(builderConstructorAccess) has no effect - the declared 'Builder' declares its own constructor, which keeps the access it is written with. Write the access on that constructor, or drop the attribute`.
+
+- **A weak warning where the entry points are skipped beside a declared builder.** `builder()`,
+  `from(T)` and `mutate()` leave completion when the declared builder has no constructor they can
+  call, and the only account of it was a compiler note. The editor now shows that note, word for word,
+  as a weak warning on the annotation - on a class or record target, a concrete link and a
+  constructor or factory target, and nowhere the processor prints no note.
 
 - **One shared decision behind both halves of the declared-builder rules.** The chain role, the
   shape check, and the wording each rejection is reported with all live in the library and are

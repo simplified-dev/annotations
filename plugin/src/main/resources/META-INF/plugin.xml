@@ -157,11 +157,11 @@
         />
         <localInspection
                 language="JAVA"
-                implementationClass="dev.simplified.classbuilder.inspect.DeclaredBuilderSuppressesGenerationInspection"
+                implementationClass="dev.simplified.classbuilder.inspect.DeclaredBuilderSkipsEntryPointsInspection"
                 enabledByDefault="true"
                 level="WEAK WARNING"
-                shortName="DeclaredBuilderSuppressesGenerationInspection"
-                displayName="@ClassBuilder generates nothing beside a declared builder"
+                shortName="DeclaredBuilderSkipsEntryPointsInspection"
+                displayName="@ClassBuilder skips entry points the declared builder cannot serve"
                 groupPath="Simplified Annotations"
                 groupName="Misuse"
         />

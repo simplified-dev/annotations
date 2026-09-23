@@ -835,7 +835,8 @@ public final class GeneratedMemberFactory {
      * legal one. The third shape the processor knows - a slot whose retained
      * initializer reads instance state, which is also held as a supplier -
      * cannot be told apart here, initializer flow being something the editor
-     * does not analyse, so such a slot is contributed with its declared type.
+     * does not analyse, so on a class or record target a non-lazy slot whose
+     * field carries an initializer is not contributed at all.
      *
      * @param site the annotated site
      * @param config the resolved configuration
@@ -862,8 +863,8 @@ public final class GeneratedMemberFactory {
             // javac rejects - the very shape this contribution exists to
             // prevent - so a slot carrying any initializer is left out unless it
             // is lazy, which is held as a supplier whatever its initializer says.
-            // Absent means unresolved, which is the state before this existed;
-            // present and mistyped would be worse than either. On an executable
+            // Absent leaves a reference unresolved; present and mistyped would
+            // resolve it to the wrong type, which is worse. On an executable
             // site the slot is a parameter, which has no initializer, and a
             // field of the enclosing type sharing its name is no part of it.
             if (!site.isExecutable() && !slot.lazy && hasInitializer(target, slot.name)) continue;
