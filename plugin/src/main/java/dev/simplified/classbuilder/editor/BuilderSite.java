@@ -31,8 +31,8 @@ import java.util.List;
  *        when the annotation is on the type
  * @param annotation the {@code @ClassBuilder} itself, wherever it is written
  */
-record BuilderSite(@NotNull PsiClass owner, @Nullable PsiMethod executable,
-                   @NotNull PsiAnnotation annotation) {
+public record BuilderSite(@NotNull PsiClass owner, @Nullable PsiMethod executable,
+                          @NotNull PsiAnnotation annotation) {
 
     /**
      * Resolves where {@code target}'s builder is declared.
@@ -50,10 +50,15 @@ record BuilderSite(@NotNull PsiClass owner, @Nullable PsiMethod executable,
      * runs under the augment providers' re-entry guard, so a lookup started from
      * anywhere inside synthesis answers {@code null} rather than recursing.
      *
+     * <p>The one reading of which annotation the processor builds from, for the
+     * inspections as for the augment providers: an annotated member it refuses,
+     * or one beside an annotated type, is never the site answered, so nothing
+     * judges a merge javac never runs.
+     *
      * @param target the class to read
      * @return the site, or {@code null} when nothing here declares a builder
      */
-    static @Nullable BuilderSite of(@NotNull PsiClass target) {
+    public static @Nullable BuilderSite of(@NotNull PsiClass target) {
         if (AbstractRecursionSafeAugmentProvider.isInProgress(target)) return null;
         return AbstractRecursionSafeAugmentProvider.withInProgress(target, () -> resolve(target));
     }
@@ -117,13 +122,13 @@ record BuilderSite(@NotNull PsiClass owner, @Nullable PsiMethod executable,
     }
 
     /**
-     * How many of the annotated member's parameters are seeds, each of which
+     * The type of each of the annotated member's seeds as written, each of which
      * {@code builder(..)} takes and passes to the builder's constructor.
      *
-     * @return the seed count, zero when the annotation is on the type
+     * @return the seeds' types in parameter order, empty when the annotation is on the type
      */
-    int seedCount() {
-        return executable == null ? 0 : MergedSlotStorage.seedNames(executable).size();
+    List<String> seedTypes() {
+        return executable == null ? List.of() : MergedSlotStorage.seedTypes(executable);
     }
 
 }

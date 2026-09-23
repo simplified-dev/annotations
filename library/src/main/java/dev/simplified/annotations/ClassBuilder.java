@@ -63,8 +63,11 @@ import java.lang.annotation.Target;
  * generated members are written in - a static factory's own - and its one entry
  * point, {@code builder(..)}, passes each {@link BuilderSeed} to the builder's
  * constructor, so it is emitted only where the author declares a constructor
- * taking exactly those. A seed is appended as a {@code final} field that the
- * author's constructors assign.
+ * taking exactly those - the seeds' types in parameter order, compared by
+ * erasure and simple name - and is skipped with a note otherwise. A seed is
+ * appended as a {@code final} field that the author's constructors assign. A
+ * static factory inside an interface is such a target too, and merges into the
+ * class the interface body declares.
  *
  * <p>A target in a SuperBuilder chain merges too, into a declaration of the shape
  * its role generates: on an abstract root, a {@code static abstract} class

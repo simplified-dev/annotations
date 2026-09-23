@@ -408,6 +408,76 @@ public class DeclaredBuilderSkipsEntryPointsInspectionTest extends BasePlatformT
             0, weakWarnings().size());
     }
 
+    /**
+     * A static factory inside an interface is an executable target, which merges
+     * into the class the interface body declares - so a builder there whose
+     * constructors all take parameters leaves {@code builder()} nothing to call,
+     * and javac says so in this note. The editor stayed silent, reading the
+     * interface around the factory as an interface type target.
+     */
+    public void testOnAStaticFactoryInAnInterfaceWhoseBuilderTakesParameters_isWarned() {
+        myFixture.addFileToProject("Circle.java", "public record Circle(double radius) { }");
+        myFixture.configureByText("Shapes.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public interface Shapes {
+                @ClassBuilder
+                static Circle circle(double radius) { return new Circle(radius); }
+                class Builder { Builder(int n) { } }
+            }
+            """);
+        assertEquals("@ClassBuilder merged into 'Builder' but every constructor it declares takes "
+                + "parameters, so 'builder' was not added - declare a no-argument constructor or write it",
+            theOnlyWarning());
+    }
+
+    /**
+     * A constructor of the seed count taking another type is not one
+     * {@code builder(seed)} can call. javac emitted the entry point against it
+     * and failed on the class line; it now skips it with this note.
+     */
+    public void testOnASeededConstructorWhoseBuilderTakesAnotherTypeAtTheSeedsArity_isWarned() {
+        myFixture.configureByText("Order.java",
+            """
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Order {
+                private final String origin;
+                private final String item;
+                @ClassBuilder
+                Order(@BuilderSeed String origin, String item) { this.origin = origin; this.item = item; }
+                public static final class Builder {
+                    Builder(int code) { this.origin = "code-" + code; }
+                }
+            }
+            """);
+        assertEquals("@ClassBuilder merged into 'Builder' but none of its constructors takes the seed "
+                + "'builder' passes, so 'builder' was not added - declare a constructor taking "
+                + "(origin) or write it",
+            theOnlyWarning());
+    }
+
+    /**
+     * The processor refuses an instance method outright and merges nothing, so
+     * there is no skipped entry point to account for.
+     */
+    public void testOnAnInstanceMethodTheProcessorRefuses_isNotWarned() {
+        myFixture.configureByText("Job.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Job {
+                private final String name;
+                Job(String name) { this.name = name; }
+                @ClassBuilder
+                public Job copy(String name) { return new Job(name); }
+                public static final class Builder {
+                    public Builder(String unused) { }
+                }
+            }
+            """);
+        assertEquals("javac prints no merge note for a refused member: " + weakWarningTexts(),
+            0, weakWarnings().size());
+    }
 
     private List<HighlightInfo> weakWarnings() {
         List<HighlightInfo> out = new ArrayList<>();

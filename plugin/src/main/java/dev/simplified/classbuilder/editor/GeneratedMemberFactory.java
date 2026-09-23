@@ -108,9 +108,14 @@ public final class GeneratedMemberFactory {
         // and mutate() seed every slot by reading a built instance, and a
         // parameter has no accessor to be read through - so the processor emits
         // neither, and offering them here would put two methods in completion
-        // that the build does not produce.
+        // that the build does not produce. An author's own method of the entry
+        // point's name taking as many parameters as there are seeds wins, as the
+        // processor's collision rule has it on this path.
         if (site.isExecutable()) {
-            if (config.builderMethodName().isEmpty()) return List.of();
+            if (config.builderMethodName().isEmpty()
+                || declaresArity(target, config.builderMethodName(), site.seedTypes().size())) {
+                return List.of();
+            }
             return List.of(buildEntryPoint(psiManager, elements, site, builderClass,
                 config.builderMethodName(), config.access()));
         }
@@ -160,8 +165,23 @@ public final class GeneratedMemberFactory {
      *         that name
      */
     private static boolean declaresNullary(PsiClass target, String name) {
+        return declaresArity(target, name, 0);
+    }
+
+    /**
+     * Whether the author already declares a method of that name and parameter
+     * count, which is what a seeded {@code builder(..)} collides at - the rule
+     * {@code BootstrapCollisions.declaresArity} states on the javac side.
+     *
+     * @param target the annotated type
+     * @param name the bootstrap name being considered
+     * @param arity how many parameters the injection would declare
+     * @return whether the author already declares such a method
+     */
+    private static boolean declaresArity(PsiClass target, String name, int arity) {
         for (PsiMethod method : ownMethods(target)) {
-            if (name.equals(method.getName()) && method.getParameterList().isEmpty()) return true;
+            if (name.equals(method.getName()) && method.getParameterList().getParametersCount() == arity)
+                return true;
         }
         return false;
     }

@@ -18,8 +18,11 @@ import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
 import dev.simplified.classbuilder.apt.BuilderScheme;
 import dev.simplified.classbuilder.apt.ChainRole;
 import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
+import dev.simplified.classbuilder.editor.BuilderSite;
 import dev.simplified.classbuilder.editor.MergedSlotStorage;
 import org.jetbrains.annotations.NotNull;
+
+import java.util.Objects;
 
 /**
  * Reports a declared builder the merge cannot append to.
@@ -54,6 +57,11 @@ import org.jetbrains.annotations.NotNull;
  * builder declares a constructor of its own is a warning on that attribute, in
  * the processor's sentence: the author's constructor keeps its own access.
  *
+ * <p>Only the annotation the processor builds from is judged, which is the one
+ * {@link BuilderSite#of} answers: an annotated member the processor refuses -
+ * an instance or {@code void} method, or one beside an annotated type - merges
+ * nothing, so there is nothing to report about its builder.
+ *
  * <p>On a constructor or factory target, a seed the merge appends as a
  * {@code final} field and a constructor of the declared builder leaves
  * unassigned is reported on that constructor, or on the builder's name when it
@@ -79,6 +87,11 @@ public class DeclaredBuilderShapeInspection extends LocalInspectionTool {
                     ? cls
                     : member != null ? member.getContainingClass() : null;
                 if (target == null || target.getName() == null) return;
+                // Only the annotation the processor builds from is judged. It
+                // refuses an instance method, a void one and a member beside an
+                // annotated type with an error of its own and merges nothing.
+                BuilderSite site = BuilderSite.of(target);
+                if (site == null || !Objects.equals(site.executable(), member)) return;
 
                 NamingStyle style = ClassBuilderConstants.namingStyle(annotation);
                 BuilderScheme names =
@@ -98,11 +111,12 @@ public class DeclaredBuilderShapeInspection extends LocalInspectionTool {
                 }
 
                 // The merge runs on a class or record target, a chain role among
-                // them, and on a constructor or factory target, into the builder
-                // the type declares, and nowhere else - an interface's builder is
-                // a sibling file - so the shape of a declared builder is only a
-                // question there.
-                if (target.isInterface()) return;
+                // them, and on a constructor or factory target, one inside an
+                // interface included, into the builder the type declares, and
+                // nowhere else - an interface type target's builder is a sibling
+                // file - so the shape of a declared builder is only a question
+                // there.
+                if (target.isInterface() && !executable) return;
                 PsiClass declared = ClassBuilderConstants.declaredBuilderOf(target, names.type());
                 if (declared == null || declared.getName() == null) return;
 

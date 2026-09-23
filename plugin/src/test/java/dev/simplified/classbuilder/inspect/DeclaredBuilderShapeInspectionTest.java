@@ -1125,6 +1125,105 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
         assertEquals("javac accepts it: " + errors(), 0, errors().size());
     }
 
+    // ------------------------------------------------------------------
+    // Reviewed reproductions: the constructor and factory path
+    // ------------------------------------------------------------------
+
+    /**
+     * A static factory inside an interface merges into the class the interface
+     * body declares, so an abstract one is refused as on any other target. The
+     * inspection returned on every interface owner, reading the factory's site as
+     * an interface type target, and was silent over javac's error.
+     */
+    public void testAnAbstractBuilderUnderAnInterfacesStaticFactory_isReported() {
+        myFixture.addFileToProject("Circle.java", "public record Circle(double radius) { }");
+        myFixture.configureByText("Shapes.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public interface Shapes {
+                @ClassBuilder
+                static Circle circle(double radius) { return new Circle(radius); }
+                abstract class Builder { }
+            }
+            """);
+        assertEquals("@ClassBuilder cannot merge into 'Builder' - it is what builder() instantiates, so it "
+            + "cannot be abstract", theOnlyError());
+    }
+
+    /**
+     * A varargs parameter's slot is held as the array it is, which is what javac
+     * reads off the parameter. The editor rendered the slot's ellipsis type,
+     * erased it to nothing, and reported the author's {@code String[]} field.
+     */
+    public void testAVarargsParameterSlotOverAnArrayField_isNotReported() {
+        myFixture.configureByText("Tags.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Tags {
+                private final String[] values;
+                @ClassBuilder
+                Tags(String... values) { this.values = values; }
+                public static final class Builder {
+                    private String[] values = new String[0];
+                    public Builder none() { this.values = new String[0]; return this; }
+                }
+            }
+            """);
+        assertEquals("javac accepts it: " + errors(), 0, errors().size());
+    }
+
+    /**
+     * javac refuses an instance-method target outright and merges nothing, so
+     * none of the merge's diagnostics is printed for it. The inspection took any
+     * annotated method as the target and judged the enclosing type's builder
+     * against its parameters.
+     */
+    public void testAnInstanceMethodTarget_isNotJudged() {
+        myFixture.configureByText("Job.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Job {
+                private final String name;
+                Job(String name) { this.name = name; }
+                @ClassBuilder(builderConstructorAccess = AccessLevel.PRIVATE)
+                public Job copy(String name) { return new Job(name); }
+                public static final class Builder {
+                    private int name;
+                    public Builder(String unused) { }
+                }
+            }
+            """);
+        assertEquals("javac prints no merge error for a refused member: " + errors(), 0, errors().size());
+        assertEquals("nor the no-effect warning", 0, accessWarnings().size());
+    }
+
+    /**
+     * Where the type carries the annotation too, javac refuses the member's and
+     * merges the type's slots. The inspection judged the author's field against
+     * the refused member's parameter instead, an error over a field javac
+     * accepts.
+     */
+    public void testAMemberTargetBesideAnAnnotatedType_isNotJudged() {
+        myFixture.configureByText("Job.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public final class Job {
+                private final String name;
+                Job(String name) { this.name = name; }
+                @ClassBuilder(builderConstructorAccess = AccessLevel.PRIVATE)
+                public static Job copy(int name) { return new Job(String.valueOf(name)); }
+                public static final class Builder {
+                    private String name;
+                }
+            }
+            """);
+        assertEquals("javac merges the type's slots, which the field holds: " + errors(), 0, errors().size());
+        assertEquals("nor the no-effect warning", 0, accessWarnings().size());
+    }
+
     /** The warnings this inspection raises about {@code builderConstructorAccess}. */
     private List<HighlightInfo> accessWarnings() {
         List<HighlightInfo> out = new ArrayList<>();

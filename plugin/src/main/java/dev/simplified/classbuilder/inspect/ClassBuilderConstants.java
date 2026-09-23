@@ -8,6 +8,7 @@ import com.intellij.psi.PsiJavaCodeReferenceElement;
 import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
+import com.intellij.psi.PsiParameter;
 import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiReferenceList;
 import com.intellij.psi.PsiReferenceParameterList;
@@ -25,6 +26,7 @@ import dev.simplified.classbuilder.apt.DeclaredBuilderRejection;
 import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.RoleExpectation;
 import dev.simplified.classbuilder.apt.SetterScheme;
+import dev.simplified.classbuilder.editor.MergedSlotStorage;
 import dev.simplified.shared.psi.WrittenAnnotations;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -361,79 +363,87 @@ public final class ClassBuilderConstants {
      * Whether the entry points alone are withheld, the builder itself still
      * being generated.
      *
-     * <p>Every entry point instantiates the builder with one argument per seed,
-     * and a declared builder's constructors are the author's throughout, so one
-     * that declares no constructor of that arity leaves the entry points with
-     * nothing to call and the processor skips them with a note, which
-     * {@link DeclaredBuilderSkipsEntryPointsInspection} reports in the editor in
-     * the same words. Everything else
-     * still runs - the merge appends every setter, a class target still gets
-     * the all-args constructor {@code build()} calls, and a chain link still
-     * gets its copy constructor. Withholding the whole member list here would
-     * take that constructor with it, and put a same-package
-     * {@code new Target(...)} red over source that builds.
+     * <p>Every entry point instantiates the builder with the seeds, in parameter
+     * order, and a declared builder's constructors are the author's throughout,
+     * so one that declares no constructor taking the seeds' types in that order
+     * leaves the entry points with nothing to call and the processor skips them
+     * with a note, which {@link DeclaredBuilderSkipsEntryPointsInspection}
+     * reports in the editor in the same words. Everything else still runs - the
+     * merge appends every setter, a class target still gets the all-args
+     * constructor {@code build()} calls, and a chain link still gets its copy
+     * constructor. Withholding the whole member list here would take that
+     * constructor with it, and put a same-package {@code new Target(...)} red
+     * over source that builds.
      *
-     * <p>The arity rule is {@link DeclaredBuilderShape#instantiable}, which the
-     * processor asks of the same counts - a constructor declaring a throws
-     * clause counted as none the entry points can call. On a class or record target, a chain
-     * link among them, the seed count is zero, so the constructor that serves is
-     * a no-argument one; on a constructor or factory target it is one taking
-     * exactly the seeds {@code builder(..)} passes. An interface's entry points
-     * call its sibling builder, never a class nested in the interface body.
+     * <p>The rule is {@link DeclaredBuilderShape#instantiable}, which the
+     * processor asks of the same parameter types - a constructor declaring a
+     * throws clause counted as none the entry points can call. On a class or
+     * record target, a chain link among them, there is no seed, so the
+     * constructor that serves is a no-argument one; on a constructor or factory
+     * target it is one taking exactly the seeds {@code builder(..)} passes. An
+     * interface type target's entry points call its sibling builder, never a
+     * class nested in the interface body; a constructor or factory inside an
+     * interface merges into that class as it does anywhere else.
      *
      * @param target the type the builder nests in
      * @param builderName the configured builder class name
      * @param executable whether the annotation sits on a constructor or factory method
-     * @param seeds how many arguments the entry points pass the builder's constructor
+     * @param seedTypes the type of each seed the entry points pass, in parameter order
      * @return whether the entry points are skipped
      */
     public static boolean withholdsEntryPointsOnly(@NotNull PsiClass target,
                                                    @NotNull String builderName,
                                                    boolean executable,
-                                                   int seeds) {
-        if (target.isInterface()) return false;
+                                                   @NotNull List<String> seedTypes) {
+        if (target.isInterface() && !executable) return false;
         PsiClass declared = declaredBuilderOf(target, builderName);
         return declared != null
-            && !DeclaredBuilderShape.instantiable(declaredConstructorArities(declared, false),
-                declaredConstructorArities(declared, true), seeds);
+            && !DeclaredBuilderShape.instantiable(declaredConstructorSignatures(declared, false),
+                declaredConstructorSignatures(declared, true), seedTypes);
     }
 
     /**
      * Whether the entry points are skipped only because the declared builder's
-     * constructors of the arity they pass all declare a throws clause, which
+     * constructors taking what they pass all declare a throws clause, which
      * decides the wording of the note, as
      * {@link DeclaredBuilderShape#skippedForAThrowsClause} decides it for the
      * processor.
      *
      * @param declared the builder the author wrote
-     * @param seeds how many arguments the entry points pass the builder's constructor
-     * @return whether a constructor of that arity exists and every one declares a throws clause
+     * @param seedTypes the type of each seed the entry points pass, in parameter order
+     * @return whether a constructor taking them exists and every one declares a throws clause
      */
-    public static boolean skippedForAThrowsClause(@NotNull PsiClass declared, int seeds) {
-        return DeclaredBuilderShape.skippedForAThrowsClause(declaredConstructorArities(declared, false),
-            declaredConstructorArities(declared, true), seeds);
+    public static boolean skippedForAThrowsClause(@NotNull PsiClass declared, @NotNull List<String> seedTypes) {
+        return DeclaredBuilderShape.skippedForAThrowsClause(declaredConstructorSignatures(declared, false),
+            declaredConstructorSignatures(declared, true), seedTypes);
     }
 
     /**
-     * The parameter count of each constructor the author declared.
+     * The parameter types of each constructor the author declared, as written.
      *
      * <p>Read through {@link PsiExtensibleClass#getOwnMethods()} rather than
-     * {@code getConstructors()}, the latter being augment-aware. The implicit
-     * default of a class declaring none is not in the list, which is what
-     * {@link DeclaredBuilderShape#instantiable} expects.
+     * {@code getConstructors()}, the latter being augment-aware, and read as
+     * text rather than resolved. The implicit default of a class declaring none
+     * is not in the list, which is what {@link DeclaredBuilderShape#instantiable}
+     * expects.
      *
      * @param declared the builder the author wrote
-     * @param callableOnly whether to count only the constructors declaring no throws clause
-     * @return the arities, in declaration order
+     * @param callableOnly whether to read only the constructors declaring no throws clause
+     * @return each constructor's parameter types, in declaration order
      */
-    private static @NotNull List<Integer> declaredConstructorArities(@NotNull PsiClass declared,
-                                                                     boolean callableOnly) {
-        List<Integer> out = new ArrayList<>();
+    private static @NotNull List<List<String>> declaredConstructorSignatures(@NotNull PsiClass declared,
+                                                                            boolean callableOnly) {
+        List<List<String>> out = new ArrayList<>();
         if (!(declared instanceof PsiExtensibleClass extensible)) return out;
         for (PsiMethod own : extensible.getOwnMethods()) {
             if (!own.isConstructor()) continue;
             if (callableOnly && own.getThrowsList().getReferenceElements().length > 0) continue;
-            out.add(own.getParameterList().getParametersCount());
+            List<String> types = new ArrayList<>();
+            for (PsiParameter parameter : own.getParameterList().getParameters()) {
+                String written = MergedSlotStorage.writtenTypeText(parameter);
+                types.add(written == null ? "" : written);
+            }
+            out.add(types);
         }
         return out;
     }
@@ -449,7 +459,7 @@ public final class ClassBuilderConstants {
      * @return whether it declares any constructor
      */
     public static boolean declaresConstructor(@NotNull PsiClass declared) {
-        return !declaredConstructorArities(declared, false).isEmpty();
+        return !declaredConstructorSignatures(declared, false).isEmpty();
     }
 
     /**

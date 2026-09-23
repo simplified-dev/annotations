@@ -676,57 +676,68 @@ public final class DeclaredBuilderShape {
     /**
      * Decides whether the entry points can instantiate a declared builder.
      *
-     * <p>Every entry point calls the builder's constructor with one argument per
-     * seed, so it needs a constructor of exactly that arity among the ones the
-     * author wrote. A class declaring none keeps the implicit default, which
-     * takes nothing and so serves only an entry point passing nothing. On a
-     * type target the seed count is always zero, a seed being a parameter's
-     * alone.
+     * <p>Every entry point calls the builder's constructor with the seeds, in
+     * parameter order, so it needs a constructor among the ones the author wrote
+     * taking exactly the seeds' types in that order. The types are compared by
+     * erasure and simple name, as {@link #methodKey} compares a method's, which
+     * is what both halves can read without a resolve; a constructor of the seed
+     * count taking other types, or the seeds' types in another order, is not one
+     * the entry points can pass them to. A class declaring none keeps the
+     * implicit default, which takes nothing and so serves only an entry point
+     * passing nothing. On a type target there is no seed, a seed being a
+     * parameter's alone.
      *
-     * @param declaredArities the parameter count of each constructor the author declared
-     * @param seeds how many arguments the entry points pass the constructor
+     * <p>A constructor declaring a throws clause is not one the entry points can
+     * call either: each of them calls it with nothing around the call to handle
+     * what it throws, and whether a thrown type is checked is a question of what
+     * it resolves to, which neither half asks. So a throws clause of any type
+     * takes the constructor out of the count.
+     *
+     * @param declaredConstructors the parameter types of each constructor the author declared, as
+     *     either model renders them
+     * @param callableConstructors the parameter types of each of those declaring no throws clause
+     * @param seedTypes the type of each seed the entry points pass, in parameter order
      * @return whether a constructor the entry points can call exists
      */
-    public static boolean instantiable(@NotNull List<Integer> declaredArities, int seeds) {
-        return instantiable(declaredArities, declaredArities, seeds);
+    public static boolean instantiable(@NotNull List<List<String>> declaredConstructors,
+                                       @NotNull List<List<String>> callableConstructors,
+                                       @NotNull List<String> seedTypes) {
+        if (declaredConstructors.isEmpty()) return seedTypes.isEmpty();
+        return takesTheSeeds(callableConstructors, seedTypes);
     }
 
     /**
-     * Decides whether the entry points can instantiate a declared builder,
-     * reading which constructors declare a throws clause.
-     *
-     * <p>A constructor declaring one is not one the entry points can call: each
-     * of them calls it with nothing around the call to handle what it throws,
-     * and whether a thrown type is checked is a question of what it resolves
-     * to, which neither half asks. So a throws clause of any type takes the
-     * constructor out of the count.
-     *
-     * @param declaredArities the parameter count of each constructor the author declared
-     * @param callableArities the parameter count of each of those declaring no throws clause
-     * @param seeds how many arguments the entry points pass the constructor
-     * @return whether a constructor the entry points can call exists
-     */
-    public static boolean instantiable(@NotNull List<Integer> declaredArities,
-                                       @NotNull List<Integer> callableArities,
-                                       int seeds) {
-        if (declaredArities.isEmpty()) return seeds == 0;
-        return callableArities.contains(seeds);
-    }
-
-    /**
-     * Whether the entry points are skipped only because every constructor of
-     * the arity they pass declares a throws clause, which decides the note's
+     * Whether the entry points are skipped only because every constructor
+     * taking what they pass declares a throws clause, which decides the note's
      * wording.
      *
-     * @param declaredArities the parameter count of each constructor the author declared
-     * @param callableArities the parameter count of each of those declaring no throws clause
-     * @param seeds how many arguments the entry points pass the constructor
-     * @return whether a constructor of that arity exists and none of them is callable
+     * @param declaredConstructors the parameter types of each constructor the author declared, as
+     *     either model renders them
+     * @param callableConstructors the parameter types of each of those declaring no throws clause
+     * @param seedTypes the type of each seed the entry points pass, in parameter order
+     * @return whether a constructor taking the seeds exists and none of them is callable
      */
-    public static boolean skippedForAThrowsClause(@NotNull List<Integer> declaredArities,
-                                                  @NotNull List<Integer> callableArities,
-                                                  int seeds) {
-        return declaredArities.contains(seeds) && !callableArities.contains(seeds);
+    public static boolean skippedForAThrowsClause(@NotNull List<List<String>> declaredConstructors,
+                                                  @NotNull List<List<String>> callableConstructors,
+                                                  @NotNull List<String> seedTypes) {
+        return takesTheSeeds(declaredConstructors, seedTypes)
+            && !takesTheSeeds(callableConstructors, seedTypes);
+    }
+
+    /**
+     * Whether one of the constructors takes the seeds' types in seed order, by
+     * the erasure {@link #methodKey} keys a parameter list under.
+     *
+     * @param constructors the parameter types of each constructor, as either model renders them
+     * @param seedTypes the type of each seed, in parameter order
+     * @return whether one of them takes exactly those
+     */
+    private static boolean takesTheSeeds(List<List<String>> constructors, List<String> seedTypes) {
+        String seeds = methodKey("<init>", seedTypes);
+        for (List<String> parameters : constructors) {
+            if (methodKey("<init>", parameters).equals(seeds)) return true;
+        }
+        return false;
     }
 
     /**
@@ -760,7 +771,7 @@ public final class DeclaredBuilderShape {
      * @param names the resolved names, an entry point named {@code NONE} being empty
      * @param executable whether the annotation sits on a constructor or factory method
      * @param seedNames the seeded slots the entry points pass, in parameter order
-     * @param throwsClause whether a constructor of the arity they pass exists and declares a throws
+     * @param throwsClause whether a constructor taking what they pass exists and declares a throws
      *     clause, from {@link #skippedForAThrowsClause}
      * @return the note text, or {@code null} when the path emits no entry point
      */

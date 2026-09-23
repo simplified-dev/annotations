@@ -6,6 +6,7 @@ import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiClassInitializer;
 import com.intellij.psi.PsiCodeBlock;
 import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiEllipsisType;
 import com.intellij.psi.PsiExpression;
 import com.intellij.psi.PsiExpressionStatement;
 import com.intellij.psi.PsiField;
@@ -20,6 +21,7 @@ import com.intellij.psi.PsiStatement;
 import com.intellij.psi.PsiSubstitutor;
 import com.intellij.psi.PsiSuperExpression;
 import com.intellij.psi.PsiThisExpression;
+import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypeElement;
 import com.intellij.psi.PsiVariable;
 import com.intellij.psi.controlFlow.AnalysisCanceledException;
@@ -127,7 +129,12 @@ public final class MergedSlotStorage {
                     ? SlotHolding.DECLARED
                     : holdingOf(target, slot, retainInit);
                 if (holding == null) continue;
-                String declaredType = slot.type.getCanonicalText();
+                // A varargs parameter's slot is the array it is, which is how the
+                // processor reads it off the parameter's type.
+                PsiType slotType = slot.type instanceof PsiEllipsisType ellipsis
+                    ? ellipsis.toArrayType()
+                    : slot.type;
+                String declaredType = slotType.getCanonicalText();
                 String storage = holding.isSupplier()
                     ? DeclaredBuilderShape.supplierOf(declaredType)
                     : declaredType;
@@ -161,6 +168,25 @@ public final class MergedSlotStorage {
         for (PsiParameter parameter : executable.getParameterList().getParameters()) {
             if (PsiFieldShapeExtractor.hasAnnotation(parameter, ClassBuilderConstants.BUILDER_SEED_FQN))
                 out.add(parameter.getName());
+        }
+        return out;
+    }
+
+    /**
+     * The type of each of the annotated member's seeds as written, in the order
+     * {@code builder(..)} takes them and passes them to the builder's
+     * constructor.
+     *
+     * @param executable the annotated constructor or static factory
+     * @return the seeded parameters' types, in parameter order
+     */
+    public static @NotNull List<String> seedTypes(@NotNull PsiMethod executable) {
+        List<String> out = new ArrayList<>();
+        for (PsiParameter parameter : executable.getParameterList().getParameters()) {
+            if (!PsiFieldShapeExtractor.hasAnnotation(parameter, ClassBuilderConstants.BUILDER_SEED_FQN))
+                continue;
+            String written = writtenTypeText(parameter);
+            out.add(written == null ? "" : written);
         }
         return out;
     }
@@ -433,7 +459,7 @@ public final class MergedSlotStorage {
      * @param variable the field or parameter
      * @return the type as the processor reads it, or {@code null} when none is written
      */
-    static @Nullable String writtenTypeText(@NotNull PsiVariable variable) {
+    public static @Nullable String writtenTypeText(@NotNull PsiVariable variable) {
         PsiTypeElement written = variable.getTypeElement();
         if (written == null) return null;
         int trailing = variable.getType().getArrayDimensions() - written.getType().getArrayDimensions();

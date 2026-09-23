@@ -2528,4 +2528,168 @@ public class DeclaredBuilderMergeTest {
         assertEquals("l/y", runGo(c, "demo.UseLink"));
     }
 
+    // ------------------------------------------------------------------
+    // Reviewed reproductions: the constructor and factory path
+    // ------------------------------------------------------------------
+
+    /**
+     * {@code builder(seed)} passes the seed to the builder's constructor, so a
+     * constructor of the seed count taking another type is not one it can call.
+     * The count alone was compared, the entry point was emitted against
+     * {@code Builder(int)}, and javac failed on the class line with
+     * {@code String cannot be converted to int}. It is skipped with the note
+     * instead, and the rest of the merge compiles.
+     */
+    @Test
+    public void merge_onASeededConstructorWhoseBuilderTakesAnotherTypeAtTheSeedsArity_skipsTheEntryPoint() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Order",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderSeed;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public final class Order {",
+                "    private final String origin;",
+                "    private final String item;",
+                "    @ClassBuilder",
+                "    Order(@BuilderSeed String origin, String item) { this.origin = origin; this.item = item; }",
+                "    public String origin() { return origin; }",
+                "    public static final class Builder {",
+                "        Builder(int code) { this.origin = \"code-\" + code; }",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("@ClassBuilder merged into 'Builder' but none of its constructors "
+            + "takes the seed 'builder' passes, so 'builder' was not added - declare a constructor taking "
+            + "(origin) or write it");
+    }
+
+    /** The seeds are passed in parameter order, so a constructor taking them swapped is not one either. */
+    @Test
+    public void merge_onTwoSeedsWhoseBuilderTakesThemInAnotherOrder_skipsTheEntryPoint() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Order",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderSeed;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public final class Order {",
+                "    private final String origin;",
+                "    private final int qty;",
+                "    private final String item;",
+                "    @ClassBuilder",
+                "    Order(@BuilderSeed String origin, @BuilderSeed int qty, String item) {",
+                "        this.origin = origin; this.qty = qty; this.item = item;",
+                "    }",
+                "    public String origin() { return origin; }",
+                "    public static final class Builder {",
+                "        Builder(int qty, String origin) { this.qty = qty; this.origin = origin; }",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("@ClassBuilder merged into 'Builder' but none of its constructors "
+            + "takes the 2 seeds 'builder' passes, so 'builder' was not added - declare a constructor taking "
+            + "(origin, qty) or write it");
+    }
+
+    /**
+     * The seeds' types in order, written in any spelling of them, still serve -
+     * a qualified name, a type argument and a type variable included.
+     */
+    @Test
+    public void merge_onSeedsWhoseBuilderTakesTheirTypesInAnotherSpelling_keepsTheEntryPoint() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Slot",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderSeed;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import java.util.List;",
+                "public final class Slot<V> {",
+                "    private final String origin;",
+                "    private final List<V> values;",
+                "    private final String item;",
+                "    @ClassBuilder",
+                "    Slot(@BuilderSeed String origin, @BuilderSeed List<V> values, String item) {",
+                "        this.origin = origin; this.values = values; this.item = item;",
+                "    }",
+                "    public String describe() { return origin + values + item; }",
+                "    public static final class Builder<V> {",
+                "        Builder(java.lang.String origin, java.util.List<V> values) {",
+                "            this.origin = origin; this.values = values;",
+                "        }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseSlot",
+                "package demo;",
+                "public class UseSlot {",
+                "    public static String go() {",
+                "        return Slot.<Integer>builder(\"a\", java.util.List.of(1)).item(\"b\").build().describe();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("a[1]b", runGo(c, "demo.UseSlot"));
+    }
+
+    /**
+     * A static factory inside an interface is an executable target, and the
+     * class the interface body declares is merged into and entered through
+     * {@code builder()}. The javac twin of the editor case, which read every
+     * interface owner as an interface type target.
+     */
+    @Test
+    public void merge_onAStaticFactoryInAnInterface_mergesIntoItsDeclaredBuilder() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Circle",
+                "package demo;",
+                "public record Circle(double radius) { }"),
+            JavaFileObjects.forSourceLines("demo.Shapes",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public interface Shapes {",
+                "    @ClassBuilder",
+                "    static Circle circle(double radius) { return new Circle(radius); }",
+                "    class Builder {",
+                "        public Builder doubled() { this.radius = radius * 2; return this; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseShapes",
+                "package demo;",
+                "public class UseShapes {",
+                "    public static double go() {",
+                "        return new Shapes.Builder().radius(1.5).doubled().build().radius()",
+                "            + Shapes.builder().radius(1).doubled().build().radius();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals(5.0, runGo(c, "demo.UseShapes"));
+    }
+
+    /**
+     * A varargs parameter's slot is the array it is, so a declared {@code String[]}
+     * field of its name holds it. The javac twin of the editor case, which
+     * rendered the slot's ellipsis type and reported the field.
+     */
+    @Test
+    public void merge_aVarargsParameterSlotOverAnArrayField_isMergedInto() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Tags",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public final class Tags {",
+                "    private final String[] values;",
+                "    @ClassBuilder",
+                "    Tags(String... values) { this.values = values; }",
+                "    public int count() { return values.length; }",
+                "    public static final class Builder {",
+                "        private String[] values = new String[0];",
+                "        public Builder none() { this.values = new String[0]; return this; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseTags",
+                "package demo;",
+                "public class UseTags {",
+                "    public static int go() { return Tags.builder().values(\"a\", \"b\").build().count(); }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals(2, runGo(c, "demo.UseTags"));
+    }
+
 }

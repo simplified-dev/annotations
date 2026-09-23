@@ -493,11 +493,12 @@ public class DeclaredBuilderShapeTest {
     public void finalSlotAndThrowingConstructor_renderTheSharedSentences() {
         assertEquals("@ClassBuilder merged into 'Builder' finds 'items' declared final, and the generated "
             + "setter assigns it", DeclaredBuilderShape.finalSlot("Builder", "items"));
+        List<List<String>> noArgument = List.of(List.of());
         assertFalse("a throwing constructor serves nothing",
-            DeclaredBuilderShape.instantiable(List.of(0), List.of(), 0));
-        assertTrue("and says so", DeclaredBuilderShape.skippedForAThrowsClause(List.of(0), List.of(), 0));
-        assertFalse("not where no constructor has the arity",
-            DeclaredBuilderShape.skippedForAThrowsClause(List.of(1), List.of(), 0));
+            DeclaredBuilderShape.instantiable(noArgument, List.of(), List.of()));
+        assertTrue("and says so", DeclaredBuilderShape.skippedForAThrowsClause(noArgument, List.of(), List.of()));
+        assertFalse("not where no constructor takes what the entry points pass",
+            DeclaredBuilderShape.skippedForAThrowsClause(List.of(List.of("String")), List.of(), List.of()));
         assertEquals("@ClassBuilder merged into 'Builder' but its constructor taking the seed 'builder' "
                 + "passes declares a throws clause, so 'builder' was not added - declare one that throws "
                 + "nothing or write it",
@@ -557,19 +558,51 @@ public class DeclaredBuilderShapeTest {
     }
 
     /**
-     * The arity that serves is the seed count: zero on a type target, one per
-     * seed on an executable one. A class declaring nothing keeps the implicit
-     * default, which serves only an entry point passing nothing.
+     * The constructor that serves takes the seeds' types in seed order: nothing
+     * on a type target, one parameter per seed on an executable one. A class
+     * declaring nothing keeps the implicit default, which serves only an entry
+     * point passing nothing.
      */
     @Test
-    public void instantiable_comparesTheDeclaredAritiesWithTheSeedCount() {
-        assertTrue("the implicit default serves no seed", DeclaredBuilderShape.instantiable(List.of(), 0));
-        assertFalse("and nothing else", DeclaredBuilderShape.instantiable(List.of(), 1));
-        assertTrue("a seed-arity constructor serves a seeded entry point",
-            DeclaredBuilderShape.instantiable(List.of(1), 1));
-        assertFalse("a no-argument one does not", DeclaredBuilderShape.instantiable(List.of(0), 1));
-        assertFalse("nor does a seeded one serve no seed", DeclaredBuilderShape.instantiable(List.of(1), 0));
-        assertTrue("any one of them serving is enough", DeclaredBuilderShape.instantiable(List.of(2, 0), 0));
+    public void instantiable_comparesTheDeclaredConstructorsWithTheSeedTypes() {
+        List<List<String>> none = List.of();
+        assertTrue("the implicit default serves no seed", DeclaredBuilderShape.instantiable(none, none, List.of()));
+        assertFalse("and nothing else", DeclaredBuilderShape.instantiable(none, none, List.of("String")));
+        List<List<String>> seeded = List.of(List.of("String"));
+        assertTrue("a constructor taking the seed serves a seeded entry point",
+            DeclaredBuilderShape.instantiable(seeded, seeded, List.of("java.lang.String")));
+        List<List<String>> noArgument = List.of(List.of());
+        assertFalse("a no-argument one does not",
+            DeclaredBuilderShape.instantiable(noArgument, noArgument, List.of("String")));
+        assertFalse("nor does a seeded one serve no seed",
+            DeclaredBuilderShape.instantiable(seeded, seeded, List.of()));
+        List<List<String>> both = List.of(List.of("int", "String"), List.of());
+        assertTrue("any one of them serving is enough", DeclaredBuilderShape.instantiable(both, both, List.of()));
+    }
+
+    /**
+     * A constructor of the seed count that takes other types, or the seeds'
+     * types in another order, is not one {@code builder(..)} can pass them to.
+     * The count alone was compared, and javac then failed on the class line.
+     * The erasure by simple name decides, as the method key does, so a
+     * qualified name, a type argument or a varargs spelling is the same type.
+     */
+    @Test
+    public void instantiable_readsTheSeedsTypesInOrder() {
+        List<List<String>> otherType = List.of(List.of("int"));
+        assertFalse("another type at the seed's position",
+            DeclaredBuilderShape.instantiable(otherType, otherType, List.of("java.lang.String")));
+        List<List<String>> swapped = List.of(List.of("int", "String"));
+        assertFalse("the seeds' types in another order",
+            DeclaredBuilderShape.instantiable(swapped, swapped, List.of("java.lang.String", "int")));
+        List<List<String>> spelled = List.of(List.of("java.lang.String", "List<V>", "String..."));
+        assertTrue("any spelling of the same types",
+            DeclaredBuilderShape.instantiable(spelled, spelled,
+                List.of("String", "java.util.List<V>", "java.lang.String[]")));
+        assertTrue("a throws clause is read off the matching constructor",
+            DeclaredBuilderShape.skippedForAThrowsClause(List.of(List.of("int")), List.of(), List.of("int")));
+        assertFalse("and not off one taking another type",
+            DeclaredBuilderShape.skippedForAThrowsClause(List.of(List.of("int")), List.of(), List.of("String")));
     }
 
     /** The skip note names only the entry points skipped, and the arity they needed. */

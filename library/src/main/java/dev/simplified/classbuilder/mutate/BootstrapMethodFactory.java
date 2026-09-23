@@ -101,30 +101,31 @@ final class BootstrapMethodFactory {
      *
      * <p>Only ever false for a merged builder: a synthesised one is given the
      * constructor it needs. The author's is theirs throughout - javac's own
-     * default included - so a class that declares constructors and none of the
-     * arity the entry points pass leaves them with nothing to call, and they are
-     * skipped with a note rather than emitted onto a line javac rejects - and so
-     * does one whose constructor of that arity declares a throws clause, which
-     * the entry points call with nothing to handle it. The decision is
-     * {@link DeclaredBuilderShape#instantiable}, which the editor asks of the
-     * same arities read out of PSI.
+     * default included - so a class that declares constructors and none taking
+     * the seeds' types in seed order leaves the entry points with nothing to
+     * call, and they are skipped with a note rather than emitted onto a line
+     * javac rejects - and so does one whose constructor taking them declares a
+     * throws clause, which the entry points call with nothing to handle it. The
+     * decision is {@link DeclaredBuilderShape#instantiable}, which the editor
+     * asks of the same parameter types read out of PSI.
      *
-     * @param seeds how many arguments the entry point passes the constructor
      * @return whether the entry points can be emitted
      */
-    private boolean builderCanBeInstantiated(int seeds) {
+    private boolean builderCanBeInstantiated() {
         if (mergedInto == null) return true;
-        return DeclaredBuilderShape.instantiable(constructorArities(false), constructorArities(true), seeds);
+        return DeclaredBuilderShape.instantiable(constructorSignatures(false), constructorSignatures(true),
+            seedTypes());
     }
 
     /**
-     * The parameter count of each constructor the merged builder declares.
+     * The parameter types of each constructor the merged builder declares, as
+     * written.
      *
-     * @param callableOnly whether to count only the ones declaring no throws clause
-     * @return the arities, in declaration order
+     * @param callableOnly whether to read only the ones declaring no throws clause
+     * @return each constructor's parameter types, in declaration order
      */
-    private java.util.List<Integer> constructorArities(boolean callableOnly) {
-        java.util.List<Integer> arities = new ArrayList<>();
+    private java.util.List<java.util.List<String>> constructorSignatures(boolean callableOnly) {
+        java.util.List<java.util.List<String>> signatures = new ArrayList<>();
         for (JCTree def : mergedInto.defs) {
             if (!(def instanceof JCMethodDecl method)) continue;
             if (!method.name.contentEquals("<init>")) continue;
@@ -132,9 +133,19 @@ final class BootstrapMethodFactory {
             // declaring nothing falls back to, not a constructor the author wrote.
             if ((method.mods.flags & Flags.GENERATEDCONSTR) != 0) continue;
             if (callableOnly && method.thrown != null && !method.thrown.isEmpty()) continue;
-            arities.add(method.params.size());
+            java.util.List<String> types = new ArrayList<>(method.params.size());
+            for (JCVariableDecl parameter : method.params)
+                types.add(parameter.vartype == null ? "" : parameter.vartype.toString());
+            signatures.add(types);
         }
-        return arities;
+        return signatures;
+    }
+
+    /** The type of each seed the entry points pass, in parameter order. */
+    private java.util.List<String> seedTypes() {
+        java.util.List<String> types = new ArrayList<>();
+        for (FieldSpec seed : ctx.seeds()) types.add(seed.typeDisplay);
+        return types;
     }
 
     /**
@@ -147,8 +158,8 @@ final class BootstrapMethodFactory {
     private @Nullable String uninstantiableNote() {
         java.util.List<String> seedNames = new ArrayList<>();
         for (FieldSpec seed : ctx.seeds()) seedNames.add(seed.name);
-        boolean throwsClause = DeclaredBuilderShape.skippedForAThrowsClause(constructorArities(false),
-            constructorArities(true), ctx.seeds().size());
+        boolean throwsClause = DeclaredBuilderShape.skippedForAThrowsClause(constructorSignatures(false),
+            constructorSignatures(true), seedTypes());
         return DeclaredBuilderShape.entryPointsSkipped(mergedInto.name.toString(), ctx.config().names(),
             ctx.isExecutableTarget(), seedNames, throwsClause);
     }
@@ -165,7 +176,7 @@ final class BootstrapMethodFactory {
         // @BuilderNames(x = NONE) to the empty string, so there is no second
         // generate-flag to consult.
         int seeds = ctx.seeds().size();
-        if (!builderCanBeInstantiated(seeds)) {
+        if (!builderCanBeInstantiated()) {
             // On the member the annotation is written on, where the editor's
             // weak warning sits: the annotated constructor or factory on that
             // path, the type on every other.

@@ -67,7 +67,8 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   author's field rather than passing on its erasure and failing inside the generated setter; a raw
   spelling on either side still passes, and so does a primitive spelled over its box or the reverse,
   which the setter assigns and `build()` reads back under boxing. A C-style `String tags[]` is read
-  with its brackets in the editor as javac reads it, where it had been judged as `String`. The editor
+  with its brackets in the editor as javac reads it, where it had been judged as `String`, and a
+  varargs parameter's slot is the array it is, so a `String[]` field holds a `String...` slot. The editor
   classifies an initialised slot as the build does -
   as a supplier where its kept initializer names `this`, `super` or an instance member, from one rule
   both halves ask of the names the initializer spells - and judges its field the same way.
@@ -218,11 +219,17 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
 - **A constructor or static factory target merges into the builder its enclosing type declares.**
   The merged members are the parameters' slots, and the builder re-declares the type parameters they
   are written in - a static factory's own, the enclosing type's for a constructor, on both halves.
-  `builder(..)` passes each `@BuilderSeed` to the builder's constructor, so it is emitted only where
-  the author declares a constructor taking exactly the seeds; a seed is appended as a `final` field,
-  and the editor reports a constructor of the builder that leaves it unassigned, or the builder's name
-  when it declares none, where javac refuses the same declaration - an instance initializer assigning
-  the seed assigning it for every constructor, as javac finds.
+  A static factory inside an interface is one such target, merging into the class the interface body
+  declares. `builder(..)` passes each `@BuilderSeed` to the builder's constructor, so it is emitted
+  only where the author declares a constructor taking exactly the seeds - their types in parameter
+  order, compared by erasure and simple name, so a constructor of the seed count taking other types
+  or the seeds swapped is not one - and is skipped with a note otherwise. An author's own `builder`
+  method of the seed count wins, and none is offered or emitted beside it. A seed is appended as a
+  `final` field, and the editor reports a constructor of the builder that leaves it unassigned, or
+  the builder's name when it declares none, where javac refuses the same declaration - an instance
+  initializer assigning the seed assigning it for every constructor, as javac finds. The editor
+  judges only the annotation the processor builds from: an instance or `void` method, or a member
+  beside an annotated type, is refused by the build and gets none of the merge's diagnostics.
 
 - **An inspection for a declared builder the merge cannot append to.** Non-static, the wrong type
   parameters, or declared abstract where the entry points instantiate it. The processor refuses these

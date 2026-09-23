@@ -1227,6 +1227,187 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
     }
 
     // ------------------------------------------------------------------
+    // Reviewed reproductions: the constructor and factory path
+    // ------------------------------------------------------------------
+
+    /**
+     * A static factory inside an interface is an executable target, and javac
+     * merges its slots into the class the interface body declares. The editor
+     * read every interface owner as an interface type target, whose builder is a
+     * sibling file, merged nothing and typed {@code builder()} against the
+     * synthesised class - so the author's own verb and the generated setter were
+     * both red over source that runs.
+     */
+    public void testAStaticFactoryInAnInterface_mergesIntoItsDeclaredBuilder() {
+        myFixture.addFileToProject("Circle.java", "public record Circle(double radius) { }");
+        PsiFile file = myFixture.configureByText("Shapes.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public interface Shapes {
+                @ClassBuilder
+                static Circle circle(double radius) { return new Circle(radius); }
+                class Builder {
+                    public Builder doubled() { this.radius = radius * 2; return this; }
+                }
+            }
+            class UseShapes {
+                static double go() { return new Shapes.Builder().radius(1.5).doubled().build().radius(); }
+                static double entry() { return Shapes.builder().radius(1.5).doubled().build().radius(); }
+            }
+            """);
+        List<String> nested = methodNamesOf(nestedOf(((PsiJavaFile) file).getClasses()[0], "Builder"));
+        assertTrue("the factory's parameter is merged in: " + nested, nested.contains("radius"));
+        assertNoErrors();
+    }
+
+    /**
+     * The same site with a builder whose only constructor takes a parameter:
+     * javac skips {@code builder()} with a note, so the editor offers none.
+     */
+    public void testAStaticFactoryInAnInterface_whoseBuilderTakesParameters_offersNoEntryPoint() {
+        myFixture.addFileToProject("Circle.java", "public record Circle(double radius) { }");
+        PsiFile file = myFixture.configureByText("Shapes.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public interface Shapes {
+                @ClassBuilder
+                static Circle circle(double radius) { return new Circle(radius); }
+                class Builder { Builder(int n) { } }
+            }
+            """);
+        List<String> names = methodNamesOf(((PsiJavaFile) file).getClasses()[0]);
+        assertFalse("javac emits no builder(): " + names, names.contains("builder"));
+    }
+
+    /**
+     * The same site with an abstract builder, which javac refuses before the
+     * entry point - so the editor offers none.
+     */
+    public void testAStaticFactoryInAnInterface_withAnAbstractBuilder_offersNoEntryPoint() {
+        myFixture.addFileToProject("Circle.java", "public record Circle(double radius) { }");
+        PsiFile file = myFixture.configureByText("Shapes.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public interface Shapes {
+                @ClassBuilder
+                static Circle circle(double radius) { return new Circle(radius); }
+                abstract class Builder { }
+            }
+            """);
+        List<String> names = methodNamesOf(((PsiJavaFile) file).getClasses()[0]);
+        assertFalse("javac emits no builder(): " + names, names.contains("builder"));
+    }
+
+    /**
+     * A builder constructor of the seed count that takes another type is not one
+     * {@code builder(seed)} can call, so javac skips the entry point and the
+     * editor offers none. Both halves counted the parameters only, and javac then
+     * failed on the class line.
+     */
+    public void testMergeOnASeededConstructor_whoseBuilderTakesAnotherTypeAtTheSeedsArity_offersNoEntryPoint() {
+        PsiFile file = myFixture.configureByText("Order.java",
+            """
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Order {
+                private final String origin;
+                private final String item;
+                @ClassBuilder
+                Order(@BuilderSeed String origin, String item) { this.origin = origin; this.item = item; }
+                public static final class Builder {
+                    Builder(int code) { this.origin = "code-" + code; }
+                }
+            }
+            """);
+        List<String> names = methodNamesOf(((PsiJavaFile) file).getClasses()[0]);
+        assertFalse("javac emits no builder(String): " + names, names.contains("builder"));
+    }
+
+    /** The seeds are passed in parameter order, so a constructor taking them swapped serves neither. */
+    public void testMergeOnTwoSeeds_whoseBuilderTakesThemInAnotherOrder_offersNoEntryPoint() {
+        PsiFile file = myFixture.configureByText("Order.java",
+            """
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Order {
+                private final String origin;
+                private final int qty;
+                private final String item;
+                @ClassBuilder
+                Order(@BuilderSeed String origin, @BuilderSeed int qty, String item) {
+                    this.origin = origin; this.qty = qty; this.item = item;
+                }
+                public static final class Builder {
+                    Builder(int qty, String origin) { this.qty = qty; this.origin = origin; }
+                }
+            }
+            """);
+        List<String> names = methodNamesOf(((PsiJavaFile) file).getClasses()[0]);
+        assertFalse("javac emits no builder(String, int): " + names, names.contains("builder"));
+    }
+
+    /**
+     * An author's own {@code builder} of the seed count wins on the executable
+     * path as on the type path: javac skips its entry point with a note, so a
+     * call passing the seed's type resolves against the author's method alone and
+     * is red. The editor offered a second {@code builder(String)} beside it.
+     */
+    public void testAnExecutableTarget_besideAnAuthorBuilderOfTheSeedCount_offersNoSecondBuilder() {
+        PsiFile file = myFixture.configureByText("Ticket.java",
+            """
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Ticket {
+                private final String origin;
+                private final String item;
+                @ClassBuilder
+                Ticket(@BuilderSeed String origin, String item) { this.origin = origin; this.item = item; }
+                public String origin() { return origin; }
+                public static Builder builder(int code) { return new Builder("code-" + code); }
+                public static final class Builder {
+                    Builder(String origin) { this.origin = origin; }
+                }
+            }
+            class UseTicket {
+                static String go() { return Ticket.builder("web").item("x").build().origin(); }
+            }
+            """);
+        List<String> names = methodNamesOf(((PsiJavaFile) file).getClasses()[0]);
+        assertEquals("javac emits only the author's builder(int): " + names, 1, count(names, "builder"));
+        assertFalse("and the call passing a String is red", errors().isEmpty());
+    }
+
+    /**
+     * The same collision where the author's method has the generated one's
+     * signature, which javac compiles and runs. The editor's second copy made
+     * the author's method a duplicate and the call ambiguous.
+     */
+    public void testAnExecutableTarget_besideAnAuthorBuilderOfTheSameSignature_isGreen() {
+        PsiFile file = myFixture.configureByText("Ticket.java",
+            """
+            import dev.simplified.annotations.BuilderSeed;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Ticket {
+                private final String origin;
+                private final String item;
+                @ClassBuilder
+                Ticket(@BuilderSeed String origin, String item) { this.origin = origin; this.item = item; }
+                public String origin() { return origin; }
+                public static Builder builder(String origin) { return new Builder(origin); }
+                public static final class Builder {
+                    Builder(String origin) { this.origin = origin; }
+                }
+            }
+            class UseTicket {
+                static String go() { return Ticket.builder("web").item("x").build().origin(); }
+            }
+            """);
+        List<String> names = methodNamesOf(((PsiJavaFile) file).getClasses()[0]);
+        assertEquals("the author's builder(String) alone: " + names, 1, count(names, "builder"));
+        assertNoErrors();
+    }
+
+    // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
 

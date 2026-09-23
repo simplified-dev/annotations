@@ -59,9 +59,12 @@ or not the link declares its own.
 
 <p>
 A constructor or static factory target merges into the builder its enclosing
-type declares, so that builder is judged the same way. Its type parameters are
-measured against the ones the generated members are written in: a static
-factory's own, and the enclosing type's for a constructor.
+type declares, a static factory inside an interface included, so that builder
+is judged the same way. Its type parameters are measured against the ones the
+generated members are written in: a static factory's own, and the enclosing
+type's for a constructor. An annotated member the processor refuses - an
+instance or <code>void</code> method, or one beside an annotated type - merges
+nothing and is not judged.
 </p>
 
 <p>
@@ -69,7 +72,8 @@ On a shape the merge accepts, a field the author declares in the builder under
 a slot's name is also checked against the type the generated setters assign,
 type arguments included, a primitive and its box being accepted for each other
 since the setter assigns and <code>build()</code> reads back under boxing. A
-field written C-style, <code>String tags[]</code>, is read with its brackets.
+field written C-style, <code>String tags[]</code>, is read with its brackets,
+and a varargs parameter's slot is the array it is.
 That is the field's declared type, except for a
 <code>@Lazy</code> field and a field whose kept initializer reads the instance -
 names <code>this</code>, <code>super</code> or an instance member - which the

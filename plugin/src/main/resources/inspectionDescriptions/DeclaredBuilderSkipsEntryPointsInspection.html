@@ -6,11 +6,11 @@ the target declares has no constructor they can call.
 <p>
 A declared builder is merged into: the generated members are appended beside
 the author's, and the author's constructors are the builder's constructors.
-Every entry point creates the builder with one argument per
-<code>@BuilderSeed</code>, so where the declared builder declares constructors
-and none of that arity, <code>builder()</code>, <code>from(T)</code> and
-<code>mutate()</code> are not generated - and neither are they where every
-constructor of that arity declares a throws clause, since the entry points call
+Every entry point creates the builder with the <code>@BuilderSeed</code>
+parameters, in order, so where the declared builder declares constructors and
+none taking the seeds' types in that order, <code>builder()</code>,
+<code>from(T)</code> and <code>mutate()</code> are not generated - and neither
+are they where every constructor taking them declares a throws clause, since the entry points call
 it with nothing around the call to handle what it throws. The processor says so in a compiler
 note and completion leaves the three out; this warning is the note, in the
 same words, on the annotation.
@@ -24,7 +24,10 @@ the entry points pass nothing, so the constructor they need is a no-argument
 one. A builder that declares no constructor at all keeps its implicit default,
 which serves them. On a constructor or static factory target the one entry
 point is <code>builder(..)</code>, and it needs a constructor taking exactly the
-seeds.
+seeds - their types in parameter order, compared by erasure and simple name, so
+a constructor of the seed count taking other types, or the seeds swapped, does
+not serve. A static factory inside an interface is such a target, and its
+builder is the class the interface body declares.
 </p>
 
 <p>
@@ -34,8 +37,10 @@ generated, so it is not reported as skipped.
 </p>
 
 <p>
-Nothing is reported on an interface, whose entry points create its sibling
-builder; on an abstract target, which has no entry points of its own; or beside
+Nothing is reported on an interface type target, whose entry points create its
+sibling builder; on an abstract target, which has no entry points of its own; on
+an annotated member the processor refuses, such as an instance method or one
+beside an annotated type, which merges nothing; or beside
 a declared shape the merge refuses, which the declared-builder shape
 inspection reports as an error.
 </p>

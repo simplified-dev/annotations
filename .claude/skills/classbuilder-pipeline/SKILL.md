@@ -36,7 +36,9 @@ for each element annotated with @ClassBuilder (CLASS | RECORD | INTERFACE):
         role's members, in the declaration's own self-type names
     ExecutableBuilderMutator (annotation on a constructor or static
       factory) merges into the enclosing type's declared builder the same
-      way; builder(..) needs a constructor taking exactly the seeds
+      way, a static factory inside an interface included; builder(..)
+      needs a constructor taking exactly the seeds' types in parameter
+      order, by erased simple name, and is skipped with a NOTE otherwise
     If JavacProcessingEnvironment cannot be unwrapped (ecj, unknown wrapper),
       the processor ERRORs - consumers must use javac.
   for INTERFACE:
