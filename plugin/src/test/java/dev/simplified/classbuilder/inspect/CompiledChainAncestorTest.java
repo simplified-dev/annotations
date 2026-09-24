@@ -370,6 +370,131 @@ public class CompiledChainAncestorTest extends BasePlatformTestCase {
     }
 
     // ------------------------------------------------------------------
+    // A final self() on a root the processor never judged
+    // ------------------------------------------------------------------
+
+    /** The link's refusal of a final {@code self()} on a root the processor never judged. */
+    private static final String LINK_FINAL_SELF = "@ClassBuilder generates no builder on 'Circle' - the self() of "
+        + "'Shape.Builder' is final, so its builder cannot override it";
+
+    /**
+     * A root compiled with no processor whose builder declares a final
+     * {@code self()} is refused on the link's annotation, in the sentence the
+     * processor reports reading the same class file, and the link gets no
+     * builder. The editor was silent and contributed the link's override javac
+     * refuses as overriding a final method.
+     */
+    public void testAnUnprocessedCompiledRootDeclaringAFinalSelf_isReportedOnTheLink() throws Exception {
+        compiledShape(false, "public abstract static class Builder<T extends Shape, B extends Builder<T, B>> "
+            + "{ @SuppressWarnings(\"unchecked\") protected final B self() { return (B) this; } }");
+        addCircle();
+        assertEquals(List.of(LINK_FINAL_SELF), errorsIn("demo/Circle.java"));
+        assertEquals("the link's builder is withheld, as the processor generates none", 0,
+            findClass("demo.Circle").getInnerClasses().length);
+    }
+
+    /** The same with the final {@code self()} one the unprocessed root's builder inherits. */
+    public void testAnUnprocessedCompiledRootInheritingAFinalSelf_isReportedOnTheLink() throws Exception {
+        compiled(false, Map.of(
+            "demo/Fluent.java", """
+                package demo;
+                public abstract class Fluent<B> {
+                    @SuppressWarnings("unchecked") public final B self() { return (B) this; }
+                }
+                """,
+            "demo/Shape.java", """
+                package demo;
+                import dev.simplified.annotations.ClassBuilder;
+                @ClassBuilder(validate = false)
+                public abstract class Shape {
+                    private String name;
+                    public String getName() { return name; }
+                    public abstract static class Builder<T extends Shape, B extends Builder<T, B>>
+                            extends Fluent<B> { }
+                }
+                """));
+        addCircle();
+        assertEquals(List.of(LINK_FINAL_SELF), errorsIn("demo/Circle.java"));
+        assertEquals("the link's builder is withheld, as the processor generates none", 0,
+            findClass("demo.Circle").getInnerClasses().length);
+    }
+
+    /**
+     * A public, non-final {@code self()} on an unprocessed root is still
+     * followed: the link overrides it publicly. The root declares no field and
+     * spells the copy constructor the link's calls, neither of which a
+     * processor wrote for it.
+     */
+    public void testAnUnprocessedCompiledRootDeclaringAPublicSelf_linkOverridesItPublicly() throws Exception {
+        compiled(false, "demo/Shape.java", """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false)
+            public abstract class Shape {
+                protected Shape(Builder<?, ?> builder) { }
+                public abstract static class Builder<T extends Shape, B extends Builder<T, B>> {
+                    public abstract B self();
+                }
+            }
+            """);
+        addCircle();
+        assertTrue("the link's self() is public",
+            selfOf(builderOf(findClass("demo.Circle"))).hasModifierProperty(PsiModifier.PUBLIC));
+        assertEquals(List.of(), errorsIn("demo/Circle.java"));
+    }
+
+    // ------------------------------------------------------------------
+    // A self() a root inherits from a compiled supertype
+    // ------------------------------------------------------------------
+
+    /** Compiles {@code demo.Fluent}, declaring a protected abstract {@code self()}, and attaches it. */
+    private void compiledFluent() throws Exception {
+        compiled(false, "demo/Fluent.java", """
+            package demo;
+            public abstract class Fluent<B> {
+                protected abstract B self();
+            }
+            """);
+    }
+
+    /** Adds a source root whose builder extends the compiled {@code Fluent} with the given type argument. */
+    private void addFluentShape(String fluentArgument) {
+        myFixture.addFileToProject("demo/Shape.java", """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false)
+            public abstract class Shape {
+                private String name;
+                public String getName() { return name; }
+                public abstract static class Builder<T extends Shape, B extends Builder<T, B>>
+                        extends Fluent<%s> { }
+            }
+            """.formatted(fluentArgument));
+    }
+
+    /**
+     * A {@code self()} a source root's builder inherits from a compiled
+     * supertype, returning another type than the pair's {@code B}, is reported
+     * on the root's builder in the processor's sentence. The editor was silent.
+     */
+    public void testARootInheritingASelfOfAnotherTypeFromACompiledSupertype_isReported() throws Exception {
+        compiledFluent();
+        addFluentShape("String");
+        assertEquals(List.of("@ClassBuilder merged into 'Builder' finds self() inherited from Fluent returning "
+            + "String, where the generated setters need it to return B"), errorsIn("demo/Shape.java"));
+    }
+
+    /** A compiled supertype's {@code self()} returning the pair's {@code B} is followed, and the chain resolves. */
+    public void testARootInheritingItsBuilderTypeFromACompiledSupertype_isNotReported() throws Exception {
+        compiledFluent();
+        addFluentShape("B");
+        addCircle();
+        addUseShape();
+        assertEquals(List.of(), errorsIn("demo/Shape.java"));
+        assertEquals(List.of(), allErrorsIn("demo/UseShape.java"));
+    }
+
+    // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
 

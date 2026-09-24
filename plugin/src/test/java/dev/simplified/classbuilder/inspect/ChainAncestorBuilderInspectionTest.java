@@ -398,6 +398,38 @@ public class ChainAncestorBuilderInspectionTest extends BasePlatformTestCase {
             + "generated below 'Shape' can override it"), errorsIn("demo/Shape.java"));
     }
 
+    /**
+     * A source root's final {@code self()}, declared or inherited, is judged on
+     * the root, as the processor judges it, and the link below draws nothing of
+     * its own.
+     */
+    public void testARootWithAFinalSelf_isReportedOnTheRootAlone() {
+        addShape("""
+            public abstract static class Builder<T extends Shape, B extends Builder<T, B>> {
+                    @SuppressWarnings("unchecked") protected final B self() { return (B) this; }
+                }""");
+        addCircle();
+        assertEquals(List.of(), errorsIn("demo/Circle.java"));
+    }
+
+    /** The root builder extending {@link #addFluent} with its type argument bound to {@code String}. */
+    private static final String STRING_FLUENT_ROOT = "public abstract static class Builder<T extends Shape, "
+        + "B extends Builder<T, B>> extends Fluent<String> { }";
+
+    /**
+     * A {@code self()} the root's builder inherits returning another type than
+     * the pair's {@code B} is reported on the root's builder, in the processor's
+     * sentence. The editor was silent while every generated setter's
+     * {@code return self()} fails in javac.
+     */
+    public void testARootInheritingASelfOfAnotherType_isReported() {
+        addFluent("protected abstract B self();");
+        addShape(STRING_FLUENT_ROOT);
+        addCircle();
+        assertEquals(List.of("@ClassBuilder merged into 'Builder' finds self() inherited from Fluent returning "
+            + "String, where the generated setters need it to return B"), errorsIn("demo/Shape.java"));
+    }
+
     // ------------------------------------------------------------------
     // The root's access and its no-argument constructor
     // ------------------------------------------------------------------

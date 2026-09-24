@@ -24,12 +24,15 @@ import com.intellij.psi.PsiParameter;
 import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiReferenceList;
 import com.intellij.psi.PsiReferenceParameterList;
+import com.intellij.psi.PsiSubstitutor;
+import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypeElement;
 import com.intellij.psi.PsiTypeParameter;
 import com.intellij.psi.PsiTypes;
 import com.intellij.psi.impl.source.PsiExtensibleClass;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.psi.util.PsiUtil;
+import com.intellij.psi.util.TypeConversionUtil;
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.NamingStyle;
 import dev.simplified.annotations.SetterNames;
@@ -727,10 +730,11 @@ public final class ClassBuilderConstants {
     }
 
     /**
-     * The names of the type parameters a declared builder declares, which the
-     * seed match reads a parameter spelling one of as able to take the seed.
+     * The names of the type parameters a class declares - a declared builder's,
+     * which the seed match reads a parameter spelling one of as able to take
+     * the seed, or the target's, ahead of a self-typed pair.
      *
-     * @param declared the builder the author wrote
+     * @param declared the class, a builder the author wrote or its target
      * @return the names, in declaration order
      */
     private static @NotNull List<String> typeParameterNames(@NotNull PsiClass declared) {
@@ -1001,6 +1005,12 @@ public final class ClassBuilderConstants {
      * {@link DeclaredBuilderShape#rawGenericAncestor} decides it for both
      * halves, whoever wrote the ancestor's builder.
      *
+     * <p>After them, on a concrete link, so does a {@code final} {@code self()}
+     * - the nearest one {@link #linkSelfPublic} follows - on the builder of a
+     * compiled ancestor, as {@link ChainBuilderReach#unjudgedFinalSelf} decides
+     * it: the processor judged a source ancestor's on that ancestor's builder,
+     * and a compiled one's reaches the link unjudged.
+     *
      * @param target the annotated type
      * @param builderName the builder class name the chain is written in
      * @param executable whether the annotation sits on a constructor or factory method
@@ -1068,10 +1078,20 @@ public final class ClassBuilderConstants {
             reason = ChainBuilderReach.unreachable(accessOf(declared), declaresAnyConstructor(declared),
                 noArgumentConstructorAccess(declared), samePackage, sameTopLevel);
         }
-        return reason == null
-            ? null
-            : new AncestorBlock(parent,
+        if (reason != null) {
+            return new AncestorBlock(parent,
                 ChainBuilderReach.unreachableAncestorBuilder(reason, targetName, parentName, builderName));
+        }
+        if (chainRoleOf(target) != ChainRole.CONCRETE_LINK) return null;
+        // The nearest self() the link overrides is read through the ancestors'
+        // resolved supertypes, under this target's guard.
+        NearestSelf nearest = AbstractRecursionSafeAugmentProvider.withInProgress(target,
+            () -> nearestSelf(target, builderName));
+        if (nearest == null) return null;
+        String nearestName = nearest.ancestor().getName() == null ? "" : nearest.ancestor().getName();
+        String finalSelf = ChainBuilderReach.unjudgedFinalSelf(targetName, nearestName, builderName,
+            nearest.self(), !(nearest.ancestor() instanceof PsiCompiledElement));
+        return finalSelf == null ? null : new AncestorBlock(nearest.ancestor(), finalSelf);
     }
 
     /**
@@ -1095,8 +1115,12 @@ public final class ClassBuilderConstants {
     /**
      * The errors a builder declared on a self-typed role draws where the
      * builders generated below it cannot extend it or override its
-     * {@code self()}, as {@link ChainBuilderReach#unextendableBuilder} and
-     * {@link ChainBuilderReach#finalSelf} word them for the processor.
+     * {@code self()}, or where the generated setters cannot return the
+     * {@code self()} a root's builder inherits, as
+     * {@link ChainBuilderReach#unextendableBuilder},
+     * {@link ChainBuilderReach#finalSelf} and
+     * {@link ChainBuilderReach#mistypedInheritedSelf} word them for the
+     * processor.
      *
      * <p>Read as written: the builder's constructors with the ones a constructor
      * annotation on it appends, and its own no-argument {@code self()} - on a
@@ -1110,23 +1134,50 @@ public final class ClassBuilderConstants {
     public static @NotNull List<String> unextendableBuilder(@NotNull PsiClass target, @NotNull PsiClass declared) {
         String declaredName = declared.getName() == null ? "" : declared.getName();
         String targetName = target.getName() == null ? "" : target.getName();
-        List<String> out = new ArrayList<>(2);
+        List<String> out = new ArrayList<>(3);
         String unextendable = ChainBuilderReach.unextendableBuilder(declaredName, targetName,
             constructorSignatures(declared, false));
         if (unextendable != null) out.add(unextendable);
+        ChainRole role = chainRoleOf(target);
         ChainBuilderReach.SelfMethod declaredSelf = selfMethodOf(authoredSelf(declared));
-        ChainBuilderReach.SelfMethod inherited = declaredSelf == null && chainRoleOf(target) == ChainRole.ABSTRACT_ROOT
+        ChainBuilderReach.SelfMethod inherited = declaredSelf == null && role == ChainRole.ABSTRACT_ROOT
             ? inheritedSelf(declared)
             : null;
         ChainBuilderReach.SelfMethod self = ChainBuilderReach.rootSelf(declaredSelf, inherited);
         String finalSelf = ChainBuilderReach.finalSelf(declaredName, targetName, self != null && self.isFinal());
         if (finalSelf != null) out.add(finalSelf);
+        String selfBuilder = DeclaredBuilderShape.selfNames(role, typeParameterNames(target),
+            typeParameterNames(declared)).get(1);
+        String mistyped = ChainBuilderReach.mistypedInheritedSelf(declaredName, selfBuilder, inherited);
+        if (mistyped != null) out.add(mistyped);
         return out;
     }
 
     /**
      * Decides, through {@link ChainBuilderReach#linkSelfPublic}, whether the
-     * {@code self()} a link's generated builder overrides with is public.
+     * {@code self()} a link's generated builder overrides with is public - the
+     * nearest one {@link #nearestSelf} finds.
+     *
+     * @param target the link
+     * @param builderName the builder class name the chain is written in
+     * @return whether the link's {@code self()} is public
+     */
+    public static boolean linkSelfPublic(@NotNull PsiClass target, @NotNull String builderName) {
+        NearestSelf nearest = nearestSelf(target, builderName);
+        return ChainBuilderReach.linkSelfPublic(nearest == null ? null : nearest.self().isPublic());
+    }
+
+    /**
+     * An annotated ancestor whose builder holds the nearest {@code self()} a
+     * link overrides, with that {@code self()} as the rules read it.
+     *
+     * @param ancestor the annotated ancestor
+     * @param self its builder's own {@code self()}, or on a root the one its builder inherits
+     */
+    private record NearestSelf(@NotNull PsiClass ancestor, ChainBuilderReach.@NotNull SelfMethod self) { }
+
+    /**
+     * Finds the nearest {@code self()} a link's generated builder overrides.
      *
      * <p>The annotated ancestors are walked upward from the direct one, as the
      * processor walks them, until one whose declared builder's author wrote a
@@ -1138,9 +1189,9 @@ public final class ClassBuilderConstants {
      *
      * @param target the link
      * @param builderName the builder class name the chain is written in
-     * @return whether the link's {@code self()} is public
+     * @return the ancestor holding it, or {@code null} when no ancestor has one
      */
-    public static boolean linkSelfPublic(@NotNull PsiClass target, @NotNull String builderName) {
+    private static @Nullable NearestSelf nearestSelf(@NotNull PsiClass target, @NotNull String builderName) {
         Set<PsiClass> seen = new HashSet<>();
         for (PsiClass parent = annotatedSuperOf(target); parent != null && seen.add(parent);
              parent = annotatedSuperOf(parent)) {
@@ -1154,10 +1205,9 @@ public final class ClassBuilderConstants {
                 ? inheritedSelf(declared)
                 : null;
             ChainBuilderReach.SelfMethod self = ChainBuilderReach.rootSelf(declaredSelf, inherited);
-            if (self == null) continue;
-            return ChainBuilderReach.linkSelfPublic(self.isPublic());
+            if (self != null) return new NearestSelf(parent, self);
         }
-        return ChainBuilderReach.linkSelfPublic(null);
+        return null;
     }
 
     /**
@@ -1170,24 +1220,27 @@ public final class ClassBuilderConstants {
      * extends and implements references, as the chain resolves an ancestor
      * from a target's, and read through its own methods, which no augment
      * provider contributes to - so an augment provider may ask this inside its
-     * recursion guard.
+     * recursion guard. Its return type is read as a member of the builder,
+     * through the supertype's substitutor, as the processor reads it.
      *
      * @param builder the root's declared builder
      * @return the inherited method, or {@code null} when the builder inherits none
      */
     public static ChainBuilderReach.@Nullable SelfMethod inheritedSelf(@NotNull PsiClass builder) {
-        return inheritedSelf(builder, PsiUtil.getPackageName(builder), new HashSet<>());
+        return inheritedSelf(builder, builder, PsiUtil.getPackageName(builder), new HashSet<>());
     }
 
     /**
      * Walks one type's supertypes for {@link #inheritedSelf(PsiClass)}.
      *
+     * @param builder the root's declared builder, which the return type is read as a member of
      * @param type the type whose supertypes are read
      * @param home the builder's package name
      * @param seen the supertypes already read
      * @return the inherited method, or {@code null} when none is found below this type
      */
-    private static ChainBuilderReach.@Nullable SelfMethod inheritedSelf(@NotNull PsiClass type, @Nullable String home,
+    private static ChainBuilderReach.@Nullable SelfMethod inheritedSelf(@NotNull PsiClass builder,
+                                                                       @NotNull PsiClass type, @Nullable String home,
                                                                        @NotNull Set<PsiClass> seen) {
         for (PsiClass supertype : type.getSupers()) {
             if (CommonClassNames.JAVA_LANG_OBJECT.equals(supertype.getQualifiedName()) || !seen.add(supertype))
@@ -1199,9 +1252,16 @@ public final class ClassBuilderConstants {
                     method.hasModifierProperty(PsiModifier.STATIC), accessOf(method), samePackage)) {
                     continue;
                 }
-                return selfMethodOf(method);
+                PsiType declaredReturn = method.getReturnType();
+                PsiType returned = declaredReturn == null
+                    ? null
+                    : TypeConversionUtil.getSuperClassSubstitutor(supertype, builder, PsiSubstitutor.EMPTY)
+                        .substitute(declaredReturn);
+                return new ChainBuilderReach.SelfMethod(method.hasModifierProperty(PsiModifier.PUBLIC),
+                    method.hasModifierProperty(PsiModifier.FINAL), String.valueOf(supertype.getName()),
+                    returned == null ? null : returned.getCanonicalText());
             }
-            ChainBuilderReach.SelfMethod further = inheritedSelf(supertype, home, seen);
+            ChainBuilderReach.SelfMethod further = inheritedSelf(builder, supertype, home, seen);
             if (further != null) return further;
         }
         return null;

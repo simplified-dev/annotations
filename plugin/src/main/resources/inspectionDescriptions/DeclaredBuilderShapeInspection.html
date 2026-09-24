@@ -61,14 +61,21 @@ a root, a concrete link and a chained abstract are each judged against the
 shape their role generates. A root or chained abstract's builder whose
 constructors all take parameters, or whose <code>self()</code> - declared, or
 on a root inherited from a supertype - is <code>final</code>, is reported on
-its name, since every link below calls the one and overrides the other. A link
+its name, since every link below calls the one and overrides the other. So is
+a root's builder inheriting a <code>self()</code> that, as its extends clause
+instantiates the supertype, returns another type than the pair's builder
+parameter - <code>extends Fluent&lt;String&gt;</code> where every generated
+setter returns <code>self()</code> as <code>B</code>. A link
 whose annotated ancestor declares a builder the extends clause cannot name is
 reported on the annotation instead, whether or not the link declares its own,
 as is a link the ancestor's builder is out of reach of - declared, or generated
 at the access the ancestor's <code>@ClassBuilder(access)</code> asks for -
 being <code>private</code> from another top-level class or package-private from
 another package, and a link whose extends clause names a generic ancestor
-without its type arguments.
+without its type arguments. A concrete link is reported on its annotation, too,
+where the nearest <code>self()</code> it overrides is <code>final</code> on a
+compiled ancestor - one built without the processor, whose own builder nothing
+judged; a source ancestor's is reported on that ancestor's builder alone.
 </p>
 
 <p>
@@ -133,8 +140,16 @@ and the supertype that declares it. The supertypes are the builder's
 superclasses up to and including <code>java.lang.Object</code> - a
 <code>long wait</code> slot's setter meets its final <code>wait(long)</code> -
 and its superinterfaces, whose static methods a class does not inherit. An
-inherited method the setter can override, one returning the builder's own self
-type among them, and one taking other parameter types, are left alone.
+inherited method of the same erasure whose parameter, as the builder's extends
+clause instantiates its supertype, is not the setter's type variable -
+<code>value(T)</code> beside a non-final <code>value(Object)</code>, or
+<code>value(T extends Number)</code> beside <code>value(Number)</code> - is
+neither overridden nor overloaded, which javac refuses as a name clash, and is
+reported on the builder's name as one. A generic supertype's
+<code>value(X)</code> that the builder passes its <code>T</code> is the method
+<code>value(T)</code> overrides. An inherited method the setter can override,
+one returning the builder's own self type among them, and one taking other
+parameter types, are left alone.
 </p>
 
 <p>

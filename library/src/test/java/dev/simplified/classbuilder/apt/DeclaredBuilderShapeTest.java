@@ -1205,6 +1205,36 @@ public class DeclaredBuilderShapeTest {
     }
 
     /**
+     * A setter parameter typed by one of the builder's type variables meets an
+     * inherited method of the same erasure whose parameter, as a member of the
+     * builder, is not that variable - a name clash, which is named as one.
+     * Nothing was reported for an inherited method neither static, final nor
+     * mistyped, and javac refused the setter on the target's line.
+     */
+    @Test
+    public void unoverridableInheritedMethod_namesANameClashOfATypeVariablesErasure() {
+        Map<String, String> unbounded = DeclaredBuilderShape.typeVariableErasures(List.of("T"), Arrays.asList(
+            (String) null));
+        Map<String, String> bounded = DeclaredBuilderShape.typeVariableErasures(List.of("T"), List.of("Number"));
+        assertEquals("@ClassBuilder merged into 'Builder' finds value(Object) inherited from Base, which has the "
+                + "same erasure as the generated setter value(T) but is not overridden by it",
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "value", List.of("T"), unbounded,
+                List.of(new InheritedMethod("value", List.of("java.lang.Object"), "Base", "Base", false, true,
+                    false))));
+        assertEquals("@ClassBuilder merged into 'Builder' finds value(Number) inherited from Base, which has the "
+                + "same erasure as the generated setter value(T) but is not overridden by it",
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "value", List.of("T"), bounded,
+                List.of(new InheritedMethod("value", List.of("java.lang.Number"), "Base", "Base", false, true,
+                    false))));
+        assertEquals("an array of the variable is the same clash",
+            "@ClassBuilder merged into 'Builder' finds values(Object[]) inherited from Base, which has the "
+                + "same erasure as the generated setter values(T...) but is not overridden by it",
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "values", List.of("T..."), unbounded,
+                List.of(new InheritedMethod("values", List.of("java.lang.Object[]"), "Base", "Base", false, true,
+                    false))));
+    }
+
+    /**
      * A setter of a builder the generator writes whole meets one of
      * {@code java.lang.Object}'s methods it cannot override - a final one, or
      * one whose return type the builder is not - and is named in the same

@@ -19,6 +19,29 @@ import java.util.List;
  * @param acceptsBuilderReturn whether a method returning the declared builder may override it - its
  *     return type, as a member of the builder, is a reference type the builder is assignable to
  * @param isStatic whether the method is declared {@code static}, which no instance method can override
+ * @param memberParameterTypes each parameter's type as a member of the declared builder, unerased, in either
+ *     model's spelling - a type variable the builder's extends clause passes the supertype read by its name
  */
 public record InheritedMethod(String name, List<String> parameterTypes, String declaringType, String returnType,
-                              boolean isFinal, boolean acceptsBuilderReturn, boolean isStatic) { }
+                              boolean isFinal, boolean acceptsBuilderReturn, boolean isStatic,
+                              List<String> memberParameterTypes) {
+
+    /**
+     * Constructs an inherited method whose parameter types, as members of the
+     * declared builder, are their own erasures - no type variable among them.
+     *
+     * @param name the method's name
+     * @param parameterTypes each parameter's type as a member of the declared builder, erased
+     * @param declaringType the simple name of the supertype that declares it
+     * @param returnType the return type as the supertype declares it
+     * @param isFinal whether the method is declared {@code final}
+     * @param acceptsBuilderReturn whether a method returning the declared builder may override it
+     * @param isStatic whether the method is declared {@code static}
+     */
+    public InheritedMethod(String name, List<String> parameterTypes, String declaringType, String returnType,
+                           boolean isFinal, boolean acceptsBuilderReturn, boolean isStatic) {
+        this(name, parameterTypes, declaringType, returnType, isFinal, acceptsBuilderReturn, isStatic,
+            parameterTypes);
+    }
+
+}

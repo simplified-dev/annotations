@@ -4564,6 +4564,59 @@ public class DeclaredBuilderMergeTest {
         assertEquals(7, runGo(c, "demo.UseBox"));
     }
 
+    /**
+     * A generated {@code value(T)} beside an inherited, non-final
+     * {@code value(Object)} shares its erasure without overriding it (JLS
+     * 8.4.2), and is reported on the declared builder. Neither half reported
+     * it, since the inherited method is overridable in principle, and javac's
+     * only report was on the target's line: {@code name clash: value(T) in
+     * demo.Box.Builder and value(java.lang.Object) in demo.Base have the same
+     * erasure, yet neither overrides the other}.
+     */
+    @Test
+    public void merge_aTypeVariableSetterBesideAnInheritedMethodOfItsErasure_isRejectedOnTheBuilder() {
+        JavaFileObject[] sources = boxOver("T", "Base",
+            "public class Base { public Base value(Object v) { return this; } }");
+        Compilation c = compile(sources);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds value(Object) inherited from "
+            + "Base, which has the same erasure as the generated setter value(T) but is not overridden by it")
+            .inFile(sources[1]).onLine(6);
+        assertEquals("the report on the builder is the only error: " + c.errors(), 1, c.errors().size());
+    }
+
+    /** A bounded {@code value(T extends Number)} beside an inherited, non-final {@code value(Number)} is the same clash. */
+    @Test
+    public void merge_aBoundedTypeVariableSetterBesideAnInheritedMethodOfItsBound_isRejectedOnTheBuilder() {
+        JavaFileObject[] sources = boxOver("T extends Number", "Base",
+            "public class Base { public Base value(Number v) { return this; } }");
+        Compilation c = compile(sources);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds value(Number) inherited from "
+            + "Base, which has the same erasure as the generated setter value(T) but is not overridden by it")
+            .inFile(sources[1]).onLine(6);
+        assertEquals("the report on the builder is the only error: " + c.errors(), 1, c.errors().size());
+    }
+
+    /**
+     * {@code Base<X>}'s {@code value(X)}, taken as a member of a builder passing
+     * it {@code T}, is the method the generated {@code value(T)} overrides, and
+     * the builder builds and runs.
+     */
+    @Test
+    public void merge_aTypeVariableSetterOverridingAGenericSupertypesMethod_compiles() throws Exception {
+        JavaFileObject[] sources = boxOver("T", "Base<T>",
+            "public class Base<X> { public Base<X> value(X v) { return this; } }");
+        Compilation c = compile(sources[0], sources[1],
+            JavaFileObjects.forSourceLines("demo.UseBox",
+                "package demo;",
+                "public class UseBox {",
+                "    public static Integer go() { return Box.<Integer>builder().value(7).build().value; }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals(7, runGo(c, "demo.UseBox"));
+    }
+
     // ------------------------------------------------------------------
     // The all-args constructor beside an author's own build()
     // ------------------------------------------------------------------

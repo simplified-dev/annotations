@@ -142,6 +142,17 @@ final class SuperBuilderMutator {
             return;
         }
 
+        // A concrete link overrides the nearest self() above it. A final one on
+        // an ancestor this round judged is reported on that ancestor's builder;
+        // one read off a class file was never judged, and the override would
+        // fail on a generated line, so the link is refused on its annotation.
+        String finalSelf = annotatedSuper == null || isAbstract ? null : unjudgedFinalSelf();
+        if (finalSelf != null) {
+            messager.printMessage(Diagnostic.Kind.ERROR, finalSelf, ctx.targetElement(),
+                new AnnotationLookup().findMirror(ctx.targetElement(), ClassBuilder.class.getName()));
+            return;
+        }
+
         // $default$<fieldName>() providers for this target's retainInit fields
         // land on the target itself (not on the nested Builder), so inherited
         // chain fields keep their providers on their respective declaring
@@ -523,23 +534,59 @@ final class SuperBuilderMutator {
 
     /**
      * Whether the nearest {@code self()} an ancestor's author wrote, or a root's
-     * builder inherits, is public, walking the annotated ancestors upward from
-     * the direct one.
+     * builder inherits, is public, as {@link #nearestAuthoredSelf} finds it.
+     *
+     * @return whether it is public, or null when no ancestor has one
+     */
+    private Boolean nearestAuthoredSelfPublic() {
+        NearestSelf nearest = nearestAuthoredSelf();
+        return nearest == null ? null : nearest.index().selfPublic();
+    }
+
+    /**
+     * An annotated ancestor whose builder holds the nearest {@code self()} a
+     * link overrides, with the index its builder was read through.
+     *
+     * @param ancestor the annotated ancestor
+     * @param index what its builder carries, its {@code self()} among it
+     */
+    private record NearestSelf(AnnotatedSuper ancestor, ChainMemberIndex index) { }
+
+    /**
+     * Finds the nearest {@code self()} an ancestor's author wrote, or a root's
+     * builder inherits, walking the annotated ancestors upward from the direct
+     * one.
      *
      * <p>A builder the generator writes, or one with no {@code self()} of either
      * kind, says nothing and the walk goes on to the ancestor's own annotated
      * superclass, so a leaf below a generated chained abstract reads its root's.
      *
-     * @return whether it is public, or null when no ancestor has one
+     * @return the ancestor holding it, or null when no ancestor has one
      */
-    private Boolean nearestAuthoredSelfPublic() {
+    private NearestSelf nearestAuthoredSelf() {
         for (AnnotatedSuper ancestor = annotatedSuper; ancestor != null;
              ancestor = BuilderMutator.findAnnotatedDirectSuper(ancestor.element())) {
-            Boolean selfPublic = ChainMemberIndex.of(ctx.bridge(), ancestor.element(), ctx.builderName(),
-                ancestor.role()).selfPublic();
-            if (selfPublic != null) return selfPublic;
+            ChainMemberIndex index = ChainMemberIndex.of(ctx.bridge(), ancestor.element(), ctx.builderName(),
+                ancestor.role());
+            if (index.self() != null) return new NearestSelf(ancestor, index);
         }
         return null;
+    }
+
+    /**
+     * Renders why a concrete link cannot override the nearest {@code self()}
+     * above it, as {@link ChainBuilderReach#unjudgedFinalSelf} decides it: a
+     * final one on an ancestor read off a class file, which the processor never
+     * judged.
+     *
+     * @return the error, or null when the link can override it or an ancestor's own error stands
+     */
+    private String unjudgedFinalSelf() {
+        NearestSelf nearest = nearestAuthoredSelf();
+        return nearest == null
+            ? null
+            : ChainBuilderReach.unjudgedFinalSelf(ctx.targetSimpleName(), nearest.ancestor().simpleName(),
+                ctx.builderName(), nearest.index().self(), nearest.index().judged());
     }
 
     /**

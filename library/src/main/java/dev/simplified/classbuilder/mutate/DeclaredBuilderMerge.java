@@ -135,7 +135,7 @@ final class DeclaredBuilderMerge {
         ChainBuilderReach.SelfMethod inheritedSelf = role == ChainRole.ABSTRACT_ROOT && declared.sym != null
             ? ChainMemberIndex.inheritedSelf(ctx.bridge(), declared.sym)
             : null;
-        if (role.isSelfTyped()) rejectUnextendable(anchor, declared, inheritedSelf);
+        if (role.isSelfTyped()) rejectUnextendable(anchor, declared, role, inheritedSelf);
         Map<String, JCMethodDecl> methods = declaredMethodKeys(declared);
         rejectMistypedSlots(anchor, declared, members, methods.keySet());
         rejectUnoverridableInheritedMethods(declared, members, methods.keySet());
@@ -230,19 +230,23 @@ final class DeclaredBuilderMerge {
      * generated below it cannot extend or override into.
      *
      * <p>The decisions and their wording are
-     * {@link ChainBuilderReach#unextendableBuilder} and
-     * {@link ChainBuilderReach#finalSelf}, which the editor's inspection asks of
-     * the same facts read out of PSI. Reported on the declared builder, where
-     * the author acts; the merge continues, since the builder itself is sound
-     * and only a link below it is not, and each link is refused on its own
-     * annotation.
+     * {@link ChainBuilderReach#unextendableBuilder},
+     * {@link ChainBuilderReach#finalSelf} and
+     * {@link ChainBuilderReach#mistypedInheritedSelf}, which the editor's
+     * inspection asks of the same facts read out of PSI. Reported on the
+     * declared builder, where the author acts; the merge continues, since the
+     * builder itself is sound and only a link below it is not, and each link is
+     * refused on its own annotation. An inherited {@code self()} returning
+     * another type than the pair's builder parameter fails the generated
+     * setters as well, which the report stands for.
      *
      * @param anchor the element the annotation is written on, reported against when the builder has no symbol
      * @param declared the builder the author wrote
+     * @param role the target's position in the chain, a self-typed one
      * @param inheritedSelf the {@code self()} a root's builder inherits, or null when it inherits none or is
      *     not a root's
      */
-    private void rejectUnextendable(Element anchor, JCClassDecl declared,
+    private void rejectUnextendable(Element anchor, JCClassDecl declared, ChainRole role,
                                     ChainBuilderReach.@Nullable SelfMethod inheritedSelf) {
         Element builder = declared.sym == null ? anchor : declared.sym;
         String declaredName = declared.name.toString();
@@ -261,6 +265,11 @@ final class DeclaredBuilderMerge {
         String finalSelf = ChainBuilderReach.finalSelf(declaredName, ctx.targetSimpleName(),
             self != null && self.isFinal());
         if (finalSelf != null) messager.printMessage(Diagnostic.Kind.ERROR, finalSelf, builder);
+        if (declaredSelf != null) return;
+        String selfBuilder = DeclaredBuilderShape.selfNames(role, targetParameterNames(ctx),
+            declaredParameterNames(declared)).get(1);
+        String mistyped = ChainBuilderReach.mistypedInheritedSelf(declaredName, selfBuilder, inheritedSelf);
+        if (mistyped != null) messager.printMessage(Diagnostic.Kind.ERROR, mistyped, builder);
     }
 
     /**
@@ -513,7 +522,9 @@ final class DeclaredBuilderMerge {
      * override it either. Each method is read as a member of the builder, so a
      * self-typed supertype's {@code B} is the builder itself, and its return
      * type accepts the builder where the builder is assignable to it or to its
-     * erasure.
+     * erasure. Its parameters are read both erased and as they stand as members
+     * of the builder, where a type variable the builder passes the supertype
+     * keeps its name.
      *
      * <p>The element model holds what the supertype's source declares: a
      * supertype compiled in the same round is read through the members written
@@ -547,14 +558,18 @@ final class DeclaredBuilderMerge {
                     continue;
                 ExecutableType member = (ExecutableType) types.asMemberOf(builderType, method);
                 List<String> parameters = new ArrayList<>();
-                for (TypeMirror parameter : member.getParameterTypes()) parameters.add(types.erasure(parameter).toString());
+                List<String> memberParameters = new ArrayList<>();
+                for (TypeMirror parameter : member.getParameterTypes()) {
+                    parameters.add(types.erasure(parameter).toString());
+                    memberParameters.add(parameter.toString());
+                }
                 TypeMirror returned = member.getReturnType();
                 boolean accepts = returned.getKind() != TypeKind.VOID && !returned.getKind().isPrimitive()
                     && (types.isAssignable(builderType, returned)
                         || types.isAssignable(builderType, types.erasure(returned)));
                 out.add(new InheritedMethod(method.getSimpleName().toString(), parameters,
                     supertype.getSimpleName().toString(), method.getReturnType().toString(),
-                    modifiers.contains(Modifier.FINAL), accepts, isStatic));
+                    modifiers.contains(Modifier.FINAL), accepts, isStatic, memberParameters));
             }
         }
         return out;

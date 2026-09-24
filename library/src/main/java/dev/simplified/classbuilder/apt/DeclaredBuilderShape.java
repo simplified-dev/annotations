@@ -908,7 +908,7 @@ public final class DeclaredBuilderShape {
     }
 
     /** A rendered type with every qualifier removed, so both models print it alike. */
-    private static String unqualified(String type) {
+    static String unqualified(String type) {
         return QUALIFIER.matcher(type).replaceAll("");
     }
 
@@ -1047,7 +1047,12 @@ public final class DeclaredBuilderShape {
      * <p>The setter is keyed as the builder's own methods are, a parameter typed
      * by one of the builder's type variables by that variable's erasure - the
      * form the inherited method's erased parameters are in - so a generated
-     * {@code value(T)} meets an inherited {@code value(Object)}.
+     * {@code value(T)} meets an inherited {@code value(Object)}. Where the
+     * inherited method's parameter, as a member of the builder, is not that
+     * variable, the two share an erasure and neither overrides the other, which
+     * javac refuses as a name clash on the target's line however the inherited
+     * method is declared; one neither {@code static} nor {@code final} is
+     * reported in a sentence naming the clash.
      *
      * @param declaredName the declared builder's simple name
      * @param setterName the appended setter's name
@@ -1113,7 +1118,6 @@ public final class DeclaredBuilderShape {
                                                   List<InheritedMethod> inherited) {
         String key = methodKey(setterName, setterParameterTypes, typeVariableErasures);
         for (InheritedMethod method : inherited) {
-            if (!method.isStatic() && !method.isFinal() && method.acceptsBuilderReturn()) continue;
             if (!methodKey(method.name(), method.parameterTypes()).equals(key)) continue;
             String found = opening + " finds " + signature(setterName, setterParameterTypes) + " inherited from "
                 + method.declaringType();
@@ -1121,10 +1125,46 @@ public final class DeclaredBuilderShape {
                 return found + " declared " + (method.isStatic() ? "static" : "final")
                     + ", so the generated setter of that signature cannot override it";
             }
+            if (clashes(setterParameterTypes, method.memberParameterTypes(), typeVariableErasures)) {
+                return opening + " finds " + signature(method.name(), method.memberParameterTypes())
+                    + " inherited from " + method.declaringType() + ", which has the same erasure as the generated "
+                    + "setter " + signature(setterName, setterParameterTypes) + " but is not overridden by it";
+            }
+            if (method.acceptsBuilderReturn()) continue;
             return found + " returning " + unqualified(typeText(method.returnType()))
                 + ", which the generated setter returning " + builderName + " cannot override";
         }
         return null;
+    }
+
+    /**
+     * Decides whether a setter and an inherited method of the same erased key
+     * clash rather than override - where a setter parameter typed by one of the
+     * builder's type variables meets an inherited parameter that, as a member of
+     * the builder, is not that variable.
+     *
+     * <p>A method overrides another only where its signature is a subsignature
+     * of the other's (JLS 8.4.2): the same parameter types, or the erasure of
+     * them. {@code value(T)} is neither {@code value(Object)} nor that method's
+     * erasure, so the two share an erasure and neither overrides the other. A
+     * generic supertype's {@code value(X)}, taken with the builder's {@code T},
+     * is {@code value(T)} as a member of the builder, which the setter
+     * overrides.
+     *
+     * @param setterParameterTypes each parameter type of the setter, in order
+     * @param memberParameterTypes each parameter type of the inherited method as a member of the builder, in order
+     * @param typeVariableErasures each of the builder's type parameter names with its erasure
+     * @return whether the two clash
+     */
+    private static boolean clashes(List<String> setterParameterTypes, List<String> memberParameterTypes,
+                                   Map<String, String> typeVariableErasures) {
+        for (int i = 0; i < setterParameterTypes.size() && i < memberParameterTypes.size(); i++) {
+            String setter = typeText(setterParameterTypes.get(i).replace("...", "[]"));
+            if (!typeVariableErasures.containsKey(withoutDimensions(setter))) continue;
+            String member = unqualified(typeText(memberParameterTypes.get(i).replace("...", "[]")));
+            if (!member.equals(unqualified(setter))) return true;
+        }
+        return false;
     }
 
     /**

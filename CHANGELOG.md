@@ -120,6 +120,31 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   override public, and a `final` one is refused on the root's builder, on both halves, read from the
   root's source or from its class file.
 
+- **An inherited `self()` returning another type than the builder is refused on the root.**
+  `Shape.Builder<T, B> extends Fluent<String>`, where `Fluent<B>` declares `B self()`, left the
+  merge appending no `self()` beside the inherited one, and every generated setter's `return
+  self()` failed on a generated line with `String cannot be converted to B`. The root's builder is
+  refused with `@ClassBuilder merged into 'Builder' finds self() inherited from Fluent returning
+  String, where the generated setters need it to return B`, on both halves, the supertype read from
+  source or from its class file. `extends Fluent<B>` is accepted as before.
+
+- **A `final` `self()` on a root built without the processor is refused on the link.** A root
+  compiled with `-proc:none` whose builder declares or inherits a `final` `self()` was never judged,
+  and a concrete link below it failed on its generated override with `overridden method is final`.
+  The link reads the finality of the nearest `self()` with its access and is refused on its
+  annotation with `@ClassBuilder generates no builder on 'Circle' - the self() of 'Shape.Builder' is
+  final, so its builder cannot override it`, nothing generated for it, on both halves. A root the
+  processor judges keeps its own error on its builder, and the link adds none.
+
+- **A generated setter clashing with an inherited method of its erasure is refused on the
+  builder.** A generated `value(T)` beside an inherited, non-final `value(Object)` - or
+  `value(T extends Number)` beside `value(Number)` - shares its erasure without overriding it, and
+  javac refused it as a `name clash` on the target's line while neither half said anything. The
+  declared builder is refused with `@ClassBuilder merged into 'Builder' finds value(Object)
+  inherited from Base, which has the same erasure as the generated setter value(T) but is not
+  overridden by it`, on both halves. A generic supertype's `value(X)` that the builder passes its
+  `T` is overridden and builds as before.
+
 - **A self-typed builder's built type may be bounded by a supertype the target names.** A declared
   root or chained abstract builder bounding the first of its pair by a type the target's own
   `extends` or `implements` clause names - `T extends Base` on a chained abstract below `Base`,
@@ -581,7 +606,10 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
     the links below cannot extend - reported on the builder: declare a no-argument constructor. The
     links below it are refused as well;
   - on a chain root or a chained abstract, a `final` `self()`, which every link overrides - one a
-    root's builder inherits from a supertype included - drop `final`;
+    root's builder inherits from a supertype included - drop `final`. Below a root compiled without
+    the processor the same `self()` is refused on each concrete link instead;
+  - on a chain root, a `self()` the builder inherits returning another type than the pair's
+    builder parameter, `extends Fluent<String>` - pass the supertype the pair's `B`;
   - below a chain root, a missing or wrong `extends` clause or the wrong arguments to it - extend
     the ancestor's builder as `Ancestor.Builder<Link, Builder>` on a concrete link, or forward the
     builder's own self-typed pair on a chained abstract;
@@ -593,7 +621,9 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
     on the builder naming the method and the supertype declaring it where javac refused the
     override on the target's line, `Object`'s final `wait(long)` meeting the setter of a `long wait`
     slot. A setter's parameter typed by one of the builder's type variables is compared by the
-    variable's erasure, so `value(T)` meets an inherited `value(Object)`; an interface's static
+    variable's erasure, so `value(T)` meets an inherited `value(Object)`, and where the inherited
+    parameter is not that variable as the builder's extends clause instantiates its supertype the
+    two share an erasure without an override, reported as that name clash; an interface's static
     methods are not inherited and block nothing - drop `static` or `final` or return a supertype
     of the builder there, or rename the slot or its setter. This refusal
     withholds nothing: the build appends the setter before reporting it, and the editor keeps

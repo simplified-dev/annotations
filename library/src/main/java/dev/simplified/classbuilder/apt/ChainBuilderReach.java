@@ -21,10 +21,12 @@ import java.util.List;
  * so the author's builder is judged on the self-typed role that declares it and
  * on every link below it.
  *
- * <p>Every question is answered from names, flags and parameter counts, never
- * from a resolved type: the processor reads them off a tree the round is still
- * building or off an ancestor's class file, and the editor off PSI it must not
- * resolve.
+ * <p>Every question is answered from names, flags, parameter counts and
+ * rendered type text, never from a resolved type: the processor reads them off
+ * a tree the round is still building or off an ancestor's class file, and the
+ * editor off PSI it must not resolve. The one exception is a {@code self()} a
+ * root's builder inherits, which each half finds through the builder's
+ * resolved supertypes and hands over as flags and the text of its return type.
  */
 public final class ChainBuilderReach {
 
@@ -40,8 +42,26 @@ public final class ChainBuilderReach {
      *
      * @param isPublic whether it is public
      * @param isFinal whether it is final
+     * @param declaringType the simple name of the supertype declaring an inherited one, null for one the builder
+     *     declares
+     * @param returnType the return type of an inherited one as a member of the builder, in either model's
+     *     spelling, null for one the builder declares
      */
-    public record SelfMethod(boolean isPublic, boolean isFinal) { }
+    public record SelfMethod(boolean isPublic, boolean isFinal, @Nullable String declaringType,
+                             @Nullable String returnType) {
+
+        /**
+         * Constructs a {@code self()} the builder declares, read for its access
+         * and finality alone.
+         *
+         * @param isPublic whether it is public
+         * @param isFinal whether it is final
+         */
+        public SelfMethod(boolean isPublic, boolean isFinal) {
+            this(isPublic, isFinal, null, null);
+        }
+
+    }
 
     /** Why a link's generated builder cannot extend its annotated ancestor's. */
     public enum Unreachable {
@@ -250,6 +270,63 @@ public final class ChainBuilderReach {
         if (!selfFinal) return null;
         return "@ClassBuilder merged into '" + declaredName + "' but its self() is final, so no builder "
             + "generated below '" + targetName + "' can override it";
+    }
+
+    /**
+     * Reports a {@code self()} a root's declared builder inherits whose return
+     * type, as a member of the builder, is not the builder's own self-type
+     * parameter, reported on the declared builder.
+     *
+     * <p>An inherited {@code self()} stands for one the author declares, so the
+     * merge appends none beside it, and every generated setter returns
+     * {@code self()} as the pair's builder parameter - {@code B} on a builder
+     * extending {@code Fluent<B>}. Where the builder passes the supertype
+     * another type, {@code Fluent<String>}, each setter's return fails on a
+     * generated line. The return type is compared by its unqualified text, so
+     * only the pair's own parameter, read by its name, passes.
+     *
+     * @param declaredName the declared builder's simple name
+     * @param selfBuilderName the name of the pair's builder parameter, which the generated setters return
+     * @param inherited the {@code self()} the builder inherits, or null when it inherits none or declares its own
+     * @return the error, or null when the inherited {@code self()} returns the pair's builder parameter
+     */
+    public static @Nullable String mistypedInheritedSelf(@NotNull String declaredName,
+                                                         @NotNull String selfBuilderName,
+                                                         @Nullable SelfMethod inherited) {
+        if (inherited == null || inherited.returnType() == null) return null;
+        String returned = DeclaredBuilderShape.unqualified(DeclaredBuilderShape.typeText(inherited.returnType()));
+        if (returned.equals(selfBuilderName)) return null;
+        return "@ClassBuilder merged into '" + declaredName + "' finds self() inherited from "
+            + inherited.declaringType() + " returning " + returned + ", where the generated setters need it to "
+            + "return " + selfBuilderName;
+    }
+
+    /**
+     * Reports a {@code final} {@code self()} on the builder of an annotated
+     * ancestor the processor did not judge, reported on a concrete link's
+     * annotation.
+     *
+     * <p>{@link #finalSelf} is reported where the ancestor's own merge runs, on
+     * its builder, and a link below an ancestor compiled in the same round
+     * adds nothing to it. An ancestor compiled without the processor reaches a
+     * link through its class file with nothing reported, and the link's
+     * generated builder overrides {@code self()} - so the link is refused on its
+     * own annotation, and nothing is generated for it.
+     *
+     * @param targetName the link's simple name
+     * @param ancestorName the simple name of the annotated ancestor whose builder holds the nearest {@code self()}
+     * @param builderName the builder class name the chain is written in
+     * @param nearest the nearest {@code self()} an annotated ancestor's builder declares, or on a root inherits,
+     *     or null when none does
+     * @param judged whether the processor judged that ancestor's builder - one compiled in the same round
+     * @return the error, or null when the link can override it or the ancestor's own error stands
+     */
+    public static @Nullable String unjudgedFinalSelf(@NotNull String targetName, @NotNull String ancestorName,
+                                                     @NotNull String builderName, @Nullable SelfMethod nearest,
+                                                     boolean judged) {
+        if (nearest == null || !nearest.isFinal() || judged) return null;
+        return "@ClassBuilder generates no builder on '" + targetName + "' - the self() of '" + ancestorName + "."
+            + builderName + "' is final, so its builder cannot override it";
     }
 
     /**

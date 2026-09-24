@@ -20,6 +20,7 @@ import javax.lang.model.element.Modifier;
 import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.ElementFilter;
 import javax.lang.model.util.Elements;
@@ -62,20 +63,23 @@ public final class ChainMemberIndex {
     private final AccessLevel builderAccess;
     private final boolean declaresConstructors;
     private final @Nullable AccessLevel noArgumentConstructorAccess;
-    private final @Nullable Boolean selfPublic;
+    private final ChainBuilderReach.@Nullable SelfMethod self;
+    private final boolean judged;
     private final @Nullable AccessLevel generatedBuilderAccess;
 
     private ChainMemberIndex(boolean builderPresent, int builderTypeParameters, Set<String> authoredNoArgMethods,
                              AccessLevel builderAccess, boolean declaresConstructors,
                              @Nullable AccessLevel noArgumentConstructorAccess,
-                             @Nullable Boolean selfPublic, @Nullable AccessLevel generatedBuilderAccess) {
+                             ChainBuilderReach.@Nullable SelfMethod self, boolean judged,
+                             @Nullable AccessLevel generatedBuilderAccess) {
         this.builderPresent = builderPresent;
         this.builderTypeParameters = builderTypeParameters;
         this.authoredNoArgMethods = authoredNoArgMethods;
         this.builderAccess = builderAccess;
         this.declaresConstructors = declaresConstructors;
         this.noArgumentConstructorAccess = noArgumentConstructorAccess;
-        this.selfPublic = selfPublic;
+        this.self = self;
+        this.judged = judged;
         this.generatedBuilderAccess = generatedBuilderAccess;
     }
 
@@ -147,7 +151,7 @@ public final class ChainMemberIndex {
             }
             return new ChainMemberIndex(true, nested.typarams == null ? 0 : nested.typarams.size(),
                 authored, accessOf(nested.mods.flags), declaresConstructors, noArgumentConstructor,
-                selfPublic(bridge, ancestorRole, declaredSelf, nested.sym), null);
+                self(bridge, ancestorRole, declaredSelf, nested.sym), true, null);
         }
         // Not generated yet: the generator writes it at the annotation's access.
         return generated(generatedAccessOf(element));
@@ -205,30 +209,28 @@ public final class ChainMemberIndex {
             }
             return new ChainMemberIndex(true, nested.getTypeParameters().size(), authored,
                 accessOf(nested.getModifiers()), declaresConstructors, noArgumentConstructor,
-                selfPublic(bridge, ancestorRole, declaredSelf, nested), null);
+                self(bridge, ancestorRole, declaredSelf, nested), false, null);
         }
         return absent();
     }
 
     /**
-     * Whether the {@code self()} standing for the ancestor's builder's own is
-     * public - the one its author wrote, or on a root the one the builder
-     * inherits where the author wrote none, as {@link ChainBuilderReach#rootSelf}
-     * picks it.
+     * The {@code self()} standing for the ancestor's builder's own - the one its
+     * author wrote, or on a root the one the builder inherits where the author
+     * wrote none, as {@link ChainBuilderReach#rootSelf} picks it.
      *
      * @param bridge the javac bridge
      * @param ancestorRole where the ancestor sits in the chain
      * @param declared the {@code self()} the author wrote, or null when they wrote none
      * @param builder the builder's element, or null when the tree has none entered
-     * @return whether it is public, or null when there is none
+     * @return the method, or null when there is none
      */
-    private static @Nullable Boolean selfPublic(JavacBridge bridge, ChainRole ancestorRole,
-                                                ChainBuilderReach.@Nullable SelfMethod declared,
-                                                @Nullable TypeElement builder) {
+    private static ChainBuilderReach.@Nullable SelfMethod self(JavacBridge bridge, ChainRole ancestorRole,
+                                                              ChainBuilderReach.@Nullable SelfMethod declared,
+                                                              @Nullable TypeElement builder) {
         ChainBuilderReach.SelfMethod inherited = declared == null && ancestorRole == ChainRole.ABSTRACT_ROOT
             && builder != null ? inheritedSelf(bridge, builder) : null;
-        ChainBuilderReach.SelfMethod self = ChainBuilderReach.rootSelf(declared, inherited);
-        return self == null ? null : self.isPublic();
+        return ChainBuilderReach.rootSelf(declared, inherited);
     }
 
     /**
@@ -239,7 +241,9 @@ public final class ChainMemberIndex {
      * interfaces beside it, {@code java.lang.Object} left out, and the first
      * method {@link ChainBuilderReach#inheritedAsSelf} accepts is the one. A
      * supertype compiled in the same round is read through the members written
-     * in it, and one compiled before it through its class file.
+     * in it, and one compiled before it through its class file. Its return type
+     * is read as a member of the builder, so the {@code B} a supertype declares
+     * it with is what the builder's extends clause passes in its place.
      *
      * @param bridge the javac bridge
      * @param builder the declared builder's element
@@ -261,8 +265,10 @@ public final class ChainMemberIndex {
                     samePackage)) {
                     continue;
                 }
+                ExecutableType member = (ExecutableType) types.asMemberOf((DeclaredType) builder.asType(), method);
                 return new ChainBuilderReach.SelfMethod(modifiers.contains(Modifier.PUBLIC),
-                    modifiers.contains(Modifier.FINAL));
+                    modifiers.contains(Modifier.FINAL), supertype.getSimpleName().toString(),
+                    member.getReturnType().toString());
             }
         }
         return null;
@@ -350,12 +356,12 @@ public final class ChainMemberIndex {
     }
 
     private static ChainMemberIndex absent() {
-        return new ChainMemberIndex(false, 0, Set.of(), AccessLevel.PUBLIC, false, null, null, null);
+        return new ChainMemberIndex(false, 0, Set.of(), AccessLevel.PUBLIC, false, null, null, false, null);
     }
 
     /** An index of a builder the generator writes, which says nothing but the access it has. */
     private static ChainMemberIndex generated(AccessLevel access) {
-        return new ChainMemberIndex(false, 0, Set.of(), AccessLevel.PUBLIC, false, null, null, access);
+        return new ChainMemberIndex(false, 0, Set.of(), AccessLevel.PUBLIC, false, null, null, false, access);
     }
 
     /**
@@ -393,7 +399,27 @@ public final class ChainMemberIndex {
      * @return whether it is public, or null when there is none or the builder is absent
      */
     public @Nullable Boolean selfPublic() {
-        return selfPublic;
+        return self == null ? null : self.isPublic();
+    }
+
+    /**
+     * The {@code self()} standing for the ancestor's builder's own - the one its
+     * author wrote, or on a root the one the builder inherits where the author
+     * wrote none.
+     *
+     * @return the method, or null when there is none or the builder is absent
+     */
+    public ChainBuilderReach.@Nullable SelfMethod self() {
+        return self;
+    }
+
+    /**
+     * Whether the processor judged the ancestor's builder in this compilation -
+     * true of the tree view, an ancestor compiled in the same round, and false
+     * of the element view, one read off a class file.
+     */
+    public boolean judged() {
+        return judged;
     }
 
     /**

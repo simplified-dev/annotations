@@ -551,6 +551,60 @@ public class ChainAncestorBuilderTest {
         assertRefusedWith(compile(fluent(finalSelf), shapeWith(FLUENT_ROOT), circle()), refusal);
     }
 
+    /**
+     * A root the processor judges keeps the refusal of a final {@code self()},
+     * declared or inherited, on its own builder, and the link below it draws
+     * none of its own.
+     */
+    @Test
+    public void rootWithAFinalSelf_isRefusedOnTheRootAlone() {
+        String refusal = "@ClassBuilder merged into 'Builder' but its self() is final, so no builder "
+            + "generated below 'Shape' can override it";
+        Compilation declared = compile(shapeWith(FINAL_SELF_ROOT), circle());
+        assertEquals(List.of(refusal), errors(declared));
+        Compilation inherited = compile(fluent("@SuppressWarnings(\"unchecked\") public final B self() "
+            + "{ return (B) this; }"), shapeWith(FLUENT_ROOT), circle());
+        assertEquals(List.of(refusal), errors(inherited));
+    }
+
+    /** The root builder extending {@link #fluent} with its type argument bound to {@code String}. */
+    private static final String STRING_FLUENT_ROOT = "public abstract static class Builder<T extends Shape, "
+        + "B extends Builder<T, B>> extends Fluent<String> { }";
+
+    /** The root's refusal of an inherited {@code self()} returning {@code String}. */
+    private static final String ROOT_STRING_SELF = "@ClassBuilder merged into 'Builder' finds self() inherited "
+        + "from Fluent returning String, where the generated setters need it to return B";
+
+    /**
+     * A {@code self()} the root's builder inherits returning another type than
+     * the pair's {@code B} is refused on the root, since every generated setter
+     * returns {@code self()} as {@code B}. The merge appended no {@code self()}
+     * beside it, and javac failed on each generated setter's return.
+     */
+    @Test
+    public void rootInheritingASelfOfAnotherType_isRefused() {
+        assertRefusedWith(compile(fluent("protected abstract B self();"), shapeWith(STRING_FLUENT_ROOT)),
+            ROOT_STRING_SELF);
+        assertRefusedWith(compile(fluent("protected abstract B self();"), shapeWith(STRING_FLUENT_ROOT), circle()),
+            ROOT_STRING_SELF);
+    }
+
+    /** The same with the supertype compiled before the root, its {@code self()} read through its class file. */
+    @Test
+    public void rootInheritingASelfOfAnotherTypeFromACompiledSupertype_isRefused() throws Exception {
+        Path fluent = compiledAncestor(fluent("protected abstract B self();"));
+        assertRefusedWith(compileAgainst(fluent, shapeWith(STRING_FLUENT_ROOT)), ROOT_STRING_SELF);
+    }
+
+    /** A compiled supertype's {@code self()} returning the pair's {@code B} is followed, and the chain runs. */
+    @Test
+    public void rootInheritingItsBuilderTypeFromACompiledSupertype_buildsAndRuns() throws Exception {
+        Path fluent = compiledAncestor(fluent("protected abstract B self();"));
+        Compilation c = compileAgainst(fluent, shapeWith(FLUENT_ROOT), circle(), useShape());
+        assertBuilt(c);
+        assertEquals("c", runGo("demo.UseShape", c, fluent));
+    }
+
     // ------------------------------------------------------------------
     // The root's access and its no-argument constructor
     // ------------------------------------------------------------------
@@ -762,6 +816,69 @@ public class ChainAncestorBuilderTest {
         Path root = classesOf(stage);
         assertRefusedWith(compileAgainst(root, circle()),
             linkRefusal("Circle", "Shape.Builder", "declares no constructor taking no parameters"));
+    }
+
+    /** The root builder declaring a final {@code self()}. */
+    private static final String FINAL_SELF_ROOT = "public abstract static class Builder<T extends Shape, "
+        + "B extends Builder<T, B>> { @SuppressWarnings(\"unchecked\") protected final B self() { return (B) this; } }";
+
+    /** The link's refusal of a final {@code self()} on a root the processor never judged. */
+    private static final String LINK_FINAL_SELF = "@ClassBuilder generates no builder on 'Circle' - the self() of "
+        + "'Shape.Builder' is final, so its builder cannot override it";
+
+    /** Compiles the sources with no processor, asserts they built, and writes their class files out. */
+    private static Path unprocessed(JavaFileObject... sources) throws Exception {
+        Compilation stage = Compiler.javac().withOptions("-proc:none").compile(sources);
+        assertThat(stage).succeeded();
+        return classesOf(stage);
+    }
+
+    /**
+     * A root compiled with no processor whose builder declares a final
+     * {@code self()} was never judged, so the link is refused on its own
+     * annotation. javac failed on the link's generated override alone:
+     * {@code self() in demo.Circle.Builder cannot override self() in
+     * demo.Shape.Builder - overridden method is final}.
+     */
+    @Test
+    public void unprocessedCompiledRootDeclaringAFinalSelf_isRefusedOnTheLink() throws Exception {
+        Path root = unprocessed(shapeWith(FINAL_SELF_ROOT));
+        JavaFileObject link = circle();
+        Compilation c = compileAgainst(root, link);
+        assertRefusedWith(c, LINK_FINAL_SELF);
+        assertThat(c).hadErrorContaining(LINK_FINAL_SELF).inFile(link).onLine(3);
+    }
+
+    /** The same with the final {@code self()} one the unprocessed root's builder inherits. */
+    @Test
+    public void unprocessedCompiledRootInheritingAFinalSelf_isRefusedOnTheLink() throws Exception {
+        Path root = unprocessed(fluent("@SuppressWarnings(\"unchecked\") public final B self() { return (B) this; }"),
+            shapeWith(FLUENT_ROOT));
+        JavaFileObject link = circle();
+        Compilation c = compileAgainst(root, link);
+        assertRefusedWith(c, LINK_FINAL_SELF);
+        assertThat(c).hadErrorContaining(LINK_FINAL_SELF).inFile(link).onLine(3);
+    }
+
+    /**
+     * A public, non-final {@code self()} on an unprocessed root is still
+     * followed: the link overrides it publicly. The root declares no field and
+     * spells the copy constructor the link's calls, neither of which a
+     * processor wrote for it.
+     */
+    @Test
+    public void unprocessedCompiledRootDeclaringAPublicSelf_linkOverridesItPublicly() throws Exception {
+        Path root = unprocessed(src("demo.Shape",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            CB,
+            "public abstract class Shape {",
+            "    protected Shape(Builder<?, ?> builder) { }",
+            "    " + PUBLIC_SELF_ROOT,
+            "}"));
+        Compilation c = compileAgainst(root, circle());
+        assertBuilt(c);
+        assertTrue("the link's self() is public", selfIsPublic(loaderOf(c, root), "demo.Circle$Builder"));
     }
 
     /** An abstract root in {@code demo} whose generated builder takes the given access. */

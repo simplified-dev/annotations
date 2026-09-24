@@ -358,9 +358,12 @@ public final class MergedSlotStorage {
      * override it either. Each method is read as a member of the builder
      * through the supertype's substitutor, so a self-typed supertype's
      * {@code B} is the builder itself, and its return type accepts the builder
-     * where the builder is assignable to it or to its erasure. A supertype's own
-     * methods are read without the augment pass, as the element model holds
-     * only what a supertype compiled in the same round declares in source.
+     * where the builder is assignable to it or to its erasure; its parameters
+     * are read both erased and as they stand as members of the builder, where a
+     * type variable the builder passes the supertype keeps its name. A
+     * supertype's own methods are read without the augment pass, as the element
+     * model holds only what a supertype compiled in the same round declares in
+     * source.
      *
      * @param declared the builder the author wrote
      * @return the inherited methods, in the order the supertypes are walked
@@ -387,10 +390,12 @@ public final class MergedSlotStorage {
                 if (!samePackage && !method.hasModifierProperty(PsiModifier.PUBLIC)
                     && !method.hasModifierProperty(PsiModifier.PROTECTED)) continue;
                 List<String> parameters = new ArrayList<>();
+                List<String> memberParameters = new ArrayList<>();
                 for (PsiParameter parameter : method.getParameterList().getParameters()) {
-                    PsiType member = substitutor.substitute(parameter.getType());
-                    parameters.add(TypeConversionUtil.erasure(member == null ? parameter.getType() : member)
-                        .getCanonicalText());
+                    PsiType substituted = substitutor.substitute(parameter.getType());
+                    PsiType member = substituted == null ? parameter.getType() : substituted;
+                    parameters.add(TypeConversionUtil.erasure(member).getCanonicalText());
+                    memberParameters.add(member.getCanonicalText());
                 }
                 PsiType returned = substitutor.substitute(declaredReturn);
                 boolean accepts = returned != null && !(returned instanceof PsiPrimitiveType)
@@ -398,7 +403,7 @@ public final class MergedSlotStorage {
                         || TypeConversionUtil.erasure(returned).isAssignableFrom(builderType));
                 out.add(new InheritedMethod(method.getName(), parameters, String.valueOf(supertype.getName()),
                     declaredReturn.getCanonicalText(), method.hasModifierProperty(PsiModifier.FINAL), accepts,
-                    isStatic));
+                    isStatic, memberParameters));
             }
         }
         return out;

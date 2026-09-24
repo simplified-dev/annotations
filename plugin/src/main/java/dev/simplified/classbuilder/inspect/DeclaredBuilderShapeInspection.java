@@ -56,18 +56,22 @@ import java.util.Objects;
  * the same generic type is reported on its name where {@code from(T)} or
  * {@code mutate()} is emitted to pass it the slot's own type. A generated setter
  * the merge appends that a method the builder inherits keeps from overriding it
- * - a {@code static} or {@code final} one, or one returning a type the builder
- * cannot stand in for - is reported on the builder's name, the supertypes
+ * - a {@code static} or {@code final} one, one returning a type the builder
+ * cannot stand in for, or one sharing the setter's erasure without being
+ * overridden by it - is reported on the builder's name, the supertypes
  * resolved here as the processor reads them from the element model.
  *
  * <p>On an abstract root or a chained abstract, a declared builder the builders
  * generated below it cannot extend - one declaring constructors none of which
  * takes no parameters - or whose {@code self()} they cannot override because it
  * is {@code final}, one a root's builder inherits included, is reported on the
- * builder's name in the processor's sentence. A link whose annotated
- * ancestor's builder, declared or generated, is out of its reach is reported on
- * its annotation, as is a link whose ancestor's builder cannot take the extends
- * clause.
+ * builder's name in the processor's sentence, as is a root's builder inheriting
+ * a {@code self()} that returns another type than the pair's builder parameter.
+ * A link whose annotated ancestor's builder, declared or generated, is out of
+ * its reach is reported on its annotation, as is a link whose ancestor's
+ * builder cannot take the extends clause, and a concrete link overriding a
+ * {@code final} {@code self()} on a compiled ancestor the processor never
+ * judged.
  *
  * <p>On a class or record target and on a constructor or factory target, a
  * {@code builderConstructorAccess} written on the annotation while the declared

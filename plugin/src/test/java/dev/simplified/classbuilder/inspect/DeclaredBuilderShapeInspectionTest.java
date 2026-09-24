@@ -2248,6 +2248,33 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
         assertEquals(List.of(), errors());
     }
 
+    /**
+     * A generated {@code value(T)} beside an inherited, non-final
+     * {@code value(Object)} shares its erasure without overriding it, and is
+     * reported on the declared builder's name in the processor's sentence. The
+     * editor was green while javac reported a name clash on the target's line.
+     */
+    public void testATypeVariableSetterBesideAnInheritedMethodOfItsErasure_isReportedOnTheBuildersName() {
+        configureBoxOver("T", "Base", "public class Base { public Base value(Object v) { return this; } }");
+        assertEquals("@ClassBuilder merged into 'Builder' finds value(Object) inherited from Base, which has the "
+            + "same erasure as the generated setter value(T) but is not overridden by it", theOnlyError());
+        assertEquals(List.of("Builder@5"), inheritedAnchors());
+    }
+
+    /** A bounded {@code value(T extends Number)} beside an inherited, non-final {@code value(Number)} is the same clash. */
+    public void testABoundedTypeVariableSetterBesideAnInheritedMethodOfItsBound_isReportedOnTheBuildersName() {
+        configureBoxOver("T extends Number", "Base",
+            "public class Base { public Base value(Number v) { return this; } }");
+        assertEquals("@ClassBuilder merged into 'Builder' finds value(Number) inherited from Base, which has the "
+            + "same erasure as the generated setter value(T) but is not overridden by it", theOnlyError());
+    }
+
+    /** {@code Base<X>}'s {@code value(X)} taken with {@code T} is the method {@code value(T)} overrides. */
+    public void testATypeVariableSetterOverridingAGenericSupertypesMethod_isNotReported() {
+        configureBoxOver("T", "Base<T>", "public class Base<X> { public Base<X> value(X v) { return this; } }");
+        assertEquals(List.of(), errors());
+    }
+
     private String theOnlyError() {
         List<String> errors = errors();
         assertEquals("expected exactly one highlight, got: " + errors, 1, errors.size());
