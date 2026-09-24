@@ -24,6 +24,7 @@ import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.SetterNames;
 import dev.simplified.classbuilder.apt.BuilderAccess;
 import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
+import dev.simplified.classbuilder.apt.ConstructorAccess;
 import dev.simplified.classbuilder.apt.NamePattern;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -55,6 +56,8 @@ import java.util.Map;
  *       identifier, or that suppresses the setter role</li>
  *   <li>{@code @ClassBuilder(access = NONE)}, which names no modifier the
  *       always-generated builder class can carry</li>
+ *   <li>{@code @ClassBuilder(constructorAccess = NONE)}, which names no
+ *       modifier the constructor {@code build()} calls can carry</li>
  *   <li>{@code @ClassBuilder(builderConstructorAccess = NONE)}, which names no
  *       modifier a builder's constructor can carry</li>
  *   <li>{@code @ClassBuilder} on a constructor or static factory the processor
@@ -99,6 +102,7 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
                         "a builder with no way to finish is not a builder");
                 } else if (ClassBuilderConstants.ANNOTATION_FQN.equals(qualifiedName)) {
                     checkAccess(holder, annotation);
+                    checkConstructorAccess(holder, annotation);
                     checkBuilderConstructorAccess(holder, annotation);
                     checkExecutableTarget(holder, annotation);
                 }
@@ -169,6 +173,23 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
         if (!(value instanceof PsiReferenceExpression reference)) return;
         if (!AccessLevel.NONE.name().equals(reference.getReferenceName())) return;
         holder.registerProblem(value, BuilderAccess.notExpressible(), ProblemHighlightType.GENERIC_ERROR);
+    }
+
+    /**
+     * Reports {@code constructorAccess = NONE} on the written value, in the
+     * processor's sentence. The value is the access of the constructor
+     * {@code build()} calls, so it names no modifier to apply; the processor
+     * then generates at the default, which is what the augment provider
+     * contributes.
+     *
+     * @param holder sink for the diagnostic
+     * @param annotation the {@code @ClassBuilder} annotation
+     */
+    private static void checkConstructorAccess(@NotNull ProblemsHolder holder, @NotNull PsiAnnotation annotation) {
+        PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(ConstructorAccess.ATTRIBUTE);
+        if (!(value instanceof PsiReferenceExpression reference)) return;
+        if (!AccessLevel.NONE.name().equals(reference.getReferenceName())) return;
+        holder.registerProblem(value, ConstructorAccess.notExpressible(), ProblemHighlightType.GENERIC_ERROR);
     }
 
     /**

@@ -117,6 +117,10 @@ public @interface Lazy {
     /**
      * Access level for the synthesized getter. Defaults to {@link AccessLevel#PUBLIC}.
      * {@link AccessLevel#PACKAGE} emits no access keyword (package-private).
+     *
+     * <p>{@link AccessLevel#NONE} is a compile error: the field's storage holds
+     * the deferred supplier, so the getter is the only read of its value. The
+     * getter is then generated public beside the error.
      */
     @NotNull AccessLevel access() default AccessLevel.PUBLIC;
 

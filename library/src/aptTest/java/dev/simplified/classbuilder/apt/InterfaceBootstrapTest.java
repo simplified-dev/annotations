@@ -218,6 +218,96 @@ public class InterfaceBootstrapTest {
         }
     }
 
+    /**
+     * An interface target's builder is the sibling {@code ShapeBuilder} alone:
+     * the interface declares no nested class, so {@code Shape.Builder} names
+     * nothing - the shape the editor mirrors by contributing no nested builder.
+     */
+    @Test
+    public void interfaceTarget_declaresNoNestedClass() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public interface Shape {",
+                "    String name();",
+                "}"));
+        assertThat(c).succeeded();
+
+        ClassLoader loader = loadClasses(c);
+        assertEquals(0, Class.forName("demo.Shape", true, loader).getDeclaredClasses().length);
+        assertEquals("demo.ShapeBuilder", Class.forName("demo.ShapeBuilder", true, loader).getName());
+
+        Compilation nested = compile(
+            JavaFileObjects.forSourceLines("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "public interface Shape {",
+                "    String name();",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseShape",
+                "package demo;",
+                "public class UseShape {",
+                "    Shape.Builder b;",
+                "}"));
+        assertThat(nested).failed();
+        assertThat(nested).hadErrorContaining("cannot find symbol");
+        assertEquals(nested.errors().toString(), 1, nested.errors().size());
+    }
+
+    /**
+     * With {@code from = NONE} the sibling has no static copy factory to
+     * delegate to, so {@code mutate()} seeds a fresh sibling builder inline
+     * through its setters, as a class target's does, and copies every slot.
+     * It used to call {@code ShapeBuilder.(this)} - a method with no name - and
+     * fail with {@code cannot find symbol} on the interface.
+     */
+    @Test
+    public void fromNone_mutateSeedsTheSiblingInline() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderNames;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import java.util.List;",
+                "import java.util.Map;",
+                "import java.util.Optional;",
+                "@ClassBuilder(validate = false, builder = @BuilderNames(from = BuilderNames.NONE))",
+                "public interface Shape {",
+                "    String name();",
+                "    int sides();",
+                "    boolean filled();",
+                "    Optional<String> label();",
+                "    List<String> points();",
+                "    java.util.Set<String> tags();",
+                "    Map<String, Integer> weights();",
+                "    String[] notes();",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseShape",
+                "package demo;",
+                "import java.util.List;",
+                "import java.util.Map;",
+                "public class UseShape {",
+                "    public static String go() {",
+                "        Shape s = Shape.builder().name(\"tri\").sides(3).filled(true).label(\"L\")",
+                "            .points(List.of(\"a\", \"b\")).tags(java.util.Set.of(\"t\")).weights(Map.of(\"w\", 2))",
+                "            .notes(\"n1\", \"n2\").build();",
+                "        Shape copy = s.mutate().build();",
+                "        return copy.name() + copy.sides() + copy.filled() + copy.label().orElse(\"-\")",
+                "            + copy.points() + copy.tags() + copy.weights() + String.join(\",\", copy.notes());",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+
+        ClassLoader loader = loadClasses(c);
+        assertEquals("tri3trueL[a, b][t]{w=2}n1,n2",
+            Class.forName("demo.UseShape", true, loader).getMethod("go").invoke(null));
+        for (Method method : Class.forName("demo.Shape", true, loader).getDeclaredMethods())
+            assertFalse("no from(T) under from = NONE: " + method, method.getName().equals("from"));
+    }
+
     /** {@code generateImpl = false} routes build() through a factory and still bootstraps. */
     @Test
     public void generateImplFalse_stillGetsEntryPoints() throws Exception {

@@ -24,6 +24,7 @@ import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.NamingStyle;
 import dev.simplified.classbuilder.apt.AccessorScheme;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.lazy.apt.LazyAccess;
 import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.ContractAnnotations;
 import dev.simplified.shared.javac.GeneratedAnnotations;
@@ -515,10 +516,7 @@ public final class LazyFieldMutator {
                 // type - suppressing it leaves the field unreachable, and
                 // silently emitting a public getter instead hides that.
                 if ("NONE".equals(name)) {
-                    messager.printMessage(Diagnostic.Kind.ERROR,
-                        "@Lazy(access = NONE) would leave field '" + lazy.name
-                            + "' unreadable - its storage holds the deferred supplier and the "
-                            + "synthesised getter is the only read that resolves it",
+                    messager.printMessage(Diagnostic.Kind.ERROR, LazyAccess.notExpressible(lazy.name),
                         lazy.element);
                     return Flags.PUBLIC;
                 }

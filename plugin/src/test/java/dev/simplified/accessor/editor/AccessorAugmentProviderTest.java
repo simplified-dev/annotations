@@ -181,6 +181,63 @@ public class AccessorAugmentProviderTest extends LightJavaCodeInsightFixtureTest
             0, widget.findMethodsByName("getCache", false).length);
     }
 
+    /**
+     * {@code AccessLevel.NONE} generates nothing on a {@code @Setter} as on a
+     * {@code @Getter}, and at the type as on a field - the documented opt-out,
+     * which javac honours with no diagnostic.
+     */
+    public void testNoneGeneratesNothingOnASetterAndAtTheType() {
+        PsiClass widget = configure("Widget",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.Setter;
+            @Setter
+            public class Widget {
+                private int label;
+                @Setter(AccessLevel.NONE) private int cache;
+            }
+            """);
+        assertEquals(1, widget.findMethodsByName("setLabel", false).length);
+        assertEquals(0, widget.findMethodsByName("setCache", false).length);
+
+        PsiClass plain = configure("Plain",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.Getter;
+            import dev.simplified.annotations.Setter;
+            @Getter(AccessLevel.NONE) @Setter(AccessLevel.NONE)
+            public class Plain {
+                private int label;
+            }
+            """);
+        assertEquals(0, plain.findMethodsByName("getLabel", false).length);
+        assertEquals(0, plain.findMethodsByName("setLabel", false).length);
+    }
+
+    /**
+     * A {@code name} written as a constant the target declares is read as the
+     * value it holds, as javac reads it, so the accessors are spelled from it.
+     * The editor used to read only a literal, so it offered {@code getLabel()}
+     * and {@code setLabel(int)} where javac generates {@code fetchLabel()} and
+     * {@code storeLabel(int)}.
+     */
+    public void testNamesWrittenAsConstants_nameTheAccessors() {
+        PsiClass widget = configure("Widget",
+            """
+            import dev.simplified.annotations.Getter;
+            import dev.simplified.annotations.Setter;
+            public class Widget {
+                static final String READ = "fetch{}";
+                static final String WRITE = "store" + "{}";
+                @Getter(name = Widget.READ) @Setter(name = WRITE) private int label;
+            }
+            """);
+        assertEquals(1, widget.findMethodsByName("fetchLabel", false).length);
+        assertEquals(1, widget.findMethodsByName("storeLabel", false).length);
+        assertEquals(0, widget.findMethodsByName("getLabel", false).length);
+        assertEquals(0, widget.findMethodsByName("setLabel", false).length);
+    }
+
     public void testHandWrittenAccessorWins() {
         PsiClass widget = configure("Widget",
             """

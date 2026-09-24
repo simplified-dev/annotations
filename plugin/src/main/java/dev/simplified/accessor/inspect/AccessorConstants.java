@@ -8,6 +8,7 @@ import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiReferenceExpression;
 import dev.simplified.annotations.NamingStyle;
+import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -94,8 +95,26 @@ public final class AccessorConstants {
 
     /** The written {@code name} pattern, or {@code null} when unwritten. */
     public static String name(PsiAnnotation annotation) {
-        String written = stringAttr(annotation, "name");
+        String written = writtenName(annotation);
         return written == null || written.isEmpty() ? null : written;
+    }
+
+    /**
+     * The {@code name} attribute as javac reads it, empty included.
+     *
+     * <p>A literal is read as written. Any other expression is a constant javac
+     * hands the processor the value of, so it is evaluated the way the
+     * {@code @BuilderNames} and {@code @SetterNames} readers evaluate theirs,
+     * through {@link ClassBuilderConstants#evaluatedString} under the owning
+     * class's re-entry guard. None of {@code @Getter}, {@code @Setter} and
+     * {@code @Lazy} declares a constant of its own for the attribute, so there
+     * is no name to recognise without evaluating.
+     *
+     * @param annotation the {@code @Getter}, {@code @Setter} or {@code @Lazy}
+     * @return the written pattern, or {@code null} when unwritten or not a constant
+     */
+    public static String writtenName(PsiAnnotation annotation) {
+        return stringAttr(annotation, "name");
     }
 
     /**
@@ -147,9 +166,10 @@ public final class AccessorConstants {
 
     private static String stringAttr(PsiAnnotation annotation, String attribute) {
         PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(attribute);
-        if (value instanceof PsiLiteralExpression literal
-            && literal.getValue() instanceof String s) return s;
-        return null;
+        if (value == null) return null;
+        if (value instanceof PsiLiteralExpression literal)
+            return literal.getValue() instanceof String s ? s : null;
+        return ClassBuilderConstants.evaluatedString(value);
     }
 
     private static List<String> stringArrayAttr(PsiAnnotation annotation, String attribute) {

@@ -1637,6 +1637,8 @@ public final class GeneratedMemberFactory {
             // at the annotation and generates at the default beside the error.
             String access = ClassBuilderConstants.accessKeyword(annotation);
             // Package-private default, matching the ctor Lombok @Builder supplies.
+            // NONE falls to it: the processor reports that value at the
+            // annotation and generates at the default beside the error.
             String constructorAccess = ClassBuilderConstants.accessKeyword(annotation,
                 ClassBuilderConstants.ATTR_CONSTRUCTOR_ACCESS, "");
             // Same default one level down, so builder() is the one way in. NONE

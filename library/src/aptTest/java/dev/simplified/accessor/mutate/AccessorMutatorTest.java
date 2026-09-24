@@ -255,6 +255,55 @@ public class AccessorMutatorTest {
         assertEquals("getLabel", methodNames(t));
     }
 
+    /**
+     * {@code AccessLevel.NONE} is the documented way to generate nothing, on a
+     * {@code @Setter} as on a {@code @Getter} and at the type as on a field, so
+     * it compiles with no diagnostic and mints no member.
+     */
+    @Test
+    public void noneGeneratesNothingOnASetterAndAtTheType() throws Exception {
+        Class<?> setter = compileAndLoad("demo.Widget",
+            "package demo;",
+            "import dev.simplified.annotations.AccessLevel;",
+            "import dev.simplified.annotations.Setter;",
+            "@Setter",
+            "public class Widget {",
+            "    private String label;",
+            "    @Setter(AccessLevel.NONE) private int cache;",
+            "}");
+        assertEquals("setLabel", methodNames(setter));
+
+        Class<?> typeLevel = compileAndLoad("demo.Plain",
+            "package demo;",
+            "import dev.simplified.annotations.AccessLevel;",
+            "import dev.simplified.annotations.Getter;",
+            "import dev.simplified.annotations.Setter;",
+            "@Getter(AccessLevel.NONE) @Setter(AccessLevel.NONE)",
+            "public class Plain {",
+            "    private String label;",
+            "}");
+        assertEquals("", methodNames(typeLevel));
+    }
+
+    /**
+     * A {@code name} written as a {@code String} constant the target declares
+     * is read as the value it holds - the javac twin of the editor reading the
+     * same constant.
+     */
+    @Test
+    public void namesWrittenAsConstants_nameTheAccessors() throws Exception {
+        Class<?> t = compileAndLoad("demo.Widget",
+            "package demo;",
+            "import dev.simplified.annotations.Getter;",
+            "import dev.simplified.annotations.Setter;",
+            "public class Widget {",
+            "    static final String READ = \"fetch{}\";",
+            "    static final String WRITE = \"store{}\";",
+            "    @Getter(name = Widget.READ) @Setter(name = WRITE) private String label;",
+            "}");
+        assertEquals("fetchLabel,storeLabel", methodNames(t));
+    }
+
     @Test
     public void excludeSkipsNamedFields() throws Exception {
         Class<?> t = compileAndLoad("demo.Widget",

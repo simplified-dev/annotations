@@ -189,6 +189,11 @@ public final class BuilderMutator {
      * {@code @BuilderArgsConstructor} states nothing about visibility and must
      * not silently overrule a {@code constructorAccess} beside it.
      *
+     * <p>{@code @BuilderArgsConstructor(access = NONE)} is read as unwritten.
+     * The constructor pass reports that value on the annotation, and
+     * {@code build()} still calls a constructor, so it is generated as though
+     * the annotation were absent rather than failing the target a second time.
+     *
      * @param targetElement the annotated type
      * @param ctx the per-target mutation context
      * @return the resolved access level
@@ -198,7 +203,8 @@ public final class BuilderMutator {
             targetElement, BUILDER_ARGS_CONSTRUCTOR, "access", null);
         if (written == null) return ctx.config().constructorAccess();
         try {
-            return AccessLevel.valueOf(written);
+            AccessLevel access = AccessLevel.valueOf(written);
+            return access.emits() ? access : ctx.config().constructorAccess();
         } catch (IllegalArgumentException e) {
             return ctx.config().constructorAccess();
         }

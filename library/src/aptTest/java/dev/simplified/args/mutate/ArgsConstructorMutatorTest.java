@@ -622,6 +622,39 @@ public class ArgsConstructorMutatorTest {
         assertTrue(Modifier.isPrivate(target.getDeclaredConstructors()[0].getModifiers()));
     }
 
+    /**
+     * {@code @BuilderArgsConstructor(access = NONE)} is the annotation's one
+     * error, and the builder pass still generates the constructor its
+     * {@code build()} calls, at {@code constructorAccess}, so a same-package
+     * {@code new Named("x")} compiles beside it. The value used to reach the
+     * modifier switch as well and fail the target a second time with
+     * {@code Failed to generate builder for demo.Named: AccessLevel.NONE is
+     * rejected before constructor synthesis}.
+     */
+    @Test
+    public void builderArgsAccessNone_isTheOneErrorAndTheConstructorIsStillGenerated() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Named",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.BuilderArgsConstructor;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "@BuilderArgsConstructor(access = AccessLevel.NONE)",
+                "public class Named {",
+                "    private String name;",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseNamed",
+                "package demo;",
+                "public class UseNamed {",
+                "    static Named direct() { return new Named(\"x\"); }",
+                "    static Named built() { return Named.builder().name(\"x\").build(); }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@BuilderArgsConstructor(access = NONE) generates nothing");
+        assertEquals("the annotation's error alone: " + c.errors(), 1, c.errors().size());
+    }
+
     // ------------------------------------------------------------------
     // Coverage marker
     // ------------------------------------------------------------------

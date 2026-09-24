@@ -612,7 +612,12 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
     private static List<PsiClass> cachedNestedClasses(PsiClass target) {
         return CachedValuesManager.getCachedValue(target, () -> {
             BuilderSite site = BuilderSite.of(target);
-            if (site == null) {
+            // An interface type target's builder is the sibling <Name>Builder the
+            // processor writes as its own file, and the interface body gets the
+            // entry points alone, so no nested class is contributed there. A
+            // constructor or factory target inside an interface is the
+            // executable path, which does nest its builder.
+            if (site == null || (target.isInterface() && !site.isExecutable())) {
                 return CachedValueProvider.Result.create(Collections.<PsiClass>emptyList(),
                     PsiModificationTracker.MODIFICATION_COUNT);
             }

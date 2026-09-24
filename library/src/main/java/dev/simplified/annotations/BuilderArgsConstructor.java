@@ -40,6 +40,11 @@ public @interface BuilderArgsConstructor {
      * {@link ClassBuilder#constructorAccess()} - the generated builder is a
      * nested class of the target, so nothing wider is needed to construct it.
      * A value written here wins over {@code constructorAccess}.
+     *
+     * <p>{@link AccessLevel#NONE} is a compile error, since the builder's
+     * {@code build()} calls the constructor whatever is written here; it is
+     * then generated at {@code constructorAccess}, as though the annotation
+     * were absent.
      */
     @NotNull AccessLevel access() default AccessLevel.PACKAGE;
 

@@ -58,6 +58,7 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
             public @interface ClassBuilder {
                 BuilderNames builder() default @BuilderNames;
                 AccessLevel access() default AccessLevel.PUBLIC;
+                AccessLevel constructorAccess() default AccessLevel.PACKAGE;
                 AccessLevel builderConstructorAccess() default AccessLevel.PACKAGE;
             }
             """);
@@ -504,6 +505,36 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
         assertNotNull("an error on the attribute", found);
         assertEquals("@ClassBuilder(access = NONE) is not expressible - the builder class is always "
                 + "generated, so choose PRIVATE, PACKAGE, PROTECTED or PUBLIC",
+            found.getDescription());
+        assertEquals("AccessLevel.NONE", myFixture.getEditor().getDocument().getText()
+            .substring(found.getStartOffset(), found.getEndOffset()));
+    }
+
+    /**
+     * {@code constructorAccess = NONE} is an error on the written value, in the
+     * processor's sentence. The editor said nothing, while javac failed the
+     * target with an internal message.
+     */
+    public void testConstructorAccessNone_isAnErrorOnTheAttribute() {
+        myFixture.configureByText("Acc.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(constructorAccess = AccessLevel.NONE)
+            public class Acc {
+                String name;
+            }
+            """);
+        HighlightInfo found = null;
+        for (HighlightInfo h : myFixture.doHighlighting()) {
+            if (h.getSeverity() == HighlightSeverity.ERROR && h.getDescription() != null
+                && h.getDescription().startsWith("@ClassBuilder(constructorAccess")) {
+                found = h;
+            }
+        }
+        assertNotNull("an error on the attribute", found);
+        assertEquals("@ClassBuilder(constructorAccess = NONE) is not expressible - it is the access of the "
+                + "constructor build() calls, so choose PRIVATE, PACKAGE, PROTECTED or PUBLIC",
             found.getDescription());
         assertEquals("AccessLevel.NONE", myFixture.getEditor().getDocument().getText()
             .substring(found.getStartOffset(), found.getEndOffset()));

@@ -30,7 +30,8 @@ import static org.junit.Assert.fail;
 
 /**
  * Round-trips for {@code @XContract} emission via the AST-mutation path.
- * Mirrors {@link dev.simplified.classbuilder.apt.BuilderEmitter#emitContract}.
+ * Mirrors the package-private {@code BuilderEmitter.emitContract} of the
+ * interface sibling-emission path.
  *
  * <p>{@code @XContract} has {@code @Retention(CLASS)}, so
  * {@link Method#getDeclaredAnnotations()} can't observe it.
@@ -146,6 +147,49 @@ public class EmitContractsTest {
         // clearTags / clearEntries (no params)
         assertValueOnMethod(builder, "clearTags", "-> this");
         assertValueOnMethod(builder, "clearEntries", "-> this");
+    }
+
+    /**
+     * An interface target's {@code builder()}, {@code from(T)} and
+     * {@code mutate()} carry the contracts a class target's do, which are the
+     * ones the editor infers for all three. The interface path used to declare
+     * none, so the editor's data flow read a contract javac never wrote.
+     */
+    @Test
+    public void interfaceTarget_entryPointsCarryTheClassPathsContracts() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Shape",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public interface Shape {",
+            "    String name();",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        Map<String, MethodContracts> shape = readMethodContracts(c, "demo.Shape");
+        assertContract(shape, "builder", "()Ldemo/ShapeBuilder;", "-> new", null, null);
+        assertContract(shape, "from", "(Ldemo/Shape;)Ldemo/ShapeBuilder;", "_ -> new", true, null);
+        assertContract(shape, "mutate", "()Ldemo/ShapeBuilder;", "-> new", null, null);
+    }
+
+    /** {@code emitContracts = false} withholds them on an interface's entry points too. */
+    @Test
+    public void interfaceTarget_emitContractsFalse_noneOnTheEntryPoints() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Shape",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false, emitContracts = false)",
+            "public interface Shape {",
+            "    String name();",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        Map<String, MethodContracts> shape = readMethodContracts(c, "demo.Shape");
+        assertEquals(shape.keySet().toString(), 4, shape.size());
+        for (MethodContracts m : shape.values())
+            assertNull("emitContracts=false must suppress @XContract on " + m.key, m.contract);
     }
 
     // ------------------------------------------------------------------

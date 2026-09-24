@@ -197,6 +197,29 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   on the annotation of every target, and the builder and its entry points are generated public so
   that error is the only one.
 
+- **`constructorAccess = NONE` is one error on the annotation.** It failed the build with `Failed to
+  generate builder for ...: AccessLevel.NONE is rejected before constructor synthesis` on a class
+  target, was accepted in silence on every other kind of target, and was green in the editor. Both
+  halves now report
+  `@ClassBuilder(constructorAccess = NONE) is not expressible - it is the access of the constructor build() calls, so choose PRIVATE, PACKAGE, PROTECTED or PUBLIC`
+  on the annotation of every target, and the constructor `build()` calls is generated
+  package-private, the default, so that error is the only one.
+
+- **`@BuilderArgsConstructor(access = NONE)` is one error.** Beside its own
+  `@BuilderArgsConstructor(access = NONE) generates nothing - delete the annotation instead`, which
+  the editor reports as well, the value also reached the builder's constructor synthesis and failed
+  the target a second time with `AccessLevel.NONE is rejected before constructor synthesis`. The
+  constructor `build()` calls is now generated at `constructorAccess`, as though the annotation were
+  absent.
+
+- **`@Lazy(access = NONE)` is an error in the editor too.** javac refused it with
+  `@Lazy(access = NONE) would leave field '...' unreadable - its storage holds the deferred supplier and the synthesised getter is the only read that resolves it`
+  and generated the getter public beside the error, while the editor reported nothing and offered
+  that public getter. The editor now reports the same sentence on the written value. The other
+  `AccessLevel` attributes were checked for the same shape: `@Getter` and `@Setter` read `NONE` as
+  generating nothing, their documented meaning, on a field and at the type alike; the constructor
+  annotations and `@UtilityClass(constructorAccess)` already reported `NONE` on both halves.
+
 - **An interface target's entry points are offered in the editor.** The processor appends
   `builder()`, `from(T)` and `mutate()` to an interface target's body - public, the first two
   `static` and re-declaring a generic interface's type parameters, the third `default` - returning
@@ -206,6 +229,24 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   none named `NONE`, typed to the sibling by its qualified name, which resolves once the sibling has
   been generated.
 
+- **The editor offers no nested `Builder` on an interface target.** An interface target's builder
+  is the sibling `<Name>Builder` alone, and javac declares no nested class on the interface, but the
+  editor listed a synthesised `Builder` among its inner classes, so `Shape.Builder` resolved over
+  source javac rejects with `cannot find symbol`.
+
+- **An interface target's entry points carry `@XContract`.** `builder()` and `mutate()` carry
+  `@XContract("-> new")` and `from(T)` carries `@XContract(value = "_ -> new", pure = true)`, the
+  contracts a class target's entry points carry and the ones the editor already inferred for all
+  three, so the editor's data flow reads what javac declares. `emitContracts = false` withholds them,
+  as on a class.
+
+- **An interface target with `from = NONE` builds, and `mutate()` copies every slot.** `mutate()`
+  delegated to the sibling's static copy factory, which `from = NONE` suppresses, and failed with
+  `cannot find symbol / symbol: method (Shape) / location: class ShapeBuilder`. With `from`
+  suppressed it now seeds a fresh sibling builder inline through each slot's setter, reading the
+  slot as the sibling's `from(T)` would, as a class target's `mutate()` always does. With `from`
+  written it still delegates, and the editor offers `mutate()` either way.
+
 - **A naming attribute written as a constant is read as its value in the editor.** `@BuilderNames`
   and `@SetterNames` values were read only as string literals, so `from = BuilderNames.NONE` - the
   spelling the documentation shows - was taken for an unwritten name and the editor offered a
@@ -214,6 +255,13 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   recognised by name, qualified or statically imported; any other constant is evaluated, so it
   names the member in the editor as javac names it, and the naming checks judge it by the value it
   holds.
+
+- **An accessor or lazy name written as a constant is read as its value in the editor.**
+  `@Getter(name)`, `@Setter(name)` and `@Lazy(name)` were read only as string literals, so
+  `@Getter(name = Widget.READ)` with `READ = "fetch{}"` offered `getLabel()` where javac generates
+  `fetchLabel()`, and a call to the generated name was red. The constant is evaluated the way a
+  `@BuilderNames` constant is, so the accessor and the lazy getter are named as javac names them,
+  and the naming checks of `@Getter` / `@Setter` and `@Lazy` judge a constant by the value it holds.
 
 - **The editor no longer invents a chain builder's constructor.** It gave every chain builder a
   constructor at `builderConstructorAccess`, and no chain builder the processor writes declares one:

@@ -17,7 +17,8 @@ Flags misuse of <code>@Getter</code> and <code>@Setter</code>:
   <li>A <code>name</code> pattern with no <code>{}</code> placeholder, which
       gives every field the same method name, or one set to the
       <code>"-"</code> sentinel, which would be minted verbatim as the method
-      name. Write <code>AccessLevel.NONE</code> to generate nothing.</li>
+      name. Write <code>AccessLevel.NONE</code> to generate nothing. A name
+      written as a constant is judged by the value it holds.</li>
 </ul>
 
 <!-- tooltip end -->

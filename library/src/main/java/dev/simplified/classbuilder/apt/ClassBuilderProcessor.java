@@ -659,6 +659,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         BuilderConfig config = extractConfig(executable, enclosing.getSimpleName().toString());
         validateNaming(executable, config, messager);
         validateAccess(executable, messager);
+        validateConstructorAccess(executable, messager);
         validateBuilderConstructorAccess(executable, messager);
         if (!config.excludeSet().isEmpty()) {
             messager.printMessage(Diagnostic.Kind.ERROR,
@@ -735,6 +736,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         BuilderConfig config = extractConfig(target);
         validateNaming(target, config, messager);
         validateAccess(target, messager);
+        validateConstructorAccess(target, messager);
         validateBuilderConstructorAccess(target, messager);
         warnMisplacedBuilderConstructorAccess(target, false, BuilderMutator.chainRoleOf(target), messager);
         List<FieldSpec> fields = collectFields(target, config);
@@ -1124,6 +1126,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
         BuilderConfig config = extractConfig(target);
         validateNaming(target, config, messager);
         validateAccess(target, messager);
+        validateConstructorAccess(target, messager);
         validateBuilderConstructorAccess(target, messager);
         warnMisplacedBuilderConstructorAccess(target, true, ChainRole.STANDALONE, messager);
 
@@ -1187,7 +1190,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
             JCClassDecl targetTree = javacBridge.get().treeOf(target);
             if (targetTree != null) {
                 new InterfaceBootstrapMutator(javacBridge.get(), messager, target, targetTree,
-                    config, emitter.builderClassName()).appendAll();
+                    config, emitter.builderClassName(), fields).appendAll();
             }
         }
     }
@@ -1237,8 +1240,12 @@ public class ClassBuilderProcessor extends AbstractProcessor {
             BuilderAccess.DEFAULT.name()));
         if (!BuilderAccess.expressible(access))
             access = BuilderAccess.DEFAULT;
-        AccessLevel constructorAccess =
-            parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, "constructorAccess", "PACKAGE"));
+        // NONE is reported at the annotation by validateConstructorAccess, and
+        // the constructor build() calls is then generated at the default.
+        AccessLevel constructorAccess = parseAccess(lookup.stringAttr(target, ANNOTATION_FQN,
+            ConstructorAccess.ATTRIBUTE, ConstructorAccess.DEFAULT.name()));
+        if (!ConstructorAccess.expressible(constructorAccess))
+            constructorAccess = ConstructorAccess.DEFAULT;
         // NONE is reported at the annotation by validateBuilderConstructorAccess,
         // and the builder is then generated as under the default, so that error
         // is the only one the author sees - the editor contributes the same.
@@ -1428,6 +1435,25 @@ public class ClassBuilderProcessor extends AbstractProcessor {
             role, written);
         if (message != null)
             messager.printMessage(Diagnostic.Kind.WARNING, message, target, lookup.findMirror(target, ANNOTATION_FQN));
+    }
+
+    /**
+     * Reports {@code constructorAccess = NONE} at the annotation.
+     *
+     * <p>The value is the access of the constructor a generated {@code build()}
+     * calls, so a level naming no modifier has nothing to apply to. The
+     * configuration generates at the default beside the error, which keeps
+     * every generated line compilable and leaves this the one diagnostic, on
+     * every kind of target alike.
+     *
+     * @param target the annotated element
+     * @param messager sink for diagnostics
+     */
+    private void validateConstructorAccess(Element target, Messager messager) {
+        String written = lookup.stringAttr(target, ANNOTATION_FQN, ConstructorAccess.ATTRIBUTE, null);
+        if (written == null || ConstructorAccess.expressible(parseAccess(written))) return;
+        messager.printMessage(Diagnostic.Kind.ERROR, ConstructorAccess.notExpressible(), target,
+            lookup.findMirror(target, ANNOTATION_FQN));
     }
 
     /**

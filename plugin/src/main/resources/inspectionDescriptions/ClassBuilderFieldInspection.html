@@ -40,6 +40,10 @@ Flags misuse of the per-field companion annotations that travel with
       builder class can carry, and the builder class is always generated.
       The build generates the builder and its entry points public beside the
       error.</li>
+  <li><code>@ClassBuilder(constructorAccess = NONE)</code> names no
+      modifier the constructor <code>build()</code> calls can carry. The
+      build generates that constructor package-private, the default, beside
+      the error.</li>
   <li><code>@ClassBuilder(builderConstructorAccess = NONE)</code> names no
       modifier a constructor can carry, and every builder has a constructor.
       The build generates as under the default beside the error.</li>

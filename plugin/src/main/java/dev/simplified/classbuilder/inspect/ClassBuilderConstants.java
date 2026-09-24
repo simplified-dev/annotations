@@ -264,10 +264,17 @@ public final class ClassBuilderConstants {
      * Evaluates a written constant expression to the {@code String} javac
      * would read from it.
      *
+     * <p>Runs under the re-entry guard of the class the value is written in,
+     * since resolving a name in it can reach an augment pass that is reading
+     * this very attribute, and follows {@code final} fields through their
+     * initializers rather than asking them, so no declared type is resolved.
+     * Every reader of a {@code String} annotation attribute a constant can
+     * spell asks this rather than the platform's evaluator directly.
+     *
      * @param value the written attribute value
      * @return the string it evaluates to, or {@code null} when it evaluates to none
      */
-    private static @Nullable String evaluatedString(@NotNull PsiAnnotationMemberValue value) {
+    public static @Nullable String evaluatedString(@NotNull PsiAnnotationMemberValue value) {
         PsiConstantEvaluationHelper evaluator =
             JavaPsiFacade.getInstance(value.getProject()).getConstantEvaluationHelper();
         PsiClass owner = PsiTreeUtil.getParentOfType(value, PsiClass.class);

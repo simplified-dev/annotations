@@ -123,6 +123,33 @@ public class LazyAugmentProviderTest extends LightJavaCodeInsightFixtureTestCase
         assertEquals(0, holder.findMethodsByName("getLabel", false).length);
     }
 
+    /**
+     * A name written as a {@code String} constant the target declares is read
+     * as the value it holds, as javac reads it, so the getter is spelled from it
+     * and a call to it resolves. The editor used to read only a literal, so it
+     * offered {@code getLabel()} where javac generates {@code fetchLabel()}.
+     */
+    public void testNameWrittenAsAConstant_namesTheGetter() {
+        PsiClass holder = configure("Holder",
+            """
+            import dev.simplified.annotations.Lazy;
+            public class Holder {
+                static final String FETCH = "fetch{}";
+                @Lazy(name = Holder.FETCH)
+                private String label = "x";
+                String read() { return fetchLabel(); }
+            }
+            """);
+        assertEquals(1, holder.findMethodsByName("fetchLabel", false).length);
+        assertEquals(0, holder.findMethodsByName("getLabel", false).length);
+        List<String> unresolved = new ArrayList<>();
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            if (info.getSeverity() == HighlightSeverity.ERROR && info.getDescription() != null
+                && info.getDescription().contains("fetchLabel")) unresolved.add(info.getDescription());
+        }
+        assertEquals("javac compiles the call to fetchLabel()", List.of(), unresolved);
+    }
+
     /** A hand-written accessor still wins, whatever the style spelled. */
     public void testHandWrittenFluentGetterSuppressesSynthesis() {
         PsiClass holder = configure("Holder",

@@ -1252,6 +1252,58 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
         assertEquals(0, shape.findMethodsByName("mutate", false).length);
     }
 
+    /**
+     * An interface target's builder is the sibling {@code ShapeBuilder}, and
+     * javac declares no nested class on the interface, so the editor contributes
+     * none and {@code Shape.Builder} is unresolved. The editor used to list a
+     * synthesised {@code Builder} among the interface's inner classes, so the
+     * reference resolved over source javac rejects.
+     */
+    public void testAnInterfaceTarget_contributesNoNestedBuilder() {
+        addShapeSources("@ClassBuilder", "from");
+        PsiClass shape = myFixture.findClass("demo.Shape");
+        List<String> inner = new ArrayList<>();
+        for (PsiClass nested : shape.getInnerClasses()) inner.add(nested.getName());
+        assertEquals(List.of(), inner);
+
+        myFixture.configureByText("UseShape.java",
+            """
+            import demo.Shape;
+            public class UseShape {
+                Shape.Builder b;
+            }
+            """);
+        List<String> errors = errors();
+        assertEquals("javac: cannot find symbol Shape.Builder; editor: " + errors, 1, errors.size());
+        assertTrue(errors.get(0), errors.get(0).contains("Builder"));
+    }
+
+    /**
+     * {@code from = NONE} on an interface withholds {@code from(T)} and keeps
+     * {@code mutate()}, whose body javac seeds inline, so both halves offer the
+     * same two entry points.
+     */
+    public void testAnInterfaceTargetWithFromNone_stillOffersMutate() {
+        addShapeSources("@ClassBuilder(builder = @BuilderNames(from = BuilderNames.NONE))", "unused");
+        myFixture.configureByText("UseShape.java",
+            """
+            import demo.Shape;
+            public class UseShape {
+                static String go() {
+                    Shape s = Shape.builder().name("tri").build();
+                    return s.mutate().build().name();
+                }
+            }
+            """);
+        List<String> errors = errors();
+        assertTrue("javac compiles and runs these calls; editor errors: " + errors, errors.isEmpty());
+        PsiClass shape = myFixture.findClass("demo.Shape");
+        assertEquals(0, shape.findMethodsByName("from", false).length);
+        PsiMethod mutate = single(shape, "mutate");
+        assertTrue(mutate.hasModifierProperty(PsiModifier.DEFAULT));
+        assertEquals("demo.ShapeBuilder", mutate.getReturnType().getCanonicalText());
+    }
+
     // ------------------------------------------------------------------
     // Naming attributes written as constants
     // ------------------------------------------------------------------
@@ -1402,6 +1454,31 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
         assertTrue(single(target, "from").hasModifierProperty(PsiModifier.PUBLIC));
         assertTrue(single(target, "mutate").hasModifierProperty(PsiModifier.PUBLIC));
         assertTrue(target.getInnerClasses()[0].hasModifierProperty(PsiModifier.PUBLIC));
+    }
+
+    /**
+     * {@code constructorAccess = NONE} is reported on the annotation, and the
+     * all-args constructor is contributed at the default beside it, as javac
+     * generates it: package-private, so a same-package {@code new Acc("x")}
+     * resolves.
+     */
+    public void testConstructorAccessNone_contributesTheConstructorAtTheDefault() {
+        PsiFile file = myFixture.configureByText("Acc.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(constructorAccess = AccessLevel.NONE)
+            public class Acc {
+                String label;
+                static Acc direct() { return new Acc("x"); }
+            }
+            """);
+        PsiClass target = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+        PsiMethod[] constructors = target.getConstructors();
+        assertEquals(1, constructors.length);
+        assertEquals(1, constructors[0].getParameterList().getParametersCount());
+        assertTrue(constructors[0].hasModifierProperty(PsiModifier.PACKAGE_LOCAL));
+        assertEquals(List.of(), errors());
     }
 
     // ------------------------------------------------------------------

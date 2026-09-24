@@ -323,6 +323,10 @@ public @interface ClassBuilder {
      * {@code @BuildFlag} validation rather than instantiating the type directly.
      * Independent of {@link #access()}, which governs the builder class and the
      * bootstrap methods.
+     *
+     * <p>{@link AccessLevel#NONE} is a compile error on every target, since the
+     * value is the access of the constructor {@code build()} calls; that
+     * constructor is then generated package-private beside the error.
      */
     @NotNull AccessLevel constructorAccess() default AccessLevel.PACKAGE;
 

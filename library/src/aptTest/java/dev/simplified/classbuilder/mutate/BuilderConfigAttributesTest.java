@@ -1028,6 +1028,114 @@ public class BuilderConfigAttributesTest {
         assertEquals(c.errors().toString(), 1, c.errors().size());
     }
 
+    /** The sentence both halves report for {@code constructorAccess = NONE}. */
+    private static final String CONSTRUCTOR_ACCESS_NONE_REJECTED =
+        "@ClassBuilder(constructorAccess = NONE) is not expressible - it is the access of the constructor "
+            + "build() calls, so choose PRIVATE, PACKAGE, PROTECTED or PUBLIC";
+
+    /**
+     * {@code constructorAccess = NONE} is one error at the annotation, and the
+     * all-args constructor {@code build()} calls is generated at the default,
+     * package-private, beside it - so the builder and a same-package
+     * {@code new Acc("x")} compile. The value used to reach the modifier switch
+     * and fail the target with {@code Failed to generate builder for demo.Acc:
+     * AccessLevel.NONE is rejected before constructor synthesis}.
+     */
+    @Test
+    public void constructorAccess_noneIsRejectedAtTheAnnotation() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Acc",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, constructorAccess = AccessLevel.NONE)",
+                "public class Acc {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseAcc",
+                "package demo;",
+                "public class UseAcc {",
+                "    public static String go() {",
+                "        return Acc.builder().name(\"x\").build().getName() + new Acc(\"y\").getName();",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(CONSTRUCTOR_ACCESS_NONE_REJECTED);
+        assertEquals("the one error, with the constructor generated at the default beside it: " + c.errors(),
+            1, c.errors().size());
+    }
+
+    /**
+     * A record synthesises no constructor, and the value is still refused, as
+     * {@code access = NONE} and {@code builderConstructorAccess = NONE} are on
+     * every kind of target. It used to compile in silence.
+     */
+    @Test
+    public void constructorAccess_noneIsRejectedOnARecord() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Point",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, constructorAccess = AccessLevel.NONE)",
+                "public record Point(int x, int y) { }"),
+            JavaFileObjects.forSourceLines("demo.UsePoint",
+                "package demo;",
+                "public class UsePoint {",
+                "    public static int go() { return Point.builder().x(1).y(2).build().y(); }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(CONSTRUCTOR_ACCESS_NONE_REJECTED);
+        assertEquals(c.errors().toString(), 1, c.errors().size());
+    }
+
+    /** An interface target reads the attribute through the same rule. */
+    @Test
+    public void constructorAccess_noneIsRejectedOnAnInterface() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, constructorAccess = AccessLevel.NONE)",
+                "public interface Shape {",
+                "    String name();",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseShape",
+                "package demo;",
+                "public class UseShape {",
+                "    public static String go() { return Shape.builder().name(\"x\").build().name(); }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(CONSTRUCTOR_ACCESS_NONE_REJECTED);
+        assertEquals(c.errors().toString(), 1, c.errors().size());
+    }
+
+    /** A constructor or factory target reports it on its own annotation. */
+    @Test
+    public void constructorAccess_noneIsRejectedOnAFactory() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Made",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public class Made {",
+                "    final String name;",
+                "    private Made(String name) { this.name = name; }",
+                "    @ClassBuilder(validate = false, constructorAccess = AccessLevel.NONE)",
+                "    static Made make(String name) { return new Made(name); }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseMade",
+                "package demo;",
+                "public class UseMade {",
+                "    public static String go() { return Made.builder().name(\"x\").build().name; }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(CONSTRUCTOR_ACCESS_NONE_REJECTED);
+        assertEquals(c.errors().toString(), 1, c.errors().size());
+    }
+
     /**
      * {@code from = NONE} brought in by a static import withholds {@code from(T)},
      * so a call to it does not compile. The editor twin reads the import list.

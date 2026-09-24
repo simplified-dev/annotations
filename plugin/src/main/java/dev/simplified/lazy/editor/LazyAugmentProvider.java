@@ -284,7 +284,9 @@ public final class LazyAugmentProvider extends AbstractRecursionSafeAugmentProvi
      * Reads {@code @Lazy.access()} as a PSI modifier keyword. Maps
      * {@link AccessLevel#PACKAGE PACKAGE} to the
      * empty string (no keyword); everything else returns the lowercase
-     * Java modifier. Default when unset is {@code "public"}.
+     * Java modifier. Default when unset is {@code "public"}, and
+     * {@link AccessLevel#NONE NONE} reads as that default too: the processor
+     * reports it on the field and generates the getter public beside the error.
      */
     private static String readAccessKeyword(PsiField field) {
         PsiAnnotation lazy = WrittenAnnotations.find(field, LAZY_FQN);
