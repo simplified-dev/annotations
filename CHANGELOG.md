@@ -30,7 +30,8 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   directory holding something else - a copy the expander did not create is never deleted, and a run
   that cannot record what it wrote says so rather than silently leaving the next one nothing to
   compare against.
-- **Two compilation units sharing a file name no longer overwrite each other's expanded copy.** The
+- **Two compilation units sharing a file name no longer overwrite each other's copy in the javadoc
+  source expansion.** The
   copy was named after the file it was read from, so an authored `Helpers.java` declaring only a
   package-private type and a processor-generated `Helpers` in the same package resolved to one path,
   where the last written won and the doclet read whichever that was. A link resolves against the
@@ -43,17 +44,16 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   class of the builder's name that was not merged into, while the editor offered all three - so
   `Target.builder()` completed green on a target whose build answered `cannot find symbol`, on a
   plain standalone class with nothing unusual in it, which is the shape a hand-migration off a
-  Lombok builder produces most naturally. Every declared builder is merged into now, and the three
-  are typed against the declared class rather than a synthesised one the target never lists, so
-  `Target.builder().name("x").apply(..)` resolves the author's own verb. They are withheld exactly
-  where the processor skips them: beside a declared shape the merge refuses, and where the declared
-  builder has no constructor they can call.
+  Lombok builder produces most naturally. The processor now merges into every declared builder and
+  emits the three, as the BREAKING entry under Changed describes, and the editor offers them exactly
+  where it does.
 
-- **The editor merges a chain's members into the builder javac merges them into.** A root, a
-  concrete link and a chained abstract each receive their role's setters, and the editor
-  contributes the abstract `self()` and `build()` on the root only, their overrides on a link and
-  neither on a chained abstract, which inherits them - as the processor does. It had appended the
-  abstract pair into every chained-abstract builder, synthesised or not.
+- **The editor no longer re-declares the abstract `self()` and `build()` in a chained abstract's
+  builder.** The processor declares the pair on a chain root's builder only, and a chained
+  abstract's builder inherits it, while the editor appended both again into every chained
+  abstract's generated builder. It now contributes the pair on the root, their overrides on a link
+  and neither on a chained abstract, as the processor does, in a generated builder and a declared
+  one alike.
 
 - **A merged slot is compared against the type the builder holds it in.** The check read the field's
   declared type, and the builder does not always hold a slot as declared: a `@Lazy` field and a slot
@@ -65,12 +65,11 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   primitive's `Supplier<java.lang.Integer>` read alike in the build and in the editor. The types are
   compared argument by argument, so `List<Integer>` beside a `List<String>` slot is refused on the
   author's field rather than passing on its erasure and failing inside the generated setter; a raw
-  spelling on either side still passes, and so does a primitive spelled over its box, which the
-  setter assigns under unboxing. A box spelled over its primitive, `Integer count` over an
+  spelling on either side still passes, and a primitive spelled over its box, which 2.6.x refused,
+  now passes, the setter assigning it under unboxing. A box spelled over its primitive, `Integer count` over an
   `int count` slot, is refused with its own clause: left unset it reaches the primitive constructor
-  parameter as `null`, and `build()` throws where a generated builder passes `0`. A C-style `String tags[]` is read
-  with its brackets in the editor as javac reads it, where it had been judged as `String`, and a
-  varargs parameter's slot is the array it is, so a `String[]` field holds a `String...` slot. The editor
+  parameter as `null`, and `build()` throws where a generated builder passes `0`. The editor reads a
+  C-style `String tags[]` with its brackets, as javac does. The editor
   classifies an initialised slot as the build does -
   as a supplier where its kept initializer names `this`, `super` or an instance member, from one rule
   both halves ask of the names the initializer spells - and judges its field the same way. A
@@ -83,7 +82,9 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   self-typed pair, so an ancestor's declared builder without that parameter list - a concrete
   ancestor's, or one compiled without the processor - cannot receive it. The clause was emitted
   anyway and failed at attribution on a generated line, while the editor left the child's builder
-  with no supertype and reported nothing at all. An ancestor whose declared builder has the root's
+  with no supertype and reported nothing at all. The link is refused on its annotation with
+  `@ClassBuilder generates no builder on 'Circle' - its annotated supertype 'Shape' declares its own nested builder`,
+  nothing generated for it, on both halves. An ancestor whose declared builder has the root's
   shape is merged into and extended like a generated one.
 
 - **A link whose ancestor's builder is out of its reach is refused on the link.** Every link's
@@ -100,33 +101,12 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   from its class file. A `protected` builder or no-argument constructor is reached from another
   package and stays accepted.
 
-- **A `private` root builder is accepted.** A root or chained abstract's declared builder written
-  `private` was refused on the builder itself, though a link nested in the same top-level class
-  extends it and calls its default constructor as a nestmate, which javac builds. It is refused only
-  on each link in another top-level class, as above.
-
 - **A link overrides a public `self()` publicly.** Every link's builder overrides the `self()` its
   ancestor's builder declares, and the override was always `protected`, so a root builder whose
   author wrote `public abstract B self()` failed every link with `attempting to assign weaker access
   privileges; was public`. The override is now public where the nearest `self()` an ancestor's author
   wrote, or a root's builder inherits, is public, a generated chained abstract in between included,
   on both halves.
-
-- **A root builder inheriting `self()` from a supertype builds.** `Shape.Builder<T, B> extends
-  Fluent<B>`, where `Fluent` declares `public B self()`, had the merge append `protected abstract B
-  self()` beside the inherited one and every link override it `protected`, each refused with
-  `attempting to assign weaker access privileges; was public`. An inherited `self()` now stands for
-  one the builder declares: the merge appends none beside it, a public one makes every link's
-  override public, and a `final` one is refused on the root's builder, on both halves, read from the
-  root's source or from its class file.
-
-- **An inherited `self()` returning another type than the builder is refused on the root.**
-  `Shape.Builder<T, B> extends Fluent<String>`, where `Fluent<B>` declares `B self()`, left the
-  merge appending no `self()` beside the inherited one, and every generated setter's `return
-  self()` failed on a generated line with `String cannot be converted to B`. The root's builder is
-  refused with `@ClassBuilder merged into 'Builder' finds self() inherited from Fluent returning
-  String, where the generated setters need it to return B`, on both halves, the supertype read from
-  source or from its class file. `extends Fluent<B>` is accepted as before.
 
 - **A `final` `self()` on a root built without the processor is refused on the link.** A root
   compiled with `-proc:none` whose builder declares or inherits a `final` `self()` was never judged,
@@ -145,26 +125,14 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   overridden by it`, on both halves. A generic supertype's `value(X)` that the builder passes its
   `T` is overridden and builds as before.
 
-- **A self-typed builder's built type may be bounded by any supertype of the target.** A declared
-  root or chained abstract builder bounding the first of its pair by a supertype of the target -
-  `T extends Base` on a chained abstract below `Base`, `T extends Object & Serializable` on a root
-  implementing `Serializable`, `T extends Serializable` on a root whose unannotated superclass
-  implements it - was refused as a wrong bound, though every link is within it and javac builds it.
-  A type the target's own `extends` or `implements` clause names is accepted by name; any other is
-  resolved, the processor reading the target's supertypes at every depth from the element model and
-  the editor resolving only the bound's reference and the target's supertype references. It is
-  accepted on both halves, and a name that resolves to nothing, or to a type the target does not
-  reach, is still refused.
-
-- **An intersection bound's further interfaces are judged on each link.** `T extends Shape &
-  Comparable<Shape>` on a root's declared builder was refused on the root, every type of the bound
-  having to be the root, a type its own clauses name, or `Object`, though javac builds it wherever
-  every link implements `Comparable<Shape>`. The root accepts it, and each concrete link, and each
-  chained abstract whose builder is generated, is judged against every type of the bound as
-  instantiated for it; one that is not within a type is refused on its own annotation with
-  `@ClassBuilder generates no builder on 'Circle' - 'Shape.Builder' bounds the type it builds by
-  Comparable<Shape>, which 'Circle' does not implement`, nothing generated for it, on both halves -
-  where javac would fail on the link's generated extends clause.
+- **A link outside its root builder's intersection bound is refused on its own annotation.**
+  `T extends Shape & Comparable<Shape>` on a root's declared builder builds wherever every link
+  implements `Comparable<Shape>`, and a link that did not failed on its generated extends clause, a
+  line its author never wrote, while the editor was green. Each concrete link, and each chained
+  abstract whose builder is generated, is now judged against every type of the bound as
+  instantiated for it, and one outside a type is refused with
+  `@ClassBuilder generates no builder on 'Circle' - 'Shape.Builder' bounds the type it builds by Comparable<Shape>, which 'Circle' does not implement`,
+  nothing generated for it, on both halves.
 
 - **A link in another package naming its root fully qualified builds.** The generated extends clause
   spelled the root's builder `Shape.Builder`, which resolves only where the link's file imports
@@ -176,15 +144,15 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   `protected Target(Builder)` on every chain role and the editor synthesised none, so a hand-written
   `super(builder)` was red over source that builds. Contributed under both of the gates javac reads -
   `generateCopyConstructor`, and the author's own builder-taking constructor - rather than on the
-  chain role alone.
+  chain role alone. None is offered beside an author constructor taking the builder, however it
+  spells it, by the rule the processor reads.
 
 - **A hand-written copy constructor naming the builder through its target is kept alone.** The
   author's `protected Link(Link.Builder b)` or `protected Shape(Shape.Builder<?, ?> b)` - the spelling
   a migrated `@SuperBuilder` class carries - was not recognised as their copy constructor, because
   only the simple `Builder` spelling was. The processor appended a second of the same erasure, which
-  javac reported as already defined on the class line, and the editor contributed one beside it,
-  reported on the author's constructor instead. Both halves now read the parameter type through one
-  rule: the builder by its simple name, or qualified through the target and whatever encloses it. A
+  javac reported as already defined on the class line. The parameter type is now read as the
+  builder by its simple name, or qualified through the target and whatever encloses it. A
   constructor taking an ancestor's `Base.Builder` shares the simple name but not the erasure, and
   still gets the generated copy constructor beside it.
 
@@ -215,14 +183,19 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   constructor, the field is lifted only where a constructor the builder generates assigns it - see
   the `factoryMethod` entry below.
 
-- **A merged builder's slot fields resolve in the editor.** The merge appends them and the editor
-  contributed none, so an author's own verb inside that class referencing a slot was red over source
-  that builds - which lands on exactly the hand-written verb the merge exists to allow. Each slot is
-  contributed as the type the builder holds it in, an initialised one included: a supplier where its
-  kept initializer reads the instance, the plain `java.util` container a `@Collector` slot whose
-  default reads the instance gathers into, and its declared type otherwise - a varargs parameter's
-  as the array javac declares rather than its ellipsis type. Renaming a slot now follows through to
-  the setters contributed there, which it silently skipped.
+- **A builder's slot fields resolve in the editor.** The processor declares one private field per
+  slot on every builder - one it merges into, and one it writes whole on a standalone target and on
+  each chain role - and the editor declared none, so an author's own verb inside a declared builder,
+  an author copy constructor reading `b.name` off a generated chain builder, or a helper in the
+  target reading a builder's slot was `Cannot resolve symbol` over source that builds. Each field is
+  offered in the type the builder holds it in: a supplier for a `@Lazy` slot, boxed over a
+  primitive, and for a slot whose kept initializer reads the instance; the plain `java.util` `List`,
+  `Set` or `Map` a `@Collector` slot whose default reads the instance gathers into; and its declared
+  type otherwise, an `Optional` or a collection as written - a varargs parameter's as the array
+  javac declares. Beside a `@Collector` slot whose default reads the instance, the
+  `private boolean $replaced$<name>` marker its wholesale-replace setters raise is offered after the
+  slot, as the processor declares it. Renaming a slot now follows through to the setters contributed
+  into a declared builder, which it silently skipped.
 
 - **The entry points a merged builder has no constructor for are skipped with a note.** Every entry
   point instantiates the builder with one argument per `@BuilderSeed`, and a declared builder's
@@ -247,17 +220,6 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   sits on the member the annotation is written on, the constructor or factory on that path, where the
   editor's weak warning sits.
 
-- **A declared builder with no constructor takes `builderConstructorAccess`.** javac's implicit
-  default takes the builder class's own access, `public` on the usual shape, so a merged builder
-  published `new Target.Builder()` beside `Target.builder()` - the second entry point the attribute
-  exists to close. 2.6.0 recorded that retyping that default does not take; it does once javac's
-  generated-constructor flag is cleared, so on a class or record target and on a constructor or
-  factory target the default is retyped to the attribute, `PACKAGE` unless written, and the editor
-  contributes the matching constructor. A declared builder with a constructor of its own keeps it as
-  written, and so does one given a constructor by `@NoArgsConstructor` or a sibling written on it,
-  where the editor had contributed the retyped one beside it; a chain role keeps javac's default, no
-  chain builder being given a constructor at all.
-
 - **`builderConstructorAccess = NONE` is one error on the annotation.** It reached a switch with no
   case for it and failed the build with `Failed to generate builder for ...: AccessLevel.NONE has no
   modifier flag - callers must check emits() first`, was accepted in silence on an interface, and
@@ -272,14 +234,6 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   `@ClassBuilder(access = NONE) is not expressible - the builder class is always generated, so choose PRIVATE, PACKAGE, PROTECTED or PUBLIC`
   on the annotation of every target, and the builder and its entry points are generated public so
   that error is the only one.
-
-- **`constructorAccess = NONE` is one error on the annotation.** It failed the build with `Failed to
-  generate builder for ...: AccessLevel.NONE is rejected before constructor synthesis` on a class
-  target, was accepted in silence on every other kind of target, and was green in the editor. Both
-  halves now report
-  `@ClassBuilder(constructorAccess = NONE) is not expressible - it is the access of the constructor build() calls, so choose PRIVATE, PACKAGE, PROTECTED or PUBLIC`
-  on the annotation of every target, and the constructor `build()` calls is generated
-  package-private, the default, so that error is the only one.
 
 - **`@BuilderArgsConstructor(access = NONE)` is one error.** Beside its own
   `@BuilderArgsConstructor(access = NONE) generates nothing - delete the annotation instead`, which
@@ -340,14 +294,13 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   names the member in the editor as javac names it, and the naming checks judge it by the value it
   holds.
 
-- **A written `INHERIT` takes the style's name.** `@BuilderNames(from = BuilderNames.INHERIT)` failed
-  the build with `@BuilderNames 'from' must not be empty`, and the editor reported `Naming pattern
-  for 'from' must not be empty` on it, though `INHERIT` is every attribute's default and is
-  documented as taking the style's name; `@SetterNames(set = SetterNames.INHERIT)` built, and the
-  editor reported the same error on every role written so. A written `INHERIT` on any
-  `@BuilderNames` or `@SetterNames` attribute now names the member exactly as the unwritten default
-  does, on both halves. Its value is the empty string, so an empty literal - `from = ""` - is read
-  the same way.
+- **A written `INHERIT` takes the style's name.** `@BuilderNames(from = BuilderNames.INHERIT)`
+  failed the build with `@BuilderNames 'from' must not be empty`, though `INHERIT` is every
+  attribute's default and is documented as taking the style's name. Its value is the empty string,
+  and the editor reported `Naming pattern for 'from' must not be empty` on the literal `""` on every
+  `@BuilderNames` and `@SetterNames` attribute - `@SetterNames(set = "")` among them, which builds.
+  A written `INHERIT`, as the constant or as `""`, on any `@BuilderNames` or `@SetterNames`
+  attribute now names the member exactly as the unwritten default does, on both halves.
 
 - **A slot's own `@SetterNames` pattern needs no placeholder in the editor.**
   `@SetterNames(set = "withName") String name;` builds, `withName("x")` included - a pattern written
@@ -377,14 +330,15 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   `PACKAGE`, and an accessor `@Getter`, `@Setter` or `@Lazy` generates at `PACKAGE`. Each carries
   package-private explicitly, and stays reachable from its own package.
 
-- **A second processor run over one compilation adds nothing.** Every pass leaves its marks where a
-  second `ClassBuilderProcessor` handed the same trees sees them, and the builder passes stopped only
-  at a builder they had generated. Over a declared builder they merged again and reported their own
-  members as the author's, and on a class target appended a second `from(T)` - `method from(T) is
-  already defined` - since the element model the collision test reads cannot see a method appended
-  to the tree; on every class target they reported the all-args constructor they had appended as one
-  a written annotation generates. Each target and each annotated constructor or factory is now
-  mutated once.
+- **A second processor run over one compilation adds nothing.** A second `ClassBuilderProcessor`
+  handed trees a first one already mutated took the builder that run generated for one the author
+  declared: every target printed `@ClassBuilder skipped injection`, and a class target written with
+  `mergeDeclaredBuilder = true` was merged into again, its generated members reported as the
+  author's, the all-args constructor it had appended reported as one a written annotation generates,
+  and a second `from(T)` appended - `method from(T) is already defined` - since the element model the
+  collision test reads cannot see a method appended to the tree. Every pass now leaves its marks
+  where a second run sees them, so each target and each annotated constructor or factory is mutated
+  once, and the second run prints nothing.
 
 - **An initializer calling a generated accessor is computed on the instance.** A retained default
   reading instance state is computed where the built instance exists, and whether it does was asked
@@ -396,7 +350,8 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   generate, through the scheme each annotation writes, and count them as instance members; the slot
   is then held as a supplier, in the build and in the editor alike.
 
-- **The expansion stopped documenting a chain's members as each other.** A self-typed builder's
+- **The javadoc source expansion no longer documents a chain builder's setters and `self()` with
+  another member's sentence.** A self-typed builder's
   setters and its self accessor return the builder's own self type rather than its name, so the owner
   test answered no for every member of every chain and each fell through to a sentence written for
   something else - the self accessor coming out documented as the build method.
@@ -421,40 +376,19 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   the last it offered a builder the build never generates. Each is now an error on the annotation in
   the build's own sentence, and the editor offers no builder for a refused member.
 
-- **A generated builder's slot fields resolve in the editor.** The processor declares one private
-  field per slot on every builder it writes - a standalone target's and each chain role's - and the
-  editor declared none, so an author copy constructor reading `b.name` off a generated chain builder,
-  or a helper in the target reading a builder's slot, was `Cannot resolve symbol` over source that
-  builds. Each field is offered in the type the builder holds it in: a `@Lazy` slot as a supplier of
-  its declared type, and an `Optional` or a collection as written.
-
-- **A collected slot's replaced marker resolves in the editor.** Beside a `@Collector` slot whose
-  default reads the instance, the processor declares `private boolean $replaced$<name>`, which its
-  wholesale-replace setters raise, on a generated builder and a merged one alike; the editor
-  offered the slot and not the marker, so an author's verb or a helper reading `$replaced$tags` was
-  `Cannot resolve symbol` over source that builds. The marker is offered after its slot wherever the
-  processor declares one, under the name the library gives it, and nowhere else.
-
-- **A link below a compiled root reads the root's generated builder as the generator's.** The
-  processor reads the `Generated` annotation it wrote into a compiled root's builder and asks
-  nothing of that builder's reach, as for one it generated in the same round. The editor matched that
-  annotation by its written spelling, which a class file does not carry, so it asked the reach rule of
-  a compiled root's generated builder and reported
-  `@ClassBuilder generates no builder on 'Circle' - 'Shape.Builder', which its builder has to extend, is package-private, and 'Circle' is in another package`
-  below a root compiled with `access = AccessLevel.PACKAGE`, a sentence the build never prints, while
-  withholding the link's builder the build generates. A class file's annotation is now matched by the
-  qualified name it carries.
+- **The editor offers no `builder(..)` beside an author's own on a constructor or factory target.**
+  The build keeps an author's method of the entry point's name taking as many parameters as there
+  are `@BuilderSeed` parameters, and emits none beside it, while the editor offered its own anyway,
+  a method javac never emits. The editor now applies the build's name-and-arity rule on that path,
+  merged builder or not.
 
 - **A link extending a generic root without its type arguments is refused on its annotation.**
   `class Circle extends Box` below `@ClassBuilder abstract class Box<V>` failed on the generated
   extends clause with `wrong number of type arguments; required 3`, whether the root's builder was
-  generated in the same round or read off a class file. The editor said nothing below a same-round
-  root and, below a compiled one, reported that `'Box' declares its own nested builder`, a builder
-  its author never wrote. Both halves now report
+  generated in the same round or read off a class file, and the editor said nothing. Both halves
+  now report
   `@ClassBuilder generates no builder on 'Circle' - its annotated supertype 'Box' is generic, so the extends clause has to give its type arguments`
-  on the link's annotation and generate no builder for it, and the editor asks whether the
-  generator wrote an ancestor's builder before comparing its type parameters with the extends
-  clause. `extends Box<String>` builds as before.
+  on the link's annotation and generate no builder for it. `extends Box<String>` builds as before.
 
 - **A static factory with a self-bounded type parameter gets a `builder()` the editor accepts.**
   `@ClassBuilder public static <T extends Comparable<T>> Range<T> of(T low, T high)` builds and runs
@@ -502,19 +436,6 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   unassigned now assigns it the initializer first, so an instance built through it holds
   `"declared"` while `build()` sets the builder's value.
 
-- **A Lombok constructor annotation beside a written constructor keeps a `final` initializer.**
-  `@lombok.NoArgsConstructor`, `@RequiredArgsConstructor` or `@AllArgsConstructor` on a
-  `@ClassBuilder` class that also writes a constructor adds a constructor that assigns no `final`
-  field carrying an initializer, which Lombok never assigns. The lift counted it only when Lombok ran
-  ahead of this processor, and otherwise took the initializer off, failing with
-  `variable a might not have been initialized` on the Lombok annotation; the editor never counted it
-  and cleared the written constructor's write. Both halves now read the annotation by name, so the
-  initializer stays whichever processor runs first, and javac's `cannot assign a value to final
-  variable` on the written constructor's write is shown by the editor on the same line. A class
-  carrying `@RequiredArgsConstructor` or `@AllArgsConstructor` that compiled only because Lombok ran
-  second and took the lifted field as a parameter is refused the same way. `@Data` and `@Value`
-  imply no constructor beside a written one and change nothing.
-
 - **A refused `@NoArgsConstructor` contributes no constructor in the editor.** Where it would leave
   a `final` field unassigned without `force`, the build reports that and appends nothing, and the
   editor contributed a public no-argument constructor beside the same error. It now contributes
@@ -550,19 +471,13 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   `incompatible types` on a generated line. An author accessor is used only where it returns a type
   the field's setter accepts; otherwise the field is read directly.
 
-- **An author method taking a type variable's erasure stands in for the generated setter.** The
-  merge keyed a parameter typed by one of the declared builder's own type variables by the
-  variable's name, so beside `Builder<T>` an author `value(Object)` and the generated `value(T)`
-  were both kept and javac refused them as a `name clash ... have the same erasure` on the target's
-  line, while the editor reported the clash on the author's method. The variable is keyed by its
-  erasure - its first bound, `Object` unbounded - on both halves, so the author's method is the
-  setter, and `from(T)` and `mutate()` call it; a chain root's own type variables are read the
-  same way.
-
-- **Two notes name what they mean and sit where the author acts.** The merge's note listing what a
-  declared builder already spells named `Builder()` beside a constructor an `@AllArgsConstructor`
-  on it appends - javac's default, which never reaches the built class - and now names the
-  appended constructor as `Builder(..)`. The note for an entry point skipped because the target
+- **The merge's note lists only a constructor written on the declared builder, and a skipped entry
+  point's note on a constructor or factory target sits on the annotated member.** The merge's note
+  listing what a declared builder already spells named `Builder()` - javac's default, which never
+  reaches the built class - wherever the author wrote no constructor on the builder, one an
+  `@AllArgsConstructor` on it appends included. It now lists only a constructor written on the
+  builder, the author's or one an annotation on it appends, as `Builder(..)`, and no constructor
+  where the builder has only javac's default. The note for an entry point skipped because the target
   already declares one of its name and arity was printed on the enclosing type on a constructor or
   factory target, and is printed on the annotated member there, as the path's other diagnostics
   are.
@@ -593,18 +508,35 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   A bare declared builder, which 2.6.x left alone, now gains the generated slot fields, setters and
   `build()` it does not spell, and its target gains the entry points `builder()`, `from(T)` and
   `mutate()`, typed against the declared class. A target that declares no constructor also gains the
-  all-args constructor the generated `build()` calls. Beside an author's own `build()` - a
+  all-args constructor the generated `build()` calls, and every chain role gains the copy
+  constructor `protected Target(Builder)` unless it declares one or writes
+  `generateCopyConstructor = false`. Beside an author's own `build()` - a
   no-argument method of the build method's name, after any `@BuilderNames(build)` rename - nothing
-  generated calls it, and it is withheld so javac's no-argument default stays for a `build()`
+  generated calls the all-args constructor, and it is withheld so javac's no-argument default stays for a `build()`
   calling `new Target()`, a `final` field keeping its initializer; `@BuilderArgsConstructor` written
   on the target keeps it. **Migration for
   2.6.x code that wrote `mergeDeclaredBuilder = true` and whose own `build()` calls
-  `new Target(a, b)`: write `@AllArgsConstructor` (or `@BuilderArgsConstructor`) on the target**,
-  since the constructor 2.6.x emitted there is no longer emitted unasked. Each skipped
+  `new Target(a, b)`: write `@BuilderArgsConstructor` on the target**, which generates the
+  constructor 2.6.x emitted there and no longer emits unasked. `@AllArgsConstructor` serves only
+  where its parameters are the same, since it leaves out a `final` field carrying an initializer,
+  which the builder's constructor takes. The copy constructor is not withheld beside an author's
+  `build()`, and it takes the place of javac's no-argument default on the role and, through the
+  implicit `super()`, on every link below it. **Migration for a 2.6.x chain whose hand-written
+  builders call `new Link()`: declare the no-argument constructor on each role, or write
+  `generateCopyConstructor = false` on every role of the chain.**
+
+  Each skipped
   member the author already spells is listed in one note - a method counting as spelled where it has
-  the generated one's name and erased parameter types, so an author's `port(String)` beside an
+  the generated one's name and erased parameter types, a parameter typed by one of the builder's own
+  type variables read as that variable's erasure, its first bound or `Object`. So beside
+  `Builder<T>` an author `value(Object)` is the setter, and `from(T)` and `mutate()` call it, while
+  an author's `port(String)` beside an
   `int port` slot is an overload and the generated `port(int)` that `from(T)` and `mutate()` call is
-  still appended. A declared shape the generated members cannot live in is an error on both halves,
+  still appended. A 2.6.x builder whose own setter took another type than its slot - `name(Object)`
+  for a `String name` slot - now sits beside the generated `name(String)`, and every call passing
+  the slot's type, `from(T)` and `mutate()` included, reaches the generated one instead of the
+  author's, where 2.6.x matched a method by name and parameter count. **Migration: declare such a
+  setter with the slot's own type to keep it as the setter.** A declared shape the generated members cannot live in is an error on both halves,
   where it used to pass because nothing was merged:
 
   - a record, an enum or an interface - declare a class;
@@ -669,10 +601,72 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
     by an earlier assignment of its own - assign it exactly once on every path, the merge appending it
     as a `final` field.
 
-  A declared builder whose constructors all take parameters keeps its setters and loses only the
-  entry points, with a note; declaring a no-argument constructor restores them. So does one whose
-  no-argument constructor declares a throws clause naming an exception not known to be unchecked;
-  declaring one that throws only subtypes of `RuntimeException` or `Error` restores them.
+  A declared builder with no constructor the entry points can call - one taking the seeds on a
+  constructor or factory target, and a no-argument one elsewhere - keeps its setters and loses only
+  the entry points, with a note; see the entry on skipped entry points under Fixed for what counts.
+
+- **BREAKING: a declared builder that writes no constructor takes `builderConstructorAccess`.**
+  javac's implicit default takes the builder class's own access, `public` on the usual shape, and
+  2.6.x left it there on every declared builder, merged or not, so `new Target.Builder()` was a
+  second public entry point beside `Target.builder()` - the one the attribute exists to close.
+  2.6.0 recorded that retyping that default does not take; it does once javac's
+  generated-constructor flag is cleared, so on a class or record target and on a constructor or
+  factory target the default is now retyped to the attribute, `PACKAGE` unless written, and the
+  editor contributes the matching constructor. A declared builder with a constructor of its own
+  keeps it as written, and so does one given a constructor by `@NoArgsConstructor` or a sibling
+  written on it; a chain role keeps javac's default, no chain builder being given a constructor at
+  all. A `new Target.Builder()` or a subclass of the builder in another package, which built
+  against 2.6.x, no longer compiles. **Migration: write
+  `builderConstructorAccess = AccessLevel.PUBLIC`, or declare the builder's no-argument constructor
+  `public`.**
+
+- **BREAKING: `constructorAccess = NONE` and `builderConstructorAccess = NONE` are errors on every
+  target.** 2.6.x read `constructorAccess` only where it generated the all-args constructor - a
+  class target declaring no constructor and no `factoryMethod`, with no
+  `@BuilderArgsConstructor(access)` written - and failed the build there with `Failed to generate
+  builder for ...: AccessLevel.NONE is rejected before constructor synthesis`, and it read
+  `builderConstructorAccess` only where it generated a builder's constructor. Everywhere else each
+  value was accepted in silence - `constructorAccess = NONE` on a class declaring its own
+  constructor or a `factoryMethod`, a record, an interface, a SuperBuilder chain role and a
+  constructor or factory target, `builderConstructorAccess = NONE` on an interface, a chain role and
+  a target whose declared builder was not merged into - and the editor was green on all of them.
+  Both halves now report
+  `@ClassBuilder(constructorAccess = NONE) is not expressible - it is the access of the constructor build() calls, so choose PRIVATE, PACKAGE, PROTECTED or PUBLIC`
+  on the annotation of every target, and the constructor `build()` calls is generated
+  package-private, the default, so that error is the only one; `builderConstructorAccess = NONE` is
+  reported as the entry under Fixed describes. **Migration: delete the attribute, or write the level
+  the constructor should carry.**
+
+- **BREAKING: a Lombok constructor annotation beside a written constructor keeps a `final` field's
+  initializer.** `@lombok.NoArgsConstructor`, `@RequiredArgsConstructor` or `@AllArgsConstructor`
+  on a `@ClassBuilder` class that also writes a constructor adds a constructor that assigns no
+  `final` field carrying an initializer, which Lombok never assigns. 2.6.x took the initializer off
+  every such field whatever the constructors wrote. Where Lombok ran ahead of this processor, that
+  failed with `variable a might not have been initialized` on the Lombok annotation, the editor
+  never counting it and clearing the written constructor's write. Where Lombok ran second,
+  `@RequiredArgsConstructor` and `@AllArgsConstructor` took the stripped field as a parameter and
+  the class compiled. Both halves now read the annotation by name, so the initializer stays
+  whichever processor runs first, and javac's `cannot assign a value to final variable` on the
+  written constructor's write is shown by the editor on the same line. `@Data` and `@Value` imply no
+  constructor beside a written one and change nothing. **Migration: where a Lombok constructor took
+  the field as a parameter, write that constructor by hand in place of the Lombok annotation, or
+  delete the field's initializer.**
+
+- **BREAKING: a `final` field written only under a named constant condition keeps its
+  initializer.** 2.6.x took the initializer off every selected `final` field whatever the
+  constructors wrote, so a constructor javac finds assigning the field only through a named
+  constant - `while (FOREVER) { this.a = a; break; }` with `static final boolean FOREVER = true` -
+  built. Each author constructor is now read as the Fixed entry on a `final` field a hand-written
+  constructor leaves alone describes, with the literals `true` and `false` the only constant
+  conditions, so a named constant is read as a condition that may go either way: such a
+  constructor keeps the initializer, and its write fails with `cannot assign a value to final
+  variable`. **Migration: write the literal in that condition, or move the write out of it.**
+
+- **The Marketplace change notes list each entry's bold lead alone when the release is too long
+  for them.** The plugin descriptor refuses change notes over 65535 characters, and the 2.7.0
+  section renders longer, so the notes the Marketplace and the IDE's plugin details show carry the
+  lead sentence of every entry without its prose - the migration lines of the BREAKING entries
+  included. The full section, migrations and all, is `CHANGELOG.md` in the repository.
 
 - **The README documents the dependency scope the artifact is actually built for.** It showed
   `implementation`, which puts a jar on a consumer's runtime classpath that nothing ever loads: every
@@ -689,16 +683,19 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   bounded self-typed pair, whose names are the author's to choose and are what the merged setters
   return; on a chained abstract the same, extending the ancestor's builder with that pair forwarded;
   on a concrete link a static class extending the ancestor's builder with the link and its builder
-  bound. A root receives the abstract `self()` and `build()`, a link their overrides, and a chained
-  abstract neither. The extends clause is compared with its qualifier and its arguments are checked,
+  bound. A root receives the abstract `self()` and `build()` - no `self()` where its builder inherits
+  one from a supertype, which stands for it - a link their overrides, and a chained abstract
+  neither. The extends clause is compared with its qualifier and its arguments are checked,
   so `extends Other.Builder<Link, Builder>` or a reversed pair is refused before it fails inside a
-  generated member. A link whose annotated ancestor declares a builder the extends clause cannot name
-  is still refused on the ancestor.
+  generated member. A root or chained abstract's builder may be `private`, a link nested in the same
+  top-level class extending it as a nestmate. A link whose annotated ancestor declares a builder the
+  extends clause cannot name is refused on the link, as the entry under Fixed describes.
 
 - **A constructor or static factory target merges into the builder its enclosing type declares.**
   The merged members are the parameters' slots, and the builder re-declares the type parameters they
   are written in - a static factory's own, the enclosing type's for a constructor, on both halves.
-  A static factory inside an interface is one such target, merging into the class the interface body
+  A varargs parameter's slot is held as the array javac declares, so a `String[]` field in the
+  declared builder holds a `String...` slot. A static factory inside an interface is one such target, merging into the class the interface body
   declares. `builder(..)` passes each `@BuilderSeed` to the builder's constructor, so it is emitted
   only where names alone single out the constructor javac calls with the seeds, in parameter order:
   one taking the seeds' own types, compared by erasure and simple name, always - a distinct concrete
@@ -716,7 +713,8 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   supertype is not counted, nor is one of two javac could
   not choose between, nor any where a constructor names cannot place might be chosen first; the
   entry point is skipped with a note saying what is counted, and where the selected constructor
-  declares a throws clause the throws note is printed instead. An author's own `builder`
+  declares a throws clause that may name a checked exception the throws note is printed instead -
+  one naming only unchecked exceptions is called like any other. An author's own `builder`
   method of the seed count wins, and none is offered or emitted beside it. A seed is appended as a
   `final` field, and the editor reports a constructor of the builder that leaves it unassigned, or
   the builder's name when it declares none, where javac refuses the same declaration - an instance
@@ -734,15 +732,19 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   beside an annotated type, a second annotated member and a member of a type with a `@Lazy` field
   are refused by the build, and get none of the merge's diagnostics but the build's refusal.
 
-- **An inspection for a declared builder the merge cannot append to.** Non-static, the wrong type
-  parameters, or declared abstract where the entry points instantiate it. The processor refuses these
-  with a compile error and the editor had no analogue, so the whole generated surface appeared in
-  completion on a class the build was going to reject. Further shapes - an unbounded self-type pair,
-  a missing or wrong `extends` clause, the wrong arguments to it, and a build method that cannot
-  stand in for the generated one - are stated in the same decision and asked only of a chain, where a
-  generated member depends on the answer; standing alone the author's `build()` is simply kept, as it
-  always was. Every role is judged, and so is a constructor or factory target's builder, each in the
-  processor's sentence.
+- **An inspection for a declared builder the merge cannot append to.** `@ClassBuilder cannot merge
+  into the declared builder`, an error enabled by default, reports in the editor every declared
+  shape the `mergeDeclaredBuilder` entry under Changed lists as refused - the builder's kind,
+  `static` and `abstract`, its type parameters and their bounds, a slot field's type or `final`, an
+  author method the copy entry points cannot pass the slot, an inherited method a setter cannot
+  override, a `@BuilderSeed` a builder constructor leaves unassigned or may assign twice, and on a
+  chain the self-typed pair, `extends` clause, build method, constructors and `self()` - and, on a
+  link's annotation, an ancestor whose builder the link's builder cannot extend. The processor
+  refuses these with a compile error and the editor had no analogue, so the whole generated surface
+  appeared in completion on a class the build was going to reject. The self-typed pair, the
+  `extends` clause and the build method are asked only of a chain, where a generated member depends
+  on the answer; standing alone the author's `build()` is simply kept, as it always was. Every role
+  is judged, and so is a constructor or factory target's builder, each in the processor's sentence.
 
 - **A warning where `builderConstructorAccess` cannot reach the declared builder.** The author's own
   constructor keeps the access it is written with, so the attribute written beside it changes
@@ -763,33 +765,6 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   call, and the only account of it was a compiler note. The editor now shows that note, word for word,
   as a weak warning on the annotation - on a class or record target, a concrete link and a
   constructor or factory target, and nowhere the processor prints no note.
-
-- **One shared decision behind both halves of the declared-builder rules.** The chain role, the
-  shape check, and the wording each rejection is reported with all live in the library and are
-  answered from names and flags alone, so the processor can fill them from a tree the round is still
-  building and the editor from stubs it must not resolve. A diagnostic reimplemented in the plugin is
-  the same class of drift as a validator reimplemented there.
-
-- **A processor suite that compiles against an already-compiled ancestor.** Every other fixture here
-  builds its whole chain in one round, so a subclass read its parent from a tree the round was still
-  building. A consumer almost never does, and the two views differ: a tree carries the marks the
-  passes set and a class file carries only what a class file carries. Three cases now cross that
-  boundary - a chain inheriting its parent's setters, a lazy parent field staying one slot, and the
-  no-runtime-dependency pin applied to an inherited builder, which no existing fixture covered.
-
-- **An editor suite that reads a chain's root from its class file.** The editor fixtures wrote every
-  ancestor as source, so what the editor reads off a compiled root's builder - its access, the
-  constructors javac wrote into it, a `self()` its author wrote, and the `Generated` annotation on
-  what the processor wrote - was pinned on the processor's side alone. Each root is now also compiled
-  in the test by javac, with the library's processor or without it, and attached to the fixture as a
-  library, and the link's editor is asked what the processor's two-stage compile answers on the same
-  shape.
-
-- **One parity root both editor suites and the processor suite read.** A case is a target source and
-  a list of members each half must agree about, written once. The editor fixtures also hand-wrote
-  their own `@ClassBuilder` and between them omitted eight attributes, one naming constant, one
-  setter name and an access level - so a case reading an attribute its fixture did not declare
-  asserted nothing and still passed.
 
 ## [2.6.3]
 
