@@ -11,6 +11,7 @@ import com.sun.tools.javac.tree.JCTree;
 import dev.simplified.annotations.ClassBuilder;
 import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
 import dev.simplified.classbuilder.apt.ChainBuilderReach;
+import dev.simplified.classbuilder.apt.ChainMemberIndex;
 import dev.simplified.classbuilder.apt.ChainRole;
 import dev.simplified.classbuilder.apt.DeclaredBuildMethod;
 import dev.simplified.classbuilder.apt.DeclaredBuilderFacts;
@@ -129,7 +130,12 @@ final class DeclaredBuilderMerge {
     boolean merge(JCClassDecl target, Element anchor, JCClassDecl declared, ChainRole role,
                   List<JCTree> members, @Nullable AnnotatedSuper annotatedSuper) {
         if (!rejectUnusableShape(anchor, declared, role, annotatedSuper)) return false;
-        if (role.isSelfTyped()) rejectUnextendable(anchor, declared);
+        // A root's builder may inherit its self() from a supertype, which then
+        // stands for one the author declared.
+        ChainBuilderReach.SelfMethod inheritedSelf = role == ChainRole.ABSTRACT_ROOT && declared.sym != null
+            ? ChainMemberIndex.inheritedSelf(ctx.bridge(), declared.sym)
+            : null;
+        if (role.isSelfTyped()) rejectUnextendable(anchor, declared, inheritedSelf);
         Map<String, JCMethodDecl> methods = declaredMethodKeys(declared);
         rejectMistypedSlots(anchor, declared, members, methods.keySet());
         rejectUnoverridableInheritedMethods(declared, members, methods.keySet());
@@ -158,6 +164,13 @@ final class DeclaredBuilderMerge {
                 // the author's or one an annotation on it appends, is reported.
                 if (method.name.contentEquals("<init>")) {
                     if (!retyped && !constructorSignatures(declared).isEmpty()) skipped.add(declared.name + "(..)");
+                    continue;
+                }
+                // The generated self() a root's builder inherits is not appended
+                // beside the inherited one, which it would override abstract
+                // and, beside a public one, with weaker access.
+                if (method.name.contentEquals(ChainBuilderReach.SELF) && method.params.isEmpty()
+                    && !ChainBuilderReach.appendsSelf(inheritedSelf)) {
                     continue;
                 }
                 JCMethodDecl author = methods.get(key(declared, method));
@@ -226,21 +239,27 @@ final class DeclaredBuilderMerge {
      *
      * @param anchor the element the annotation is written on, reported against when the builder has no symbol
      * @param declared the builder the author wrote
+     * @param inheritedSelf the {@code self()} a root's builder inherits, or null when it inherits none or is
+     *     not a root's
      */
-    private void rejectUnextendable(Element anchor, JCClassDecl declared) {
+    private void rejectUnextendable(Element anchor, JCClassDecl declared,
+                                    ChainBuilderReach.@Nullable SelfMethod inheritedSelf) {
         Element builder = declared.sym == null ? anchor : declared.sym;
         String declaredName = declared.name.toString();
         String unextendable = ChainBuilderReach.unextendableBuilder(declaredName, ctx.targetSimpleName(),
-            (declared.mods.flags & Flags.PRIVATE) != 0, constructorSignatures(declared));
+            constructorSignatures(declared));
         if (unextendable != null) messager.printMessage(Diagnostic.Kind.ERROR, unextendable, builder);
-        boolean selfFinal = false;
+        ChainBuilderReach.SelfMethod declaredSelf = null;
         for (JCTree def : declared.defs) {
             if (def instanceof JCMethodDecl method && method.name.contentEquals(ChainBuilderReach.SELF)
                 && method.params.isEmpty() && !AstMarkers.isGenerated(method)) {
-                selfFinal = (method.mods.flags & Flags.FINAL) != 0;
+                declaredSelf = new ChainBuilderReach.SelfMethod((method.mods.flags & Flags.PUBLIC) != 0,
+                    (method.mods.flags & Flags.FINAL) != 0);
             }
         }
-        String finalSelf = ChainBuilderReach.finalSelf(declaredName, ctx.targetSimpleName(), selfFinal);
+        ChainBuilderReach.SelfMethod self = ChainBuilderReach.rootSelf(declaredSelf, inheritedSelf);
+        String finalSelf = ChainBuilderReach.finalSelf(declaredName, ctx.targetSimpleName(),
+            self != null && self.isFinal());
         if (finalSelf != null) messager.printMessage(Diagnostic.Kind.ERROR, finalSelf, builder);
     }
 
@@ -268,9 +287,9 @@ final class DeclaredBuilderMerge {
      *
      * <p>The derivation is {@link DeclaredBuilderShape#expectation}, which the
      * editor asks of the same names read out of PSI; what is left here is
-     * reading them off the context - the target's own parameters, and on a
-     * linked role the ancestor's simple name and the arguments the target passes
-     * it.
+     * reading them off the context - the target's own parameters and the types
+     * its extends and implements clauses name, and on a linked role the
+     * ancestor's simple name and the arguments the target passes it.
      *
      * @param role the target's position in a chain
      * @param facts the declared builder as written
@@ -279,10 +298,13 @@ final class DeclaredBuilderMerge {
      */
     private RoleExpectation expectationFor(ChainRole role, DeclaredBuilderFacts facts,
                                            @Nullable AnnotatedSuper annotatedSuper) {
+        List<String> supertypes = new ArrayList<>();
+        if (ctx.target().extending != null) supertypes.add(ctx.target().extending.toString());
+        for (JCExpression implemented : ctx.target().implementing) supertypes.add(implemented.toString());
         return DeclaredBuilderShape.expectation(role, ctx.targetSimpleName(), ctx.builderName(),
             targetParameterNames(ctx), boundsOf(ctx.typeParams()), facts.typeParameterNames(),
             annotatedSuper == null ? null : annotatedSuper.simpleName(),
-            annotatedSuper == null ? List.of() : annotatedSuper.typeArguments());
+            annotatedSuper == null ? List.of() : annotatedSuper.typeArguments(), supertypes);
     }
 
     /**

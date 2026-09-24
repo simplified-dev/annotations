@@ -225,14 +225,15 @@ public class CompiledChainAncestorTest extends BasePlatformTestCase {
     }
 
     /**
-     * A builder the processor generated carries its {@code Generated} marker
-     * into the class file, and is the generator's rather than the author's, so
-     * the reach rule is not asked of it: the processor reads it as absent, and
-     * reports nothing on a link in another package below a package-private
-     * one. The editor read the marker off source only, asked the rule of the
-     * compiled builder, and reported the refusal the processor never prints.
+     * A builder the processor generated package-private into a compiled root is
+     * out of reach of a link in another package, read from the access its class
+     * file carries, and the link is refused and gets no builder, as the
+     * processor refuses it reading the same class file. The editor read the
+     * {@code Generated} marker as the end of the question, reported nothing and
+     * contributed the link's builder.
      */
-    public void testACompiledRootsGeneratedPackagePrivateBuilder_isNotAskedTheReachRule() throws Exception {
+    public void testACompiledRootsGeneratedPackagePrivateBuilder_isReportedOnALinkInAnotherPackage()
+        throws Exception {
         compiled(true, "demo/Shape.java", """
             package demo;
             import dev.simplified.annotations.AccessLevel;
@@ -244,9 +245,42 @@ public class CompiledChainAncestorTest extends BasePlatformTestCase {
             }
             """);
         addOtherCircle();
-        assertEquals(List.of(), errorsIn("other/Circle.java"));
-        assertEquals("the link's builder is contributed, as the processor generates it", 1,
+        assertEquals(List.of(linkRefusal("Circle", "Shape.Builder",
+            "is package-private, and 'Circle' is in another package")), errorsIn("other/Circle.java"));
+        assertEquals("the link's builder is withheld, as the processor generates none", 0,
             findClass("other.Circle").getInnerClasses().length);
+    }
+
+    /**
+     * A public {@code self()} a compiled root's builder inherits from a
+     * supertype, which its class file carries no override of, makes the link's
+     * override public, as javac's is, and the link's chain resolves.
+     */
+    public void testACompiledRootInheritingAPublicSelf_linkOverridesItPublicly() throws Exception {
+        compiled(true, Map.of(
+            "demo/Fluent.java", """
+                package demo;
+                public abstract class Fluent<B> {
+                    public abstract B self();
+                }
+                """,
+            "demo/Shape.java", """
+                package demo;
+                import dev.simplified.annotations.ClassBuilder;
+                @ClassBuilder(validate = false)
+                public abstract class Shape {
+                    private String name;
+                    public String getName() { return name; }
+                    public abstract static class Builder<T extends Shape, B extends Builder<T, B>>
+                            extends Fluent<B> { }
+                }
+                """));
+        addCircle();
+        addUseShape();
+        assertTrue("the link's self() is public",
+            selfOf(builderOf(findClass("demo.Circle"))).hasModifierProperty(PsiModifier.PUBLIC));
+        assertEquals(List.of(), errorsIn("demo/Circle.java"));
+        assertEquals(List.of(), allErrorsIn("demo/UseShape.java"));
     }
 
     /**

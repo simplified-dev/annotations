@@ -15,6 +15,7 @@ import com.intellij.psi.util.PsiModificationTracker;
 import com.intellij.util.IdempotenceChecker;
 import dev.simplified.args.inspect.ArgsConstants;
 import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
+import dev.simplified.classbuilder.apt.ChainBuilderReach;
 import dev.simplified.classbuilder.apt.ChainRole;
 import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
@@ -350,8 +351,10 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
      *
      * <p>The collision rule is the processor's: a generated method is offered
      * only when the declared class spells no method of that name and those
-     * erased parameter types, {@link DeclaredBuilderShape#methodKey}, and the
-     * generated constructor is never offered, that class always
+     * erased parameter types, {@link DeclaredBuilderShape#methodKey} - on a
+     * root, a {@code self()} the class inherits covering the generated one as
+     * one it spells does - and the generated constructor is never offered, that
+     * class always
      * having one by the time either half looks. Where the author wrote none on a
      * class, record, constructor or factory target, the default javac retypes
      * to {@code builderConstructorAccess} is offered in its place. Read through
@@ -486,6 +489,13 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
         // same place: synthesising a setter resolves the type of the slot it
         // assigns, which re-enters this provider for the class that wrote it.
         return withInProgress(merge.owner(), () -> {
+            // A root's builder may inherit its self() from a supertype, which
+            // then covers the generated one as an author's own does. The
+            // supertypes are resolved here, inside the guard, as the chain
+            // resolves an ancestor.
+            ChainRole role = GeneratedMemberFactory.roleOf(merge.site());
+            boolean appendsSelf = role != ChainRole.ABSTRACT_ROOT
+                || ChainBuilderReach.appendsSelf(ClassBuilderConstants.inheritedSelf(declared));
             List<PsiMethod> out = new ArrayList<>();
             for (PsiMethod generated : GeneratedMemberFactory.synthesizeBuilderMethods(
                 merge.site(), merge.config(), declared)) {
@@ -493,6 +503,10 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
                 // one below takes its place where the author wrote none.
                 if (generated.isConstructor()) continue;
                 if (spelled.contains(MergedSlotStorage.generatedKey(generated, declared))) continue;
+                if (!appendsSelf && ChainBuilderReach.SELF.equals(generated.getName())
+                    && generated.getParameterList().isEmpty()) {
+                    continue;
+                }
                 out.add(generated);
             }
             // The processor retypes javac's default to builderConstructorAccess

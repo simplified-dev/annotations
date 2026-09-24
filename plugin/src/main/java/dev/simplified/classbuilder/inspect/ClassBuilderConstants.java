@@ -35,6 +35,7 @@ import dev.simplified.annotations.NamingStyle;
 import dev.simplified.annotations.SetterNames;
 import dev.simplified.args.apt.ArgsMode;
 import dev.simplified.args.inspect.ArgsConstants;
+import dev.simplified.classbuilder.apt.BuilderAccess;
 import dev.simplified.classbuilder.apt.BuilderScheme;
 import dev.simplified.classbuilder.apt.ChainBuilderReach;
 import dev.simplified.classbuilder.apt.ChainRole;
@@ -54,6 +55,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -932,19 +934,23 @@ public final class ClassBuilderConstants {
      * say so; this is the same test, so the editor withholds the same builder
      * rather than leaving it unrooted in silence.
      *
-     * <p>An ancestor declaring nothing is not blocking: the builder it gets is
-     * the generated one, in the shape the clause expects. A target declaring its
+     * <p>An ancestor declaring nothing gets the generated builder, in the shape
+     * the clause expects, and blocks only at an access the link cannot reach. A
+     * target declaring its
      * own builder is asked too, ahead of its own shape, as the processor asks
      * it: that declaration's extends clause has to name the ancestor's builder
      * just as a generated one does.
      *
      * <p>An ancestor whose author wrote the builder out of the link's reach -
-     * private, package-private from another package, or without a no-argument
-     * constructor the link's builder can call through its implicit
-     * {@code super()} - is blocking too, as {@link ChainBuilderReach#unreachable}
-     * decides it for both halves. A builder carrying the marker the generator
-     * writes, which only a compiled ancestor's can, is the generator's and is
-     * not asked.
+     * private from another top-level class, package-private from another
+     * package, or without a no-argument constructor the link's builder can call
+     * through its implicit {@code super()} - is blocking too, as
+     * {@link ChainBuilderReach#unreachable} decides it for both halves. So is an
+     * ancestor whose builder the generator writes at an access out of the
+     * link's reach, as {@link ChainBuilderReach#unreachableGenerated} decides
+     * it: a source ancestor's at the access its annotation asks for, and a
+     * compiled one's, which carries the generator's marker, at the access its
+     * class file holds.
      *
      * @param target the annotated type
      * @param builderName the builder class name the chain is written in
@@ -985,23 +991,51 @@ public final class ClassBuilderConstants {
         if (executable) return null;
         PsiClass parent = annotatedSuperOf(target);
         if (parent == null) return null;
-        PsiClass declared = declaredBuilderOf(parent, builderName);
-        if (declared == null) return null;
         String targetName = target.getName() == null ? "" : target.getName();
         String parentName = parent.getName() == null ? "" : parent.getName();
-        if (declared.getTypeParameters().length != superTypeArgumentTexts(target).size() + 2) {
-            return new AncestorBlock(parent,
-                DeclaredBuilderShape.ancestorDeclaresItsOwnBuilder(targetName, parentName));
+        boolean samePackage = PsiUtil.getPackageName(target) != null
+            && PsiUtil.getPackageName(target).equals(PsiUtil.getPackageName(parent));
+        PsiClass targetTop = PsiUtil.getTopLevelClass(target);
+        boolean sameTopLevel = targetTop != null && targetTop.equals(PsiUtil.getTopLevelClass(parent));
+        PsiClass declared = declaredBuilderOf(parent, builderName);
+        ChainBuilderReach.Unreachable reason;
+        if (declared == null) {
+            // A compiled ancestor with no builder in its class file has none a
+            // generator will write, so there is nothing to ask.
+            if (parent instanceof PsiCompiledElement) return null;
+            reason = ChainBuilderReach.unreachableGenerated(generatedAccessOf(parent), samePackage, sameTopLevel);
+        } else {
+            if (declared.getTypeParameters().length != superTypeArgumentTexts(target).size() + 2) {
+                return new AncestorBlock(parent,
+                    DeclaredBuilderShape.ancestorDeclaresItsOwnBuilder(targetName, parentName));
+            }
+            reason = generatorMarked(declared)
+                ? ChainBuilderReach.unreachableGenerated(accessOf(declared), samePackage, sameTopLevel)
+                : ChainBuilderReach.unreachable(accessOf(declared), declaresAnyConstructor(declared),
+                    noArgumentConstructorAccess(declared), samePackage, sameTopLevel);
         }
-        if (generatorMarked(declared)) return null;
-        ChainBuilderReach.Unreachable reason = ChainBuilderReach.unreachable(accessOf(declared),
-            declaresAnyConstructor(declared), noArgumentConstructorAccess(declared),
-            PsiUtil.getPackageName(target) != null
-                && PsiUtil.getPackageName(target).equals(PsiUtil.getPackageName(parent)));
         return reason == null
             ? null
             : new AncestorBlock(parent,
                 ChainBuilderReach.unreachableAncestorBuilder(reason, targetName, parentName, builderName));
+    }
+
+    /**
+     * The access a source ancestor's {@code @ClassBuilder(access)} generates its
+     * builder at, read from the constant's name as written, as
+     * {@link BuilderAccess#generatedAt} reads it for the processor.
+     *
+     * @param ancestor the annotated ancestor
+     * @return the access
+     */
+    private static @NotNull AccessLevel generatedAccessOf(@NotNull PsiClass ancestor) {
+        PsiAnnotation annotation = WrittenAnnotations.find(ancestor, ANNOTATION_FQN);
+        PsiAnnotationMemberValue value = annotation == null
+            ? null
+            : annotation.findDeclaredAttributeValue(BuilderAccess.ATTRIBUTE);
+        return BuilderAccess.generatedAt(value instanceof PsiReferenceExpression reference
+            ? reference.getReferenceName()
+            : null);
     }
 
     /**
@@ -1010,9 +1044,10 @@ public final class ClassBuilderConstants {
      * {@code self()}, as {@link ChainBuilderReach#unextendableBuilder} and
      * {@link ChainBuilderReach#finalSelf} word them for the processor.
      *
-     * <p>Read as written: the builder's own modifiers, its constructors with the
-     * ones a constructor annotation on it appends, and its own no-argument
-     * {@code self()}.
+     * <p>Read as written: the builder's constructors with the ones a constructor
+     * annotation on it appends, and its own no-argument {@code self()} - on a
+     * root, where it declares none, the one it inherits, its supertypes
+     * resolved as the processor reads them from the element model.
      *
      * @param target the annotated type
      * @param declared the builder it declares
@@ -1023,11 +1058,14 @@ public final class ClassBuilderConstants {
         String targetName = target.getName() == null ? "" : target.getName();
         List<String> out = new ArrayList<>(2);
         String unextendable = ChainBuilderReach.unextendableBuilder(declaredName, targetName,
-            declared.hasModifierProperty(PsiModifier.PRIVATE), constructorSignatures(declared, false));
+            constructorSignatures(declared, false));
         if (unextendable != null) out.add(unextendable);
-        PsiMethod self = authoredSelf(declared);
-        String finalSelf = ChainBuilderReach.finalSelf(declaredName, targetName,
-            self != null && self.hasModifierProperty(PsiModifier.FINAL));
+        ChainBuilderReach.SelfMethod declaredSelf = selfMethodOf(authoredSelf(declared));
+        ChainBuilderReach.SelfMethod inherited = declaredSelf == null && chainRoleOf(target) == ChainRole.ABSTRACT_ROOT
+            ? inheritedSelf(declared)
+            : null;
+        ChainBuilderReach.SelfMethod self = ChainBuilderReach.rootSelf(declaredSelf, inherited);
+        String finalSelf = ChainBuilderReach.finalSelf(declaredName, targetName, self != null && self.isFinal());
         if (finalSelf != null) out.add(finalSelf);
         return out;
     }
@@ -1038,10 +1076,11 @@ public final class ClassBuilderConstants {
      *
      * <p>The annotated ancestors are walked upward from the direct one, as the
      * processor walks them, until one whose declared builder's author wrote a
-     * no-argument {@code self()}. A builder carrying the generator's marker, and
-     * a concrete {@code self()} on an ancestor that is itself a concrete link -
-     * the shape the generator gives one - say nothing, as the processor's index
-     * reads them.
+     * no-argument {@code self()}, or, on a root, whose declared builder inherits
+     * one. A builder carrying the generator's marker, and a concrete
+     * {@code self()} on an ancestor that is itself a concrete link - the shape
+     * the generator gives one - say nothing, as the processor's index reads
+     * them.
      *
      * @param target the link
      * @param builderName the builder class name the chain is written in
@@ -1053,12 +1092,78 @@ public final class ClassBuilderConstants {
              parent = annotatedSuperOf(parent)) {
             PsiClass declared = declaredBuilderOf(parent, builderName);
             if (declared == null || generatorMarked(declared)) continue;
-            PsiMethod self = authoredSelf(declared);
+            ChainRole role = chainRoleOf(parent);
+            PsiMethod own = authoredSelf(declared);
+            if (own != null && !role.isSelfTyped() && !own.hasModifierProperty(PsiModifier.ABSTRACT)) own = null;
+            ChainBuilderReach.SelfMethod declaredSelf = selfMethodOf(own);
+            ChainBuilderReach.SelfMethod inherited = declaredSelf == null && role == ChainRole.ABSTRACT_ROOT
+                ? inheritedSelf(declared)
+                : null;
+            ChainBuilderReach.SelfMethod self = ChainBuilderReach.rootSelf(declaredSelf, inherited);
             if (self == null) continue;
-            if (!chainRoleOf(parent).isSelfTyped() && !self.hasModifierProperty(PsiModifier.ABSTRACT)) continue;
-            return ChainBuilderReach.linkSelfPublic(self.hasModifierProperty(PsiModifier.PUBLIC));
+            return ChainBuilderReach.linkSelfPublic(self.isPublic());
         }
         return ChainBuilderReach.linkSelfPublic(null);
+    }
+
+    /**
+     * The nearest {@code self()} a root's declared builder inherits, as
+     * {@link ChainBuilderReach#inheritedAsSelf} decides it.
+     *
+     * <p>Its supertypes are walked depth first, each superclass ahead of the
+     * interfaces beside it, {@code java.lang.Object} left out, as the processor
+     * walks them in the element model. Each is resolved from the builder's own
+     * extends and implements references, as the chain resolves an ancestor
+     * from a target's, and read through its own methods, which no augment
+     * provider contributes to - so an augment provider may ask this inside its
+     * recursion guard.
+     *
+     * @param builder the root's declared builder
+     * @return the inherited method, or {@code null} when the builder inherits none
+     */
+    public static ChainBuilderReach.@Nullable SelfMethod inheritedSelf(@NotNull PsiClass builder) {
+        return inheritedSelf(builder, PsiUtil.getPackageName(builder), new HashSet<>());
+    }
+
+    /**
+     * Walks one type's supertypes for {@link #inheritedSelf(PsiClass)}.
+     *
+     * @param type the type whose supertypes are read
+     * @param home the builder's package name
+     * @param seen the supertypes already read
+     * @return the inherited method, or {@code null} when none is found below this type
+     */
+    private static ChainBuilderReach.@Nullable SelfMethod inheritedSelf(@NotNull PsiClass type, @Nullable String home,
+                                                                       @NotNull Set<PsiClass> seen) {
+        for (PsiClass supertype : type.getSupers()) {
+            if (CommonClassNames.JAVA_LANG_OBJECT.equals(supertype.getQualifiedName()) || !seen.add(supertype))
+                continue;
+            boolean samePackage = Objects.equals(home, PsiUtil.getPackageName(supertype));
+            for (PsiMethod method : ownMethodsOf(supertype)) {
+                if (method.isConstructor()) continue;
+                if (!ChainBuilderReach.inheritedAsSelf(method.getName(), method.getParameterList().getParametersCount(),
+                    method.hasModifierProperty(PsiModifier.STATIC), accessOf(method), samePackage)) {
+                    continue;
+                }
+                return selfMethodOf(method);
+            }
+            ChainBuilderReach.SelfMethod further = inheritedSelf(supertype, home, seen);
+            if (further != null) return further;
+        }
+        return null;
+    }
+
+    /**
+     * Reads a {@code self()} as the rules read it.
+     *
+     * @param self the method, or {@code null}
+     * @return its access and finality, or {@code null} when there is no method
+     */
+    private static ChainBuilderReach.@Nullable SelfMethod selfMethodOf(@Nullable PsiMethod self) {
+        return self == null
+            ? null
+            : new ChainBuilderReach.SelfMethod(self.hasModifierProperty(PsiModifier.PUBLIC),
+                self.hasModifierProperty(PsiModifier.FINAL));
     }
 
     /**
@@ -1282,7 +1387,23 @@ public final class ClassBuilderConstants {
         }
         String targetName = target.getName() == null ? "" : target.getName();
         return DeclaredBuilderShape.expectation(role, targetName, builderName, targetParameters,
-            targetBounds, declaredTypeParameters, ancestorName, superArguments);
+            targetBounds, declaredTypeParameters, ancestorName, superArguments, supertypeTexts(target));
+    }
+
+    /**
+     * Each type the target's own extends and implements clauses name, as
+     * written.
+     *
+     * @param target the annotated type
+     * @return the reference texts, the extends clause's first
+     */
+    private static @NotNull List<String> supertypeTexts(@NotNull PsiClass target) {
+        List<String> out = new ArrayList<>();
+        for (PsiReferenceList list : new PsiReferenceList[] { target.getExtendsList(), target.getImplementsList() }) {
+            if (list == null) continue;
+            for (PsiJavaCodeReferenceElement reference : list.getReferenceElements()) out.add(reference.getText());
+        }
+        return out;
     }
 
     /**

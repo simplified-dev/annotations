@@ -23,6 +23,7 @@ import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.JavacTypeFactory;
 
 import javax.annotation.processing.Messager;
+import javax.lang.model.element.TypeElement;
 import javax.lang.model.util.Elements;
 import javax.tools.Diagnostic;
 import java.util.Collection;
@@ -111,10 +112,12 @@ final class SuperBuilderMutator {
         }
 
         // The same clause has to name the ancestor's builder from the link's
-        // package, and the constructor javac gives the link's builder calls the
-        // ancestor's no-argument one through its implicit super(). A builder
-        // the ancestor's author wrote out of either's reach fails on a generated
-        // line, so the link is refused on its own annotation instead.
+        // package and top-level class, and the constructor javac gives the
+        // link's builder calls the ancestor's no-argument one through its
+        // implicit super(). A builder the ancestor's author wrote, or the
+        // generator writes at the ancestor's access, out of either's reach fails
+        // on a generated line, so the link is refused on its own annotation
+        // instead.
         String unreachable = annotatedSuper == null ? null : ancestorBuilderUnreachable();
         if (unreachable != null) {
             messager.printMessage(Diagnostic.Kind.ERROR, unreachable, ctx.targetElement());
@@ -461,13 +464,13 @@ final class SuperBuilderMutator {
     }
 
     /**
-     * Renders why the link's builder cannot extend the builder its ancestor's
-     * author declared, as {@link ChainBuilderReach#unreachable} decides it.
+     * Renders why the link's builder cannot extend its ancestor's builder, as
+     * {@link ChainBuilderReach#unreachable} decides it for one the ancestor's
+     * author declared and {@link ChainBuilderReach#unreachableGenerated} for one
+     * the generator writes at the access the ancestor's annotation asks for.
      *
      * <p>Read through the two-view index, so an ancestor in this round is asked
-     * of its tree and one compiled earlier of its class file. A builder that is
-     * absent - generated, or not generated yet - is the generator's, in a shape
-     * every link can reach.
+     * of its tree and annotation, and one compiled earlier of its class file.
      *
      * @return the error, or null when the link can extend it
      */
@@ -477,7 +480,8 @@ final class SuperBuilderMutator {
         Elements elements = ctx.bridge().processingEnvironment().getElementUtils();
         boolean samePackage = elements.getPackageOf(ctx.targetElement())
             .equals(elements.getPackageOf(annotatedSuper.element()));
-        ChainBuilderReach.Unreachable reason = ancestor.unreachable(samePackage);
+        boolean sameTopLevel = outermost(ctx.targetElement()).equals(outermost(annotatedSuper.element()));
+        ChainBuilderReach.Unreachable reason = ancestor.unreachable(samePackage, sameTopLevel);
         return reason == null
             ? null
             : ChainBuilderReach.unreachableAncestorBuilder(reason, ctx.targetSimpleName(),
@@ -485,21 +489,34 @@ final class SuperBuilderMutator {
     }
 
     /**
-     * Whether the nearest {@code self()} an ancestor's author wrote is public,
-     * walking the annotated ancestors upward from the direct one.
+     * The top-level class a type is nested in, or the type itself when it is
+     * one.
      *
-     * <p>A builder the generator writes, or one whose author wrote no
-     * {@code self()}, says nothing and the walk goes on to the ancestor's own
-     * annotated superclass, so a leaf below a generated chained abstract reads
-     * its root's.
+     * @param type the type
+     * @return its outermost enclosing class
+     */
+    private static TypeElement outermost(TypeElement type) {
+        TypeElement out = type;
+        while (out.getEnclosingElement() instanceof TypeElement enclosing) out = enclosing;
+        return out;
+    }
+
+    /**
+     * Whether the nearest {@code self()} an ancestor's author wrote, or a root's
+     * builder inherits, is public, walking the annotated ancestors upward from
+     * the direct one.
      *
-     * @return whether it is public, or null when no ancestor's author wrote one
+     * <p>A builder the generator writes, or one with no {@code self()} of either
+     * kind, says nothing and the walk goes on to the ancestor's own annotated
+     * superclass, so a leaf below a generated chained abstract reads its root's.
+     *
+     * @return whether it is public, or null when no ancestor has one
      */
     private Boolean nearestAuthoredSelfPublic() {
         for (AnnotatedSuper ancestor = annotatedSuper; ancestor != null;
              ancestor = BuilderMutator.findAnnotatedDirectSuper(ancestor.element())) {
             Boolean selfPublic = ChainMemberIndex.of(ctx.bridge(), ancestor.element(), ctx.builderName(),
-                ancestor.role()).authoredSelfPublic();
+                ancestor.role()).selfPublic();
             if (selfPublic != null) return selfPublic;
         }
         return null;

@@ -61,12 +61,13 @@ import java.util.Objects;
  * resolved here as the processor reads them from the element model.
  *
  * <p>On an abstract root or a chained abstract, a declared builder the builders
- * generated below it cannot extend - a private one, or one declaring
- * constructors none of which takes no parameters - or whose {@code self()} they
- * cannot override because it is {@code final}, is reported on the builder's
- * name in the processor's sentence. A link whose annotated ancestor's builder
- * is out of its reach is reported on its annotation, as is a link whose
- * ancestor's builder cannot take the extends clause.
+ * generated below it cannot extend - one declaring constructors none of which
+ * takes no parameters - or whose {@code self()} they cannot override because it
+ * is {@code final}, one a root's builder inherits included, is reported on the
+ * builder's name in the processor's sentence. A link whose annotated
+ * ancestor's builder, declared or generated, is out of its reach is reported on
+ * its annotation, as is a link whose ancestor's builder cannot take the extends
+ * clause.
  *
  * <p>On a class or record target and on a constructor or factory target, a
  * {@code builderConstructorAccess} written on the annotation while the declared

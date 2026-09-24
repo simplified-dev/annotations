@@ -1,6 +1,7 @@
 package dev.simplified.classbuilder.apt;
 
 import dev.simplified.annotations.AccessLevel;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * The rule deciding which values {@code @ClassBuilder(access)} can take, and
@@ -32,6 +33,22 @@ public final class BuilderAccess {
      */
     public static boolean expressible(AccessLevel access) {
         return access.emits();
+    }
+
+    /**
+     * Reads the access the builder class is generated at from the attribute's
+     * constant as written.
+     *
+     * @param written the name of the {@link AccessLevel} constant written, or null when the attribute is not written
+     * @return the level, {@link #DEFAULT} where none is written, the name is no constant, or the constant is not
+     *     {@linkplain #expressible expressible}
+     */
+    public static AccessLevel generatedAt(@Nullable String written) {
+        if (written == null) return DEFAULT;
+        for (AccessLevel level : AccessLevel.values()) {
+            if (level.name().equals(written)) return expressible(level) ? level : DEFAULT;
+        }
+        return DEFAULT;
     }
 
     /**

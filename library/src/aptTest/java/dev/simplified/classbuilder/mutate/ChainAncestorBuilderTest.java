@@ -278,6 +278,101 @@ public class ChainAncestorBuilderTest {
         assertEquals("v", runGo("demo.UseText", c));
     }
 
+    /**
+     * A chained abstract's built type bounded by the supertype its own extends
+     * clause names is wide enough for every link below it, which is within
+     * that bound as it is within the target. It was refused for naming a type
+     * other than the target.
+     */
+    @Test
+    public void chainedAbstractBoundingItsBuiltTypeByItsSupertype_buildsAndRuns() throws Exception {
+        Compilation c = compile(
+            src("demo.Base",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                CB,
+                "public abstract class Base {",
+                "    private String label;",
+                "    public String getLabel() { return label; }",
+                "}"),
+            src("demo.Mid",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                CB,
+                "public abstract class Mid extends Base {",
+                "    private String kind;",
+                "    public String getKind() { return kind; }",
+                "    public abstract static class Builder<T extends Base, B extends Builder<T, B>>",
+                "            extends Base.Builder<T, B> { }",
+                "}"),
+            src("demo.Leaf",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                CB,
+                "public class Leaf extends Mid {",
+                "    private int size;",
+                "    public int getSize() { return size; }",
+                "}"),
+            src("demo.UseLeaf",
+                "package demo;",
+                "public class UseLeaf {",
+                "    public static String go() {",
+                "        Leaf leaf = Leaf.builder().label(\"l\").kind(\"k\").size(1).build();",
+                "        return leaf.getLabel() + leaf.getKind();",
+                "    }",
+                "}"));
+        assertBuilt(c);
+        assertEquals("lk", runGo("demo.UseLeaf", c));
+    }
+
+    /**
+     * A root's built type bounded by {@code Object} and by an interface the
+     * root's implements clause names, every component a type each link is
+     * within. It was refused for naming neither as the root.
+     */
+    @Test
+    public void rootBoundingItsBuiltTypeByObjectAndAnInterfaceItImplements_buildsAndRuns() throws Exception {
+        Compilation c = compile(
+            src("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import java.io.Serializable;",
+                CB,
+                "public abstract class Shape implements Serializable {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "    public abstract static class Builder<T extends Object & Serializable, B extends Builder<T, B>> { }",
+                "}"),
+            circle(), useShape());
+        assertBuilt(c);
+        assertEquals("c", runGo("demo.UseShape", c));
+    }
+
+    /**
+     * A bound naming a type the root reaches only through an unannotated
+     * superclass is not one its own clauses name, and names cannot tell it from
+     * an unrelated type, so it stays refused.
+     */
+    @Test
+    public void rootBoundingItsBuiltTypeByAnIndirectSupertype_isRefused() {
+        Compilation c = compile(
+            src("demo.Figure",
+                "package demo;",
+                "public abstract class Figure implements java.io.Serializable { }"),
+            src("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                CB,
+                "public abstract class Shape extends Figure {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "    public abstract static class Builder<T extends java.io.Serializable, B extends Builder<T, B>> { }",
+                "}"),
+            circle());
+        assertRefusedWith(c, boundsRefusal("<T extends Shape, B extends Builder<T, B>>",
+            "<T extends java.io.Serializable, B extends Builder<T, B>>"));
+    }
+
     // ------------------------------------------------------------------
     // The root's self(), which every link overrides
     // ------------------------------------------------------------------
@@ -376,6 +471,87 @@ public class ChainAncestorBuilderTest {
     }
 
     // ------------------------------------------------------------------
+    // A self() the root's builder inherits from a supertype
+    // ------------------------------------------------------------------
+
+    /** A supertype in {@code demo} for a root builder to extend, declaring the given {@code self()}. */
+    private static JavaFileObject fluent(String selfDeclaration) {
+        return src("demo.Fluent",
+            "package demo;",
+            "public abstract class Fluent<B> {",
+            "    " + selfDeclaration,
+            "}");
+    }
+
+    /** The root builder extending {@link #fluent}, declaring nothing of its own. */
+    private static final String FLUENT_ROOT =
+        "public abstract static class Builder<T extends Shape, B extends Builder<T, B>> extends Fluent<B> { }";
+
+    /** Whether the named class declares any {@code self()} of its own. */
+    private static boolean declaresSelf(ClassLoader loader, String builder) throws Exception {
+        for (java.lang.reflect.Method method : Class.forName(builder, false, loader).getDeclaredMethods()) {
+            if (method.getName().equals("self")) return true;
+        }
+        return false;
+    }
+
+    /**
+     * A public {@code self()} the root's builder inherits is treated as one it
+     * declares: the root's merge appends none beside it, and the link overrides
+     * it publicly. The root appended {@code protected abstract B self()} and the
+     * link overrode it protected, both refused by javac: {@code attempting to
+     * assign weaker access privileges; was public}.
+     */
+    @Test
+    public void rootInheritingAPublicSelf_linkOverridesItPublicly() throws Exception {
+        Compilation c = compile(fluent("public abstract B self();"), shapeWith(FLUENT_ROOT), circle(), useShape());
+        assertBuilt(c);
+        assertEquals("c", runGo("demo.UseShape", c));
+        assertFalse("the root's builder appends no self()", declaresSelf(loaderOf(c), "demo.Shape$Builder"));
+        assertTrue("the link's self() is public", selfIsPublic(loaderOf(c), "demo.Circle$Builder"));
+    }
+
+    /** The same with the root compiled before the link, its inherited self() read through its class file. */
+    @Test
+    public void compiledRootInheritingAPublicSelf_linkOverridesItPublicly() throws Exception {
+        Path root = compiledAncestor(fluent("public abstract B self();"), shapeWith(FLUENT_ROOT));
+        Compilation c = compileAgainst(root, circle(), useShape());
+        assertBuilt(c);
+        assertEquals("c", runGo("demo.UseShape", c, root));
+        assertTrue("the link's self() is public", selfIsPublic(loaderOf(c, root), "demo.Circle$Builder"));
+    }
+
+    /**
+     * A protected {@code self()} the root's builder inherits covers the one the
+     * merge would append, as the author's own does, and the link overrides it
+     * protected. The merge appended a second, abstract one beside it.
+     */
+    @Test
+    public void rootInheritingAProtectedSelf_appendsNoneAndTheLinkOverridesItProtected() throws Exception {
+        Compilation c = compile(fluent("protected abstract B self();"), shapeWith(FLUENT_ROOT), circle(),
+            useShape());
+        assertBuilt(c);
+        assertEquals("c", runGo("demo.UseShape", c));
+        assertFalse("the root's builder appends no self()", declaresSelf(loaderOf(c), "demo.Shape$Builder"));
+        assertFalse("the link's self() stays protected", selfIsPublic(loaderOf(c), "demo.Circle$Builder"));
+    }
+
+    /**
+     * A final {@code self()} the root's builder inherits is refused on the root,
+     * as a final one it declares is. javac refused the self() the merge
+     * appended beside it: {@code self() in demo.Shape.Builder cannot override
+     * self() in demo.Fluent - overridden method is final}.
+     */
+    @Test
+    public void rootInheritingAFinalSelf_isRefused() {
+        String finalSelf = "@SuppressWarnings(\"unchecked\") public final B self() { return (B) this; }";
+        String refusal = "@ClassBuilder merged into 'Builder' but its self() is final, so no builder "
+            + "generated below 'Shape' can override it";
+        assertRefusedWith(compile(fluent(finalSelf), shapeWith(FLUENT_ROOT)), refusal);
+        assertRefusedWith(compile(fluent(finalSelf), shapeWith(FLUENT_ROOT), circle()), refusal);
+    }
+
+    // ------------------------------------------------------------------
     // The root's access and its no-argument constructor
     // ------------------------------------------------------------------
 
@@ -458,15 +634,44 @@ public class ChainAncestorBuilderTest {
     }
 
     /**
-     * A private root builder cannot be named by any link's extends clause. It
-     * went unreported, and javac failed on the link: {@code demo.Shape.Builder
-     * has private access in demo.Shape}.
+     * A private root builder cannot be named by a link in another top-level
+     * class, which is refused; the root itself is legal, since a link nested
+     * beside it can extend it. The root was refused too.
      */
     @Test
-    public void privateRootBuilder_isRefusedOnRootAndLink() {
+    public void privateRootBuilder_isRefusedOnALinkInAnotherTopLevelClassOnly() {
         Compilation c = compile(shapeWith(
             "private abstract static class Builder<T extends Shape, B extends Builder<T, B>> { }"), circle());
-        assertRefusedWith(c, ROOT_PRIVATE, linkRefusal("Circle", "Shape.Builder", "is private"));
+        assertRefusedWith(c, linkRefusal("Circle", "Shape.Builder", "is private"));
+        assertFalse("the root is not refused: " + errors(c), errors(c).contains(ROOT_PRIVATE));
+    }
+
+    /**
+     * A private root builder is reached by a link nested in the same top-level
+     * class, whose builder extends it and calls its private default constructor
+     * as a nestmate. Both were refused.
+     */
+    @Test
+    public void privateRootBuilder_buildsAndRunsBelowALinkNestedInTheSameTopLevelClass() throws Exception {
+        Compilation c = compile(src("demo.Outer",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "public class Outer {",
+            "    " + CB,
+            "    public abstract static class Shape {",
+            "        private String name;",
+            "        public String getName() { return name; }",
+            "        private abstract static class Builder<T extends Shape, B extends Builder<T, B>> { }",
+            "    }",
+            "    " + CB,
+            "    public static class Circle extends Shape {",
+            "        private int radius;",
+            "        public int getRadius() { return radius; }",
+            "    }",
+            "    public static String go() { return Circle.builder().name(\"n\").radius(1).build().getName(); }",
+            "}"));
+        assertBuilt(c);
+        assertEquals("n", runGo("demo.Outer", c));
     }
 
     /**
@@ -559,29 +764,70 @@ public class ChainAncestorBuilderTest {
             linkRefusal("Circle", "Shape.Builder", "declares no constructor taking no parameters"));
     }
 
-    /**
-     * A builder the processor generated into a compiled root is the
-     * generator's, read as absent through the {@code Generated} annotation on
-     * it, so the reach rule is not asked of it and the processor reports
-     * nothing on a link in another package below a package-private one -
-     * javac alone refuses the generated extends clause.
-     * {@code CompiledChainAncestorTest} reads the same class file in the editor.
-     */
-    @Test
-    public void compiledRootsGeneratedPackagePrivateBuilder_isNotAskedTheReachRule() throws Exception {
-        Path root = compiledAncestor(src("demo.Shape",
+    /** An abstract root in {@code demo} whose generated builder takes the given access. */
+    private static JavaFileObject shapeAt(String access) {
+        return src("demo.Shape",
             "package demo;",
             "import dev.simplified.annotations.AccessLevel;",
             "import dev.simplified.annotations.ClassBuilder;",
-            "@ClassBuilder(validate = false, access = AccessLevel.PACKAGE)",
+            "@ClassBuilder(validate = false, access = AccessLevel." + access + ")",
             "public abstract class Shape {",
             "    private String name;",
             "    public String getName() { return name; }",
-            "}"));
+            "}");
+    }
+
+    /**
+     * A root whose builder the processor generates package-private is out of
+     * reach of a link in another package, which is refused as below a declared
+     * package-private builder. The processor reported nothing, and javac failed
+     * on the link's generated extends clause: {@code demo.Shape.Builder is not
+     * public in demo.Shape; cannot be accessed from outside package}.
+     */
+    @Test
+    public void generatedPackagePrivateRootBuilder_isRefusedOnALinkInAnotherPackage() {
+        Compilation c = compile(shapeAt("PACKAGE"), otherCircle());
+        assertRefusedWith(c, linkRefusal("Circle", "Shape.Builder",
+            "is package-private, and 'Circle' is in another package"));
+    }
+
+    /**
+     * The same with the root compiled before the link, the generated builder's
+     * access read from its class file. The {@code Generated} annotation on it
+     * read it as absent, the rule was not asked, and the processor reported
+     * nothing. {@code CompiledChainAncestorTest} reads the same class file in the
+     * editor.
+     */
+    @Test
+    public void compiledRootsGeneratedPackagePrivateBuilder_isRefusedOnALinkInAnotherPackage() throws Exception {
+        Path root = compiledAncestor(shapeAt("PACKAGE"));
         Compilation c = compileAgainst(root, otherCircle());
-        assertThat(c).failed();
-        assertTrue("the processor reports nothing: " + errors(c),
-            errors(c).stream().noneMatch(error -> error.startsWith("@ClassBuilder")));
+        assertRefusedWith(c, linkRefusal("Circle", "Shape.Builder",
+            "is package-private, and 'Circle' is in another package"));
+    }
+
+    /**
+     * A root whose builder the processor generates private is out of reach of a
+     * link in another top-level class. javac failed on the link's generated
+     * extends clause: {@code demo.Shape.Builder has private access in
+     * demo.Shape}.
+     */
+    @Test
+    public void generatedPrivateRootBuilder_isRefusedOnALinkInAnotherTopLevelClass() {
+        Compilation c = compile(shapeAt("PRIVATE"), circle());
+        assertRefusedWith(c, linkRefusal("Circle", "Shape.Builder", "is private"));
+    }
+
+    /** A generated package-private root builder is reached by a link in its own package, in both views. */
+    @Test
+    public void generatedPackagePrivateRootBuilder_buildsBelowALinkInTheSamePackage() throws Exception {
+        Compilation c = compile(shapeAt("PACKAGE"), circle(), useShape());
+        assertBuilt(c);
+        assertEquals("c", runGo("demo.UseShape", c));
+        Path compiled = compiledAncestor(shapeAt("PACKAGE"));
+        Compilation against = compileAgainst(compiled, circle(), useShape());
+        assertBuilt(against);
+        assertEquals("c", runGo("demo.UseShape", against, compiled));
     }
 
     /**

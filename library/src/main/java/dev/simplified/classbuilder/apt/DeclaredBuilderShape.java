@@ -230,6 +230,36 @@ public final class DeclaredBuilderShape {
                                                        @NotNull List<String> declaredTypeParameters,
                                                        @Nullable String ancestorName,
                                                        @NotNull List<String> superArguments) {
+        return expectation(role, targetName, builderName, targetTypeParameters, targetTypeParameterBounds,
+            declaredTypeParameters, ancestorName, superArguments, List.of());
+    }
+
+    /**
+     * Derives everything a role requires of the builder declared for it, the
+     * bounds on the target's own type parameters and the supertypes its own
+     * clauses name included.
+     *
+     * @param role the position the target holds in a chain
+     * @param targetName the target's simple name
+     * @param builderName the builder's simple name
+     * @param targetTypeParameters the type parameter names the builder re-declares, in declaration order
+     * @param targetTypeParameterBounds the bounds written on each of those parameters, as
+     *     {@link DeclaredBuilderFacts#typeParameterBounds} holds a declaration's, null where none is written
+     * @param declaredTypeParameters the declared builder's type parameter names, in declaration order
+     * @param ancestorName the annotated superclass's simple name, or null when there is none
+     * @param superArguments the type arguments the target passes to its superclass, in order
+     * @param targetSupertypes each type the target's own extends and implements clauses name, as written
+     * @return the expectation the declaration is measured against
+     */
+    public static @NotNull RoleExpectation expectation(@NotNull ChainRole role,
+                                                       @NotNull String targetName,
+                                                       @NotNull String builderName,
+                                                       @NotNull List<String> targetTypeParameters,
+                                                       @NotNull List<@Nullable String> targetTypeParameterBounds,
+                                                       @NotNull List<String> declaredTypeParameters,
+                                                       @Nullable String ancestorName,
+                                                       @NotNull List<String> superArguments,
+                                                       @NotNull List<String> targetSupertypes) {
         List<String> pair = selfNames(role, targetTypeParameters, declaredTypeParameters);
         return new RoleExpectation(
             expectedTypeParameters(role, targetTypeParameters, pair),
@@ -239,7 +269,8 @@ public final class DeclaredBuilderShape {
             acceptedBuildReturnTypes(role, targetName, pair.get(0)),
             targetTypeParameterBounds,
             targetName,
-            builderName);
+            builderName,
+            erasedNames(targetSupertypes));
     }
 
     /**
@@ -2077,14 +2108,17 @@ public final class DeclaredBuilderShape {
      * <p>Every link below the declaration binds the pair to itself and its own
      * builder, so the first parameter needs a bound the link is within and the
      * second one the link's builder is within. Both are read as written, by name,
-     * since neither half can resolve them: the first has to carry a bound whose
-     * erasure is the target's simple name, however qualified and whatever type
-     * arguments a generic target is written with, and the second one whose
-     * erasure is the builder's simple name and whose type arguments end with the
-     * pair's own two names, in order - a generic root's own parameters leading
-     * them. An unbounded parameter carries neither. Where the expectation names
-     * neither the target nor the builder the bounds are asked for their presence
-     * only.
+     * since neither half can resolve them. Every type the first one's bound
+     * names has to erase to a type each link is within: the target's simple
+     * name, however qualified and whatever type arguments a generic target is
+     * written with, a type the target's own extends or implements clause names,
+     * or {@code Object} - a type the target reaches only further up is not one
+     * names can tell from an unrelated one. The second has to carry a bound
+     * whose erasure is the builder's simple name and whose type arguments end
+     * with the pair's own two names, in order - a generic root's own parameters
+     * leading them. An unbounded parameter carries neither. Where the
+     * expectation names neither the target nor the builder the bounds are asked
+     * for their presence only.
      *
      * @param facts the declared builder as written
      * @param expectation what the role requires
@@ -2094,15 +2128,32 @@ public final class DeclaredBuilderShape {
         int size = expectation.typeParameterNames().size();
         List<@Nullable String> bounds = facts.typeParameterBounds();
         if (size < 2 || bounds.size() < size || facts.typeParameterNames().size() < size) return false;
-        List<String> builtBounds = boundList(bounds.get(size - 2));
+        String writtenBuilt = bounds.get(size - 2);
+        List<String> builtBounds = boundList(writtenBuilt);
         List<String> builderBounds = boundList(bounds.get(size - 1));
-        if (builtBounds.isEmpty() || builderBounds.isEmpty()) return false;
         String targetName = expectation.targetName();
         String builderName = expectation.builderName();
-        if (targetName == null || builderName == null) return true;
+        if (targetName == null || builderName == null) return !builtBounds.isEmpty() && !builderBounds.isEmpty();
+        // The bound list leaves Object out, so a bound naming it alone is
+        // present as written and has nothing left to compare.
+        if (writtenBuilt == null || writtenBuilt.isBlank() || builderBounds.isEmpty()) return false;
         List<String> pair = facts.typeParameterNames().subList(size - 2, size);
-        return builtBounds.stream().anyMatch(bound -> erasedName(bound).equals(targetName))
+        return builtBounds.stream().allMatch(bound -> keepsBuiltType(erasedName(bound), targetName,
+                expectation.targetSupertypes()))
             && builderBounds.stream().anyMatch(bound -> appliesToPair(bound, builderName, pair));
+    }
+
+    /**
+     * Whether one type a self-typed pair's first bound names is a type every
+     * link below the target is within, by its erased simple name.
+     *
+     * @param erased the bound's erased simple name
+     * @param targetName the target's simple name
+     * @param targetSupertypes the erased simple names the target's own extends and implements clauses name
+     * @return whether the bound keeps every link within it
+     */
+    private static boolean keepsBuiltType(String erased, String targetName, List<String> targetSupertypes) {
+        return erased.equals(targetName) || targetSupertypes.contains(erased) || "Object".equals(erased);
     }
 
     /**

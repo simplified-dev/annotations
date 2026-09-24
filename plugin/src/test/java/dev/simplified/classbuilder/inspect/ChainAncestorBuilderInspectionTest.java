@@ -50,6 +50,7 @@ public class ChainAncestorBuilderInspectionTest extends BasePlatformTestCase {
             public @interface ClassBuilder {
                 boolean retainInit() default true;
                 boolean validate() default true;
+                AccessLevel access() default AccessLevel.PUBLIC;
                 AccessLevel builderConstructorAccess() default AccessLevel.PACKAGE;
             }
             """);
@@ -178,6 +179,88 @@ public class ChainAncestorBuilderInspectionTest extends BasePlatformTestCase {
         assertEquals(List.of(), errorsIn("demo/Holder.java"));
     }
 
+    /**
+     * A chained abstract's built type bounded by the supertype its own extends
+     * clause names is accepted, as javac builds it. It was reported for naming a
+     * type other than the target.
+     */
+    public void testAChainedAbstractBoundingItsBuiltTypeByItsSupertype_isNotReported() {
+        myFixture.addFileToProject("demo/Base.java", """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false)
+            public abstract class Base {
+                private String label;
+            }
+            """);
+        myFixture.addFileToProject("demo/Mid.java", """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false)
+            public abstract class Mid extends Base {
+                private String kind;
+                public abstract static class Builder<T extends Base, B extends Builder<T, B>>
+                        extends Base.Builder<T, B> { }
+            }
+            """);
+        myFixture.addFileToProject("demo/Leaf.java", """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false)
+            public class Leaf extends Mid {
+                private int size;
+            }
+            """);
+        myFixture.addFileToProject("demo/UseLeaf.java", """
+            package demo;
+            public class UseLeaf {
+                public static Leaf go() { return Leaf.builder().label("l").kind("k").size(1).build(); }
+            }
+            """);
+        assertEquals(List.of(), errorsIn("demo/Mid.java"));
+        assertEquals(List.of(), allErrorsIn("demo/UseLeaf.java"));
+    }
+
+    /**
+     * A root's built type bounded by {@code Object} and by an interface the
+     * root's implements clause names is accepted, as javac builds it.
+     */
+    public void testARootBoundingItsBuiltTypeByObjectAndAnInterfaceItImplements_isNotReported() {
+        myFixture.addFileToProject("demo/Shape.java", """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            import java.io.Serializable;
+            @ClassBuilder(validate = false)
+            public abstract class Shape implements Serializable {
+                private String name;
+                public String getName() { return name; }
+                public abstract static class Builder<T extends Object & Serializable, B extends Builder<T, B>> { }
+            }
+            """);
+        addCircle();
+        assertEquals(List.of(), errorsIn("demo/Shape.java"));
+        assertEquals(List.of(), errorsIn("demo/Circle.java"));
+    }
+
+    /** A bound naming a type the root reaches only through an unannotated superclass stays refused. */
+    public void testARootBoundingItsBuiltTypeByAnIndirectSupertype_isReported() {
+        myFixture.addFileToProject("demo/Figure.java", """
+            package demo;
+            public abstract class Figure implements java.io.Serializable { }
+            """);
+        myFixture.addFileToProject("demo/Shape.java", """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false)
+            public abstract class Shape extends Figure {
+                private String name;
+                public abstract static class Builder<T extends java.io.Serializable, B extends Builder<T, B>> { }
+            }
+            """);
+        assertEquals(List.of(boundsRefusal("<T extends Shape, B extends Builder<T, B>>",
+            "<T extends java.io.Serializable, B extends Builder<T, B>>")), errorsIn("demo/Shape.java"));
+    }
+
     // ------------------------------------------------------------------
     // The root's self(), which every link overrides
     // ------------------------------------------------------------------
@@ -243,6 +326,79 @@ public class ChainAncestorBuilderInspectionTest extends BasePlatformTestCase {
     }
 
     // ------------------------------------------------------------------
+    // A self() the root's builder inherits from a supertype
+    // ------------------------------------------------------------------
+
+    /** Adds a supertype in {@code demo} for a root builder to extend, declaring the given {@code self()}. */
+    private void addFluent(String selfDeclaration) {
+        myFixture.addFileToProject("demo/Fluent.java", """
+            package demo;
+            public abstract class Fluent<B> {
+                %s
+            }
+            """.formatted(selfDeclaration));
+    }
+
+    /** The root builder extending {@link #addFluent}, declaring nothing of its own. */
+    private static final String FLUENT_ROOT =
+        "public abstract static class Builder<T extends Shape, B extends Builder<T, B>> extends Fluent<B> { }";
+
+    /** The {@code self()} methods the root's declared builder carries, light or written. */
+    private PsiMethod[] rootSelves() {
+        return builderOf(findClass("demo.Shape")).findMethodsByName("self", false);
+    }
+
+    /**
+     * A public {@code self()} the root's builder inherits is treated as one it
+     * declares: nothing is contributed beside it, and the link's override is
+     * public, as javac's is. The editor contributed a protected abstract one on
+     * the root and a protected override on the link, the pair javac refuses.
+     */
+    public void testARootInheritingAPublicSelf_addsNoneAndTheLinkOverridesItPublicly() {
+        addFluent("public abstract B self();");
+        addShape(FLUENT_ROOT);
+        addCircle();
+        myFixture.addFileToProject("demo/UseShape.java", """
+            package demo;
+            public class UseShape {
+                public static String go() { return Circle.builder().name("c").radius(1).self().build().getName(); }
+            }
+            """);
+        assertEquals("the root's builder carries no self() of its own", 0, rootSelves().length);
+        assertTrue("the link's self() is public",
+            selfOf(builderOf(findClass("demo.Circle"))).hasModifierProperty(PsiModifier.PUBLIC));
+        assertEquals(List.of(), errorsIn("demo/Shape.java"));
+        assertEquals(List.of(), allErrorsIn("demo/UseShape.java"));
+    }
+
+    /**
+     * A protected {@code self()} the root's builder inherits covers the one the
+     * merge would add, and the link's override stays protected. The editor
+     * contributed a second, abstract one on the root.
+     */
+    public void testARootInheritingAProtectedSelf_addsNoneAndTheLinkOverridesItProtected() {
+        addFluent("protected abstract B self();");
+        addShape(FLUENT_ROOT);
+        addCircle();
+        assertEquals("the root's builder carries no self() of its own", 0, rootSelves().length);
+        PsiMethod self = selfOf(builderOf(findClass("demo.Circle")));
+        assertTrue("protected", self.hasModifierProperty(PsiModifier.PROTECTED));
+        assertEquals(List.of(), errorsIn("demo/Shape.java"));
+    }
+
+    /**
+     * A final {@code self()} the root's builder inherits is reported on the
+     * root's builder, as a final one it declares is. The editor was silent.
+     */
+    public void testARootInheritingAFinalSelf_isReported() {
+        addFluent("@SuppressWarnings(\"unchecked\") public final B self() { return (B) this; }");
+        addShape(FLUENT_ROOT);
+        addCircle();
+        assertEquals(List.of("@ClassBuilder merged into 'Builder' but its self() is final, so no builder "
+            + "generated below 'Shape' can override it"), errorsIn("demo/Shape.java"));
+    }
+
+    // ------------------------------------------------------------------
     // The root's access and its no-argument constructor
     // ------------------------------------------------------------------
 
@@ -299,13 +455,98 @@ public class ChainAncestorBuilderInspectionTest extends BasePlatformTestCase {
             errorsIn("demo/Leaf.java"));
     }
 
-    /** A private root builder is refused on the root and on the link. */
-    public void testAPrivateRootBuilder_isReportedOnRootAndLink() {
+    /**
+     * A private root builder is refused on a link in another top-level class
+     * and not on the root, which a link nested beside it can extend. The root
+     * was reported too.
+     */
+    public void testAPrivateRootBuilder_isReportedOnALinkInAnotherTopLevelClassOnly() {
         addShape("private abstract static class Builder<T extends Shape, B extends Builder<T, B>> { }");
         addCircle();
-        assertEquals(List.of("@ClassBuilder merged into 'Builder' but it is private, so no builder generated "
-            + "below 'Shape' can extend it"), errorsIn("demo/Shape.java"));
+        assertEquals(List.of(), errorsIn("demo/Shape.java"));
         assertEquals(List.of(linkRefusal("Circle", "Shape.Builder", "is private")), errorsIn("demo/Circle.java"));
+    }
+
+    /**
+     * A private root builder is reached by a link nested in the same top-level
+     * class, whose builder is contributed and whose chain resolves, as javac
+     * builds it. Both were reported, and the link's builder withheld.
+     */
+    public void testAPrivateRootBuilder_isNotReportedBelowALinkNestedInTheSameTopLevelClass() {
+        myFixture.addFileToProject("demo/Outer.java", """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            public class Outer {
+                @ClassBuilder(validate = false)
+                public abstract static class Shape {
+                    private String name;
+                    public String getName() { return name; }
+                    private abstract static class Builder<T extends Shape, B extends Builder<T, B>> { }
+                }
+                @ClassBuilder(validate = false)
+                public static class Circle extends Shape {
+                    private int radius;
+                }
+                public static String go() { return Circle.builder().name("n").radius(1).build().getName(); }
+            }
+            """);
+        assertEquals(List.of(), allErrorsIn("demo/Outer.java"));
+    }
+
+    /**
+     * A root whose builder the processor generates package-private is out of
+     * reach of a link in another package, which is refused on its annotation
+     * and gets no builder, as javac's processor refuses it. The editor was
+     * silent and resolved the link's chain.
+     */
+    public void testAGeneratedPackagePrivateRootBuilder_isReportedOnALinkInAnotherPackage() {
+        myFixture.addFileToProject("demo/Shape.java", """
+            package demo;
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false, access = AccessLevel.PACKAGE)
+            public abstract class Shape {
+                private String name;
+                public String getName() { return name; }
+            }
+            """);
+        addOtherCircle();
+        assertEquals(List.of(linkRefusal("Circle", "Shape.Builder",
+            "is package-private, and 'Circle' is in another package")), errorsIn("other/Circle.java"));
+        assertEquals("the link's builder is withheld", 0, findClass("other.Circle").getInnerClasses().length);
+    }
+
+    /** A root whose builder the processor generates private is refused on a link in another top-level class. */
+    public void testAGeneratedPrivateRootBuilder_isReportedOnALinkInAnotherTopLevelClass() {
+        myFixture.addFileToProject("demo/Shape.java", """
+            package demo;
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false, access = AccessLevel.PRIVATE)
+            public abstract class Shape {
+                private String name;
+                public String getName() { return name; }
+            }
+            """);
+        addCircle();
+        assertEquals(List.of(linkRefusal("Circle", "Shape.Builder", "is private")), errorsIn("demo/Circle.java"));
+    }
+
+    /** A generated package-private root builder is reached by a link in its own package. */
+    public void testAGeneratedPackagePrivateRootBuilder_isNotReportedBelowALinkInTheSamePackage() {
+        myFixture.addFileToProject("demo/Shape.java", """
+            package demo;
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false, access = AccessLevel.PACKAGE)
+            public abstract class Shape {
+                private String name;
+                public String getName() { return name; }
+            }
+            """);
+        addCircle();
+        assertEquals(List.of(), errorsIn("demo/Circle.java"));
+        assertEquals("the link's builder is contributed", 1, findClass("demo.Circle").getInnerClasses().length);
     }
 
     /**

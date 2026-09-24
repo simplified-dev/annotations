@@ -35,8 +35,14 @@ The shapes refused, each for a reason the generated members cannot work around:
       by simple name in any order; a looser bound fails the generated
       <code>build()</code> and a narrower one the generated
       <code>builder()</code>.</li>
-  <li><b>An unbounded trailing pair</b> on a self-typed builder - a setter
-      returning it would return something with no members.</li>
+  <li><b>An unbounded or otherwise bounded trailing pair</b> on a self-typed
+      builder - every link binds the pair to itself and its own builder, so
+      each type the first parameter's bound names has to be the target, a type
+      the target's own <code>extends</code> or <code>implements</code> clause
+      names, or <code>Object</code>, and the second has to be bounded by the
+      builder applied to the pair in order. A type the target reaches only
+      through a supertype further up is refused, the names being unable to tell
+      it from an unrelated one.</li>
   <li><b>The wrong <code>extends</code> clause</b> - a chained builder inherits
       the parent's setters through it, so it has to name the annotated
       ancestor's builder, qualifier included, and pass it the ancestor's own
@@ -52,9 +58,16 @@ The shapes refused, each for a reason the generated members cannot work around:
 <p>
 A target in a SuperBuilder chain merges into its declared builder as well, so
 a root, a concrete link and a chained abstract are each judged against the
-shape their role generates. A link whose annotated ancestor declares a builder
-the extends clause cannot name is reported on the annotation instead, whether
-or not the link declares its own.
+shape their role generates. A root or chained abstract's builder whose
+constructors all take parameters, or whose <code>self()</code> - declared, or
+on a root inherited from a supertype - is <code>final</code>, is reported on
+its name, since every link below calls the one and overrides the other. A link
+whose annotated ancestor declares a builder the extends clause cannot name is
+reported on the annotation instead, whether or not the link declares its own,
+as is a link the ancestor's builder is out of reach of - declared, or generated
+at the access the ancestor's <code>@ClassBuilder(access)</code> asks for -
+being <code>private</code> from another top-level class or package-private from
+another package.
 </p>
 
 <p>

@@ -22,6 +22,7 @@ import java.util.List;
  * @param typeParameterBounds the bounds the target writes on each of its own type parameters, which lead {@code typeParameterNames}, null where none is written, empty when the bounds are not compared
  * @param targetName the target's simple name, which the first of a self-typed pair's bounds has to erase to, or null when the pair's bounds are asked for their presence only
  * @param builderName the builder's simple name, which the second of a self-typed pair's bounds has to erase to, or null when the pair's bounds are asked for their presence only
+ * @param targetSupertypes the erased simple names of the types the target's own extends and implements clauses name, each of which the first of a self-typed pair's bounds may also erase to
  */
 public record RoleExpectation(List<String> typeParameterNames,
                               @Nullable String superType,
@@ -30,7 +31,8 @@ public record RoleExpectation(List<String> typeParameterNames,
                               List<String> buildReturnTypes,
                               List<@Nullable String> typeParameterBounds,
                               @Nullable String targetName,
-                              @Nullable String builderName) {
+                              @Nullable String builderName,
+                              List<String> targetSupertypes) {
 
     /**
      * Defensive copies of lists the caller still owns. The bounds go through
@@ -42,6 +44,7 @@ public record RoleExpectation(List<String> typeParameterNames,
         superTypeArguments = List.copyOf(superTypeArguments);
         buildReturnTypes = List.copyOf(buildReturnTypes);
         typeParameterBounds = Collections.unmodifiableList(new ArrayList<>(typeParameterBounds));
+        targetSupertypes = List.copyOf(targetSupertypes);
     }
 
     /**
@@ -59,7 +62,7 @@ public record RoleExpectation(List<String> typeParameterNames,
                            String buildReturnType, List<String> superTypeArguments,
                            List<String> buildReturnTypes, List<@Nullable String> typeParameterBounds) {
         this(typeParameterNames, superType, buildReturnType, superTypeArguments, buildReturnTypes,
-            typeParameterBounds, null, null);
+            typeParameterBounds, null, null, List.of());
     }
 
     /**

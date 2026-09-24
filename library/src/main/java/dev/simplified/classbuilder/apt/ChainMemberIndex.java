@@ -5,6 +5,8 @@ import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import com.sun.tools.javac.tree.JCTree.JCMethodDecl;
 import com.sun.tools.javac.tree.JCTree;
 import dev.simplified.annotations.AccessLevel;
+import dev.simplified.annotations.ClassBuilder;
+import dev.simplified.shared.apt.AnnotationLookup;
 import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.JavacBridge;
 import org.jetbrains.annotations.NotNull;
@@ -15,8 +17,16 @@ import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
+import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.TypeMirror;
+import javax.lang.model.util.ElementFilter;
+import javax.lang.model.util.Elements;
+import javax.lang.model.util.Types;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -33,10 +43,14 @@ import java.util.Set;
  *
  * <p>The tree view carries one hazard the element view does not: within a round
  * the order targets are processed in is unspecified, so an ancestor whose
- * builder this pass will generate may not have it yet. Every question here is
- * therefore asked so that <em>absent</em> means "say nothing" rather than "no" -
- * a builder that is not there yet is one that will be there, generated, in the
- * shape the generator gives it.
+ * builder this pass will generate may not have it yet. Every question about
+ * what the author wrote is therefore asked so that <em>absent</em> means "say
+ * nothing" rather than "no" - a builder that is not there yet is one that will
+ * be there, generated, in the shape the generator gives it. The one thing a
+ * generated builder's shape leaves open is its access, which the ancestor's
+ * {@code @ClassBuilder(access)} decides, so that is read from the annotation in
+ * the tree view and from the generated builder's class file in the element
+ * view.
  */
 public final class ChainMemberIndex {
 
@@ -48,19 +62,21 @@ public final class ChainMemberIndex {
     private final AccessLevel builderAccess;
     private final boolean declaresConstructors;
     private final @Nullable AccessLevel noArgumentConstructorAccess;
-    private final @Nullable Boolean authoredSelfPublic;
+    private final @Nullable Boolean selfPublic;
+    private final @Nullable AccessLevel generatedBuilderAccess;
 
     private ChainMemberIndex(boolean builderPresent, int builderTypeParameters, Set<String> authoredNoArgMethods,
                              AccessLevel builderAccess, boolean declaresConstructors,
                              @Nullable AccessLevel noArgumentConstructorAccess,
-                             @Nullable Boolean authoredSelfPublic) {
+                             @Nullable Boolean selfPublic, @Nullable AccessLevel generatedBuilderAccess) {
         this.builderPresent = builderPresent;
         this.builderTypeParameters = builderTypeParameters;
         this.authoredNoArgMethods = authoredNoArgMethods;
         this.builderAccess = builderAccess;
         this.declaresConstructors = declaresConstructors;
         this.noArgumentConstructorAccess = noArgumentConstructorAccess;
-        this.authoredSelfPublic = authoredSelfPublic;
+        this.selfPublic = selfPublic;
+        this.generatedBuilderAccess = generatedBuilderAccess;
     }
 
     /**
@@ -77,33 +93,35 @@ public final class ChainMemberIndex {
                                                @NotNull String builderName,
                                                @NotNull ChainRole ancestorRole) {
         JCClassDecl tree = bridge.treeOf(ancestor);
-        if (tree != null) return fromTree(tree, builderName, ancestorRole);
-        return fromElements(ancestor, builderName, ancestorRole);
+        if (tree != null) return fromTree(bridge, ancestor, tree, builderName, ancestorRole);
+        return fromElements(bridge, ancestor, builderName, ancestorRole);
     }
 
     /**
      * The tree view, which is the only one an ancestor in this round has.
      *
+     * @param bridge the javac bridge
+     * @param element the ancestor's type element, whose annotation and supertypes the round has entered
      * @param ancestor the ancestor's class declaration
      * @param builderName the builder class name the chain is written in
      * @param ancestorRole where the ancestor sits in the chain
      * @return the index
      */
-    private static ChainMemberIndex fromTree(JCClassDecl ancestor, String builderName,
-                                             ChainRole ancestorRole) {
+    private static ChainMemberIndex fromTree(JavacBridge bridge, TypeElement element, JCClassDecl ancestor,
+                                             String builderName, ChainRole ancestorRole) {
         for (JCTree def : ancestor.defs) {
             if (!(def instanceof JCClassDecl nested)) continue;
             if (!nested.name.contentEquals(builderName)) continue;
             // A builder this round generated is not the author's, and its shape
             // is whatever the generator gave it - so it answers nothing about
-            // what the author already spells and nothing about whether a clause
-            // can name it. Reading one as declared blamed the ancestor's author
-            // for a class they never wrote.
-            if (AstMarkers.isGenerated(nested)) return absent();
+            // what the author already spells. Reading one as declared blamed the
+            // ancestor's author for a class they never wrote. Its access is the
+            // one the ancestor's annotation asks for.
+            if (AstMarkers.isGenerated(nested)) return generated(generatedAccessOf(element));
             Set<String> authored = new HashSet<>();
             boolean declaresConstructors = false;
             AccessLevel noArgumentConstructor = null;
-            Boolean selfPublic = null;
+            ChainBuilderReach.SelfMethod declaredSelf = null;
             for (JCTree member : nested.defs) {
                 if (!(member instanceof JCMethodDecl method)) continue;
                 // javac's default is in the tree before the round, flagged as
@@ -122,38 +140,44 @@ public final class ChainMemberIndex {
                     continue;
                 }
                 authored.add(method.name.toString());
-                if (method.name.contentEquals(ChainBuilderReach.SELF))
-                    selfPublic = (method.mods.flags & Flags.PUBLIC) != 0;
+                if (method.name.contentEquals(ChainBuilderReach.SELF)) {
+                    declaredSelf = new ChainBuilderReach.SelfMethod((method.mods.flags & Flags.PUBLIC) != 0,
+                        (method.mods.flags & Flags.FINAL) != 0);
+                }
             }
             return new ChainMemberIndex(true, nested.typarams == null ? 0 : nested.typarams.size(),
-                authored, accessOf(nested.mods.flags), declaresConstructors, noArgumentConstructor, selfPublic);
+                authored, accessOf(nested.mods.flags), declaresConstructors, noArgumentConstructor,
+                selfPublic(bridge, ancestorRole, declaredSelf, nested.sym), null);
         }
-        return absent();
+        // Not generated yet: the generator writes it at the annotation's access.
+        return generated(generatedAccessOf(element));
     }
 
     /**
      * The element view, for an ancestor compiled before this round.
      *
+     * @param bridge the javac bridge
      * @param ancestor the ancestor's type element
      * @param builderName the builder class name the chain is written in
      * @param ancestorRole where the ancestor sits in the chain
      * @return the index
      */
-    private static ChainMemberIndex fromElements(TypeElement ancestor, String builderName,
+    private static ChainMemberIndex fromElements(JavacBridge bridge, TypeElement ancestor, String builderName,
                                                  ChainRole ancestorRole) {
         for (Element enclosed : ancestor.getEnclosedElements()) {
             if (!(enclosed instanceof TypeElement nested)) continue;
             if (!nested.getSimpleName().contentEquals(builderName)) continue;
             // The tree view reads the marker the pass set; a compiled ancestor
             // has no tree, and what survives into the class file is the
-            // annotation the generator writes onto everything it emits. An
-            // ancestor built with emitGenerated off is the one shape this cannot
-            // tell apart, and it reads as the author's.
-            if (carriesGeneratedAnnotation(nested)) return absent();
+            // annotation the generator writes onto everything it emits, beside
+            // the access it generated the builder at. An ancestor built with
+            // emitGenerated off is the one shape this cannot tell apart, and it
+            // reads as the author's.
+            if (carriesGeneratedAnnotation(nested)) return generated(accessOf(nested.getModifiers()));
             Set<String> authored = new HashSet<>();
             boolean declaresConstructors = false;
             AccessLevel noArgumentConstructor = null;
-            Boolean selfPublic = null;
+            ChainBuilderReach.SelfMethod declaredSelf = null;
             for (Element member : nested.getEnclosedElements()) {
                 // A class file carries javac's default like any other
                 // constructor, at the class's own access, so it is read as
@@ -174,13 +198,106 @@ public final class ChainMemberIndex {
                 boolean methodAbstract = method.getModifiers().contains(Modifier.ABSTRACT);
                 if (!recordsConcreteMatches(ancestorRole) && !methodAbstract) continue;
                 authored.add(method.getSimpleName().toString());
-                if (method.getSimpleName().contentEquals(ChainBuilderReach.SELF))
-                    selfPublic = method.getModifiers().contains(Modifier.PUBLIC);
+                if (method.getSimpleName().contentEquals(ChainBuilderReach.SELF)) {
+                    declaredSelf = new ChainBuilderReach.SelfMethod(method.getModifiers().contains(Modifier.PUBLIC),
+                        method.getModifiers().contains(Modifier.FINAL));
+                }
             }
             return new ChainMemberIndex(true, nested.getTypeParameters().size(), authored,
-                accessOf(nested.getModifiers()), declaresConstructors, noArgumentConstructor, selfPublic);
+                accessOf(nested.getModifiers()), declaresConstructors, noArgumentConstructor,
+                selfPublic(bridge, ancestorRole, declaredSelf, nested), null);
         }
         return absent();
+    }
+
+    /**
+     * Whether the {@code self()} standing for the ancestor's builder's own is
+     * public - the one its author wrote, or on a root the one the builder
+     * inherits where the author wrote none, as {@link ChainBuilderReach#rootSelf}
+     * picks it.
+     *
+     * @param bridge the javac bridge
+     * @param ancestorRole where the ancestor sits in the chain
+     * @param declared the {@code self()} the author wrote, or null when they wrote none
+     * @param builder the builder's element, or null when the tree has none entered
+     * @return whether it is public, or null when there is none
+     */
+    private static @Nullable Boolean selfPublic(JavacBridge bridge, ChainRole ancestorRole,
+                                                ChainBuilderReach.@Nullable SelfMethod declared,
+                                                @Nullable TypeElement builder) {
+        ChainBuilderReach.SelfMethod inherited = declared == null && ancestorRole == ChainRole.ABSTRACT_ROOT
+            && builder != null ? inheritedSelf(bridge, builder) : null;
+        ChainBuilderReach.SelfMethod self = ChainBuilderReach.rootSelf(declared, inherited);
+        return self == null ? null : self.isPublic();
+    }
+
+    /**
+     * The nearest {@code self()} a root's declared builder inherits, read from
+     * the element model.
+     *
+     * <p>Its supertypes are walked depth first, each superclass ahead of the
+     * interfaces beside it, {@code java.lang.Object} left out, and the first
+     * method {@link ChainBuilderReach#inheritedAsSelf} accepts is the one. A
+     * supertype compiled in the same round is read through the members written
+     * in it, and one compiled before it through its class file.
+     *
+     * @param bridge the javac bridge
+     * @param builder the declared builder's element
+     * @return the inherited method, or null when the builder inherits none
+     */
+    public static ChainBuilderReach.@Nullable SelfMethod inheritedSelf(@NotNull JavacBridge bridge,
+                                                                      @NotNull TypeElement builder) {
+        Types types = bridge.processingEnvironment().getTypeUtils();
+        Elements elements = bridge.processingEnvironment().getElementUtils();
+        PackageElement home = elements.getPackageOf(builder);
+        List<TypeElement> supertypes = new ArrayList<>();
+        collectSupertypes(types, builder.asType(), supertypes, new HashSet<>());
+        for (TypeElement supertype : supertypes) {
+            boolean samePackage = elements.getPackageOf(supertype).equals(home);
+            for (ExecutableElement method : ElementFilter.methodsIn(supertype.getEnclosedElements())) {
+                Set<Modifier> modifiers = method.getModifiers();
+                if (!ChainBuilderReach.inheritedAsSelf(method.getSimpleName().toString(),
+                    method.getParameters().size(), modifiers.contains(Modifier.STATIC), accessOf(modifiers),
+                    samePackage)) {
+                    continue;
+                }
+                return new ChainBuilderReach.SelfMethod(modifiers.contains(Modifier.PUBLIC),
+                    modifiers.contains(Modifier.FINAL));
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Collects every supertype of a type but {@code java.lang.Object}, depth
+     * first, each once.
+     *
+     * @param types the type utilities
+     * @param type the type whose supertypes are collected
+     * @param out the supertypes collected so far, appended to
+     * @param seen the qualified names already collected
+     */
+    private static void collectSupertypes(Types types, TypeMirror type, List<TypeElement> out, Set<String> seen) {
+        for (TypeMirror direct : types.directSupertypes(type)) {
+            if (!(direct instanceof DeclaredType declaredType)
+                || !(declaredType.asElement() instanceof TypeElement element)) continue;
+            String name = element.getQualifiedName().toString();
+            if (Object.class.getName().equals(name) || !seen.add(name)) continue;
+            out.add(element);
+            collectSupertypes(types, direct, out, seen);
+        }
+    }
+
+    /**
+     * The access the ancestor's {@code @ClassBuilder(access)} generates its
+     * builder at, read as {@link BuilderAccess#generatedAt} reads it.
+     *
+     * @param ancestor the annotated ancestor
+     * @return the access
+     */
+    private static AccessLevel generatedAccessOf(TypeElement ancestor) {
+        return BuilderAccess.generatedAt(new AnnotationLookup().stringAttr(ancestor, ClassBuilder.class.getName(),
+            BuilderAccess.ATTRIBUTE, null));
     }
 
     /**
@@ -233,7 +350,12 @@ public final class ChainMemberIndex {
     }
 
     private static ChainMemberIndex absent() {
-        return new ChainMemberIndex(false, 0, Set.of(), AccessLevel.PUBLIC, false, null, null);
+        return new ChainMemberIndex(false, 0, Set.of(), AccessLevel.PUBLIC, false, null, null, null);
+    }
+
+    /** An index of a builder the generator writes, which says nothing but the access it has. */
+    private static ChainMemberIndex generated(AccessLevel access) {
+        return new ChainMemberIndex(false, 0, Set.of(), AccessLevel.PUBLIC, false, null, null, access);
     }
 
     /**
@@ -264,25 +386,34 @@ public final class ChainMemberIndex {
     }
 
     /**
-     * Whether the {@code self()} the ancestor's builder's author wrote is public.
+     * Whether the {@code self()} standing for the ancestor's builder's own is
+     * public - the one its author wrote, or on a root the one the builder
+     * inherits where the author wrote none.
      *
-     * @return whether it is public, or null when the author wrote none or the builder is absent
+     * @return whether it is public, or null when there is none or the builder is absent
      */
-    public @Nullable Boolean authoredSelfPublic() {
-        return authoredSelfPublic;
+    public @Nullable Boolean selfPublic() {
+        return selfPublic;
     }
 
     /**
-     * Decides, through {@link ChainBuilderReach#unreachable}, whether a link's
-     * generated builder can extend the ancestor's builder.
+     * Decides whether a link's generated builder can extend the ancestor's
+     * builder - one its author wrote through {@link ChainBuilderReach#unreachable},
+     * one the generator writes, or will write, through
+     * {@link ChainBuilderReach#unreachableGenerated} at the access it has.
      *
      * @param samePackage whether the link is in the ancestor's package
-     * @return why it cannot, or null when it can or the builder is absent - generated, or not generated yet
+     * @param sameTopLevel whether the link's outermost enclosing class is the ancestor's
+     * @return why it cannot, or null when it can or nothing is known of the builder
      */
-    public @Nullable ChainBuilderReach.Unreachable unreachable(boolean samePackage) {
-        if (!builderPresent) return null;
-        return ChainBuilderReach.unreachable(builderAccess, declaresConstructors, noArgumentConstructorAccess,
-            samePackage);
+    public @Nullable ChainBuilderReach.Unreachable unreachable(boolean samePackage, boolean sameTopLevel) {
+        if (builderPresent) {
+            return ChainBuilderReach.unreachable(builderAccess, declaresConstructors, noArgumentConstructorAccess,
+                samePackage, sameTopLevel);
+        }
+        return generatedBuilderAccess == null
+            ? null
+            : ChainBuilderReach.unreachableGenerated(generatedBuilderAccess, samePackage, sameTopLevel);
     }
 
 }
