@@ -97,6 +97,13 @@ tasks.withType<Javadoc>().configureEach {
 sourceSets {
     create("aptTest") {
         java.srcDir("src/aptTest/java")
+        // src/aptTest/resources needs no srcDir line - a created source set
+        // takes it by convention, and naming it again makes every file under it
+        // a duplicate entry the copy task refuses. It holds the parity cases:
+        // one target source and one expectation file each, read here as a
+        // JavaFileObject and by :plugin:test out of the same directory, so a
+        // claim about what both halves produce is written once rather than
+        // transcribed twice.
         compileClasspath += sourceSets.main.get().output + configurations["testCompileClasspath"]
         runtimeClasspath += output + compileClasspath
     }

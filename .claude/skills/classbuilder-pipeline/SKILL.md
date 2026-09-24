@@ -19,11 +19,32 @@ for each element annotated with @ClassBuilder (CLASS | RECORD | INTERFACE):
         @Lazy rewrite so lazy params/assignments are retyped with it. Skipped
         for records, SuperBuilder targets, a set factoryMethod, a fieldless
         target, or any author-declared ctor (Lombok @Builder's rule).
-      NestedBuilderFactory + FieldMutators build the JCClassDecl
-      BootstrapMethodFactory appends builder()/from()/mutate() onto target.defs
+      NestedBuilderFactory + FieldMutators build the JCClassDecl - or, when
+        the target declares a nested class of the builder's name, the same
+        members go to DeclaredBuilderMerge.merge, which refuses an unusable
+        shape (ERROR, no entry points), appends what the author does not
+        spell (one NOTE for the rest), and retypes javac's default to
+        builderConstructorAccess on a builder declaring no constructor
+      BootstrapMethodFactory appends builder()/from()/mutate() onto target.defs,
+        typed against the declared builder when there is one, and skips all
+        three with a NOTE when that builder has no constructor of the arity
+        they pass (the editor repeats it as a weak warning)
       SuperBuilderMutator (abstract or annotated-super path) produces
         self-typed <T, B> generics, abstract self()/build() on the root,
-        CopyConstructorFactory emits protected Target(Builder<?,?> b)
+        CopyConstructorFactory emits protected Target(Builder<?,?> b);
+        a declared builder on any chain role is merged into with that
+        role's members, in the declaration's own self-type names
+    ExecutableBuilderMutator (annotation on a constructor or static
+      factory) merges into the enclosing type's declared builder the same
+      way, a static factory inside an interface included; builder(..)
+      needs the constructor javac would select for the seeds, as names
+      tell it (DeclaredBuilderShape.instantiable: own type by erased simple
+      name, box or primitive, wider primitive, Object, a JDK supertype
+      LISTED_SUPERTYPES names (CharSequence, Number, Comparable, the
+      java.util collection interfaces) with arguments carried; phases and most
+      specific as javac; any unplaceable rival skips), counting the ones a
+      constructor annotation on the builder appends, and is skipped with a
+      NOTE otherwise
     If JavacProcessingEnvironment cannot be unwrapped (ecj, unknown wrapper),
       the processor ERRORs - consumers must use javac.
   for INTERFACE:
@@ -34,7 +55,7 @@ for each element annotated with @ClassBuilder (CLASS | RECORD | INTERFACE):
 ```
 Validation: generated `build()` calls a `$validate$($result)` it emits into the builder, when `validate=true` and `BuildFlags.of(target)` finds an enforceable constraint. **No runtime classpath entry at all** - the checks, and the `$flagEmpty$` / `$flagSize$` / `$flagText$` / `$flagNumber$` helpers they call, are generated members. The flag walk climbs the superclass chain, so it reaches `@BuilderIgnore`d, excluded and inherited fields the builder never models; a private field on a *parent* is skipped, being unreachable from a builder nested in the child. **A `factoryMethod` is the one narrowing**: constraints are resolved against the declared type, so a subtype the factory returns can carry flags nothing at processing time can enumerate, and `BuilderMutator.warnFactoryValidation` warns rather than letting that pass in silence. Rejections throw `IllegalStateException`.
 
-Editor: `ClassBuilderAugmentProvider` surfaces the bootstrap methods AND the nested `Builder` class to the PSI layer so autocompletion, goto-symbol, and type resolution all work before the first javac round. The synthesised Builder mirrors `FieldMutators.setters` in full - boolean zero-arg/typed pair plus `@Negate` inverse, `Optional` nullable-raw/wrapped plus `@Formattable` overload, `@Collector` varargs/iterable bulk overloads with opt-in single-element add/put/clear and (map) put-if-absent, array varargs, String `@Formattable` overload. Parameter-level annotations (`@PrintFormat`, `@Nullable`, `@NotNull`) propagate live from field annotations via `buildParam` + type-use annotations. `ClassBuilderLineMarkerProvider` shows a gutter icon (`/icons/generated.svg`, with `generated_dark.svg` as its dark-theme companion) on every `@ClassBuilder` annotation.
+Editor: `ClassBuilderAugmentProvider` surfaces the bootstrap methods AND the nested `Builder` class to the PSI layer so autocompletion, goto-symbol, and type resolution all work before the first javac round. Where the target declares the builder class itself, the provider contributes the merged members into that declaration instead of synthesising a second class, and `DeclaredBuilderShapeInspection` / `DeclaredBuilderSkipsEntryPointsInspection` report the processor's refusals and skip note in its own words. The synthesised Builder mirrors `FieldMutators.setters` in full - boolean zero-arg/typed pair plus `@Negate` inverse, `Optional` nullable-raw/wrapped plus `@Formattable` overload, `@Collector` varargs/iterable bulk overloads with opt-in single-element add/put/clear and (map) put-if-absent, array varargs, String `@Formattable` overload. Parameter-level annotations (`@PrintFormat`, `@Nullable`, `@NotNull`) propagate live from field annotations via `buildParam` + type-use annotations. `ClassBuilderLineMarkerProvider` shows a gutter icon (`/icons/generated.svg`, with `generated_dark.svg` as its dark-theme companion) on every `@ClassBuilder` annotation.
 
 JDK compatibility: `mutate/compat/` carries the `JavacCompat` interface plus the `JavacCompatV17` baseline. Every currently supported JDK (17 through 25) uses the baseline because every javac internal the pipeline touches has been stable across those versions. `JavacCompatFactory.forRuntime()` stays wired up as the single entry point so a future divergence is a new subclass + one gate - no caller change required.
 

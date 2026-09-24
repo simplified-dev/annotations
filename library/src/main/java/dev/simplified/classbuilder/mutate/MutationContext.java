@@ -11,11 +11,16 @@ import com.sun.tools.javac.util.Names;
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.BuildFlag;
 import dev.simplified.classbuilder.apt.BuilderConfig;
+import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.classbuilder.apt.SetterShape;
+import dev.simplified.classbuilder.apt.SlotHolding;
+import dev.simplified.shared.apt.TypeNames;
 import dev.simplified.shared.javac.ContractAnnotations;
 import dev.simplified.shared.javac.GeneratedAnnotations;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.JavacTypeFactory;
+import org.jetbrains.annotations.Nullable;
 
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
@@ -24,9 +29,15 @@ import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.TypeParameterElement;
 import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
+import javax.lang.model.util.Types;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -48,10 +59,13 @@ public final class MutationContext {
     private final GeneratedAnnotations generated;
     private final Set<String> instanceDefaults;
     private final Set<String> declaredAccessors;
+    private final Map<String, List<TypeMirror>> accessorReturnTypes;
     private final String selfTypeName;
     private final String selfBuilderName;
     private final ExecutableElement executable;
     private final List<? extends TypeParameterElement> typeParameters;
+    private final Map<JCMethodDecl, SetterTag> setterTags = new IdentityHashMap<>();
+    private final List<DeclaredBuilderMerge.CoveredSetter> coveredSetters = new ArrayList<>();
 
     public MutationContext(JavacBridge bridge,
                            TypeElement targetElement,
@@ -107,7 +121,9 @@ public final class MutationContext {
         // on the tree" are the same set. @Lazy synthesises a getter onto the
         // target moments later, and reading target.defs after that would count
         // our own output as the author's.
-        this.declaredAccessors = collectZeroArgMethods(target, targetElement, bridge);
+        this.declaredAccessors = new HashSet<>();
+        this.accessorReturnTypes = new HashMap<>();
+        collectZeroArgMethods(target, targetElement, bridge, declaredAccessors, accessorReturnTypes);
         // A generic target could itself declare a parameter called T or B, so
         // the SuperBuilder self-type names dodge whatever it uses. Resolved
         // once here because the chain mutator declares them while the
@@ -139,6 +155,67 @@ public final class MutationContext {
     }
 
     /**
+     * Records the slot a setter was generated for and its shape, so a merge
+     * handed the whole member list can tell which setters belong to which slot
+     * and what each of them does.
+     *
+     * @param slot the slot the setter is generated for
+     * @param shape the setter's shape
+     * @param setter the setter
+     * @return the same setter
+     */
+    JCMethodDecl recordSetter(FieldSpec slot, SetterShape shape, JCMethodDecl setter) {
+        setterTags.put(setter, new SetterTag(slot.name, shape));
+        return setter;
+    }
+
+    /**
+     * The slot a generated member is a setter of.
+     *
+     * @param member a member the builder producers generated
+     * @return the slot's name, or {@code null} when the member is no slot's setter
+     */
+    @Nullable String setterSlot(JCTree member) {
+        SetterTag tag = member instanceof JCMethodDecl method ? setterTags.get(method) : null;
+        return tag == null ? null : tag.slot();
+    }
+
+    /**
+     * The shape of a generated setter.
+     *
+     * @param member a member the builder producers generated
+     * @return its shape, or {@code null} when the member is no slot's setter
+     */
+    @Nullable SetterShape setterShape(JCTree member) {
+        SetterTag tag = member instanceof JCMethodDecl method ? setterTags.get(method) : null;
+        return tag == null ? null : tag.shape();
+    }
+
+    /**
+     * What {@link #recordSetter} records of one setter.
+     *
+     * @param slot the name of the slot it is generated for
+     * @param shape its shape
+     */
+    private record SetterTag(String slot, SetterShape shape) { }
+
+    /**
+     * Records a generated setter the merge left out because an author method
+     * covers it, for the copy entry points to judge once they know whether they
+     * are emitted.
+     *
+     * @param covered the author's method and the setter it covers
+     */
+    void recordCoveredSetter(DeclaredBuilderMerge.CoveredSetter covered) {
+        coveredSetters.add(covered);
+    }
+
+    /** Every generated setter the merge left out for an author method covering it, in merge order. */
+    List<DeclaredBuilderMerge.CoveredSetter> coveredSetters() {
+        return coveredSetters;
+    }
+
+    /**
      * The {@code java.util} interface a collected field's builder slot is typed
      * as while it gathers contributions - {@code List<E>}, {@code Set<E>} or
      * {@code Map<K, V>}, read off the supertype the field's declared type was
@@ -153,17 +230,20 @@ public final class MutationContext {
      * the initializer returns rather than something reconstructed from the
      * declared type.
      *
+     * <p>The interface is {@link DeclaredBuilderShape#scratchContainerName},
+     * which the editor asks too when it renders the slot.
+     *
      * @param field the collected field
      * @return the scratch slot's declared type
      */
     public JCExpression collectedSlotType(FieldSpec field) {
         TreeMaker make = make();
+        String fqn = DeclaredBuilderShape.scratchContainerName(field.isMap, field.isSet);
         if (field.isMap) {
-            return make.TypeApply(types.qualIdent("java.util.Map"),
+            return make.TypeApply(types.qualIdent(fqn),
                 com.sun.tools.javac.util.List.of(
                     types.parseType(field.mapKey), types.parseType(field.mapValue)));
         }
-        String fqn = field.isSet ? "java.util.Set" : "java.util.List";
         return make.TypeApply(types.qualIdent(fqn),
             com.sun.tools.javac.util.List.of(types.parseType(field.collectionElement)));
     }
@@ -202,9 +282,13 @@ public final class MutationContext {
         return isInstanceDefault(field.name) && isCollected(field);
     }
 
-    /** The builder-side marker recording that a setter replaced the collection wholesale. */
+    /**
+     * Names the builder-side marker recording that a setter replaced the
+     * collection wholesale - {@link SlotHolding#replacedMarker}, the name the
+     * editor declares too.
+     */
     public static String replacedMarker(String fieldName) {
-        return "$replaced$" + fieldName;
+        return SlotHolding.replacedMarker(fieldName);
     }
 
     /** Whether the generated builder carries type parameters. */
@@ -267,16 +351,50 @@ public final class MutationContext {
      * classpath, offers a zero-argument method by this name for
      * {@code from(T)} / {@code mutate()} to read a field through.
      *
+     * <p>A method the element model knows has to return a type the field's
+     * setter accepts. Taking one by its name alone read a field through any
+     * method spelled like it - a {@code String reset()} beside a
+     * {@code Runnable reset} - and passed the setter a value javac refuses on
+     * a generated line. A method present only on the tree, appended by an
+     * earlier pass of this round with no symbol behind it, is taken at its
+     * name.
+     *
      * @param name the candidate accessor name
-     * @return whether a call to it will resolve
+     * @param field the field the call would read
+     * @return whether a call to it will resolve and yield the field's type
      */
-    public boolean declaresAccessor(String name) {
-        return declaredAccessors.contains(name);
+    public boolean declaresAccessor(String name, FieldSpec field) {
+        if (!declaredAccessors.contains(name)) return false;
+        List<TypeMirror> returned = accessorReturnTypes.get(name);
+        if (returned == null || field.type == null) return true;
+        for (TypeMirror type : returned)
+            if (readsAs(type, field.type)) return true;
+        return false;
     }
 
     /**
-     * Zero-argument methods visible on the target: those written in its own
-     * source, plus those inherited from a supertype that is already compiled.
+     * Whether a method returning one type can seed a slot of another.
+     *
+     * <p>Judged on erasures where either side names a type variable, which a
+     * member read off a generic supertype carries unsubstituted, and accepted
+     * outright where either side is still unresolved this round.
+     *
+     * @param returned the method's return type
+     * @param fieldType the field's declared type
+     * @return whether the returned value is assignable to the field's type
+     */
+    private boolean readsAs(TypeMirror returned, TypeMirror fieldType) {
+        if (returned.getKind() == TypeKind.ERROR || fieldType.getKind() == TypeKind.ERROR) return true;
+        Types typeUtils = bridge.processingEnvironment().getTypeUtils();
+        if (TypeNames.mentionsTypeVariable(returned) || TypeNames.mentionsTypeVariable(fieldType))
+            return typeUtils.isAssignable(typeUtils.erasure(returned), typeUtils.erasure(fieldType));
+        return typeUtils.isAssignable(returned, fieldType);
+    }
+
+    /**
+     * Collects the zero-argument methods visible on the target: those written
+     * in its own source, plus those inherited from a supertype that is already
+     * compiled.
      *
      * <p>Both halves are needed and neither subsumes the other. The tree scan
      * is the only view of members declared in this compilation round, and
@@ -285,25 +403,29 @@ public final class MutationContext {
      * parent's fields too. {@link Object}'s own methods are dropped: they are
      * inherited by everything and would make a field named {@code class} or
      * {@code hashCode} resolve to something unrelated.
+     *
+     * @param target the target's tree
+     * @param targetElement the target's element
+     * @param bridge the javac services
+     * @param names receives every method's name
+     * @param returnTypes receives, per name, the return type of each method the element model knows
      */
-    private static Set<String> collectZeroArgMethods(JCClassDecl target,
-                                                     TypeElement targetElement,
-                                                     JavacBridge bridge) {
-        Set<String> out = new HashSet<>();
+    private static void collectZeroArgMethods(JCClassDecl target, TypeElement targetElement, JavacBridge bridge,
+                                              Set<String> names, Map<String, List<TypeMirror>> returnTypes) {
         for (JCTree def : target.defs) {
-            if (def instanceof JCMethodDecl m && m.params.isEmpty()) out.add(m.name.toString());
+            if (def instanceof JCMethodDecl m && m.params.isEmpty()) names.add(m.name.toString());
         }
         for (Element member : bridge.elements().getAllMembers(targetElement)) {
             if (member.getKind() != ElementKind.METHOD) continue;
-            if (member.getModifiers().contains(Modifier.STATIC)) continue;
             ExecutableElement method = (ExecutableElement) member;
             if (!method.getParameters().isEmpty()) continue;
             Element owner = method.getEnclosingElement();
             if (owner instanceof TypeElement t
                 && "java.lang.Object".contentEquals(t.getQualifiedName())) continue;
-            out.add(method.getSimpleName().toString());
+            String name = method.getSimpleName().toString();
+            returnTypes.computeIfAbsent(name, key -> new ArrayList<>()).add(method.getReturnType());
+            if (!member.getModifiers().contains(Modifier.STATIC)) names.add(name);
         }
-        return out;
     }
 
     /** Appends {@code $} until the name is not one the target already declares. */

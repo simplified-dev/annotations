@@ -12,12 +12,15 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.net.URI;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
 
 import static com.google.testing.compile.CompilationSubject.assertThat;
@@ -218,11 +221,17 @@ public class BuilderMutatorTest {
     }
 
     // ------------------------------------------------------------------
-    // Existing nested 'Builder' is respected (skip-on-collision)
+    // Existing nested 'Builder' is merged into, the author winning each member
     // ------------------------------------------------------------------
 
+    /**
+     * A builder spelling every member itself is merged into rather than
+     * skipped: nothing generated lands beside the author's members, and the
+     * entry points still land on the target. The declaration used to suppress
+     * the entry points too.
+     */
     @Test
-    public void existingNestedBuilder_skipped() {
+    public void handWrittenBuilder_isMergedNotSkipped() throws Exception {
         JavaFileObject src = JavaFileObjects.forSourceLines("demo.HandRolled",
             "package demo;",
             "import dev.simplified.annotations.ClassBuilder;",
@@ -237,9 +246,16 @@ public class BuilderMutatorTest {
             "        public HandRolled build() { return new HandRolled(note); }",
             "    }",
             "}");
-        Compilation c = compile(src);
+        JavaFileObject consumer = JavaFileObjects.forSourceLines("demo.UseHandRolled",
+            "package demo;",
+            "public class UseHandRolled {",
+            "    public static String go() { return HandRolled.builder().note(\"n\").build().getNote(); }",
+            "}");
+        Compilation c = compile(src, consumer);
         assertThat(c).succeeded();
-        // No error, no sibling; processor emitted a NOTE.
+        assertThat(c).hadNoteContaining("already spells");
+        Object note = loadClasses(c).loadClass("demo.UseHandRolled").getMethod("go").invoke(null);
+        assertEquals("n", note);
     }
 
     // ------------------------------------------------------------------
@@ -282,6 +298,126 @@ public class BuilderMutatorTest {
         Object ib = innerBuilder.getEnclosingClass().getMethod("builder").invoke(null);
         innerBuilder.getMethod("innerField", int.class).invoke(ib, 7);
         assertEquals(7, inner.getMethod("getInnerField").invoke(innerBuilder.getMethod("build").invoke(ib)));
+    }
+
+    // ------------------------------------------------------------------
+    // The builder's slot fields, as author code sees them
+    // ------------------------------------------------------------------
+
+    /**
+     * The generated builder declares one private field per slot, and the target
+     * encloses the builder, so a static helper in the target reads a slot
+     * straight off a builder - the read the editor resolves against the same
+     * fields.
+     */
+    @Test
+    public void generatedBuilderSlotField_isReadableFromTheTarget() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Note",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Note {",
+            "    String text;",
+            "    static String peek(Builder b) { return b.text; }",
+            "    public static String go() { return peek(Note.builder().text(\"hi\")); }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        Class<?> note = Class.forName("demo.Note", true, loadClasses(c));
+        assertEquals("hi", note.getMethod("go").invoke(null));
+    }
+
+    /**
+     * Each slot field is declared in the type the builder holds the slot in: an
+     * {@code Optional} and a collection as written, a {@code @Lazy} field as a
+     * supplier of its declared type. The editor's copies of the fields carry the
+     * same types.
+     */
+    @Test
+    public void generatedBuilderSlotFields_areDeclaredInTheirStorageTypes() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Holder",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Lazy;",
+            "import java.util.List;",
+            "import java.util.Optional;",
+            "@ClassBuilder(validate = false)",
+            "public class Holder {",
+            "    Optional<String> nick;",
+            "    List<String> tags;",
+            "    @Lazy String heavy = \"h\";",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        Class<?> builder = nested(Class.forName("demo.Holder", true, loadClasses(c)), "Builder");
+        assertEquals("java.util.Optional<java.lang.String>",
+            builder.getDeclaredField("nick").getGenericType().getTypeName());
+        assertEquals("java.util.List<java.lang.String>",
+            builder.getDeclaredField("tags").getGenericType().getTypeName());
+        assertEquals("java.util.function.Supplier<java.lang.String>",
+            builder.getDeclaredField("heavy").getGenericType().getTypeName());
+    }
+
+    /**
+     * A {@code @Collector} slot whose default reads the instance is followed by
+     * a {@code private boolean $replaced$<name>} marker, which a static helper in
+     * the target reads off a builder. The editor declares the same field in the
+     * same place.
+     */
+    @Test
+    public void generatedBuilderReplacedMarker_followsACollectedInstanceDefault() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Tagged",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Collector;",
+            "import java.util.ArrayList;",
+            "import java.util.List;",
+            "@ClassBuilder(validate = false)",
+            "public class Tagged {",
+            "    String name;",
+            "    @Collector List<String> tags = new ArrayList<>(List.of(String.valueOf(name)));",
+            "    static boolean replaced(Builder b) { return b.$replaced$tags; }",
+            "    public static boolean go() { return replaced(Tagged.builder()); }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        Class<?> tagged = Class.forName("demo.Tagged", true, loadClasses(c));
+        assertEquals(false, tagged.getMethod("go").invoke(null));
+        List<String> fields = new ArrayList<>();
+        for (Field field : nested(tagged, "Builder").getDeclaredFields()) {
+            fields.add(Modifier.toString(field.getModifiers()) + " " + field.getGenericType().getTypeName()
+                + " " + field.getName());
+        }
+        assertEquals(List.of(
+            "private java.lang.String name",
+            "private java.util.List<java.lang.String> tags",
+            "private boolean $replaced$tags"), fields);
+    }
+
+    /**
+     * A {@code @Collector} slot whose default reads nothing of the instance has
+     * no marker, so the same read is {@code cannot find symbol}.
+     */
+    @Test
+    public void generatedBuilderReplacedMarker_isAbsentBesideAStaticDefault() {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Tagged",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Collector;",
+            "import java.util.ArrayList;",
+            "import java.util.List;",
+            "@ClassBuilder(validate = false)",
+            "public class Tagged {",
+            "    String name;",
+            "    @Collector List<String> tags = new ArrayList<>(List.of(\"t\"));",
+            "    static boolean replaced(Builder b) { return b.$replaced$tags; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("cannot find symbol");
     }
 
 }

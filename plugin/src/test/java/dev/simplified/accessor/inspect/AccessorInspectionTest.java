@@ -293,6 +293,23 @@ public class AccessorInspectionTest extends LightJavaCodeInsightFixtureTestCase 
         assertTrue(hasProblemContaining("must contain the '{}' placeholder"));
     }
 
+    /**
+     * A pattern written as a constant is judged by the value it holds, which
+     * is what javac reads. The inspection used to pass over anything but a
+     * literal, so a constant with no placeholder was clean in the editor.
+     */
+    public void testNameConstantWithoutPlaceholder_flagged() {
+        myFixture.configureByText("Widget.java",
+            """
+            import dev.simplified.annotations.Getter;
+            public class Widget {
+                static final String READ = "value";
+                @Getter(name = READ) private String label;
+            }
+            """);
+        assertTrue(hasProblemContaining("must contain the '{}' placeholder"));
+    }
+
     public void testNameSetToTheSuppressionSentinel_flagged() {
         myFixture.configureByText("Widget.java",
             """

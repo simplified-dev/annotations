@@ -4,6 +4,7 @@ import com.google.testing.compile.Compilation;
 import com.google.testing.compile.Compiler;
 import com.google.testing.compile.JavaFileObjects;
 import dev.simplified.classbuilder.apt.ClassBuilderProcessor;
+import dev.simplified.classbuilder.apt.ExecutableTargetRefusal;
 import org.junit.Test;
 
 import javax.tools.JavaFileObject;
@@ -13,6 +14,7 @@ import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
 
 import static com.google.testing.compile.CompilationSubject.assertThat;
 import static org.junit.Assert.assertEquals;
@@ -481,6 +483,16 @@ public class ExecutableTargetTest {
     // Rejections
     // ------------------------------------------------------------------
 
+    /**
+     * Asserts the compilation failed with exactly one error, whose text is the
+     * given sentence - the one the editor reports on the same source.
+     */
+    private static void assertOnlyError(Compilation c, String expected) {
+        assertThat(c).failed();
+        assertEquals("exactly one error: " + c.errors(), 1, c.errors().size());
+        assertEquals(expected, c.errors().get(0).getMessage(Locale.ROOT));
+    }
+
     @Test
     public void instanceMethodTarget_isRejected() {
         Compilation c = compile(
@@ -491,8 +503,7 @@ public class ExecutableTargetTest {
                 "    @ClassBuilder",
                 "    public Inst make(int n) { return this; }",
                 "}"));
-        assertThat(c).failed();
-        assertThat(c).hadErrorContaining("no receiver");
+        assertOnlyError(c, ExecutableTargetRefusal.instanceMethod());
     }
 
     @Test
@@ -505,8 +516,7 @@ public class ExecutableTargetTest {
                 "    @ClassBuilder",
                 "    public static void go(int n) { }",
                 "}"));
-        assertThat(c).failed();
-        assertThat(c).hadErrorContaining("nothing for build() to return");
+        assertOnlyError(c, ExecutableTargetRefusal.voidMethod());
     }
 
     @Test
@@ -521,8 +531,7 @@ public class ExecutableTargetTest {
                 "    @ClassBuilder",
                 "    Both(int n) { this.n = n; }",
                 "}"));
-        assertThat(c).failed();
-        assertThat(c).hadErrorContaining("one type carries one builder");
+        assertOnlyError(c, ExecutableTargetRefusal.besideAnnotatedType("Both"));
     }
 
     @Test
@@ -538,8 +547,7 @@ public class ExecutableTargetTest {
                 "    @ClassBuilder",
                 "    public static Twice of(int n) { return new Twice(n); }",
                 "}"));
-        assertThat(c).failed();
-        assertThat(c).hadErrorContaining("already on another member");
+        assertOnlyError(c, ExecutableTargetRefusal.secondMember("Twice"));
     }
 
     /**
@@ -559,8 +567,68 @@ public class ExecutableTargetTest {
                 "    @ClassBuilder",
                 "    Deferred(String value) { this.value = value; }",
                 "}"));
-        assertThat(c).failed();
-        assertThat(c).hadErrorContaining("@Lazy");
+        assertOnlyError(c, ExecutableTargetRefusal.lazyField("Deferred", "value"));
+    }
+
+    /**
+     * A static factory with a self-bounded type parameter: the generated
+     * {@code builder()} and builder class re-declare the bound, so an explicit
+     * witness satisfying it compiles and runs, and so does the builder named
+     * with it.
+     */
+    @Test
+    public void boundedStaticFactory_entryPointTakesAWitnessWithinTheBound() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Range",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public final class Range<T extends Comparable<T>> {",
+                "    private final T low;",
+                "    private final T high;",
+                "    private Range(T low, T high) { this.low = low; this.high = high; }",
+                "    public T low() { return low; }",
+                "    @ClassBuilder",
+                "    public static <T extends Comparable<T>> Range<T> of(T low, T high) { return new Range<>(low, high); }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseRange",
+                "package demo;",
+                "public class UseRange {",
+                "    public static int go() { return Range.<Integer>builder().low(1).high(5).build().low(); }",
+                "    public static int named() {",
+                "        Range.Builder<Integer> b = Range.<Integer>builder();",
+                "        return b.low(1).high(5).build().low();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals(1, runGo(c, "demo.UseRange"));
+    }
+
+    /** Two parameters, the first bounded by itself and the second free, witnessed in order. */
+    @Test
+    public void twoParameterBoundedStaticFactory_entryPointTakesBothWitnesses() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Entry",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public final class Entry<K extends Comparable<K>, V> {",
+                "    private final K key;",
+                "    private final V value;",
+                "    private Entry(K key, V value) { this.key = key; this.value = value; }",
+                "    public K key() { return key; }",
+                "    public V value() { return value; }",
+                "    @ClassBuilder",
+                "    public static <K extends Comparable<K>, V> Entry<K, V> of(K key, V value) { return new Entry<>(key, value); }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseEntry",
+                "package demo;",
+                "public class UseEntry {",
+                "    public static String go() {",
+                "        Entry<String, Integer> e = Entry.<String, Integer>builder().key(\"k\").value(2).build();",
+                "        return e.key() + e.value();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("k2", runGo(c, "demo.UseEntry"));
     }
 
     @Test
@@ -655,6 +723,29 @@ public class ExecutableTargetTest {
                 "}"));
         assertThat(c).failed();
         assertThat(c).hadErrorContaining("cannot be accessed from outside package");
+    }
+
+    /**
+     * An author's {@code builder()} of the entry point's arity keeps the
+     * generated one out, and the note saying so sits on the annotated
+     * constructor, as every other diagnostic of this path does. It was reported
+     * on the enclosing type's line.
+     */
+    @Test
+    public void authorBuilderMethodBesideAConstructorTarget_isNotedOnTheConstructor() {
+        JavaFileObject action = JavaFileObjects.forSourceLines("demo.Action",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "public final class Action {",
+            "    private final String name;",
+            "    @ClassBuilder",
+            "    Action(String name) { this.name = name; }",
+            "    public static Object builder() { return \"author\"; }",
+            "}");
+        Compilation c = compile(action);
+        assertThat(c).succeeded();
+        assertThat(c).hadNoteContaining("@ClassBuilder skipped bootstrap 'builder' - target already declares "
+            + "builder/0").inFile(action).onLine(6);
     }
 
 }

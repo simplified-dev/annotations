@@ -335,13 +335,6 @@ public final class FieldSpec {
     }
 
     /**
-     * Reads the three companions that shape a setter - {@code @Formattable},
-     * {@code @Negate} and {@code @Collector} - off whichever element declares
-     * the slot. One reading for all three factories, so a slot derived from a
-     * parameter cannot come out with a different setter matrix from a field of
-     * the same shape.
-     */
-    /**
      * Resolves the slot's setter patterns: the target's, overridden by a
      * {@code @SetterNames} written on the slot itself.
      *
@@ -447,6 +440,17 @@ public final class FieldSpec {
         return typeUtils.isSameType(typeUtils.erasure(param), typeUtils.erasure(slot));
     }
 
+    /**
+     * Reads the three companions that shape a setter - {@code @Formattable},
+     * {@code @Negate} and {@code @Collector} - off whichever element declares
+     * the slot. One reading for all three factories, so a slot derived from a
+     * parameter cannot come out with a different setter matrix from a field of
+     * the same shape.
+     *
+     * @param b the slot being assembled
+     * @param owner the field, component or parameter declaring the slot
+     * @param lookup the annotation reader
+     */
     private static void readSetterCompanions(Builder b, Element owner, AnnotationLookup lookup) {
         b.formattable = lookup.hasAnnotation(owner, "dev.simplified.annotations.Formattable");
         b.negateName = lookup.stringAttr(owner, "dev.simplified.annotations.Negate", "value", null);
@@ -603,13 +607,13 @@ public final class FieldSpec {
         // class-wide policy and has nothing to retain.
         AnnotationMirror declaredDefault =
             lookup.findMirror(element, "dev.simplified.annotations.BuilderDefault");
+        b.builderDefault = InstanceDefaults.builderDefault(
+            declaredDefault == null ? null : lookup.booleanAttr(declaredDefault, "value", true),
+            classRetainInit);
         if (declaredDefault != null) {
-            b.builderDefault = lookup.booleanAttr(declaredDefault, "value", true);
             b.builderDefaultExplicit = b.builderDefault;
             String provider = lookup.stringAttr(declaredDefault, "provider", "");
             b.defaultProvider = provider.isEmpty() ? null : provider;
-        } else {
-            b.builderDefault = classRetainInit;
         }
 
         AnnotationMirror via = lookup.findMirror(element, "dev.simplified.annotations.ObtainVia");
@@ -626,7 +630,8 @@ public final class FieldSpec {
         // @Collector on a custom (non-java.util) container has no
         // `new ArrayList<>()`-style fallback and must build fresh instances
         // from the field's own factory.
-        boolean needsInitializer = b.builderDefault || (b.collector && b.isCustomContainer);
+        boolean needsInitializer =
+            InstanceDefaults.captures(b.builderDefault, b.collector && b.isCustomContainer);
         if (needsInitializer && introspector != null) {
             SourceIntrospector.InitializerInfo info = introspector.readFieldInitializer(element);
             if (info != null) {

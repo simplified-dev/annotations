@@ -450,6 +450,25 @@ public class ClassBuilderLiveAnnotationsTest extends BasePlatformTestCase {
     }
 
     /**
+     * An interface target's three entry points are inferred the contracts a
+     * class target's carry - {@code builder()} and {@code mutate()}
+     * {@code -> new}, {@code from(T)} {@code _ -> new} with {@code pure} - which
+     * are the ones javac declares on the interface.
+     */
+    public void testInterfaceEntryPoints_inferTheClassPathsContracts() {
+        PsiClass target = configureTarget("Shape",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public interface Shape { String name(); }
+            """);
+
+        assertContractShape(target.findMethodsByName("builder", false)[0], "-> new", false, null);
+        assertContractShape(target.findMethodsByName("from", false)[0], "_ -> new", true, null);
+        assertContractShape(target.findMethodsByName("mutate", false)[0], "-> new", false, null);
+    }
+
+    /**
      * Guards the plugin.xml registration: the platform's extension-point list
      * must include our provider under
      * {@code com.intellij.codeInsight.InferredAnnotationProvider.EP_NAME}.

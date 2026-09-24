@@ -8,23 +8,36 @@ import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationMemberValue;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiClassType;
+import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiElementVisitor;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
+import com.intellij.psi.PsiModifierList;
+import com.intellij.psi.PsiModifierListOwner;
+import com.intellij.psi.PsiNameIdentifierOwner;
 import com.intellij.psi.PsiPrimitiveType;
+import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypes;
 import com.intellij.psi.util.InheritanceUtil;
+import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.psi.util.PsiUtil;
+import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.SetterNames;
+import dev.simplified.classbuilder.apt.BuilderAccess;
+import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
+import dev.simplified.classbuilder.apt.ConstructorAccess;
 import dev.simplified.classbuilder.apt.NamePattern;
+import dev.simplified.classbuilder.editor.BuilderSite;
+import dev.simplified.classbuilder.editor.MergedSlotStorage;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.Collection;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Flags misuse of companion field annotations on a {@code @ClassBuilder}
@@ -47,7 +60,21 @@ import java.util.Map;
  *   <li>{@code @BuildFlag} on a method that is not an interface target's
  *       accessor, where nothing will read it</li>
  *   <li>a {@code @SetterNames} pattern that cannot expand to a Java
- *       identifier, or that suppresses the setter role</li>
+ *       identifier, that lacks the placeholder on the target, where it fans
+ *       out over every slot, or that suppresses the setter role</li>
+ *   <li>{@code @ClassBuilder(access = NONE)}, which names no modifier the
+ *       always-generated builder class can carry</li>
+ *   <li>{@code @ClassBuilder(constructorAccess = NONE)}, which names no
+ *       modifier the constructor {@code build()} calls can carry</li>
+ *   <li>{@code @ClassBuilder(builderConstructorAccess = NONE)}, which names no
+ *       modifier a builder's constructor can carry</li>
+ *   <li>{@code @ClassBuilder} on a constructor or static factory the processor
+ *       refuses - an instance method, a {@code void} method, a member of an
+ *       annotated type, a second annotated member, or a member of a type
+ *       declaring a {@code @Lazy} field</li>
+ *   <li>a slot whose setter, on a builder the generator writes whole, meets a
+ *       {@code java.lang.Object} method it cannot override - {@code wait(long)}
+ *       for a {@code long wait}, reported on the slot</li>
  * </ul>
  */
 public class ClassBuilderFieldInspection extends LocalInspectionTool {
@@ -67,10 +94,14 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
                 super.visitAnnotation(annotation);
                 String qualifiedName = annotation.getQualifiedName();
                 if (SETTER_NAMES_FQN.equals(qualifiedName)) {
-                    // Generated once per field, so a pattern without the
-                    // placeholder would name every field's setter the same.
+                    // The target's pattern fans out over every slot, so one
+                    // without the placeholder would name every setter the same.
+                    // A slot's own, written on its field or parameter, expands
+                    // exactly once, and a literal is simply that setter's name -
+                    // the processor asks the placeholder of the target's alone.
+                    boolean fansOut = !(annotation.getOwner() instanceof PsiModifierList);
                     for (String role : ClassBuilderConstants.SETTER_ROLES) {
-                        checkPattern(holder, annotation, role, true);
+                        checkPattern(holder, annotation, role, fansOut);
                     }
                     checkNotSuppressed(holder, annotation, "set",
                         "a field would then have no way to be assigned on the builder");
@@ -84,6 +115,12 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
                         "a builder with no class to name is not a builder");
                     checkNotSuppressed(holder, annotation, "build",
                         "a builder with no way to finish is not a builder");
+                } else if (ClassBuilderConstants.ANNOTATION_FQN.equals(qualifiedName)) {
+                    checkAccess(holder, annotation);
+                    checkConstructorAccess(holder, annotation);
+                    checkBuilderConstructorAccess(holder, annotation);
+                    checkExecutableTarget(holder, annotation);
+                    checkObjectMethodSetters(holder, annotation);
                 }
             }
 
@@ -136,6 +173,117 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
                 checkBuildFlag(holder, flag, method.getReturnType());
             }
         };
+    }
+
+    /**
+     * Reports {@code access = NONE} on the written value, in the processor's
+     * sentence. The builder class is always generated, so the value suppresses
+     * nothing; the processor then generates at the default, which is what the
+     * augment provider contributes.
+     *
+     * @param holder sink for the diagnostic
+     * @param annotation the {@code @ClassBuilder} annotation
+     */
+    private static void checkAccess(@NotNull ProblemsHolder holder, @NotNull PsiAnnotation annotation) {
+        PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(BuilderAccess.ATTRIBUTE);
+        if (!(value instanceof PsiReferenceExpression reference)) return;
+        if (!AccessLevel.NONE.name().equals(reference.getReferenceName())) return;
+        holder.registerProblem(value, BuilderAccess.notExpressible(), ProblemHighlightType.GENERIC_ERROR);
+    }
+
+    /**
+     * Reports {@code constructorAccess = NONE} on the written value, in the
+     * processor's sentence. The value is the access of the constructor
+     * {@code build()} calls, so it names no modifier to apply; the processor
+     * then generates at the default, which is what the augment provider
+     * contributes.
+     *
+     * @param holder sink for the diagnostic
+     * @param annotation the {@code @ClassBuilder} annotation
+     */
+    private static void checkConstructorAccess(@NotNull ProblemsHolder holder, @NotNull PsiAnnotation annotation) {
+        PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(ConstructorAccess.ATTRIBUTE);
+        if (!(value instanceof PsiReferenceExpression reference)) return;
+        if (!AccessLevel.NONE.name().equals(reference.getReferenceName())) return;
+        holder.registerProblem(value, ConstructorAccess.notExpressible(), ProblemHighlightType.GENERIC_ERROR);
+    }
+
+    /**
+     * Reports {@code builderConstructorAccess = NONE} on the written value, in
+     * the processor's sentence. Every builder has a constructor, so the value
+     * suppresses nothing; the processor then generates as under the default,
+     * which is what the augment provider contributes.
+     *
+     * @param holder sink for the diagnostic
+     * @param annotation the {@code @ClassBuilder} annotation
+     */
+    private static void checkBuilderConstructorAccess(@NotNull ProblemsHolder holder,
+                                                      @NotNull PsiAnnotation annotation) {
+        PsiAnnotationMemberValue value =
+            annotation.findDeclaredAttributeValue(BuilderConstructorAccess.ATTRIBUTE);
+        if (!(value instanceof PsiReferenceExpression reference)) return;
+        if (!AccessLevel.NONE.name().equals(reference.getReferenceName())) return;
+        holder.registerProblem(value, BuilderConstructorAccess.notExpressible(),
+            ProblemHighlightType.GENERIC_ERROR);
+    }
+
+    /**
+     * Reports {@code @ClassBuilder} on a constructor or static factory the
+     * processor refuses, on the annotation, in the sentence
+     * {@link ClassBuilderConstants#executableRefusal} answers - the one javac
+     * prints on the member. The processor generates nothing for a refused
+     * member, and the augment provider contributes nothing for it either.
+     *
+     * @param holder sink for the diagnostic
+     * @param annotation the {@code @ClassBuilder} annotation
+     */
+    private static void checkExecutableTarget(@NotNull ProblemsHolder holder, @NotNull PsiAnnotation annotation) {
+        if (!(annotation.getOwner() instanceof PsiModifierList modifiers)) return;
+        if (!(modifiers.getParent() instanceof PsiMethod member)) return;
+        PsiClass owner = member.getContainingClass();
+        if (owner == null) return;
+        String refusal = ClassBuilderConstants.executableRefusal(owner, member);
+        if (refusal != null) holder.registerProblem(annotation, refusal, ProblemHighlightType.GENERIC_ERROR);
+    }
+
+    /**
+     * Reports each setter of a builder the generator writes whole that meets a
+     * {@code java.lang.Object} method it cannot override, on the name of the
+     * slot's field, record component or parameter, in the sentence
+     * {@link MergedSlotStorage#unoverridableObjectMethods} answers - the one the
+     * processor prints on the slot.
+     *
+     * <p>Judged only where the processor generates the whole builder: on the
+     * annotation it builds from, with no declared builder to merge into - where
+     * the declared builder's own supertypes are read instead - and with no chain
+     * ancestor refusing the link. An interface type target's builder is a
+     * sibling file and is not judged here. The augment provider keeps
+     * contributing the setter, as the processor keeps generating it.
+     *
+     * @param holder sink for the diagnostics
+     * @param annotation the {@code @ClassBuilder} annotation
+     */
+    private static void checkObjectMethodSetters(@NotNull ProblemsHolder holder, @NotNull PsiAnnotation annotation) {
+        PsiModifierListOwner owner = PsiTreeUtil.getParentOfType(annotation, PsiModifierListOwner.class);
+        PsiMethod member = owner instanceof PsiMethod method ? method : null;
+        PsiClass target = owner instanceof PsiClass cls ? cls : member != null ? member.getContainingClass() : null;
+        if (target == null || target.getName() == null || (target.isInterface() && member == null)) return;
+        BuilderSite site = BuilderSite.of(target);
+        if (site == null || !Objects.equals(site.executable(), member)) return;
+        String builderName = ClassBuilderConstants.builderScheme(annotation,
+            ClassBuilderConstants.namingStyle(annotation), target.getName()).type();
+        if (ClassBuilderConstants.declaredBuilderOf(target, builderName) != null) return;
+        if (ClassBuilderConstants.ancestorBlock(target, builderName, member != null) != null) return;
+        PsiClass builder = null;
+        for (PsiClass nested : target.getInnerClasses()) {
+            if (builderName.equals(nested.getName())) builder = nested;
+        }
+        if (builder == null) return;
+        for (MergedSlotStorage.ObjectMethodSetter blocked : MergedSlotStorage.unoverridableObjectMethods(site, builder)) {
+            PsiElement anchor = blocked.slot() instanceof PsiNameIdentifierOwner named ? named.getNameIdentifier() : null;
+            holder.registerProblem(anchor == null ? blocked.slot() : anchor, blocked.message(),
+                ProblemHighlightType.GENERIC_ERROR);
+        }
     }
 
     /**
@@ -253,13 +401,15 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
 
     /**
      * Reports a naming pattern that cannot expand to a Java identifier,
-     * highlighting the attribute value rather than the whole annotation.
+     * highlighting the attribute value rather than the whole annotation. The
+     * value is read as {@link ClassBuilderConstants#writtenStringAttr} reads it,
+     * so a constant is judged by what it holds.
      */
     private static void checkPattern(@NotNull ProblemsHolder holder, @NotNull PsiAnnotation annotation,
                                      @NotNull String attr, boolean placeholderRequired) {
         PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(attr);
-        if (!(value instanceof PsiLiteralExpression literal)) return;
-        if (!(literal.getValue() instanceof String pattern)) return;
+        String pattern = ClassBuilderConstants.writtenStringAttr(annotation, attr);
+        if (value == null || pattern == null) return;
         String error = NamePattern.patternError(pattern, placeholderRequired);
         if (error != null) {
             holder.registerProblem(value, "Naming pattern for '" + attr + "' " + error,
@@ -279,8 +429,8 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
     private static void checkNotSuppressed(@NotNull ProblemsHolder holder, @NotNull PsiAnnotation annotation,
                                            @NotNull String attr, @NotNull String because) {
         PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(attr);
-        if (!(value instanceof PsiLiteralExpression literal)) return;
-        if (!SetterNames.NONE.equals(literal.getValue())) return;
+        if (value == null) return;
+        if (!SetterNames.NONE.equals(ClassBuilderConstants.writtenStringAttr(annotation, attr))) return;
         holder.registerProblem(value,
             "'" + attr + "' cannot be suppressed - " + because,
             ProblemHighlightType.GENERIC_ERROR);
@@ -351,7 +501,7 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
 
     private static int intAttr(@NotNull PsiAnnotation annotation, @NotNull String attr) {
         var value = annotation.findAttributeValue(attr);
-        if (value instanceof com.intellij.psi.PsiLiteralExpression literal && literal.getValue() instanceof Integer i) return i;
+        if (value instanceof PsiLiteralExpression literal && literal.getValue() instanceof Integer i) return i;
         return -1;
     }
 

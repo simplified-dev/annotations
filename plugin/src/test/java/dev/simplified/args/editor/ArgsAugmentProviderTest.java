@@ -1,5 +1,7 @@
 package dev.simplified.args.editor;
 
+import com.intellij.codeInsight.daemon.impl.HighlightInfo;
+import com.intellij.lang.annotation.HighlightSeverity;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiJavaFile;
@@ -7,6 +9,7 @@ import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiParameter;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
+import dev.simplified.args.inspect.ArgsConstructorInspection;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
 
 import java.util.ArrayList;
@@ -319,6 +322,58 @@ public class ArgsAugmentProviderTest extends LightJavaCodeInsightFixtureTestCase
         assertTrue("@NotNull must ride the parameter's type as well", onType);
     }
 
+    /**
+     * javac refuses a {@code @NoArgsConstructor} that would leave a
+     * {@code final} field unassigned, reports only that, and appends nothing.
+     * The provider still contributed a public nullary constructor beside the
+     * error.
+     *
+     * <p>What the editor shows then: the processor's error on the annotation,
+     * and a {@code new Tagged()} elsewhere resolving to the implicit default
+     * with no error of its own - as javac, which stops at the processor's error,
+     * reports nothing on that call either.
+     */
+    public void testNoArgsOverAnUnassignedFinal_contributesNothing() {
+        myFixture.enableInspections(new ArgsConstructorInspection());
+        PsiClass tagged = configure("Tagged",
+            """
+            import dev.simplified.annotations.NoArgsConstructor;
+            @NoArgsConstructor
+            public class Tagged {
+                private final String tag;
+            }
+            """);
+        for (PsiMethod ctor : tagged.getConstructors())
+            assertFalse("javac appends nothing", GeneratedMemberMarker.isGenerated(ctor));
+        assertTrue("the processor's error is on the annotation",
+            currentErrors().contains("@NoArgsConstructor would leave final field 'tag' unassigned - "
+                + "give an initializer, or write force = true to accept the JVM zero value"));
+        List<String> errors = errorsIn("UseTagged.java",
+            """
+            public class UseTagged {
+                Tagged make() { return new Tagged(); }
+            }
+            """);
+        assertTrue("javac reports nothing on the call; editor: " + errors, errors.isEmpty());
+    }
+
+    /** With {@code force = true} the processor appends the constructor, and so does the provider. */
+    public void testForcedNoArgsOverAnUnassignedFinal_isContributed() {
+        PsiClass tagged = configure("Tagged",
+            """
+            import dev.simplified.annotations.NoArgsConstructor;
+            @NoArgsConstructor(force = true)
+            public class Tagged {
+                private final String tag;
+            }
+            """);
+        assertEquals(1, tagged.getConstructors().length);
+        PsiMethod only = tagged.getConstructors()[0];
+        assertTrue(GeneratedMemberMarker.isGenerated(only));
+        assertEquals(0, only.getParameterList().getParametersCount());
+        assertTrue(only.hasModifierProperty(PsiModifier.PUBLIC));
+    }
+
     public void testRecordContributesNothing() {
         PsiClass rec = configure("Rec",
             """
@@ -345,6 +400,65 @@ public class ArgsAugmentProviderTest extends LightJavaCodeInsightFixtureTestCase
         for (PsiMethod ctor : nope.getConstructors()) {
             assertFalse(GeneratedMemberMarker.isGenerated(ctor));
         }
+    }
+
+    /**
+     * A constructor at {@code access = PACKAGE} is refused from another package,
+     * as javac refuses it. The light constructor carried no access modifier,
+     * which the platform's access check reads as public.
+     */
+    public void testPackageAccessConstructor_isClosedToAnotherPackage() {
+        addPair();
+        List<String> errors = errorsIn("q/UsePair.java",
+            """
+            package q;
+            public class UsePair {
+                void go() { new p.Pair(1); }
+            }
+            """);
+        assertEquals("javac: cannot be accessed from outside package; editor: " + errors, 1, errors.size());
+    }
+
+    /** From its own package the same constructor stays reachable. */
+    public void testPackageAccessConstructor_resolvesFromItsOwnPackage() {
+        addPair();
+        List<String> errors = errorsIn("p/UsePair.java",
+            """
+            package p;
+            public class UsePair {
+                void go() { new Pair(1); }
+            }
+            """);
+        assertTrue("javac compiles this; editor errors: " + errors, errors.isEmpty());
+    }
+
+    private void addPair() {
+        myFixture.addFileToProject("p/Pair.java",
+            """
+            package p;
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.AllArgsConstructor;
+            @AllArgsConstructor(access = AccessLevel.PACKAGE)
+            public class Pair {
+                private int left;
+            }
+            """);
+    }
+
+    /** Opens a new file at the given path and returns the errors highlighted in it. */
+    private List<String> errorsIn(String path, String source) {
+        myFixture.addFileToProject(path, source);
+        myFixture.configureFromTempProjectFile(path);
+        return currentErrors();
+    }
+
+    /** Returns the errors highlighted in the file the fixture has open. */
+    private List<String> currentErrors() {
+        List<String> errors = new ArrayList<>();
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            if (info.getSeverity() == HighlightSeverity.ERROR) errors.add(info.getDescription());
+        }
+        return errors;
     }
 
 }

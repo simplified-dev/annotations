@@ -12,7 +12,6 @@ import com.intellij.psi.PsiElementVisitor;
 import com.intellij.psi.PsiEnumConstant;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiJavaCodeReferenceElement;
-import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiModifier;
 import dev.simplified.annotations.SetterNames;
 import dev.simplified.classbuilder.apt.NamePattern;
@@ -197,12 +196,15 @@ public final class AccessorInspection extends LocalInspectionTool {
      * pattern without it gives every field on the class the same method name,
      * where a field-level one only collides with whatever else claims that
      * name.
+     *
+     * <p>A pattern written as a constant is judged by the value it holds, read
+     * as the augment provider reads it.
      */
     private static void checkName(ProblemsHolder holder, PsiAnnotation annotation) {
         PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(NAME_ATTR);
-        if (!(value instanceof PsiLiteralExpression literal)) return;
-        if (!(literal.getValue() instanceof String pattern)) return;
-        if (pattern.isEmpty()) return; // INHERIT - the style supplies the pattern
+        if (value == null) return;
+        String pattern = AccessorConstants.writtenName(annotation);
+        if (pattern == null || pattern.isEmpty()) return; // INHERIT - the style supplies the pattern
         if (SetterNames.NONE.equals(pattern)) {
             // The accessor annotations suppress through AccessLevel.NONE, so
             // the sentinel is never read as one here and would be minted

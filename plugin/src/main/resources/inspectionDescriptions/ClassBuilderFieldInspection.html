@@ -24,17 +24,51 @@ Flags misuse of the per-field companion annotations that travel with
       <code>Map</code>, object arrays, or <code>Optional</code> of
       <code>String</code> / <code>Number</code> - the generated check has no
       notion of size on other types.</li>
-  <li>A <code>@SetterNames</code> pattern must carry the <code>{}</code>
-      placeholder exactly once and expand to a legal Java identifier.
-      These setters are generated once per field, so without the
-      placeholder every field would name the same method.</li>
+  <li>A <code>@SetterNames</code> pattern must expand to a legal Java
+      identifier and carry the <code>{}</code> placeholder at most once. On
+      the target it must carry it: those setters are generated once per
+      field, so without the placeholder every field would name the same
+      method. On a field or parameter the pattern expands once, and a
+      pattern without the placeholder is simply that setter's name.</li>
   <li>A <code>@BuilderNames</code> value must expand to a legal Java
       identifier. Its members are generated exactly once, so unlike the
       setter roles it needs no placeholder.</li>
   <li>Four members cannot be set to <code>NONE</code>:
       <code>set</code>, or a field would have no way to be assigned; and
       <code>type</code> / <code>build</code>, since a builder with no
-      class to name or no way to finish is not a builder.</li>
+      class to name or no way to finish is not a builder. A name written as
+      a constant is judged by the value it holds, <code>NONE</code> included.</li>
+  <li><code>@ClassBuilder(access = NONE)</code> names no modifier the
+      builder class can carry, and the builder class is always generated.
+      The build generates the builder and its entry points public beside the
+      error.</li>
+  <li><code>@ClassBuilder(constructorAccess = NONE)</code> names no
+      modifier the constructor <code>build()</code> calls can carry. The
+      build generates that constructor package-private, the default, beside
+      the error.</li>
+  <li><code>@ClassBuilder(builderConstructorAccess = NONE)</code> names no
+      modifier a constructor can carry, and every builder has a constructor.
+      The build generates as under the default beside the error.</li>
+  <li><code>@ClassBuilder</code> on a constructor or static factory the build
+      refuses, reported on the annotation in the build's own words: an
+      instance method, which <code>builder()</code> has no receiver to call; a
+      <code>void</code> method, which leaves <code>build()</code> nothing to
+      return; a member of a type that carries the annotation itself; a second
+      annotated member of one type; and a member of a type declaring a
+      <code>@Lazy</code> field. The build generates no builder for the member,
+      and the editor offers none.</li>
+  <li>A slot whose setter meets a <code>java.lang.Object</code> method it
+      cannot override, on a builder the generator writes whole - one no
+      declared <code>Builder</code> is merged into. The final
+      <code>getClass()</code>, <code>notify()</code>, <code>notifyAll()</code>
+      and the three <code>wait</code> overloads cannot be overridden at all, and
+      <code>hashCode()</code>, <code>toString()</code>,
+      <code>equals(Object)</code> and <code>finalize()</code> return a type the
+      builder is not: a <code>long wait</code> field, or a boolean whose flag
+      setter is named <code>notify</code>, fails the build. The slot's field,
+      record component or parameter is reported in the build's own words.
+      <code>clone()</code> returns <code>Object</code> and is overridden
+      legally.</li>
 </ul>
 
 <!-- tooltip end -->

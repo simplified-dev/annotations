@@ -178,6 +178,179 @@ public class SuperBuilderMutatorTest {
         assertEquals(2, leafCls.getMethod("getCount").invoke(built));
     }
 
+    /**
+     * Every chain role's generated builder declares one field per slot of its
+     * own target, so an author copy constructor on a root, a chained abstract
+     * and a concrete link each reads its own slots off the builder it is handed.
+     */
+    @Test
+    public void userWrittenCopyCtorsOnEveryRole_readTheirOwnSlots() throws Exception {
+        JavaFileObject root = JavaFileObjects.forSourceLines("s.Shape",
+            "package s;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Shape {",
+            "    String name;",
+            "    public String getName() { return name; }",
+            "    protected Shape(Builder<?, ?> b) { this.name = b.name + \"!\"; }",
+            "}");
+        JavaFileObject middle = JavaFileObjects.forSourceLines("s.Polygon",
+            "package s;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Polygon extends Shape {",
+            "    int sides;",
+            "    public int getSides() { return sides; }",
+            "    protected Polygon(Builder<?, ?> b) { super(b); this.sides = b.sides; }",
+            "}");
+        JavaFileObject link = JavaFileObjects.forSourceLines("s.Square",
+            "package s;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Square extends Polygon {",
+            "    double edge;",
+            "    public double getEdge() { return edge; }",
+            "    protected Square(Builder b) { super(b); this.edge = b.edge; }",
+            "}");
+        Compilation c = compile(root, middle, link);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> square = Class.forName("s.Square", true, cl);
+        Class<?> squareBuilder = nested(square, "Builder");
+        Object b = square.getMethod("builder").invoke(null);
+        squareBuilder.getMethod("name", String.class).invoke(b, "sq");
+        squareBuilder.getMethod("sides", int.class).invoke(b, 4);
+        squareBuilder.getMethod("edge", double.class).invoke(b, 2.5);
+        Object built = squareBuilder.getMethod("build").invoke(b);
+        assertEquals("sq!", square.getMethod("getName").invoke(built));
+        assertEquals(4, square.getMethod("getSides").invoke(built));
+        assertEquals(2.5, square.getMethod("getEdge").invoke(built));
+    }
+
+    /**
+     * A hand-written copy constructor that leaves a {@code final} field to its
+     * initializer keeps that initializer on a generated builder too. The lift
+     * took it off for the generated copy constructor the author's replaces, and
+     * javac reported {@code variable sides might not have been initialized} on
+     * the author's constructor.
+     */
+    @Test
+    public void userWrittenCopyCtor_leavingAnInitializedFinal_keepsItsInitializer() throws Exception {
+        JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Base",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Base {",
+            "    private final String name;",
+            "    private final int sides = 3;",
+            "    public String getName() { return name; }",
+            "    public int getSides() { return sides; }",
+            "    protected Base(Builder<?, ?> b) { this.name = b.name; }",
+            "}");
+        JavaFileObject child = JavaFileObjects.forSourceLines("demo.Leaf",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Leaf extends Base {",
+            "    int count;",
+            "}");
+        Compilation c = compile(parent, child);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> baseCls = Class.forName("demo.Base", true, cl);
+        Class<?> leafCls = Class.forName("demo.Leaf", true, cl);
+        Class<?> leafBuilder = nested(leafCls, "Builder");
+        Object b = leafCls.getMethod("builder").invoke(null);
+        leafBuilder.getMethod("name", String.class).invoke(b, "tri");
+        leafBuilder.getMethod("sides", int.class).invoke(b, 8);
+        Object built = leafBuilder.getMethod("build").invoke(b);
+        assertEquals("tri", baseCls.getMethod("getName").invoke(built));
+        assertEquals("the author's constructor leaves the initializer in charge",
+            3, baseCls.getMethod("getSides").invoke(built));
+    }
+
+    /**
+     * A hand-written copy constructor naming the builder through its target -
+     * {@code Base.Builder<?, ?>} on the root, {@code demo.Leaf.Builder} on the
+     * link - is the author's version as much as the simple spelling is. The
+     * processor matched only the simple spelling and appended a second
+     * constructor of the same erasure, which javac reported as already defined
+     * on the class line.
+     */
+    @Test
+    public void userWrittenCopyCtor_spelledWithTheQualifiedBuilder_respected() throws Exception {
+        JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Base",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Base {",
+            "    String name;",
+            "    public String getName() { return name; }",
+            "    protected Base(Base.Builder<?, ?> b) { this.name = b.name + \"!\"; }",
+            "}");
+        JavaFileObject child = JavaFileObjects.forSourceLines("demo.Leaf",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Leaf extends Base {",
+            "    int count;",
+            "    public int getCount() { return count; }",
+            "    protected Leaf(demo.Leaf.Builder b) { super(b); this.count = b.count * 10; }",
+            "}");
+        Compilation c = compile(parent, child);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> baseCls = Class.forName("demo.Base", true, cl);
+        Class<?> leafCls = Class.forName("demo.Leaf", true, cl);
+        Class<?> leafBuilder = nested(leafCls, "Builder");
+        Object b = leafCls.getMethod("builder").invoke(null);
+        leafBuilder.getMethod("name", String.class).invoke(b, "hello");
+        leafBuilder.getMethod("count", int.class).invoke(b, 2);
+        Object built = leafBuilder.getMethod("build").invoke(b);
+        assertEquals("hello!", baseCls.getMethod("getName").invoke(built));
+        assertEquals(20, leafCls.getMethod("getCount").invoke(built));
+    }
+
+    /**
+     * A one-parameter constructor taking an ancestor's builder is not the
+     * target's copy constructor, even though the simple names agree: its
+     * erasure differs, so the generated one lands beside it and is the one
+     * {@code build()} calls.
+     */
+    @Test
+    public void aConstructorTakingTheAncestorsBuilder_isNotTheCopyConstructor() throws Exception {
+        JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Base",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Base {",
+            "    String name;",
+            "    public String getName() { return name; }",
+            "}");
+        JavaFileObject child = JavaFileObjects.forSourceLines("demo.Leaf",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Leaf extends Base {",
+            "    int count;",
+            "    public int getCount() { return count; }",
+            "    Leaf(Base.Builder<?, ?> b) { super(b); this.count = -1; }",
+            "}");
+        Compilation c = compile(parent, child);
+        assertThat(c).succeeded();
+
+        ClassLoader cl = loadClasses(c);
+        Class<?> leafCls = Class.forName("demo.Leaf", true, cl);
+        Class<?> leafBuilder = nested(leafCls, "Builder");
+        Object b = leafCls.getMethod("builder").invoke(null);
+        leafBuilder.getMethod("count", int.class).invoke(b, 2);
+        Object built = leafBuilder.getMethod("build").invoke(b);
+        assertEquals(2, leafCls.getMethod("getCount").invoke(built));
+    }
+
     // ------------------------------------------------------------------
     // Abstract target has no static builder() / from() bootstraps
     // ------------------------------------------------------------------
@@ -701,6 +874,44 @@ public class SuperBuilderMutatorTest {
 
         assertEquals("Intro", docCls.getMethod("getTitle").invoke(second));
         assertEquals(99, articleCls.getMethod("getWords").invoke(second));
+    }
+
+    /**
+     * A generated link builder carries javac's default constructor at the
+     * builder class's access, {@code public} by default, and
+     * {@code builderConstructorAccess} does not reach it - so a caller in another
+     * package constructs it directly. The editor has to offer the same.
+     */
+    @Test
+    public void linkBuilder_keepsJavacsDefaultAtTheClassAccess() throws Exception {
+        JavaFileObject parent = JavaFileObjects.forSourceLines("demo.Doc",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Doc {",
+            "    String title;",
+            "    public String getTitle() { return title; }",
+            "}");
+        JavaFileObject child = JavaFileObjects.forSourceLines("demo.Article",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false)",
+            "public class Article extends Doc {",
+            "    int words;",
+            "    public int getWords() { return words; }",
+            "}");
+        JavaFileObject caller = JavaFileObjects.forSourceLines("other.UseArticle",
+            "package other;",
+            "import demo.Article;",
+            "public class UseArticle {",
+            "    public static String go() {",
+            "        return new Article.Builder().title(\"t\").words(3).build().getTitle();",
+            "    }",
+            "}");
+        Compilation c = compile(parent, child, caller);
+        assertThat(c).succeeded();
+        Object title = Class.forName("other.UseArticle", true, loadClasses(c)).getMethod("go").invoke(null);
+        assertEquals("t", title);
     }
 
 }

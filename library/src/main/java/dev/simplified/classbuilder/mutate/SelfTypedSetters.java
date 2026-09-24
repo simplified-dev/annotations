@@ -15,10 +15,13 @@ import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.classbuilder.apt.SetterScheme;
+import dev.simplified.classbuilder.apt.SetterShape;
 import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.ContractAnnotations;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.JavacTypeFactory;
+
+import java.util.Optional;
 
 /**
  * Self-typed variant of {@link FieldMutators}: emits setters whose return
@@ -44,66 +47,104 @@ final class SelfTypedSetters {
     private final Names names;
     private final JavacTypeFactory types;
     private final ContractAnnotations contracts;
+    /** The name of the builder's self-type parameter, which every setter returns. */
+    private final String selfBuilderName;
 
+    /**
+     * Creates setters returning the self-type parameter under the name the
+     * generator gives it.
+     *
+     * @param ctx the per-target mutation context
+     */
     SelfTypedSetters(MutationContext ctx) {
+        this(ctx, ctx.selfBuilderName());
+    }
+
+    /**
+     * Creates setters returning the self-type parameter under the given name,
+     * which is the one a declared builder spells its trailing parameter with.
+     *
+     * @param ctx the per-target mutation context
+     * @param selfBuilderName the name of the builder's self-type parameter
+     */
+    SelfTypedSetters(MutationContext ctx, String selfBuilderName) {
         this.ctx = ctx;
         this.make = ctx.make();
         this.names = ctx.names();
         this.types = ctx.types();
         this.contracts = ctx.contracts();
+        this.selfBuilderName = selfBuilderName;
     }
 
-    /** Mirrors {@link FieldMutators#setters} but always with {@code return self();}. */
+    /**
+     * Mirrors {@link FieldMutators#setters} but always with {@code return self();},
+     * each setter recorded on the context as the field's with its
+     * {@link SetterShape}.
+     *
+     * @param field the slot
+     * @return its setters, in emission order
+     */
     List<JCMethodDecl> setters(FieldSpec field) {
         ListBuffer<JCMethodDecl> out = new ListBuffer<>();
         if (field.lazy) {
-            out.append(lazyValueSetter(field));
-            out.append(lazySupplierSetter(field));
+            out.append(tag(field, SetterShape.LAZY_VALUE, lazyValueSetter(field)));
+            out.append(tag(field, SetterShape.LAZY_SUPPLIER, lazySupplierSetter(field)));
             return out.toList();
         }
         if (field.isBoolean) {
             // Typed setter is the ordinary `set` role; the zero-arg form is the
             // separate `flag` role and drops out when a style suppresses it.
-            if (field.setters.emitsFlag()) out.append(booleanZeroArg(field, field.name, false));
-            out.append(booleanTyped(field, field.name, false));
+            if (field.setters.emitsFlag())
+                out.append(tag(field, SetterShape.FLAG, booleanZeroArg(field, field.name, false)));
+            out.append(tag(field, SetterShape.BOOLEAN, booleanTyped(field, field.name, false)));
             if (field.negateName != null && !field.negateName.isEmpty()) {
-                if (field.setters.emitsFlag()) out.append(booleanZeroArg(field, field.negateName, true));
-                out.append(booleanTyped(field, field.negateName, true));
+                if (field.setters.emitsFlag())
+                    out.append(tag(field, SetterShape.FLAG, booleanZeroArg(field, field.negateName, true)));
+                out.append(tag(field, SetterShape.NEGATED, booleanTyped(field, field.negateName, true)));
             }
         } else if (field.isOptional) {
-            out.append(optionalNullableRaw(field));
-            out.append(optionalWrapped(field));
-            if (field.formattable && field.isOptionalString) {
-                out.append(optionalFormattable(field));
-            }
+            out.append(tag(field, SetterShape.OPTIONAL_VALUE, optionalNullableRaw(field)));
+            out.append(tag(field, SetterShape.OPTIONAL, optionalWrapped(field)));
+            if (field.formattable && field.isOptionalString)
+                out.append(tag(field, SetterShape.FORMAT, optionalFormattable(field)));
         } else if (field.isArray) {
-            out.append(arrayVarargs(field));
+            out.append(tag(field, SetterShape.ARRAY, arrayVarargs(field)));
         } else if ((field.isListLike || field.isMap) && field.collector) {
             if (field.isCustomContainer && !hasInit(field)) {
                 // Custom container with @Collector but no captured initializer -
                 // degrade to a plain replace setter (processor emits a NOTE).
-                out.append(plainSetter(field));
+                out.append(tag(field, SetterShape.PLAIN, plainSetter(field)));
             } else {
                 if (field.isMap) {
-                    out.append(singularMapReplace(field));
-                    if (field.singular && field.setters.emitsPut()) out.append(singularMapPut(field));
-                    if (field.compute && field.setters.emitsCompute()) out.append(singularMapPutIfAbsent(field));
+                    out.append(tag(field, SetterShape.BULK_MAP, singularMapReplace(field)));
+                    if (field.singular && field.setters.emitsPut())
+                        out.append(tag(field, SetterShape.PUT, singularMapPut(field)));
+                    if (field.compute && field.setters.emitsCompute())
+                        out.append(tag(field, SetterShape.PUT_IF_ABSENT, singularMapPutIfAbsent(field)));
                 } else {
-                    out.append(singularCollectionVarargsReplace(field));
-                    out.append(singularCollectionIterableReplace(field));
-                    if (field.singular && field.setters.emitsAdd()) out.append(singularCollectionAdd(field));
+                    out.append(tag(field, SetterShape.BULK_VARARGS, singularCollectionVarargsReplace(field)));
+                    out.append(tag(field, SetterShape.BULK_ITERABLE, singularCollectionIterableReplace(field)));
+                    if (field.singular && field.setters.emitsAdd())
+                        out.append(tag(field, SetterShape.ADD, singularCollectionAdd(field)));
                 }
-                if (field.clearable && field.setters.emitsClear()) out.append(singularClear(field));
-                if (field.removable && field.setters.emitsRemove()) out.append(singularRemove(field));
+                if (field.clearable && field.setters.emitsClear())
+                    out.append(tag(field, SetterShape.CLEAR, singularClear(field)));
+                if (field.removable && field.setters.emitsRemove())
+                    out.append(tag(field, SetterShape.REMOVE, singularRemove(field)));
             }
         } else if (field.isString && field.formattable) {
-            out.append(plainSetter(field));
-            out.append(stringFormattable(field));
+            out.append(tag(field, SetterShape.PLAIN, plainSetter(field)));
+            out.append(tag(field, SetterShape.FORMAT, stringFormattable(field)));
         } else {
-            out.append(plainSetter(field));
+            out.append(tag(field, SetterShape.PLAIN, plainSetter(field)));
         }
         appendAssignViaOverloads(field, out);
         return out.toList();
+    }
+
+    /** Records a setter on the context as the slot's, in the given shape. */
+    private JCMethodDecl tag(FieldSpec field, SetterShape shape, JCMethodDecl setter) {
+        return ctx.recordSetter(field, shape, setter);
     }
 
     // ------------------------------------------------------------------
@@ -123,12 +164,12 @@ final class SelfTypedSetters {
         return method(setterName, List.of(p), List.of(assign, returnSelf()));
     }
 
-    /** {@code B withFoo(Supplier<T> supplier)} - true lazy form, stores the supplier. */
+    /** {@code B withFoo(Supplier<T> supplier)} - true lazy form, stores the supplier, boxed for a primitive. */
     private JCMethodDecl lazySupplierSetter(FieldSpec field) {
         String setterName = field.setters.setName(field.name, field.isBoolean);
         JCExpression supplierType = make.TypeApply(
             types.qualIdent("java.util.function.Supplier"),
-            List.of(types.parseType(field.typeDisplay))
+            List.of(types.parseBoxedType(field.typeDisplay))
         );
         return method(setterName, List.of(param(field.name, supplierType)),
             assignAndReturnSelf(field.name));
@@ -242,7 +283,7 @@ final class SelfTypedSetters {
      * {@code B withDescription(@PrintFormat @Nullable String format, Object... args)}
      * for an {@code Optional<String>} field; wraps the formatted value so the
      * Optional wrapper is preserved and a null format string becomes
-     * {@link java.util.Optional#empty()}.
+     * {@link Optional#empty()}.
      */
     private JCMethodDecl optionalFormattable(FieldSpec field) {
         String setterName = field.setters.setName(field.name, field.isBoolean);
@@ -598,7 +639,7 @@ final class SelfTypedSetters {
         if (field.collector) return;
         for (FieldSpec.AssignTransform transform : field.assignVia) {
             if (transform.direct() || !transform.resolved()) continue;
-            out.append(assignViaOverload(field, transform));
+            out.append(tag(field, SetterShape.ASSIGN_VIA, assignViaOverload(field, transform)));
         }
     }
 
@@ -648,12 +689,6 @@ final class SelfTypedSetters {
         );
     }
 
-    /**
-     * A fresh, empty container for a {@code @Collector} reset setter. A custom
-     * container comes from the field's own {@code $default$} provider (a
-     * {@code new ArrayList<>()} would not be assignable to the field type);
-     * java.util containers use the matching concrete implementation.
-     */
     /** Call to the target's synthesised {@code $empty$<field>()} factory. */
     private JCExpression emptyFactoryCall(FieldSpec field) {
         return make.Apply(
@@ -666,6 +701,15 @@ final class SelfTypedSetters {
         );
     }
 
+    /**
+     * A fresh, empty container for a {@code @Collector} reset setter. A custom
+     * container comes from the field's own {@code $default$} provider (a
+     * {@code new ArrayList<>()} would not be assignable to the field type);
+     * java.util containers use the matching concrete implementation.
+     *
+     * @param field the collector slot being reset
+     * @return the expression producing the empty container
+     */
     private JCExpression freshContainer(FieldSpec field) {
         // A collected instance default collects into a plain java.util scratch:
         // the real container comes from the initializer in the constructor, so
@@ -719,9 +763,10 @@ final class SelfTypedSetters {
 
     private JCMethodDecl method(String methodName, List<JCVariableDecl> params, List<JCStatement> body) {
         JCBlock block = make.Block(0, body);
-        // The self-type parameter, which dodges its usual "B" spelling when the
-        // target declares a type parameter of that name.
-        JCExpression returnType = make.Ident(names.fromString(ctx.selfBuilderName()));
+        // The self-type parameter. Under the generator's name it dodges its
+        // usual "B" spelling when the target declares a type parameter of that
+        // name; a declared builder's own spelling is taken as written.
+        JCExpression returnType = make.Ident(names.fromString(selfBuilderName));
         // Contract mirrors FieldMutators: every setter returns this via
         // self() and mutates the builder. Arity picks the left-hand side.
         List<JCAnnotation> contract = switch (params.size()) {

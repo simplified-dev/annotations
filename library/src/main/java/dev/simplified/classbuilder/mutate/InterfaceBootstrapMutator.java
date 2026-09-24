@@ -1,6 +1,7 @@
 package dev.simplified.classbuilder.mutate;
 
 import com.sun.tools.javac.code.Flags;
+import com.sun.tools.javac.tree.JCTree.JCAnnotation;
 import com.sun.tools.javac.tree.JCTree.JCBlock;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import com.sun.tools.javac.tree.JCTree.JCExpression;
@@ -14,7 +15,9 @@ import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
 import dev.simplified.classbuilder.apt.BuilderConfig;
+import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.shared.javac.AstMarkers;
+import dev.simplified.shared.javac.ContractAnnotations;
 import dev.simplified.shared.javac.GeneratedAnnotations;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.JavacTypeFactory;
@@ -44,6 +47,15 @@ import javax.tools.Diagnostic;
  * default RepoBuilder<T> mutate()                          { return RepoBuilder.from(this); }
  * }</pre>
  *
+ * <p>Where {@code from} is suppressed the sibling has no static copy factory to
+ * delegate to, so {@code mutate()} seeds a fresh sibling builder inline through
+ * its setters, reading each slot off {@code this} as the sibling's
+ * {@code from(T)} reads it off its argument - the way a class target's
+ * {@code mutate()} is always seeded.
+ *
+ * <p>Each of the three carries the {@code @XContract} a class target's entry
+ * point of the same role carries, under the same {@code emitContracts} gate.
+ *
  * <p>Collision policy matches {@code BootstrapMethodFactory}: a method the
  * author already declared that would collide wins - per
  * {@link BootstrapCollisions}, shared with the AST path - and a
@@ -60,20 +72,36 @@ public final class InterfaceBootstrapMutator {
     private final JCClassDecl targetTree;
     private final BuilderConfig config;
     private final String builderName;
+    private final java.util.List<FieldSpec> fields;
     private final GeneratedAnnotations generated;
+    private final ContractAnnotations contracts;
 
+    /**
+     * Prepares the entry points for one interface target.
+     *
+     * @param bridge the javac bridge the trees are made through
+     * @param messager sink for diagnostics
+     * @param target the annotated interface
+     * @param targetTree the interface's tree, which the entry points are appended to
+     * @param config the resolved configuration
+     * @param builderName the sibling builder's simple name
+     * @param fields the slots the sibling builder holds, one per abstract accessor
+     */
     public InterfaceBootstrapMutator(JavacBridge bridge, Messager messager, TypeElement target,
-                                     JCClassDecl targetTree, BuilderConfig config, String builderName) {
+                                     JCClassDecl targetTree, BuilderConfig config, String builderName,
+                                     java.util.List<FieldSpec> fields) {
         this.bridge = bridge;
         this.make = bridge.treeMaker();
         this.names = bridge.names();
         this.types = new JavacTypeFactory(this.make, this.names);
         this.generated = new GeneratedAnnotations(this.make, this.types, config.emitGenerated());
+        this.contracts = new ContractAnnotations(this.make, this.names, this.types, config.emitContracts());
         this.messager = messager;
         this.target = target;
         this.targetTree = targetTree;
         this.config = config;
         this.builderName = builderName;
+        this.fields = fields;
     }
 
     /** Appends whichever bootstrap methods are missing from the interface. */
@@ -109,7 +137,8 @@ public final class InterfaceBootstrapMutator {
             : make.TypeApply(make.Ident(names.fromString(builderName)), List.nil());
         JCStatement body = make.Return(make.NewClass(
             null, List.nil(), instantiated, List.nil(), null));
-        return method(name, Flags.STATIC, typeParams, List.nil(), returnType, body);
+        return method(name, Flags.STATIC, contracts.newReturnNullary(), typeParams, List.nil(), returnType,
+            List.of(body));
     }
 
     /** {@code static <T> RepoBuilder<T> from(Repo<T> i) { return RepoBuilder.from(i); }} */
@@ -128,24 +157,101 @@ public final class InterfaceBootstrapMutator {
                 names.fromString(config.fromMethodName())),
             List.of(make.Ident(names.fromString("instance")))
         ));
-        return method(name, Flags.STATIC, typeParams, List.of(param),
-            builderType(typeArgsFrom(typeParams)), body);
+        return method(name, Flags.STATIC, contracts.newReturnPureUnary(), typeParams, List.of(param),
+            builderType(typeArgsFrom(typeParams)), List.of(body));
     }
 
     /**
      * {@code default RepoBuilder<T> mutate() { return RepoBuilder.from(this); }}
      * - a default rather than a static, so it has a receiver to read. The
      * interface's own type parameters are in scope here, so it declares none.
+     *
+     * <p>With {@code from} suppressed there is no static copy factory to call,
+     * so the body seeds a fresh builder inline instead - see {@link #inlineSeed()}.
      */
     private JCMethodDecl mutateMethod(String name) {
-        JCStatement body = make.Return(make.Apply(
-            List.nil(),
-            make.Select(make.Ident(names.fromString(builderName)),
-                names.fromString(config.fromMethodName())),
-            List.of(make.Ident(names._this))
-        ));
-        return method(name, Flags.DEFAULT, List.nil(), List.nil(),
+        List<JCStatement> body = config.fromMethodName().isEmpty()
+            ? inlineSeed()
+            : List.of(make.Return(make.Apply(
+                List.nil(),
+                make.Select(make.Ident(names.fromString(builderName)),
+                    names.fromString(config.fromMethodName())),
+                List.of(make.Ident(names._this))
+            )));
+        return method(name, Flags.DEFAULT, contracts.newReturnNullary(), List.nil(), List.nil(),
             builderType(ownTypeArgs()), body);
+    }
+
+    /**
+     * The body of a {@code mutate()} that seeds the sibling builder itself:
+     * {@code RepoBuilder<T> b = new RepoBuilder<>(); b.head(this.head()); ... return b;}.
+     *
+     * <p>Each slot is read off {@code this} exactly as the sibling's
+     * {@code from(T)} reads it off its argument - through an {@code @ObtainVia}
+     * override where one is written, the accessor otherwise - and copied
+     * defensively where it is a mutable collection. It is assigned through the
+     * slot's {@code set}-role setter, the one overload of each slot's setters
+     * that takes the slot's whole value, since the sibling's fields are private
+     * to it.
+     *
+     * @return the statements of the body
+     */
+    private List<JCStatement> inlineSeed() {
+        ListBuffer<JCStatement> body = new ListBuffer<>();
+        JCExpression builderClass = make.Ident(names.fromString(builderName));
+        JCExpression instantiated = target.getTypeParameters().isEmpty()
+            ? builderClass
+            : make.TypeApply(builderClass, List.nil());
+        body.append(make.VarDef(make.Modifiers(0), names.fromString("b"), builderType(ownTypeArgs()),
+            make.NewClass(null, List.nil(), instantiated, List.nil(), null)));
+        for (FieldSpec f : fields) {
+            body.append(make.Exec(make.Apply(
+                List.nil(),
+                make.Select(make.Ident(names.fromString("b")),
+                    names.fromString(f.setters.setName(f.name, f.isBoolean))),
+                List.of(readFromThis(f))
+            )));
+        }
+        body.append(make.Return(make.Ident(names.fromString("b"))));
+        return body.toList();
+    }
+
+    /**
+     * Reads one slot's value off {@code this}, in the order the sibling's
+     * {@code from(T)} reads it off its argument, copying a mutable collection.
+     *
+     * @param f the slot
+     * @return the read expression
+     */
+    private JCExpression readFromThis(FieldSpec f) {
+        JCExpression read;
+        if (f.obtainViaStatic && f.obtainViaMethod != null) {
+            read = make.Apply(List.nil(),
+                make.Select(make.Ident(names.fromString(target.getSimpleName().toString())),
+                    names.fromString(f.obtainViaMethod)),
+                List.of(make.Ident(names._this)));
+        } else if (f.obtainViaMethod != null) {
+            read = call(f.obtainViaMethod);
+        } else if (f.obtainViaField != null) {
+            read = make.Select(make.Ident(names._this), names.fromString(f.obtainViaField));
+        } else {
+            read = call(f.name);
+        }
+        if (f.isListLike && !f.isSet) return copy("java.util.ArrayList", read);
+        if (f.isSet) return copy("java.util.LinkedHashSet", read);
+        if (f.isMap) return copy("java.util.LinkedHashMap", read);
+        return read;
+    }
+
+    /** {@code this.<method>()}. */
+    private JCExpression call(String method) {
+        return make.Apply(List.nil(), make.Select(make.Ident(names._this), names.fromString(method)), List.nil());
+    }
+
+    /** {@code new <collection><>(source)}. */
+    private JCExpression copy(String collection, JCExpression source) {
+        return make.NewClass(null, List.nil(), make.TypeApply(types.qualIdent(collection), List.nil()),
+            List.of(source), null);
     }
 
     // ------------------------------------------------------------------
@@ -195,13 +301,14 @@ public final class InterfaceBootstrapMutator {
         return typeArgs.isEmpty() ? raw : make.TypeApply(raw, typeArgs);
     }
 
-    private JCMethodDecl method(String name, long flags, List<JCTypeParameter> typeParams,
-                                List<JCVariableDecl> params, JCExpression returnType, JCStatement body) {
-        JCBlock block = make.Block(0, List.of(body));
+    private JCMethodDecl method(String name, long flags, List<JCAnnotation> annotations,
+                                List<JCTypeParameter> typeParams, List<JCVariableDecl> params,
+                                JCExpression returnType, List<JCStatement> body) {
+        JCBlock block = make.Block(0, body);
         // Interface members are implicitly public; PUBLIC is set explicitly so
         // the flag set reads the same as the class path's.
         JCMethodDecl m = make.MethodDef(
-            make.Modifiers(flags | Flags.PUBLIC),
+            make.Modifiers(flags | Flags.PUBLIC, annotations),
             names.fromString(name),
             returnType,
             typeParams,

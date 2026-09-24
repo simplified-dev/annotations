@@ -1,5 +1,7 @@
 package dev.simplified.accessor.editor;
 
+import com.intellij.codeInsight.daemon.impl.HighlightInfo;
+import com.intellij.lang.annotation.HighlightSeverity;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiFile;
@@ -8,6 +10,9 @@ import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Exercises {@link AccessorAugmentProvider}: accessors must resolve in the
@@ -176,6 +181,63 @@ public class AccessorAugmentProviderTest extends LightJavaCodeInsightFixtureTest
             0, widget.findMethodsByName("getCache", false).length);
     }
 
+    /**
+     * {@code AccessLevel.NONE} generates nothing on a {@code @Setter} as on a
+     * {@code @Getter}, and at the type as on a field - the documented opt-out,
+     * which javac honours with no diagnostic.
+     */
+    public void testNoneGeneratesNothingOnASetterAndAtTheType() {
+        PsiClass widget = configure("Widget",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.Setter;
+            @Setter
+            public class Widget {
+                private int label;
+                @Setter(AccessLevel.NONE) private int cache;
+            }
+            """);
+        assertEquals(1, widget.findMethodsByName("setLabel", false).length);
+        assertEquals(0, widget.findMethodsByName("setCache", false).length);
+
+        PsiClass plain = configure("Plain",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.Getter;
+            import dev.simplified.annotations.Setter;
+            @Getter(AccessLevel.NONE) @Setter(AccessLevel.NONE)
+            public class Plain {
+                private int label;
+            }
+            """);
+        assertEquals(0, plain.findMethodsByName("getLabel", false).length);
+        assertEquals(0, plain.findMethodsByName("setLabel", false).length);
+    }
+
+    /**
+     * A {@code name} written as a constant the target declares is read as the
+     * value it holds, as javac reads it, so the accessors are spelled from it.
+     * The editor used to read only a literal, so it offered {@code getLabel()}
+     * and {@code setLabel(int)} where javac generates {@code fetchLabel()} and
+     * {@code storeLabel(int)}.
+     */
+    public void testNamesWrittenAsConstants_nameTheAccessors() {
+        PsiClass widget = configure("Widget",
+            """
+            import dev.simplified.annotations.Getter;
+            import dev.simplified.annotations.Setter;
+            public class Widget {
+                static final String READ = "fetch{}";
+                static final String WRITE = "store" + "{}";
+                @Getter(name = Widget.READ) @Setter(name = WRITE) private int label;
+            }
+            """);
+        assertEquals(1, widget.findMethodsByName("fetchLabel", false).length);
+        assertEquals(1, widget.findMethodsByName("storeLabel", false).length);
+        assertEquals(0, widget.findMethodsByName("getLabel", false).length);
+        assertEquals(0, widget.findMethodsByName("setLabel", false).length);
+    }
+
     public void testHandWrittenAccessorWins() {
         PsiClass widget = configure("Widget",
             """
@@ -332,6 +394,73 @@ public class AccessorAugmentProviderTest extends LightJavaCodeInsightFixtureTest
             0, leaf.findMethodsByName("getOwner", false).length);
         assertEquals("but it is still reachable through the supertype",
             1, leaf.findMethodsByName("getOwner", true).length);
+    }
+
+    /**
+     * A getter at {@code AccessLevel.PACKAGE} is refused from another package,
+     * as javac refuses it. The light getter carried no access modifier, which
+     * the platform's access check reads as public.
+     */
+    public void testPackageGetter_isClosedToAnotherPackage() {
+        addNamed();
+        List<String> errors = errorsIn("q/UseNamed.java",
+            """
+            package q;
+            public class UseNamed {
+                void go(p.Named n) { n.getCount(); }
+            }
+            """);
+        assertEquals("javac: cannot be accessed from outside package; editor: " + errors, 1, errors.size());
+    }
+
+    /** A setter at {@code AccessLevel.PACKAGE} is refused from another package too. */
+    public void testPackageSetter_isClosedToAnotherPackage() {
+        addNamed();
+        List<String> errors = errorsIn("q/UseNamed.java",
+            """
+            package q;
+            public class UseNamed {
+                void go(p.Named n) { n.setCount(1); }
+            }
+            """);
+        assertEquals("javac: cannot be accessed from outside package; editor: " + errors, 1, errors.size());
+    }
+
+    /** From its own package both accessors stay reachable. */
+    public void testPackageAccessors_resolveFromTheirOwnPackage() {
+        addNamed();
+        List<String> errors = errorsIn("p/UseNamed.java",
+            """
+            package p;
+            public class UseNamed {
+                void go(Named n) { n.setCount(n.getCount()); }
+            }
+            """);
+        assertTrue("javac compiles this; editor errors: " + errors, errors.isEmpty());
+    }
+
+    private void addNamed() {
+        myFixture.addFileToProject("p/Named.java",
+            """
+            package p;
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.Getter;
+            import dev.simplified.annotations.Setter;
+            public class Named {
+                @Getter(AccessLevel.PACKAGE) @Setter(AccessLevel.PACKAGE) private int count;
+            }
+            """);
+    }
+
+    /** Opens a new file at the given path and returns the errors highlighted in it. */
+    private List<String> errorsIn(String path, String source) {
+        myFixture.addFileToProject(path, source);
+        myFixture.configureFromTempProjectFile(path);
+        List<String> errors = new ArrayList<>();
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            if (info.getSeverity() == HighlightSeverity.ERROR) errors.add(info.getDescription());
+        }
+        return errors;
     }
 
 }

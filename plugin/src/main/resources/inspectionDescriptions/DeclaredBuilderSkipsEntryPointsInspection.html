@@ -1,0 +1,64 @@
+<html>
+<body>
+Reports the entry points a <code>@ClassBuilder</code> skips because the builder
+the target declares has no constructor they can call.
+
+<p>
+A declared builder is merged into: the generated members are appended beside
+the author's, and the builder's constructors are the author's and those an
+<code>@AllArgsConstructor</code>, <code>@RequiredArgsConstructor</code> or
+<code>@NoArgsConstructor</code> written on it appends.
+Every entry point creates the builder with the <code>@BuilderSeed</code>
+parameters, in order, so where the declared builder has constructors and none
+the entry points can call, <code>builder()</code>,
+<code>from(T)</code> and <code>mutate()</code> are not generated - and neither
+are they where the constructor they would call declares a throws clause naming an
+exception not known to be unchecked, since the entry points call it with nothing
+around the call to handle what it throws. A thrown name counts as unchecked
+where it resolves to a subtype of <code>RuntimeException</code> or
+<code>Error</code>, an exception of the author's own among them, and as checked
+where it resolves to anything else or to nothing. The processor says so in a compiler
+note and completion leaves the three out; this warning is the note, in the
+same words, on the annotation.
+</p>
+
+<!-- tooltip end -->
+
+<p>
+On a class or record target, and on a concrete link of a SuperBuilder chain,
+the entry points pass nothing, so the constructor they need is a no-argument
+one. A builder that declares no constructor at all keeps its implicit default,
+which serves them. On a constructor or static factory target the one entry
+point is <code>builder(..)</code>, and it needs the constructor javac would call
+with the seeds, in parameter order, as far as names can tell: one taking the
+seeds' own types, compared by erasure and simple name, a distinct concrete
+parameterisation of a seed's generic type never being its own; otherwise one taking each
+seed as its box or primitive, a wider primitive or, for a reference seed,
+<code>Object</code> or a common JDK supertype of its type - <code>CharSequence</code>,
+<code>Number</code>, <code>Comparable</code> or a <code>java.util</code>
+collection interface, the seed's type arguments carried across - chosen as
+javac chooses - without boxing before with it, then the most specific. A
+constructor reached only through any other supertype does not serve, nor does
+one of two javac could not choose between, nor any
+where a constructor names cannot place might be chosen first. A static factory
+inside an interface is such a target, and its
+builder is the class the interface body declares.
+</p>
+
+<p>
+Either declare that constructor, or write the entry points by hand. An entry
+point named <code>NONE</code> through <code>@BuilderNames</code> is not
+generated, so it is not reported as skipped.
+</p>
+
+<p>
+Nothing is reported on an interface type target, whose entry points create its
+sibling builder; on an abstract target, which has no entry points of its own; on
+an annotated member the processor refuses, such as an instance method or one
+beside an annotated type, which merges nothing; or beside
+a declared shape the merge refuses, which the declared-builder shape
+inspection reports as an error.
+</p>
+
+</body>
+</html>

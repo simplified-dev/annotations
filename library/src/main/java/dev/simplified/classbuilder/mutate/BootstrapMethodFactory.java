@@ -12,20 +12,29 @@ import com.sun.tools.javac.tree.TreeMaker;
 import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
+import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.lazy.mutate.LazyFieldMutator;
 import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.ContractAnnotations;
 import dev.simplified.shared.javac.JavacBridge;
 import dev.simplified.shared.javac.JavacTypeFactory;
+import org.jetbrains.annotations.Nullable;
 
 import javax.annotation.processing.Messager;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.type.TypeKind;
+import javax.lang.model.type.TypeMirror;
+import javax.lang.model.util.Elements;
+import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Injects the three bootstrap methods onto the target type:
@@ -56,8 +65,10 @@ final class BootstrapMethodFactory {
     private final Collection<FieldSpec> fromFields;
     private final ContractAnnotations contracts;
 
+    private final @Nullable JCClassDecl mergedInto;
+
     BootstrapMethodFactory(MutationContext ctx, Messager messager) {
-        this(ctx, messager, ctx.fields());
+        this(ctx, messager, ctx.fields(), null);
     }
 
     /**
@@ -68,6 +79,19 @@ final class BootstrapMethodFactory {
      *        {@link MutationContext#fields()}.
      */
     BootstrapMethodFactory(MutationContext ctx, Messager messager, Collection<FieldSpec> fromFields) {
+        this(ctx, messager, fromFields, null);
+    }
+
+    /**
+     * @param fromFields the fields to populate in {@code from(T)}
+     * @param mergedInto the builder the author declared and the generated members
+     *        were appended to, or {@code null} when the builder was synthesised.
+     *        Every entry point instantiates the builder, and an author's own
+     *        class is the one case where there may be no constructor to do it
+     *        with
+     */
+    BootstrapMethodFactory(MutationContext ctx, Messager messager, Collection<FieldSpec> fromFields,
+                           @Nullable JCClassDecl mergedInto) {
         this.ctx = ctx;
         this.make = ctx.make();
         this.names = ctx.names();
@@ -75,6 +99,156 @@ final class BootstrapMethodFactory {
         this.isRecord = ctx.targetElement().getKind() == ElementKind.RECORD;
         this.fromFields = fromFields;
         this.contracts = ctx.contracts();
+        this.mergedInto = mergedInto;
+    }
+
+    /**
+     * Whether the builder the entry points would instantiate has a constructor
+     * they can call.
+     *
+     * <p>Only ever false for a merged builder: a synthesised one is given the
+     * constructor it needs. The author's is theirs throughout - javac's own
+     * default included - and so is one a constructor annotation written on it
+     * appended in the constructor pass, which is in the tree by now; a class
+     * where none of those is one javac would call with the seeds leaves the
+     * entry points with nothing to call, and they are skipped with a note
+     * rather than emitted onto a line javac rejects - and so does one whose
+     * selected constructor declares a throws clause that may name a checked
+     * exception, which the entry points call with nothing to handle it. The
+     * decision is {@link DeclaredBuilderShape#instantiable}, which the editor
+     * asks of the same parameter types read out of PSI.
+     *
+     * @return whether the entry points can be emitted
+     */
+    private boolean builderCanBeInstantiated() {
+        if (mergedInto == null) return true;
+        return DeclaredBuilderShape.instantiable(constructorSignatures(false), constructorSignatures(true),
+            seedTypes(), DeclaredBuilderMerge.declaredParameterNames(mergedInto));
+    }
+
+    /**
+     * The parameter types of each constructor the merged builder declares, as
+     * written.
+     *
+     * @param callableOnly whether to read only the ones whose throws clause
+     *     {@link DeclaredBuilderShape#throwsNothingChecked} accepts
+     * @return each constructor's parameter types, in declaration order
+     */
+    private java.util.List<java.util.List<String>> constructorSignatures(boolean callableOnly) {
+        java.util.List<java.util.List<String>> signatures = new ArrayList<>();
+        for (JCTree def : mergedInto.defs) {
+            if (!(def instanceof JCMethodDecl method)) continue;
+            if (!method.name.contentEquals("<init>")) continue;
+            // javac's own default is in the tree by now; it is what a class
+            // declaring nothing falls back to, not a constructor the author wrote.
+            if ((method.mods.flags & Flags.GENERATEDCONSTR) != 0) continue;
+            if (callableOnly && !throwsNothingChecked(method)) continue;
+            java.util.List<String> types = new ArrayList<>(method.params.size());
+            for (JCVariableDecl parameter : method.params)
+                types.add(parameter.vartype == null ? "" : parameter.vartype.toString());
+            signatures.add(types);
+        }
+        return signatures;
+    }
+
+    /**
+     * Whether a constructor's throws clause names only unchecked exception
+     * types, as {@link DeclaredBuilderShape#throwsNothingChecked} decides it,
+     * each name it does not list answered from the element model.
+     *
+     * <p>Each name is read as the type the constructor's symbol throws in its
+     * position - or, with no symbol, as the type attributed to the written
+     * name - and counted unchecked where that is a subtype of
+     * {@link RuntimeException} or {@link Error}. A name that resolved to
+     * nothing is an error type, a subtype of neither, and stays checked.
+     *
+     * @param constructor the author's constructor
+     * @return whether the entry points can call it with nothing to handle what it throws
+     */
+    private boolean throwsNothingChecked(JCMethodDecl constructor) {
+        java.util.List<String> names = new ArrayList<>();
+        Map<String, Boolean> unchecked = new HashMap<>();
+        if (constructor.thrown != null) {
+            java.util.List<? extends TypeMirror> resolved = constructor.sym == null
+                ? null
+                : constructor.sym.getThrownTypes();
+            int index = 0;
+            for (JCExpression thrown : constructor.thrown) {
+                TypeMirror type = resolved != null && index < resolved.size() ? resolved.get(index) : thrown.type;
+                String name = thrown.toString();
+                names.add(name);
+                unchecked.merge(name, isUnchecked(type), Boolean::logicalAnd);
+                index++;
+            }
+        }
+        return DeclaredBuilderShape.throwsNothingChecked(names, name -> unchecked.getOrDefault(name, false));
+    }
+
+    /**
+     * Whether a thrown type is a subtype of {@link RuntimeException} or
+     * {@link Error}.
+     *
+     * @param type the thrown type, or {@code null} when it was never attributed
+     * @return whether a call throwing it needs nothing to handle it
+     */
+    private boolean isUnchecked(@Nullable TypeMirror type) {
+        if (type == null || (type.getKind() != TypeKind.DECLARED && type.getKind() != TypeKind.TYPEVAR))
+            return false;
+        Types types = ctx.bridge().processingEnvironment().getTypeUtils();
+        Elements elements = ctx.bridge().processingEnvironment().getElementUtils();
+        for (Class<?> root : java.util.List.of(RuntimeException.class, Error.class)) {
+            TypeElement element = elements.getTypeElement(root.getName());
+            if (element != null && types.isSubtype(types.erasure(type), element.asType())) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Reports each setter the merge left out for an author method covering it
+     * with another parameterisation of the same generic type, which the copy
+     * entry points about to be emitted would pass the slot's own type.
+     *
+     * <p>The rule and its wording are
+     * {@link DeclaredBuilderShape#setterWithOtherTypeArguments}, which the
+     * editor's inspection asks of the same types read out of PSI and which
+     * judges only the setter shape the copy entry points call - the one
+     * {@link #fromFactory} and {@link #mutateMethod} pass each slot to; what is
+     * known only here is which copy entry points are emitted.
+     *
+     * @param copyEntryPoints the names of the copy entry points about to be emitted
+     */
+    private void rejectCoveredSetters(java.util.List<String> copyEntryPoints) {
+        if (mergedInto == null || copyEntryPoints.isEmpty()) return;
+        java.util.List<String> typeParameters = DeclaredBuilderMerge.declaredParameterNames(mergedInto);
+        for (DeclaredBuilderMerge.CoveredSetter covered : ctx.coveredSetters()) {
+            String message = DeclaredBuilderShape.setterWithOtherTypeArguments(mergedInto.name.toString(),
+                covered.name(), covered.shape(), covered.writtenTypes(), covered.generatedTypes(), typeParameters,
+                copyEntryPoints);
+            if (message != null) messager.printMessage(Diagnostic.Kind.ERROR, message, ctx.targetElement());
+        }
+    }
+
+    /** The type of each seed the entry points pass, in parameter order. */
+    private java.util.List<String> seedTypes() {
+        java.util.List<String> types = new ArrayList<>();
+        for (FieldSpec seed : ctx.seeds()) types.add(seed.typeDisplay);
+        return types;
+    }
+
+    /**
+     * The note for entry points skipped because the merged builder has no
+     * constructor they can call, in the text the editor's weak warning shows.
+     *
+     * @return the note text naming only the entry points this path emits, or
+     *     {@code null} when it emits none
+     */
+    private @Nullable String uninstantiableNote() {
+        java.util.List<String> seedNames = new ArrayList<>();
+        for (FieldSpec seed : ctx.seeds()) seedNames.add(seed.name);
+        boolean throwsClause = DeclaredBuilderShape.skippedForAThrowsClause(constructorSignatures(false),
+            constructorSignatures(true), seedTypes(), DeclaredBuilderMerge.declaredParameterNames(mergedInto));
+        return DeclaredBuilderShape.entryPointsSkipped(mergedInto.name.toString(), ctx.config().names(),
+            ctx.isExecutableTarget(), seedNames, throwsClause);
     }
 
     /** Appends whichever bootstrap methods are missing from the target. */
@@ -89,6 +263,15 @@ final class BootstrapMethodFactory {
         // @BuilderNames(x = NONE) to the empty string, so there is no second
         // generate-flag to consult.
         int seeds = ctx.seeds().size();
+        if (!builderCanBeInstantiated()) {
+            // On the member the annotation is written on, where the editor's
+            // weak warning sits: the annotated constructor or factory on that
+            // path, the type on every other.
+            Element anchor = ctx.isExecutableTarget() ? ctx.executable() : ctx.targetElement();
+            String note = uninstantiableNote();
+            if (note != null) messager.printMessage(Diagnostic.Kind.NOTE, note, anchor);
+            return;
+        }
         if (!builderMethod.isEmpty())
             appendUnless(target, builderMethod, "/" + seeds,
                 BootstrapCollisions.declaresArity(target, builderMethod, seeds), this::builderFactory);
@@ -99,20 +282,26 @@ final class BootstrapMethodFactory {
         // at. Both are suppressed rather than emitted against a guess.
         if (ctx.isExecutableTarget()) return;
 
+        boolean fromDeclared = BootstrapCollisions.declaresCopyFactory(ctx.targetElement(), fromMethod);
+        boolean mutateDeclared = BootstrapCollisions.declaresNullary(target, mutateMethod);
+        java.util.List<String> copyEntryPoints = new ArrayList<>();
+        if (!fromMethod.isEmpty() && !fromDeclared) copyEntryPoints.add(fromMethod);
+        if (!mutateMethod.isEmpty() && !mutateDeclared) copyEntryPoints.add(mutateMethod);
+        rejectCoveredSetters(copyEntryPoints);
+
         if (!fromMethod.isEmpty())
-            appendUnless(target, fromMethod, "(" + ctx.targetSimpleName() + ")",
-                BootstrapCollisions.declaresCopyFactory(ctx.targetElement(), fromMethod),
+            appendUnless(target, fromMethod, "(" + ctx.targetSimpleName() + ")", fromDeclared,
                 this::fromFactory);
         if (!mutateMethod.isEmpty())
-            appendUnless(target, mutateMethod, "/0",
-                BootstrapCollisions.declaresNullary(target, mutateMethod), this::mutateMethod);
+            appendUnless(target, mutateMethod, "/0", mutateDeclared, this::mutateMethod);
     }
 
     /**
      * Appends a method produced by {@code supplier} unless the target already
      * declares one that collides with it. Emits a {@link Diagnostic.Kind#NOTE}
      * on skip so the note is discoverable but does not pollute
-     * warning-as-error builds.
+     * warning-as-error builds, on the member the annotation is written on - the
+     * annotated constructor or factory on that path, the type on every other.
      *
      * @param target the target's tree
      * @param name the bootstrap name
@@ -127,7 +316,7 @@ final class BootstrapMethodFactory {
             messager.printMessage(Diagnostic.Kind.NOTE,
                 "@ClassBuilder skipped bootstrap '" + name + "' - target already declares "
                     + name + signature,
-                ctx.targetElement());
+                ctx.isExecutableTarget() ? ctx.executable() : ctx.targetElement());
             return;
         }
         ctx.bridge().compat().appendDef(target, supplier.get());
@@ -259,12 +448,13 @@ final class BootstrapMethodFactory {
      *       override, which outranks everything.</li>
      *   <li>A record component, read through its canonical accessor.</li>
      *   <li>A {@code @Lazy} field, pinned to the getter that unwraps its
-     *       storage.</li>
+     *       storage, under the name its own scheme spells.</li>
      *   <li>An author-declared zero-argument accessor, in any spelling a getter
-     *       generator produces. Above the direct field read on purpose: when
-     *       the author wrote the accessor, a normalising or defensive-copying
-     *       body is the behaviour they asked for, and calling it preserves
-     *       that.</li>
+     *       generator produces, returning a type the field's setter accepts.
+     *       Above the direct field read on purpose: when the author wrote the
+     *       accessor, a normalising or defensive-copying body is the behaviour
+     *       they asked for, and calling it preserves that. A method of that
+     *       name returning something else is not the field's reader.</li>
      *   <li>A direct field read, where one is legal.</li>
      *   <li>The bean accessor, as before, with a note naming the field.</li>
      * </ol>
@@ -293,11 +483,12 @@ final class BootstrapMethodFactory {
         // @Lazy rewrites storage to a deferred holder, so the synthesised getter is the
         // only read that yields the field's declared type. Pinned rather than
         // probed because LazyFieldMutator appends that getter after this
-        // context snapshotted the target's methods.
-        if (f.lazy) return call(receiver, "get" + capitalise(f.name));
+        // context snapshotted the target's methods, and named by the call that
+        // names it there.
+        if (f.lazy) return call(receiver, LazyFieldMutator.getterName(f));
 
         for (String candidate : accessorCandidates(f)) {
-            if (ctx.declaresAccessor(candidate)) return call(receiver, candidate);
+            if (ctx.declaresAccessor(candidate, f)) return call(receiver, candidate);
         }
 
         if (isDirectlyReadable(f)) return make.Select(receiver, names.fromString(f.name));

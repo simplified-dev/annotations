@@ -24,6 +24,7 @@ import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.NamingStyle;
 import dev.simplified.classbuilder.apt.AccessorScheme;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.lazy.apt.LazyAccess;
 import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.ContractAnnotations;
 import dev.simplified.shared.javac.GeneratedAnnotations;
@@ -206,7 +207,7 @@ public final class LazyFieldMutator {
 
         for (String name : processed) {
             FieldSpec lazy = lazyByName.get(name);
-            String getterName = schemeFor(lazy).readName(name, lazy.isBoolean);
+            String getterName = getterName(lazy);
             if (existingGetters.contains(getterName)) continue;
             JCMethodDecl getter = buildGetter(lazy, getterName);
             // The getter's documentation is the field's documentation, and this
@@ -347,7 +348,8 @@ public final class LazyFieldMutator {
      * <ul>
      *   <li>(when {@code classBuilderPresent}) rewrites parameters whose
      *       names match a processed @Lazy field from {@code T} to
-     *       {@code Supplier<T>} so the builder can pass a supplier through;</li>
+     *       {@code Supplier<T>}, boxed for a primitive as the storage is, so
+     *       the builder can pass a supplier through;</li>
      *   <li>rewrites the matching {@code this.foo = foo} body assignment so
      *       the field's rewritten storage type is satisfied. With
      *       {@code @ClassBuilder} the param is now a {@code Supplier<T>} and
@@ -366,7 +368,7 @@ public final class LazyFieldMutator {
                 FieldSpec lazy = lazyByName.get(pname);
                 if (lazy == null || !processed.contains(pname)) continue;
                 if (classBuilderPresent) {
-                    param.vartype = types.parseType(SUPPLIER_FQN + "<" + lazy.typeDisplay + ">");
+                    param.vartype = supplierType(lazy);
                     rewrittenParams.add(pname);
                 }
             }
@@ -514,10 +516,7 @@ public final class LazyFieldMutator {
                 // type - suppressing it leaves the field unreachable, and
                 // silently emitting a public getter instead hides that.
                 if ("NONE".equals(name)) {
-                    messager.printMessage(Diagnostic.Kind.ERROR,
-                        "@Lazy(access = NONE) would leave field '" + lazy.name
-                            + "' unreadable - its storage holds the deferred supplier and the "
-                            + "synthesised getter is the only read that resolves it",
+                    messager.printMessage(Diagnostic.Kind.ERROR, LazyAccess.notExpressible(lazy.name),
                         lazy.element);
                     return Flags.PUBLIC;
                 }
@@ -741,6 +740,21 @@ public final class LazyFieldMutator {
             if (m.getAnnotationType().toString().equals(fqn)) return true;
         }
         return false;
+    }
+
+    /**
+     * Names the memoizing getter a {@code @Lazy} field is read through.
+     *
+     * <p>Resolved through the field's own {@link AccessorScheme} - its written
+     * {@code style} and {@code name}, and {@code isX} for a {@code boolean} -
+     * so every generated read of the field calls the getter this pass
+     * synthesises, or the author's own of that name.
+     *
+     * @param lazy the annotated field
+     * @return the getter's name
+     */
+    public static String getterName(FieldSpec lazy) {
+        return schemeFor(lazy).readName(lazy.name, lazy.isBoolean);
     }
 
     /**

@@ -756,6 +756,33 @@ public class LazyFieldMutatorTest {
             !Modifier.isPublic(mods) && !Modifier.isProtected(mods) && !Modifier.isPrivate(mods));
     }
 
+    /**
+     * {@code access = NONE} is one error on the field, in the sentence the
+     * editor reports on the attribute, and the getter is generated public
+     * beside it, so a caller of it compiles.
+     */
+    @Test
+    public void accessLevel_none_isTheOneErrorAndTheGetterStaysPublic() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Hidden",
+                "package demo;",
+                "import dev.simplified.annotations.Lazy;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "public class Hidden {",
+                "    @Lazy(access = AccessLevel.NONE)",
+                "    private String value = \"x\";",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseHidden",
+                "package demo;",
+                "public class UseHidden {",
+                "    static String go() { return new Hidden().getValue(); }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@Lazy(access = NONE) would leave field 'value' unreadable - its "
+            + "storage holds the deferred supplier and the synthesised getter is the only read that resolves it");
+        assertEquals(c.errors().toString(), 1, c.errors().size());
+    }
+
     // Sanity: ClassBuilder+Lazy with no initializer is fine.
     @Test
     public void classBuilderLazy_noInitializer_isAccepted() {
@@ -954,6 +981,31 @@ public class LazyFieldMutatorTest {
     @Test
     public void lazyNamePatternOverridesTheStyle() throws Exception {
         Set<String> methods = lazyMethodNames("String value = compute()", "@Lazy(name = \"fetch{}\")");
+        assertTrue("expected fetchValue among " + methods, methods.contains("fetchValue"));
+        assertFalse(methods.contains("getValue"));
+    }
+
+    /**
+     * A name written as a {@code String} constant the target declares is read
+     * as the value it holds, so the getter is spelled from it - the javac twin
+     * of the editor reading the same constant.
+     */
+    @Test
+    public void lazyNameWrittenAsAConstant_namesTheGetter() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Named",
+            "package demo;",
+            "import dev.simplified.annotations.Lazy;",
+            "public class Named {",
+            "    static final String FETCH = \"fetch{}\";",
+            "    @Lazy(name = Named.FETCH)",
+            "    private String value = compute();",
+            "    private static String compute() { return \"x\"; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+        Class<?> named = Class.forName("demo.Named", true, loadClasses(c));
+        Set<String> methods = new LinkedHashSet<>();
+        for (Method m : named.getDeclaredMethods()) methods.add(m.getName());
         assertTrue("expected fetchValue among " + methods, methods.contains("fetchValue"));
         assertFalse(methods.contains("getValue"));
     }

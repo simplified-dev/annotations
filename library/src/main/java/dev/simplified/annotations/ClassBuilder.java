@@ -30,6 +30,77 @@ import java.lang.annotation.Target;
  * injection is skipped for that name and the user-supplied version wins -
  * a compiler {@code NOTE} is emitted for visibility.
  *
+ * <h2>A declared builder</h2>
+ * A class or record target that already declares a nested class of the
+ * builder's name - {@code Builder}, or whatever {@link BuilderNames#type()}
+ * names - has the generated members merged into it rather than a second class
+ * generated beside it. This is how a builder gets the one member the generator
+ * cannot express - a setter that builds its own value, an extension point taking
+ * the builder itself, a view onto in-progress state - while every other setter
+ * still comes from here.
+ *
+ * <p>The author wins member for member: a generated field is appended only when
+ * the declared builder spells no field of that name, and a generated method only
+ * when it spells no method of that name and those erased parameter types - an
+ * author method of a setter's name taking another type is an overload beside
+ * the generated setter rather than a replacement for it. Everything skipped
+ * is reported in one compiler note rather than left silent. The target gets
+ * the all-args constructor the generated {@code build()} calls; where the
+ * declared builder spells its own {@code build()} - under the configured build
+ * method name - that is the one kept, nothing generated calls the constructor,
+ * and it is withheld so javac's no-argument default stays, unless
+ * {@link BuilderArgsConstructor} is written on the target. An author
+ * {@code build()} wanting the all-args form writes that, or
+ * {@link AllArgsConstructor}. The target still gets the three
+ * entry points unless the declared builder has no constructor they can call -
+ * none of the arity they pass, or only ones declaring a throws clause that
+ * names an exception other than a subtype of {@link RuntimeException} or
+ * {@link Error}, a name that resolves to nothing treated as checked - in which
+ * case all three are skipped with a note naming the constructor they need. A
+ * declared builder that declares no constructor has its implicit default
+ * retyped to {@link #builderConstructorAccess()}, so {@code new Target.Builder()}
+ * is closed off exactly as on a generated builder. A
+ * declared shape the generated members cannot live in - a record, enum or
+ * interface, an inner class, the wrong type parameters or bounds on them, an
+ * {@code abstract} builder the entry points would instantiate, a slot field the
+ * generated setter cannot assign or a boxed one over a primitive slot, a
+ * {@code final} slot field a generated setter assigns, an author method taking
+ * the place of a setter with another parameterisation of the slot's generic
+ * type while {@code from(T)} or {@code mutate()} passes it the slot, a method
+ * the builder inherits that an appended setter cannot override because it is
+ * {@code final} or returns a type the builder cannot stand in for - is a
+ * compile error.
+ *
+ * <p>A constructor or static factory target merges the same way into the class
+ * its enclosing type declares. Its builder re-declares the type parameters the
+ * generated members are written in - a static factory's own - and its one entry
+ * point, {@code builder(..)}, passes each {@link BuilderSeed} to the builder's
+ * constructor, so it is emitted only where names alone single out the
+ * constructor javac calls with the seeds in parameter order - one taking their
+ * own types, compared by erasure and simple name, a distinct concrete
+ * parameterisation of a seed's generic type never being its own, or else one
+ * taking each as its box or primitive, a wider primitive or, for a reference
+ * seed, {@code Object} or a common JDK supertype of its type -
+ * {@code CharSequence}, {@code Number}, {@code Comparable} or a
+ * {@code java.util} collection interface, the seed's type arguments carried
+ * across - and is skipped with a note otherwise, a constructor reached through
+ * any other supertype included. A seed is appended as a
+ * {@code final} field that the builder's constructors assign exactly once. A
+ * static factory inside an interface is such a target too, and merges into the
+ * class the interface body declares.
+ *
+ * <p>A target in a SuperBuilder chain merges too, into a declaration of the shape
+ * its role generates: on an abstract root, a {@code static abstract} class
+ * re-declaring the target's type parameters followed by a bounded self-typed
+ * pair, whose names are the author's to choose and are the ones the merged
+ * setters return; on a chained abstract, the same, extending the ancestor's
+ * builder with that pair forwarded; on a concrete link, a {@code static} class
+ * re-declaring the target's parameters and extending the ancestor's builder
+ * with the link and its builder bound. A root receives the abstract
+ * {@code self()} and {@code build()}, a link their overrides, and a chained
+ * abstract neither. An interface target never looks at a nested class, its
+ * builder being a sibling file.
+ *
  * <p>An interface target gets its builder as a sibling
  * {@code <Name>Builder.java} (plus {@code <Name>Impl.java}), there being no
  * in-source surface for a nested class on an interface body. The bootstrap
@@ -237,6 +308,10 @@ public @interface ClassBuilder {
     /**
      * The access level of the generated bootstrap methods and the generated
      * builder class.
+     *
+     * <p>{@link AccessLevel#NONE} is a compile error on every target, since the
+     * builder class is always generated; the builder and its entry points are
+     * then generated public beside the error.
      */
     @NotNull AccessLevel access() default AccessLevel.PUBLIC;
 
@@ -247,21 +322,55 @@ public @interface ClassBuilder {
      * {@code @BuildFlag} validation rather than instantiating the type directly.
      * Independent of {@link #access()}, which governs the builder class and the
      * bootstrap methods.
+     *
+     * <p>{@link AccessLevel#NONE} is a compile error on every target, since the
+     * value is the access of the constructor {@code build()} calls; that
+     * constructor is then generated package-private beside the error.
      */
     @NotNull AccessLevel constructorAccess() default AccessLevel.PACKAGE;
 
     /**
-     * The access level of the generated builder's own no-arg constructor.
-     * Defaults to package-private for the reason {@link #constructorAccess}
-     * does one level down - it routes callers through the entry point rather
-     * than past it, so {@code builder()} is the one way to obtain a builder and
-     * Lombok's shape is matched.
+     * The access level of the builder's own constructor, on a builder its entry
+     * points instantiate. Defaults to package-private for the reason
+     * {@link #constructorAccess} does one level down - it routes callers through
+     * the entry point rather than past it, so {@code builder()} is the one way
+     * to obtain a builder and Lombok's shape is matched.
      *
      * <p>Separate from {@link #access()}, which governs the builder class and
      * would otherwise decide this too: a builder class has to be visible to be
      * useful as a type, and that is a different question from whether
      * {@code new Target.Builder()} is an entry point. Widen it only to publish
      * that second way in deliberately.
+     *
+     * <p>It applies on a class or record target and on a constructor or factory
+     * target:
+     * <ul>
+     *   <li>to the constructor of a generated builder, which takes one parameter
+     *       per {@link BuilderSeed} and none otherwise;</li>
+     *   <li>to a declared builder that declares no constructor, whose implicit
+     *       default constructor is retyped to it.</li>
+     * </ul>
+     *
+     * <p>It does not apply:
+     * <ul>
+     *   <li>to a declared builder that declares a constructor - the author's
+     *       constructors keep the access they are written with, and the
+     *       attribute written beside them is a compile warning;</li>
+     *   <li>on a SuperBuilder chain - a root's, a chained abstract's or a
+     *       concrete link's builder, generated or declared, carries the implicit
+     *       default constructor at the builder class's own access, which is what
+     *       a subclass builder in another package calls through
+     *       {@code super()};</li>
+     *   <li>on an interface target - the sibling {@code <Name>Builder} keeps its
+     *       implicit constructor.</li>
+     * </ul>
+     *
+     * <p>A value other than the default written on a chain role or an interface
+     * target is a compile warning.
+     *
+     * <p>{@link AccessLevel#NONE} is a compile error on every target, since every
+     * builder has a constructor; the builder is then generated as under the
+     * default.
      */
     @NotNull AccessLevel builderConstructorAccess() default AccessLevel.PACKAGE;
 
@@ -332,32 +441,6 @@ public @interface ClassBuilder {
      * compile error.
      */
     boolean generateImpl() default true;
-
-    /**
-     * Whether the generated members should be appended to a {@code Builder} the
-     * target already declares, rather than the declaration suppressing them.
-     *
-     * <p>Off by default, because a declared builder normally means the author
-     * wrote the whole thing and two builders of one name is not something to
-     * guess at. Turn it on when the reason for declaring one is a single member
-     * the generator cannot express - a setter that builds its own value, an
-     * extension point taking the builder itself, a view onto in-progress state -
-     * so the other setters still come from here.
-     *
-     * <p>The author wins member for member: a generated field is appended only
-     * when the declared builder spells no field of that name, and a generated
-     * method only when it spells no method of that name and parameter count.
-     * What is skipped is reported as a compiler note rather than left silent.
-     *
-     * <p>The declared builder's constructor is the author's throughout, javac's
-     * own default included, so {@link #builderConstructorAccess()} does not
-     * reach it - declare one to narrow it, as on any other written class.
-     *
-     * <p>Ignored on an interface target, whose builder is a sibling file with
-     * nothing to merge into, and on a SuperBuilder chain, which builds its
-     * hierarchy rather than one nested class.
-     */
-    boolean mergeDeclaredBuilder() default false;
 
     /**
      * The name of a static factory method on the annotated type that

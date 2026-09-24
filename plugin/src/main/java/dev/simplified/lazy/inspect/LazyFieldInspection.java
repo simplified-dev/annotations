@@ -11,7 +11,6 @@ import com.intellij.psi.PsiCodeBlock;
 import com.intellij.psi.PsiElementVisitor;
 import com.intellij.psi.PsiExpression;
 import com.intellij.psi.PsiField;
-import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiPrimitiveType;
@@ -25,6 +24,7 @@ import dev.simplified.accessor.inspect.AccessorConstants;
 import dev.simplified.classbuilder.apt.AccessorScheme;
 import dev.simplified.classbuilder.apt.NamePattern;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
+import dev.simplified.lazy.apt.LazyAccess;
 import dev.simplified.shared.psi.WrittenTypes;
 import org.jetbrains.annotations.NotNull;
 
@@ -48,6 +48,8 @@ import org.jetbrains.annotations.NotNull;
  *       assume direct {@code T} storage. {@code @BuilderDefault} and
  *       {@code @BuilderIgnore} are not flagged: they govern the builder's view
  *       of the field, not its storage.</li>
+ *   <li>{@code @Lazy(access = NONE)} - the getter is the only read of the
+ *       field's value, so it cannot be suppressed.</li>
  *   <li>{@code @Lazy(name)} written without the {@code {}} placeholder - the
  *       pattern is applied to one field's name, so a literal is the method name
  *       whatever the field is called.</li>
@@ -112,6 +114,7 @@ public class LazyFieldInspection extends LocalInspectionTool {
                         ProblemHighlightType.GENERIC_ERROR);
                 }
 
+                checkAccess(holder, field, lazy);
                 checkName(holder, lazy);
                 checkNamingFollowsTheType(holder, field, lazy);
 
@@ -168,18 +171,36 @@ public class LazyFieldInspection extends LocalInspectionTool {
             }
 
             /**
+             * Reports {@code access = NONE} on the written value, in the
+             * processor's sentence. The getter is the only read of a lazy
+             * field's value, so it cannot be suppressed; the processor then
+             * generates it public, which is what the augment provider
+             * contributes.
+             */
+            private void checkAccess(@NotNull ProblemsHolder holder, @NotNull PsiField field,
+                                     @NotNull PsiAnnotation lazy) {
+                PsiAnnotationMemberValue value = lazy.findDeclaredAttributeValue("access");
+                if (!(value instanceof PsiReferenceExpression reference)) return;
+                if (!"NONE".equals(reference.getReferenceName())) return;
+                holder.registerProblem(value, LazyAccess.notExpressible(field.getName()),
+                    ProblemHighlightType.GENERIC_ERROR);
+            }
+
+            /**
              * Reports a {@code name} pattern the getter cannot be spelled from.
              *
              * <p>The same rule the accessor pair is held to, and for the same
              * reason: the pattern is applied to one field's name, so one
              * without the placeholder is a literal, and a literal is the method
-             * name whatever the field is called.
+             * name whatever the field is called. A pattern written as a
+             * constant is judged by the value it holds, read as the augment
+             * provider reads it.
              */
             private void checkName(@NotNull ProblemsHolder holder, @NotNull PsiAnnotation lazy) {
                 PsiAnnotationMemberValue value = lazy.findDeclaredAttributeValue("name");
-                if (!(value instanceof PsiLiteralExpression literal)) return;
-                if (!(literal.getValue() instanceof String pattern)) return;
-                if (pattern.isEmpty()) return; // inherits from the style
+                if (value == null) return;
+                String pattern = AccessorConstants.writtenName(lazy);
+                if (pattern == null || pattern.isEmpty()) return; // inherits from the style
                 String error = NamePattern.patternError(pattern, true);
                 if (error != null) {
                     holder.registerProblem(value, "Naming pattern for 'name' " + error,

@@ -1,12 +1,18 @@
 package dev.simplified.classbuilder.mutate;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import com.sun.tools.javac.tree.JCTree.JCMethodDecl;
+import com.sun.tools.javac.tree.JCTree;
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.args.mutate.ArgsConstructorMutator;
 import dev.simplified.classbuilder.apt.BuilderConfig;
+import dev.simplified.classbuilder.apt.ChainRole;
+import dev.simplified.classbuilder.apt.ConstructorAccess;
+import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.lazy.mutate.LazyFieldMutator;
+import dev.simplified.lazy.mutate.LazyHolders;
 import dev.simplified.shared.apt.AnnotationLookup;
+import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.JavacBridge;
 
 import javax.annotation.processing.Messager;
@@ -20,6 +26,7 @@ import javax.lang.model.type.TypeMirror;
 import javax.tools.Diagnostic;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * High-level orchestrator that turns a {@code @ClassBuilder}-annotated type
@@ -28,6 +35,12 @@ import java.util.List;
  * {@code false} when the caller should fall back to the sibling emitter.
  */
 public final class BuilderMutator {
+
+    /** This pass's idempotency key. */
+    private static final String PASS = "classbuilder";
+
+    /** The annotation naming the constructor this pass emits. */
+    private static final String BUILDER_ARGS_CONSTRUCTOR = "dev.simplified.annotations.BuilderArgsConstructor";
 
     private final JavacBridge bridge;
     private final Messager messager;
@@ -72,6 +85,16 @@ public final class BuilderMutator {
         JCClassDecl target = bridge.treeOf(targetElement);
         if (target == null) return false;
 
+        // A second run over a tree this pass already rewrote finds its own
+        // output everywhere: the all-args constructor it appended, which it
+        // would report as one a written annotation generates, and a declared
+        // builder it merged into, on any role, which it would merge into again
+        // and report its own members as the author's - appending a second
+        // from(T) on a class target, since the element model the collision test
+        // reads cannot see a method appended to the tree.
+        if (AstMarkers.isPassMarked(target, PASS)) return true;
+        AstMarkers.markPass(target, PASS);
+
         MutationContext ctx = new MutationContext(bridge, targetElement, target, config, fields);
 
         // Position subsequent tree construction at the target's start so error
@@ -89,7 +112,11 @@ public final class BuilderMutator {
         // default - so synthesise the matching all-args form. Injected ahead of
         // LazyFieldMutator so a @Lazy field's parameter and assignment are
         // rewritten here exactly as they would be in a hand-written ctor.
-        if (needsAllArgsConstructor(targetElement, target, ctx, isAbstract, annotatedSuper)) {
+        // Beside an author's own build() nothing generated calls it, and it is
+        // withheld so javac's no-argument default stays.
+        boolean allArgsGenerated = needsAllArgsConstructor(targetElement, target, ctx, isAbstract, annotatedSuper);
+        boolean onlyBuilderConstructor = false;
+        if (allArgsGenerated) {
             JCMethodDecl ctor = new AllArgsConstructorFactory(ctx).build(
                 constructorAccess(targetElement, ctx));
             // A written @AllArgsConstructor whose field set happens to coincide
@@ -103,6 +130,7 @@ public final class BuilderMutator {
                     targetElement);
             } else {
                 bridge.compat().appendDef(target, ctor);
+                onlyBuilderConstructor = AllArgsConstructorFactory.onlyBuilderConstructor(target, ctor);
             }
         }
 
@@ -130,57 +158,95 @@ public final class BuilderMutator {
             return true;
         }
 
+        // A declared class of the builder's name is merged into below. One this
+        // pipeline generated is a builder an earlier run already produced, and
+        // merging into it would skip every member by name and report them all.
         JCClassDecl declared = DeclaredBuilderMerge.declaredBuilder(target, ctx.builderName());
-        if (declared != null && !config.mergeDeclaredBuilder()) {
-            messager.printMessage(Diagnostic.Kind.NOTE,
-                "@ClassBuilder skipped injection: class " + ctx.targetSimpleName()
-                    + " already declares a nested '" + ctx.builderName() + "' type. Write "
-                    + "mergeDeclaredBuilder = true to have the generated members appended to it",
-                targetElement
-            );
-            return true;
-        }
+        if (declared != null && AstMarkers.isGenerated(declared)) return true;
 
         // $default$<fieldName>() providers for retained-initializer fields.
         // Must run before the nested Builder is built so FieldMutators'
         // Target.$default$<name>() references resolve at javac attribution.
-        new RetainedInitFactory(ctx, messager).appendAll();
+        new RetainedInitFactory(ctx, messager, allArgsGenerated, onlyBuilderConstructor).appendAll();
 
         if (declared != null) {
-            if (!new DeclaredBuilderMerge(ctx, messager).merge(target, targetElement, declared)) {
+            if (!new DeclaredBuilderMerge(ctx, messager).merge(target, targetElement, declared,
+                ChainRole.STANDALONE, new NestedBuilderFactory(ctx).members(), null)) {
                 return true;
             }
         } else {
             JCClassDecl nested = new NestedBuilderFactory(ctx).build();
+            rejectUnoverridableObjectMethods(ctx, messager, nested.defs);
             bridge.compat().appendDef(target, nested);
         }
 
-        new BootstrapMethodFactory(ctx, messager).appendAll();
+        new BootstrapMethodFactory(ctx, messager, ctx.fields(), declared).appendAll();
         return true;
     }
 
     /**
-     * Resolves the visibility of the constructor {@code build()} calls.
+     * Reports each setter of a builder the generator writes whole that meets a
+     * {@code java.lang.Object} method it cannot override.
      *
-     * <p>A value written on {@code @BuilderArgsConstructor} wins, then one
-     * written as {@code @ClassBuilder(constructorAccess)}, then package-private.
-     * Both steps read the written value rather than the effective one - a bare
-     * {@code @BuilderArgsConstructor} states nothing about visibility and must
-     * not silently overrule a {@code constructorAccess} beside it.
+     * <p>With no declared builder to merge into, a standalone builder's only
+     * supertype is {@code Object}, and a chain's builders extend only the
+     * builders the chain generates above them, so a setter meeting a method it
+     * cannot override meets one of {@code Object}'s, and javac refuses it on
+     * the target's line. The decision and its wording are
+     * {@link DeclaredBuilderShape#unoverridableObjectMethod}, which the editor
+     * asks of the setters it synthesises; what is left here is asking it of each
+     * setter in the member list and reporting on the slot the setter is
+     * generated for - the field, record component or annotated member's
+     * parameter, or the target where the slot names none. The builder is still
+     * generated, and the error ends the compilation ahead of javac's refusal.
+     *
+     * @param ctx the per-target mutation context, which recorded each setter's slot
+     * @param messager where the errors go
+     * @param members the members of the builder being generated
+     */
+    static void rejectUnoverridableObjectMethods(MutationContext ctx, Messager messager, Iterable<JCTree> members) {
+        Map<String, String> erasures = null;
+        for (JCTree member : members) {
+            String slot = ctx.setterSlot(member);
+            if (slot == null) continue;
+            JCMethodDecl setter = (JCMethodDecl) member;
+            if (erasures == null) {
+                erasures = DeclaredBuilderShape.typeVariableErasures(DeclaredBuilderMerge.targetParameterNames(ctx),
+                    DeclaredBuilderMerge.boundsOf(ctx.typeParams()));
+            }
+            String message = DeclaredBuilderShape.unoverridableObjectMethod(ctx.builderName(),
+                setter.name.toString(), DeclaredBuilderMerge.parameterTypes(setter), erasures);
+            if (message != null) messager.printMessage(Diagnostic.Kind.ERROR, message, slotElement(ctx, slot));
+        }
+    }
+
+    /**
+     * The declaration a slot is read from, or the target where none is known.
+     *
+     * @param ctx the per-target mutation context
+     * @param slot the slot's name
+     * @return the element to report on
+     */
+    private static Element slotElement(MutationContext ctx, String slot) {
+        for (FieldSpec field : ctx.fields()) {
+            if (field.name.equals(slot) && field.element != null) return field.element;
+        }
+        return ctx.targetElement();
+    }
+
+    /**
+     * Resolves the visibility of the constructor {@code build()} calls, as
+     * {@link ConstructorAccess#allArgs} decides it from the written
+     * {@code @BuilderArgsConstructor(access)} and {@code constructorAccess} -
+     * the rule the editor asks of the same annotations.
      *
      * @param targetElement the annotated type
      * @param ctx the per-target mutation context
      * @return the resolved access level
      */
     private static AccessLevel constructorAccess(TypeElement targetElement, MutationContext ctx) {
-        String written = new AnnotationLookup().stringAttr(
-            targetElement, "dev.simplified.annotations.BuilderArgsConstructor", "access", null);
-        if (written == null) return ctx.config().constructorAccess();
-        try {
-            return AccessLevel.valueOf(written);
-        } catch (IllegalArgumentException e) {
-            return ctx.config().constructorAccess();
-        }
+        return ConstructorAccess.allArgs(ctx.config().constructorAccess(),
+            new AnnotationLookup().stringAttr(targetElement, BUILDER_ARGS_CONSTRUCTOR, "access", null));
     }
 
     /**
@@ -188,13 +254,21 @@ public final class BuilderMutator {
      * Skipped for records (the canonical constructor already has the shape), for
      * SuperBuilder targets (they take a copy constructor instead), when a
      * {@code factoryMethod} means {@code build()} never calls {@code new}, when
-     * the author declared any constructor, when a hand-written nested builder
-     * suppresses injection wholesale, and when there are no fields to pass -
-     * that last case would collide with javac's own default constructor.
+     * the author declared any constructor, and when there are no fields to pass -
+     * javac's own default constructor is then already the no-argument one
+     * {@code build()} calls.
      *
-     * <p>A <em>merged</em> declared builder is the one case where a nested
-     * builder does not suppress it: the generated {@code build()} still calls
-     * {@code new Target(..)}, so the constructor it calls still has to exist.
+     * <p>Withheld as well where a declared nested builder spells its own
+     * {@code build()}, which the merge keeps in place of the generated one:
+     * nothing generated calls the constructor there, and emitting it would take
+     * the place of javac's no-argument default an author {@code build()} calling
+     * {@code new Target()} relies on. The rule is
+     * {@link DeclaredBuilderShape#withholdsAllArgsConstructor}, which the editor
+     * asks of the same names; {@code @BuilderArgsConstructor} written on the
+     * target keeps the constructor, and an author {@code build()} wanting the
+     * all-args form without it writes {@code @AllArgsConstructor}. A declared
+     * builder leaving {@code build()} to the generator keeps it, since the
+     * generated one merged into it calls {@code new Target(..)}.
      *
      * @param targetElement the annotated type
      * @param target the target's class declaration
@@ -203,18 +277,56 @@ public final class BuilderMutator {
      * @param annotatedSuper the annotated direct super, or {@code null}
      * @return whether an all-args constructor should be injected
      */
-    private boolean needsAllArgsConstructor(TypeElement targetElement,
-                                            JCClassDecl target,
-                                            MutationContext ctx,
-                                            boolean isAbstract,
-                                            AnnotatedSuper annotatedSuper) {
+    private static boolean needsAllArgsConstructor(TypeElement targetElement,
+                                                   JCClassDecl target,
+                                                   MutationContext ctx,
+                                                   boolean isAbstract,
+                                                   AnnotatedSuper annotatedSuper) {
+        return owesAllArgsConstructor(targetElement, target, ctx, isAbstract, annotatedSuper)
+            && !authorBuildSurvives(targetElement, target, ctx);
+    }
+
+    /**
+     * Decides whether the target's shape calls for the all-args constructor at
+     * all, before the declared builder is asked.
+     *
+     * @param targetElement the annotated type
+     * @param target the target's class declaration
+     * @param ctx the per-target mutation context
+     * @param isAbstract whether the target is abstract
+     * @param annotatedSuper the annotated direct super, or {@code null}
+     * @return whether the target is owed the constructor
+     */
+    private static boolean owesAllArgsConstructor(TypeElement targetElement,
+                                                  JCClassDecl target,
+                                                  MutationContext ctx,
+                                                  boolean isAbstract,
+                                                  AnnotatedSuper annotatedSuper) {
         if (targetElement.getKind() == ElementKind.RECORD) return false;
         if (isAbstract || annotatedSuper != null) return false;
         if (!ctx.config().factoryMethod().isEmpty()) return false;
         if (ctx.fields().isEmpty()) return false;
-        if (AllArgsConstructorFactory.hasExplicitConstructor(target)) return false;
-        if (ctx.config().mergeDeclaredBuilder()) return true;
-        return DeclaredBuilderMerge.declaredBuilder(target, ctx.builderName()) == null;
+        return !AllArgsConstructorFactory.hasExplicitConstructor(target);
+    }
+
+    /**
+     * Decides whether the declared builder's own build method survives the
+     * merge, as {@link DeclaredBuilderShape#withholdsAllArgsConstructor} answers
+     * it from the names the builder declares and the constructor annotation
+     * written on the target.
+     *
+     * @param targetElement the annotated type
+     * @param target the target's class declaration
+     * @param ctx the per-target mutation context
+     * @return whether the all-args constructor is withheld for it
+     */
+    private static boolean authorBuildSurvives(TypeElement targetElement, JCClassDecl target,
+                                               MutationContext ctx) {
+        JCClassDecl declared = DeclaredBuilderMerge.declaredBuilder(target, ctx.builderName());
+        if (declared == null || AstMarkers.isGenerated(declared)) return false;
+        return DeclaredBuilderShape.withholdsAllArgsConstructor(ctx.config().buildMethodName(),
+            DeclaredBuilderMerge.declaredMethodKeys(declared).keySet(),
+            new AnnotationLookup().hasAnnotation(targetElement, BUILDER_ARGS_CONSTRUCTOR));
     }
 
     /**
@@ -237,14 +349,6 @@ public final class BuilderMutator {
         }
     }
 
-    /**
-     * Returns the simple name of the direct superclass when it also carries
-     * {@code @ClassBuilder}; {@code null} otherwise. Matches Lombok's policy
-     * of checking only the immediate superclass - skipping annotation between
-     * two annotated ancestors still lets inherited builder setters flow
-     * through, but the generated Builder extends only the nearest annotated
-     * parent's Builder.
-     */
     /**
      * Collects this type's fields plus every ancestor's fields up to and
      * including the nearest ancestor carrying {@code @ClassBuilder}. Fields
@@ -271,6 +375,13 @@ public final class BuilderMutator {
                 if (enc.getKind() != ElementKind.FIELD) continue;
                 if (enc.getModifiers().contains(Modifier.STATIC)) continue;
                 if (enc.getModifiers().contains(Modifier.TRANSIENT)) continue;
+                // The memoized-value sibling a lazy field is given is storage,
+                // not a property: it holds what the supplier computed and is
+                // written only by the generated getter. It is private, instance
+                // and non-transient, so none of the tests above sees it, and a
+                // subclass that collected it would publish a setter for a slot
+                // the constructor never takes.
+                if (LazyHolders.isValueField(enc.getSimpleName().toString())) continue;
                 // Inherited fields use the plain classification (no Types walk):
                 // their initializers aren't accessible cross-class, so a custom
                 // container on a parent falls back to a plain setter here.
@@ -295,7 +406,18 @@ public final class BuilderMutator {
         return out;
     }
 
-    private static AnnotatedSuper findAnnotatedDirectSuper(TypeElement target) {
+    /**
+     * The direct superclass when it also carries {@code @ClassBuilder}, paired
+     * with the type arguments the target passes it. Matches Lombok's policy of
+     * checking only the immediate superclass - an unannotated class between two
+     * annotated ancestors breaks the chain rather than being skipped over, so
+     * the generated Builder extends the nearest annotated parent's Builder or
+     * none at all.
+     *
+     * @param target the annotated type
+     * @return the annotated superclass and its arguments, or {@code null}
+     */
+    static AnnotatedSuper findAnnotatedDirectSuper(TypeElement target) {
         TypeMirror superMirror = target.getSuperclass();
         if (!(superMirror instanceof DeclaredType dt)) return null;
         Element superElement = dt.asElement();
@@ -306,10 +428,30 @@ public final class BuilderMutator {
             if (m.getAnnotationType().toString().equals("dev.simplified.annotations.ClassBuilder")) {
                 List<String> args = new ArrayList<>();
                 for (TypeMirror arg : dt.getTypeArguments()) args.add(arg.toString());
-                return new AnnotatedSuper(superType.getSimpleName().toString(), args);
+                // The superclass's own role, walked one level further up. What it
+                // is decides whether a concrete member found on its builder can
+                // be read as the author's, since a self-typed role generates an
+                // abstract pair and a concrete link generates a concrete one.
+                ChainRole superRole = ChainRole.of(
+                    superType.getModifiers().contains(Modifier.ABSTRACT),
+                    findAnnotatedDirectSuper(superType) != null);
+                return new AnnotatedSuper(superType.getSimpleName().toString(), args, superType,
+                    superRole);
             }
         }
         return null;
+    }
+
+    /**
+     * Where a class or record target sits in a SuperBuilder chain, from the two
+     * questions the mutation itself asks of it.
+     *
+     * @param target the annotated class or record
+     * @return the target's role
+     */
+    public static ChainRole chainRoleOf(TypeElement target) {
+        return ChainRole.of(target.getModifiers().contains(Modifier.ABSTRACT),
+            findAnnotatedDirectSuper(target) != null);
     }
 
 }

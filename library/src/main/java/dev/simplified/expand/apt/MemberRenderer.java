@@ -252,7 +252,17 @@ final class MemberRenderer {
         if (method.getReturnType() == null)
             return "Constructs a new {@code " + owner.getSimpleName() + "}.";
         if (declaredOnBuilder(owner)) {
-            if (returnsOwner(method, owner)) return "Sets the value and returns this builder.";
+            if (returnsOwner(method, owner)) {
+                // Told apart by name, not by arity. The self accessor takes no
+                // arguments and so do several setters - a boolean flag, a
+                // @Negate inverse, a @Collector clear - so an arity test alone
+                // documents every one of those as the self accessor. Without any
+                // test the self accessor instead fell past the owner test below
+                // and was documented as the build method.
+                return "self".contentEquals(method.getName())
+                    ? "Returns this builder as its own type."
+                    : "Sets the value and returns this builder.";
+            }
             if (method.getParameters().isEmpty())
                 return "Builds a new instance from the values set so far.";
         }
@@ -296,10 +306,34 @@ final class MemberRenderer {
         return false;
     }
 
-    /** Whether the method returns the very class that declares it. */
+    /**
+     * Whether the method returns the very class that declares it, either by
+     * naming it or through the class's own self type.
+     *
+     * <p>A self-typed builder's setters and its self accessor return the second
+     * of its trailing pair rather than the builder's name, so a test on the name
+     * alone answers no for every member of every chain - and each of them then
+     * fell through to a sentence written for something else. The variable is
+     * recognised by its bound naming the builder, which is the shape
+     * {@code Builder<T, B extends Builder<T, B>>} is emitted in and the only one
+     * that makes it the owner's own type.
+     *
+     * @param method the member being rendered
+     * @param owner the class declaring it
+     * @return whether the return type is the owner
+     */
     private static boolean returnsOwner(MethodTree method, ClassTree owner) {
-        return method.getReturnType() != null
-            && method.getReturnType().toString().endsWith(owner.getSimpleName().toString());
+        if (method.getReturnType() == null) return false;
+        String returned = method.getReturnType().toString();
+        String ownerName = owner.getSimpleName().toString();
+        if (returned.endsWith(ownerName)) return true;
+        for (TypeParameterTree parameter : owner.getTypeParameters()) {
+            if (!returned.equals(parameter.getName().toString())) continue;
+            for (Tree bound : parameter.getBounds()) {
+                if (bound.toString().startsWith(ownerName)) return true;
+            }
+        }
+        return false;
     }
 
     /**

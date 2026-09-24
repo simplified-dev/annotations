@@ -234,6 +234,37 @@ public class RetainedInitExpressionTest {
         assertEquals("Expr", buildAndGet(c, "getF"));
     }
 
+    /**
+     * A getter {@code @Getter} generates is an instance method of the target as
+     * much as a written one, but the accessor pass runs after the builder's and
+     * the detector never listed it, so the initializer was hoisted into the
+     * static provider and javac refused it there with {@code non-static method
+     * getBase() cannot be referenced from a static context} while the editor
+     * was green.
+     */
+    @Test
+    public void initializerCallingAGeneratedGetter_isComputedOnTheInstance() throws Exception {
+        Compilation c = compile(
+            "  @dev.simplified.annotations.Getter String base = \"b\";",
+            "  String f = getBase() + \"x\";",
+            "  public String f() { return f; }");
+        assertThat(c).succeeded();
+
+        assertEquals("bx", buildAndGet(c, "f"));
+    }
+
+    /** A getter spelled by a written name pattern is named through the same scheme. */
+    @Test
+    public void initializerCallingAGetterByItsWrittenPattern_isComputedOnTheInstance() throws Exception {
+        Compilation c = compile(
+            "  @dev.simplified.annotations.Getter(name = \"read{}\") String base = \"b\";",
+            "  String f = readBase() + \"x\";",
+            "  public String f() { return f; }");
+        assertThat(c).succeeded();
+
+        assertEquals("bx", buildAndGet(c, "f"));
+    }
+
     /** An explicit setter still beats a constructor-computed default. */
     @Test
     public void instanceDefault_isOverriddenByTheSetter() throws Exception {
@@ -428,6 +459,105 @@ public class RetainedInitExpressionTest {
         assertEquals(List.of("p", "b"), items);
         assertEquals("the container comes from the initializer, not the declared type",
             "Bag", items.getClass().getSimpleName());
+    }
+
+    // ------------------------------------------------------------------
+    // A functional-typed instance default beside a method of the field's name
+    // ------------------------------------------------------------------
+
+    /**
+     * A Runnable default calling an authored method, beside a method named like
+     * the field that returns something else. {@code from(T)} and
+     * {@code mutate()} took that method as the field's fluent reader and passed
+     * its String to the Runnable setter, which javac refused with
+     * {@code incompatible types: java.lang.String cannot be converted to
+     * java.lang.Runnable} on a generated line.
+     */
+    @Test
+    public void runnableInstanceDefault_besideAMethodOfItsName_runsAgainstTheBuiltInstance() throws Exception {
+        Compilation c = compile(
+            "  String base = \"b\";",
+            "  Runnable reset = () -> touch();",
+            "  void touch() { base = \"r\"; }",
+            "  public String reset() { reset.run(); return base; }");
+        assertThat(c).succeeded();
+
+        assertEquals("r", buildAndGet(c, "reset"));
+    }
+
+    /** The same default declared ahead of the other field. */
+    @Test
+    public void runnableInstanceDefault_declaredFirst_runsAgainstTheBuiltInstance() throws Exception {
+        Compilation c = compile(
+            "  Runnable reset = () -> touch();",
+            "  String base = \"b\";",
+            "  void touch() { base = \"r\"; }",
+            "  public String reset() { reset.run(); return base; }");
+        assertThat(c).succeeded();
+
+        assertEquals("r", buildAndGet(c, "reset"));
+    }
+
+    /** An anonymous Runnable calling an authored method. */
+    @Test
+    public void anonymousRunnableInstanceDefault_besideAMethodOfItsName_runsAgainstTheBuiltInstance()
+        throws Exception {
+        Compilation c = compile(
+            "  String base = \"b\";",
+            "  Runnable reset = new Runnable() { public void run() { touch(); } };",
+            "  void touch() { base = \"r\"; }",
+            "  public String reset() { reset.run(); return base; }");
+        assertThat(c).succeeded();
+
+        assertEquals("r", buildAndGet(c, "reset"));
+    }
+
+    /** A {@code Consumer<String>} lambda calling an authored method. */
+    @Test
+    public void consumerInstanceDefault_besideAMethodOfItsName_runsAgainstTheBuiltInstance() throws Exception {
+        Compilation c = compile(
+            "  String base = \"b\";",
+            "  java.util.function.Consumer<String> reset = s -> touch(s);",
+            "  void touch(String s) { base = s; }",
+            "  public String reset() { reset.accept(\"r\"); return base; }");
+        assertThat(c).succeeded();
+
+        assertEquals("r", buildAndGet(c, "reset"));
+    }
+
+    /** A {@code Supplier<String>} lambda calling an authored method, declared first. */
+    @Test
+    public void supplierInstanceDefault_besideAMethodOfItsName_runsAgainstTheBuiltInstance() throws Exception {
+        Compilation c = compile(
+            "  Supplier<String> read = () -> label();",
+            "  String base = \"b\";",
+            "  String label() { return base + \"!\"; }",
+            "  public String read() { return read.get(); }");
+        assertThat(c).succeeded();
+
+        assertEquals("b!", buildAndGet(c, "read"));
+    }
+
+    /**
+     * Nothing about the misread is functional: any field beside a method of its
+     * name returning another type was read through that method. The field is
+     * read directly instead, and a copy keeps its value.
+     */
+    @Test
+    public void fieldBesideAMethodOfItsNameReturningAnotherType_isCopiedFromTheField() throws Exception {
+        Compilation c = compile(
+            "  String base = \"b\";",
+            "  int count = 3;",
+            "  public String count() { return \"c\" + count; }");
+        assertThat(c).succeeded();
+
+        Class<?> target = Class.forName("demo.Expr", true, loadClasses(c));
+        Object builder = target.getMethod("builder").invoke(null);
+        builder.getClass().getMethod("count", int.class).invoke(builder, 5);
+        Object built = builder.getClass().getMethod("build").invoke(builder);
+        Object copy = target.getMethod("from", target).invoke(null, built);
+        Object rebuilt = copy.getClass().getMethod("build").invoke(copy);
+        assertEquals("c5", target.getMethod("count").invoke(rebuilt));
     }
 
 }

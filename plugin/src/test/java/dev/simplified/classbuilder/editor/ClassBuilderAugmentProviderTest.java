@@ -5,9 +5,12 @@ import com.intellij.lang.annotation.HighlightSeverity;
 import com.intellij.openapi.application.AccessToken;
 import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiFile;
+import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
+import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.testFramework.LightProjectDescriptor;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
@@ -107,7 +110,7 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
         myFixture.addFileToProject("dev/simplified/annotations/AccessLevel.java",
             """
             package dev.simplified.annotations;
-            public enum AccessLevel { PUBLIC, PROTECTED, PACKAGE, PRIVATE }
+            public enum AccessLevel { PUBLIC, PROTECTED, PACKAGE, PRIVATE, NONE }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/Negate.java",
             """
@@ -248,7 +251,15 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
         assertEquals("a set factoryMethod suppresses synthesis", 0, factoried.getConstructors().length);
     }
 
-    public void testAbstractClass_noAllArgsConstructor() {
+    /**
+     * An abstract target takes the chain's copy constructor and never the
+     * all-args form. Asserted on which constructor is there rather than on there
+     * being none: the copy constructor is emitted by the processor above the
+     * gate that withholds the entry points, so an editor contributing nothing at
+     * all left an author's own {@code super(builder)} red over source that
+     * builds.
+     */
+    public void testAbstractClass_takesTheCopyConstructorAndNotTheAllArgsOne() {
         PsiFile file = myFixture.configureByText("Base.java",
             """
             import dev.simplified.annotations.ClassBuilder;
@@ -258,8 +269,13 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
             }
             """);
         PsiClass base = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
-        assertEquals("abstract targets take the copy constructor instead",
-            0, base.getConstructors().length);
+        PsiMethod[] constructors = base.getConstructors();
+        assertEquals("exactly one, and it is the builder-taking one",
+            1, constructors.length);
+        assertEquals(1, constructors[0].getParameterList().getParametersCount());
+        assertEquals("the wildcard form, so any subclass builder is accepted",
+            "Builder<?, ?>",
+            constructors[0].getParameterList().getParameters()[0].getType().getPresentableText());
     }
 
     public void testRecord_noAllArgsConstructor() {
@@ -634,6 +650,30 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
         PsiMethod[] ctors = builder.getConstructors();
         assertEquals(1, ctors.length);
         assertTrue(ctors[0].hasModifierProperty(PsiModifier.PUBLIC));
+    }
+
+    /**
+     * {@code NONE} is reported at the annotation, and the processor generates
+     * as under the default beside the error - a package-private constructor and
+     * the entry points - which is what is contributed here.
+     */
+    public void testBuilderConstructorAccessNone_contributesWhatTheDefaultDoes() {
+        PsiFile file = myFixture.configureByText("Closed.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builderConstructorAccess = AccessLevel.NONE)
+            public class Closed {
+                String label;
+            }
+            """);
+        PsiClass target = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+        assertEquals("the entry point is there", 1, target.findMethodsByName("builder", false).length);
+        PsiMethod[] ctors = target.getInnerClasses()[0].getConstructors();
+        assertEquals(1, ctors.length);
+        assertFalse(ctors[0].hasModifierProperty(PsiModifier.PUBLIC));
+        assertFalse(ctors[0].hasModifierProperty(PsiModifier.PROTECTED));
+        assertFalse(ctors[0].hasModifierProperty(PsiModifier.PRIVATE));
     }
 
     public void testHandWrittenBootstrap_isNotDuplicated() {
@@ -1078,8 +1118,817 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
     }
 
     // ------------------------------------------------------------------
+    // Interface targets: the entry points typed to the sibling builder
+    // ------------------------------------------------------------------
+
+    /**
+     * An interface target is entered through {@code builder()}, {@code from(T)}
+     * and {@code mutate()} on the interface itself, each returning the sibling
+     * builder the processor writes beside it. The editor used to withhold all
+     * three, reading every interface as abstract, so the calls javac compiles
+     * and runs were unresolved.
+     */
+    public void testAnInterfaceTarget_offersItsEntryPointsTypedToTheSibling() {
+        addShapeSources("@ClassBuilder", "from");
+        myFixture.configureByText("UseShape.java",
+            """
+            import demo.Shape;
+            public class UseShape {
+                static String go() {
+                    Shape s = Shape.builder().name("tri").build();
+                    return Shape.from(s).build().name() + s.mutate().name("q").build().name();
+                }
+            }
+            """);
+        List<String> errors = errors();
+        assertTrue("javac compiles and runs these calls; editor errors: " + errors, errors.isEmpty());
+
+        PsiClass shape = myFixture.findClass("demo.Shape");
+        PsiMethod builder = single(shape, "builder");
+        PsiMethod from = single(shape, "from");
+        PsiMethod mutate = single(shape, "mutate");
+        assertTrue(builder.hasModifierProperty(PsiModifier.STATIC));
+        assertTrue(builder.hasModifierProperty(PsiModifier.PUBLIC));
+        assertEquals(0, builder.getParameterList().getParametersCount());
+        assertTrue(from.hasModifierProperty(PsiModifier.STATIC));
+        assertTrue(from.hasModifierProperty(PsiModifier.PUBLIC));
+        assertEquals(1, from.getParameterList().getParametersCount());
+        assertTrue(mutate.hasModifierProperty(PsiModifier.DEFAULT));
+        assertTrue(mutate.hasModifierProperty(PsiModifier.PUBLIC));
+        assertFalse(mutate.hasModifierProperty(PsiModifier.STATIC));
+        assertEquals("demo.ShapeBuilder", builder.getReturnType().getCanonicalText());
+        assertEquals("demo.ShapeBuilder", from.getReturnType().getCanonicalText());
+        assertEquals("demo.ShapeBuilder", mutate.getReturnType().getCanonicalText());
+        assertTrue(GeneratedMemberMarker.isGenerated(builder));
+    }
+
+    /**
+     * A generic interface's static entry points re-declare its type parameter,
+     * so a witness binds the sibling builder's argument, and {@code mutate()}
+     * returns the builder over the interface's own.
+     */
+    public void testAGenericInterfaceTarget_bindsTheSiblingsTypeArgument() {
+        myFixture.addFileToProject("demo/Repo.java",
+            """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public interface Repo<T> {
+                T head();
+            }
+            """);
+        myFixture.addFileToProject("demo/RepoBuilder.java",
+            """
+            package demo;
+            public class RepoBuilder<T> {
+                private T head;
+                public RepoBuilder<T> head(T head) {
+                    this.head = head;
+                    return this;
+                }
+                public static <T> RepoBuilder<T> from(Repo<T> instance) {
+                    RepoBuilder<T> b = new RepoBuilder<>();
+                    b.head = instance.head();
+                    return b;
+                }
+                public Repo<T> build() {
+                    return new RepoImpl<>(head);
+                }
+            }
+            """);
+        myFixture.addFileToProject("demo/RepoImpl.java",
+            """
+            package demo;
+            final class RepoImpl<T> implements Repo<T> {
+                private final T head;
+                RepoImpl(T head) { this.head = head; }
+                @Override public T head() { return this.head; }
+            }
+            """);
+        myFixture.configureByText("UseRepo.java",
+            """
+            import demo.Repo;
+            public class UseRepo {
+                static String go() {
+                    Repo<String> r = Repo.<String>builder().head("h").build();
+                    String viaFrom = Repo.from(r).build().head();
+                    String viaMutate = r.mutate().head("m").build().head();
+                    return r.head().length() + viaFrom + viaMutate;
+                }
+            }
+            """);
+        List<String> errors = errors();
+        assertTrue("javac compiles and runs these calls; editor errors: " + errors, errors.isEmpty());
+    }
+
+    /** A {@code @BuilderNames} rename moves each entry point, as the processor names them. */
+    public void testAnInterfaceTarget_renamedEntryPointsMove() {
+        addShapeSources("@ClassBuilder(builder = @BuilderNames(builder = \"create\", from = \"copyOf\", "
+            + "toBuilder = \"edit\"))", "copyOf");
+        myFixture.configureByText("UseShape.java",
+            """
+            import demo.Shape;
+            public class UseShape {
+                static String go() {
+                    Shape s = Shape.create().name("tri").build();
+                    return Shape.copyOf(s).build().name() + s.edit().name("q").build().name();
+                }
+            }
+            """);
+        List<String> errors = errors();
+        assertTrue("javac compiles and runs these calls; editor errors: " + errors, errors.isEmpty());
+        PsiClass shape = myFixture.findClass("demo.Shape");
+        assertEquals(0, shape.findMethodsByName("builder", false).length);
+        assertEquals(0, shape.findMethodsByName("from", false).length);
+        assertEquals(0, shape.findMethodsByName("mutate", false).length);
+    }
+
+    /** A member named {@code NONE} is not emitted on an interface, and not offered either. */
+    public void testAnInterfaceTarget_aMemberNamedNoneIsAbsent() {
+        addShapeSources("@ClassBuilder(builder = @BuilderNames(toBuilder = BuilderNames.NONE))", "from");
+        PsiClass shape = myFixture.findClass("demo.Shape");
+        assertEquals(1, shape.findMethodsByName("builder", false).length);
+        assertEquals(1, shape.findMethodsByName("from", false).length);
+        assertEquals(0, shape.findMethodsByName("mutate", false).length);
+    }
+
+    /**
+     * An interface target's builder is the sibling {@code ShapeBuilder}, and
+     * javac declares no nested class on the interface, so the editor contributes
+     * none and {@code Shape.Builder} is unresolved. The editor used to list a
+     * synthesised {@code Builder} among the interface's inner classes, so the
+     * reference resolved over source javac rejects.
+     */
+    public void testAnInterfaceTarget_contributesNoNestedBuilder() {
+        addShapeSources("@ClassBuilder", "from");
+        PsiClass shape = myFixture.findClass("demo.Shape");
+        List<String> inner = new ArrayList<>();
+        for (PsiClass nested : shape.getInnerClasses()) inner.add(nested.getName());
+        assertEquals(List.of(), inner);
+
+        myFixture.configureByText("UseShape.java",
+            """
+            import demo.Shape;
+            public class UseShape {
+                Shape.Builder b;
+            }
+            """);
+        List<String> errors = errors();
+        assertEquals("javac: cannot find symbol Shape.Builder; editor: " + errors, 1, errors.size());
+        assertTrue(errors.get(0), errors.get(0).contains("Builder"));
+    }
+
+    /**
+     * {@code from = NONE} on an interface withholds {@code from(T)} and keeps
+     * {@code mutate()}, whose body javac seeds inline, so both halves offer the
+     * same two entry points.
+     */
+    public void testAnInterfaceTargetWithFromNone_stillOffersMutate() {
+        addShapeSources("@ClassBuilder(builder = @BuilderNames(from = BuilderNames.NONE))", "unused");
+        myFixture.configureByText("UseShape.java",
+            """
+            import demo.Shape;
+            public class UseShape {
+                static String go() {
+                    Shape s = Shape.builder().name("tri").build();
+                    return s.mutate().build().name();
+                }
+            }
+            """);
+        List<String> errors = errors();
+        assertTrue("javac compiles and runs these calls; editor errors: " + errors, errors.isEmpty());
+        PsiClass shape = myFixture.findClass("demo.Shape");
+        assertEquals(0, shape.findMethodsByName("from", false).length);
+        PsiMethod mutate = single(shape, "mutate");
+        assertTrue(mutate.hasModifierProperty(PsiModifier.DEFAULT));
+        assertEquals("demo.ShapeBuilder", mutate.getReturnType().getCanonicalText());
+    }
+
+    // ------------------------------------------------------------------
+    // Naming attributes written as constants
+    // ------------------------------------------------------------------
+
+    /**
+     * {@code from = BuilderNames.NONE} withholds {@code from(T)}, as javac
+     * withholds it. The editor used to read only a literal, so it took the
+     * constant for an unwritten name and offered the copy factory.
+     */
+    public void testFromNamedNoneByConstant_offersNoFrom() {
+        myFixture.configureByText("Config.java",
+            """
+            import dev.simplified.annotations.BuilderNames;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builder = @BuilderNames(from = BuilderNames.NONE))
+            public class Config {
+                private String name;
+                static Object go(Config c) { return Config.from(c); }
+            }
+            """);
+        List<String> errors = errors();
+        assertEquals("javac: cannot find symbol from(Config); editor: " + errors, 1, errors.size());
+        assertTrue(errors.get(0), errors.get(0).contains("from"));
+        PsiClass config = myFixture.findClass("Config");
+        assertEquals(1, config.findMethodsByName("builder", false).length);
+        assertEquals(1, config.findMethodsByName("mutate", false).length);
+    }
+
+    /** The constant spelled through its fully qualified class name reads the same. */
+    public void testToBuilderNamedNoneByQualifiedConstant_offersNoMutate() {
+        PsiFile file = myFixture.configureByText("Config.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builder = @dev.simplified.annotations.BuilderNames(
+                toBuilder = dev.simplified.annotations.BuilderNames.NONE))
+            public class Config {
+                private String name;
+            }
+            """);
+        PsiClass config = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+        assertEquals(0, config.findMethodsByName("mutate", false).length);
+        assertEquals(1, config.findMethodsByName("from", false).length);
+    }
+
+    /** A {@code NONE} brought in by a single static import is the constant too. */
+    public void testFromNamedNoneByStaticImport_offersNoFrom() {
+        PsiFile file = myFixture.configureByText("Config.java",
+            """
+            import dev.simplified.annotations.BuilderNames;
+            import dev.simplified.annotations.ClassBuilder;
+            import static dev.simplified.annotations.BuilderNames.NONE;
+            @ClassBuilder(builder = @BuilderNames(from = NONE))
+            public class Config {
+                private String name;
+            }
+            """);
+        PsiClass config = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+        assertEquals(0, config.findMethodsByName("from", false).length);
+        assertEquals(1, config.findMethodsByName("builder", false).length);
+    }
+
+    /**
+     * A setter role suppressed through an on-demand static import of
+     * {@code SetterNames} drops the member, as {@code flag = NONE} does for the
+     * processor.
+     */
+    public void testFlagNamedNoneByOnDemandStaticImport_dropsTheZeroArgSetter() {
+        PsiClass builder = builderFor("Toggle",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.SetterNames;
+            import static dev.simplified.annotations.SetterNames.*;
+            @ClassBuilder(setters = @SetterNames(flag = NONE))
+            public class Toggle {
+                boolean active;
+            }
+            """);
+        assertEquals("no zero-arg flag setter", 0, builder.findMethodsByName("isActive", false).length);
+        assertEquals("the typed setter stays", 1, builder.findMethodsByName("active", false).length);
+    }
+
+    /**
+     * {@code INHERIT} written on a {@code @BuilderNames} or {@code @SetterNames}
+     * attribute takes the style's name, so every member is named as the
+     * unwritten default names it, as javac names it.
+     */
+    public void testNamesWrittenAsInherit_nameTheMembersAsTheDefault() {
+        myFixture.configureByText("Config.java",
+            """
+            import dev.simplified.annotations.BuilderNames;
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.SetterNames;
+            @ClassBuilder(builder = @BuilderNames(type = BuilderNames.INHERIT, builder = BuilderNames.INHERIT,
+                build = BuilderNames.INHERIT, from = BuilderNames.INHERIT, toBuilder = BuilderNames.INHERIT),
+                setters = @SetterNames(set = SetterNames.INHERIT))
+            public class Config {
+                private String name;
+                static String go(Config c) {
+                    Config.Builder builder = Config.builder().name("x");
+                    return Config.from(builder.build()).build().name + c.mutate().name("y").build().name;
+                }
+            }
+            """);
+        List<String> errors = errors();
+        assertTrue("javac names every member as the default; editor errors: " + errors, errors.isEmpty());
+        PsiClass config = myFixture.findClass("Config");
+        assertEquals(1, config.findMethodsByName("from", false).length);
+        assertEquals(1, config.findMethodsByName("mutate", false).length);
+    }
+
+    /**
+     * A {@code String} constant the target declares names the member as javac
+     * names it, through the platform's constant evaluator.
+     */
+    public void testBuildNamedByATargetConstant_renamesBuild() {
+        myFixture.configureByText("Config.java",
+            """
+            import dev.simplified.annotations.BuilderNames;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builder = @BuilderNames(build = Config.FINISH))
+            public class Config {
+                static final String FINISH = "make";
+                private String name;
+                static Config go() { return Config.builder().name("x").make(); }
+            }
+            """);
+        List<String> errors = errors();
+        assertTrue("javac renames build() to make(); editor errors: " + errors, errors.isEmpty());
+        PsiClass builder = myFixture.findClass("Config").getInnerClasses()[0];
+        assertEquals(0, builder.findMethodsByName("build", false).length);
+    }
+
+    /**
+     * A constant built from another constant the target declares names the
+     * member too, and evaluating it resolves no field's declared type from
+     * inside the augment pass - which the platform reports as a recursion,
+     * failing this fixture, when a resolve of that very type started the pass.
+     */
+    public void testBuildNamedByAConcatenatedConstant_renamesBuild() {
+        myFixture.configureByText("Config.java",
+            """
+            import dev.simplified.annotations.BuilderNames;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builder = @BuilderNames(build = Config.FINISH))
+            public class Config {
+                static final String PREFIX = "ma";
+                static final String FINISH = PREFIX + "ke";
+                private String name;
+                static Config go() { return Config.builder().name("x").make(); }
+            }
+            """);
+        List<String> errors = errors();
+        assertTrue("javac renames build() to make(); editor errors: " + errors, errors.isEmpty());
+    }
+
+    // ------------------------------------------------------------------
+    // access = NONE
+    // ------------------------------------------------------------------
+
+    /**
+     * {@code access = NONE} is reported at the annotation, and the processor
+     * generates as under the default beside the error - public entry points and
+     * a public builder class - which is what is contributed here.
+     */
+    public void testAccessNone_contributesAtTheDefaultAccess() {
+        PsiFile file = myFixture.configureByText("Closed.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(access = AccessLevel.NONE)
+            public class Closed {
+                String label;
+            }
+            """);
+        PsiClass target = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+        assertTrue(single(target, "builder").hasModifierProperty(PsiModifier.PUBLIC));
+        assertTrue(single(target, "from").hasModifierProperty(PsiModifier.PUBLIC));
+        assertTrue(single(target, "mutate").hasModifierProperty(PsiModifier.PUBLIC));
+        assertTrue(target.getInnerClasses()[0].hasModifierProperty(PsiModifier.PUBLIC));
+    }
+
+    /**
+     * {@code constructorAccess = NONE} is reported on the annotation, and the
+     * all-args constructor is contributed at the default beside it, as javac
+     * generates it: package-private, so a same-package {@code new Acc("x")}
+     * resolves.
+     */
+    public void testConstructorAccessNone_contributesTheConstructorAtTheDefault() {
+        PsiFile file = myFixture.configureByText("Acc.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(constructorAccess = AccessLevel.NONE)
+            public class Acc {
+                String label;
+                static Acc direct() { return new Acc("x"); }
+            }
+            """);
+        PsiClass target = ((com.intellij.psi.PsiJavaFile) file).getClasses()[0];
+        PsiMethod[] constructors = target.getConstructors();
+        assertEquals(1, constructors.length);
+        assertEquals(1, constructors[0].getParameterList().getParametersCount());
+        assertTrue(constructors[0].hasModifierProperty(PsiModifier.PACKAGE_LOCAL));
+        assertEquals(List.of(), errors());
+    }
+
+    // ------------------------------------------------------------------
+    // Package-private members from another package
+    // ------------------------------------------------------------------
+
+    /**
+     * The all-args constructor at the default {@code constructorAccess} is
+     * package-private, so {@code new p.Widget("x")} from another package is
+     * refused, as javac refuses it. The light constructor carried no access
+     * modifier, which the platform's access check reads as public.
+     */
+    public void testAllArgsConstructorAtDefaultAccess_isClosedToAnotherPackage() {
+        addWidget("@ClassBuilder");
+        List<String> errors = errorsIn("q/UseWidget.java",
+            """
+            package q;
+            public class UseWidget {
+                String go() { return new p.Widget("x").getName(); }
+            }
+            """);
+        assertEquals("javac: cannot be accessed from outside package; editor: " + errors, 1, errors.size());
+    }
+
+    /**
+     * {@code @BuilderArgsConstructor(access = PRIVATE)} makes the all-args
+     * constructor private, as javac makes it, so a same-package
+     * {@code new Widget("x")} is refused. The editor applied
+     * {@code constructorAccess} alone and left the call green.
+     */
+    public void testBuilderArgsConstructorPrivate_closesTheAllArgsConstructorToItsOwnPackage() {
+        addBuilderArgsWidget("@ClassBuilder", "@BuilderArgsConstructor(access = AccessLevel.PRIVATE)");
+        List<String> errors = errorsIn("p/UseWidget.java",
+            """
+            package p;
+            public class UseWidget {
+                String go() { return new Widget("x").getName(); }
+            }
+            """);
+        assertEquals("javac: Widget(java.lang.String) has private access in p.Widget; editor: " + errors,
+            1, errors.size());
+    }
+
+    /**
+     * {@code @BuilderArgsConstructor(access = PUBLIC)} wins over
+     * {@code constructorAccess = PACKAGE}, as it does in javac, so a call from
+     * another package resolves. The editor applied {@code constructorAccess}
+     * alone and refused it.
+     */
+    public void testBuilderArgsConstructorPublic_opensTheAllArgsConstructorOverPackageConstructorAccess() {
+        addBuilderArgsWidget("@ClassBuilder(constructorAccess = AccessLevel.PACKAGE)",
+            "@BuilderArgsConstructor(access = AccessLevel.PUBLIC)");
+        List<String> errors = errorsIn("q/UseWidget.java",
+            """
+            package q;
+            public class UseWidget {
+                String go() { return new p.Widget("x").getName(); }
+            }
+            """);
+        assertEquals(List.of(), errors);
+    }
+
+    /**
+     * {@code @BuilderArgsConstructor(access = NONE)} reads as unwritten, so the
+     * all-args constructor takes {@code constructorAccess = PUBLIC}, as javac's
+     * does, and a call from another package resolves.
+     */
+    public void testBuilderArgsConstructorNone_takesConstructorAccess() {
+        addBuilderArgsWidget("@ClassBuilder(constructorAccess = AccessLevel.PUBLIC)",
+            "@BuilderArgsConstructor(access = AccessLevel.NONE)");
+        List<String> errors = errorsIn("q/UseWidget.java",
+            """
+            package q;
+            public class UseWidget {
+                String go() { return new p.Widget("x").getName(); }
+            }
+            """);
+        assertEquals(List.of(), errors);
+    }
+
+    /** {@code builder()} at {@code access = PACKAGE} is closed to another package. */
+    public void testEntryPointAtPackageAccess_isClosedToAnotherPackage() {
+        addWidget("@ClassBuilder(access = AccessLevel.PACKAGE)");
+        List<String> errors = errorsIn("q/UseWidget.java",
+            """
+            package q;
+            public class UseWidget {
+                Object go() { return p.Widget.builder(); }
+            }
+            """);
+        assertEquals("javac: cannot be accessed from outside package; editor: " + errors, 1, errors.size());
+    }
+
+    /** The builder class at {@code access = PACKAGE} is closed to another package. */
+    public void testBuilderClassAtPackageAccess_isClosedToAnotherPackage() {
+        addWidget("@ClassBuilder(access = AccessLevel.PACKAGE)");
+        List<String> errors = errorsIn("q/UseWidget.java",
+            """
+            package q;
+            public class UseWidget {
+                Object go() { p.Widget.Builder b = null; return b; }
+            }
+            """);
+        assertEquals("javac: Builder is not public in p.Widget; editor: " + errors, 1, errors.size());
+    }
+
+    /** From its own package every one of those members stays reachable. */
+    public void testPackagePrivateMembers_resolveFromTheirOwnPackage() {
+        addWidget("@ClassBuilder(access = AccessLevel.PACKAGE)");
+        List<String> errors = errorsIn("p/UseWidget.java",
+            """
+            package p;
+            public class UseWidget {
+                String go() {
+                    Widget.Builder b = Widget.builder();
+                    return b.name("x").build().getName() + new Widget("y").getName();
+                }
+            }
+            """);
+        assertTrue("javac compiles this; editor errors: " + errors, errors.isEmpty());
+    }
+
+    // ------------------------------------------------------------------
+    // The generated builder's slot fields
+    // ------------------------------------------------------------------
+
+    /**
+     * The generated builder declares one private field per slot, and the target
+     * encloses it, so a static helper in the target reads a slot off a builder;
+     * javac builds and runs it. The editor's generated builder carried no
+     * fields, and the read was {@code Cannot resolve symbol 'text'}.
+     */
+    public void testAStaticHelperReadingAGeneratedBuildersSlot_resolves() {
+        myFixture.configureByText("Note.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Note {
+                String text;
+                static String peek(Builder b) { return b.text; }
+                public static String go() { return peek(Note.builder().text("hi")); }
+            }
+            """);
+        assertEquals("javac compiles this", List.of(), errors());
+    }
+
+    /**
+     * Each slot field carries the type the processor declares it in: an
+     * {@code Optional} and a collection as written, a {@code @Lazy} field as a
+     * supplier of its declared type, every one private.
+     */
+    public void testTheGeneratedBuildersSlotFields_carryTheProcessorsStorageTypes() {
+        myFixture.addFileToProject("dev/simplified/annotations/Lazy.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
+            public @interface Lazy { }
+            """);
+        PsiClass builder = builderFor("Holder",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Lazy;
+            import java.util.List;
+            import java.util.Optional;
+            @ClassBuilder
+            public class Holder {
+                Optional<String> nick;
+                List<String> tags;
+                @Lazy String heavy = "h";
+            }
+            """);
+        List<String> fields = new ArrayList<>();
+        for (PsiField field : builder.getFields()) {
+            fields.add((field.hasModifierProperty(PsiModifier.PRIVATE) ? "private " : "")
+                + field.getType().getCanonicalText() + " " + field.getName());
+        }
+        assertEquals(List.of(
+            "private java.util.Optional<java.lang.String> nick",
+            "private java.util.List<java.lang.String> tags",
+            "private java.util.function.Supplier<java.lang.String> heavy"), fields);
+        assertNotNull("the lookup the platform resolves a reference through",
+            builder.findFieldByName("heavy", false));
+    }
+
+    /**
+     * A {@code @Collector} slot whose default reads the instance is followed on
+     * the generated builder by the processor's {@code private boolean
+     * $replaced$<name>} marker, so a static helper in the target reads it; javac
+     * builds and runs the same source. The editor contributed the slot and not
+     * the marker, and the read was {@code Cannot resolve symbol '$replaced$tags'}.
+     */
+    public void testACollectedInstanceDefaultsReplacedMarker_resolvesOnTheGeneratedBuilder() {
+        myFixture.configureByText("Tagged.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Collector;
+            import java.util.ArrayList;
+            import java.util.List;
+            @ClassBuilder
+            public class Tagged {
+                String name;
+                @Collector List<String> tags = new ArrayList<>(List.of(String.valueOf(name)));
+                static boolean replaced(Builder b) { return b.$replaced$tags; }
+                public static boolean go() { return replaced(Tagged.builder()); }
+            }
+            """);
+        assertEquals("javac compiles this", List.of(), errors());
+
+        PsiClass builder = ((PsiJavaFile) myFixture.getFile()).getClasses()[0].getInnerClasses()[0];
+        List<String> fields = new ArrayList<>();
+        for (PsiField field : builder.getFields()) {
+            fields.add((field.hasModifierProperty(PsiModifier.PRIVATE) ? "private " : "")
+                + field.getType().getCanonicalText() + " " + field.getName());
+        }
+        assertEquals("the marker follows its slot, as the processor declares it", List.of(
+            "private java.lang.String name",
+            "private java.util.List<java.lang.String> tags",
+            "private boolean $replaced$tags"), fields);
+    }
+
+    /**
+     * A {@code @Collector} slot whose default reads nothing of the instance has
+     * no marker on either half: javac reports {@code cannot find symbol} for the
+     * same read, and the editor resolves nothing.
+     */
+    public void testACollectedSlotWithAStaticDefault_hasNoReplacedMarker() {
+        myFixture.configureByText("Tagged.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Collector;
+            import java.util.ArrayList;
+            import java.util.List;
+            @ClassBuilder
+            public class Tagged {
+                String name;
+                @Collector List<String> tags = new ArrayList<>(List.of("t"));
+                static boolean replaced(Builder b) { return b.$replaced$tags; }
+            }
+            """);
+        assertEquals("javac rejects the read", List.of("Cannot resolve symbol '$replaced$tags'"), errors());
+    }
+
+    /**
+     * A primitive {@code @Lazy} field's supplier setter and all-args constructor
+     * parameter take the boxed supplier the processor declares. Both read
+     * {@code Supplier<int>}, a type javac refuses to name.
+     */
+    public void testAPrimitiveLazyFieldsSupplierSetterAndConstructorParameter_areBoxed() {
+        myFixture.addFileToProject("dev/simplified/annotations/Lazy.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
+            public @interface Lazy { }
+            """);
+        PsiClass builder = builderFor("Counted",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Lazy;
+            @ClassBuilder
+            public class Counted {
+                @Lazy private int count = compute();
+                private static int compute() { return 7; }
+            }
+            """);
+        List<String> setters = new ArrayList<>();
+        for (PsiMethod setter : builder.findMethodsByName("count", false))
+            setters.add(setter.getParameterList().getParameters()[0].getType().getCanonicalText());
+        assertEquals(List.of("int", "java.util.function.Supplier<java.lang.Integer>"), setters);
+
+        PsiClass target = builder.getContainingClass();
+        assertNotNull(target);
+        List<String> parameters = new ArrayList<>();
+        for (PsiMethod constructor : target.getConstructors()) {
+            for (var parameter : constructor.getParameterList().getParameters())
+                parameters.add(parameter.getType().getCanonicalText());
+        }
+        assertEquals(List.of("java.util.function.Supplier<java.lang.Integer>"), parameters);
+    }
+
+    /**
+     * A read of the builder's slot is a read of the builder's field, not of the
+     * target's, so Find Usages on the target's field still finds its own reads
+     * alone, as javac binds them.
+     */
+    public void testFindUsagesOnTheTargetsField_findsItsOwnReadsAlone() {
+        myFixture.configureByText("Note.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Note {
+                String text;
+                String echo() { return text; }
+                static String peek(Builder b) { return b.text; }
+            }
+            """);
+        PsiClass note = ((PsiJavaFile) myFixture.getFile()).getClasses()[0];
+        PsiField text = note.findFieldByName("text", false);
+        assertNotNull(text);
+        List<String> usages = new ArrayList<>();
+        for (var usage : myFixture.findUsages(text)) {
+            PsiMethod in = PsiTreeUtil.getParentOfType(usage.getElement(), PsiMethod.class);
+            usages.add(in == null ? "?" : in.getName());
+        }
+        assertEquals(List.of("echo"), usages);
+    }
+
+    // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+
+    /**
+     * Adds the interface {@code demo.Shape} under the given annotation, and its
+     * sibling builder and implementation as the processor writes them, less the
+     * nullness and contract annotations.
+     */
+    private void addShapeSources(String annotation, String fromName) {
+        myFixture.addFileToProject("demo/Shape.java",
+            """
+            package demo;
+            import dev.simplified.annotations.BuilderNames;
+            import dev.simplified.annotations.ClassBuilder;
+            %s
+            public interface Shape {
+                String name();
+            }
+            """.formatted(annotation));
+        myFixture.addFileToProject("demo/ShapeBuilder.java",
+            """
+            package demo;
+            public class ShapeBuilder {
+                private String name;
+                public ShapeBuilder name(String name) {
+                    this.name = name;
+                    return this;
+                }
+                public static ShapeBuilder %s(Shape instance) {
+                    ShapeBuilder b = new ShapeBuilder();
+                    b.name = instance.name();
+                    return b;
+                }
+                public Shape build() {
+                    return new ShapeImpl(name);
+                }
+            }
+            """.formatted(fromName));
+        myFixture.addFileToProject("demo/ShapeImpl.java",
+            """
+            package demo;
+            final class ShapeImpl implements Shape {
+                private final String name;
+                ShapeImpl(String name) { this.name = name; }
+                @Override public String name() { return this.name; }
+            }
+            """);
+    }
+
+    /** Adds {@code p.Widget} under the given annotation. */
+    private void addWidget(String annotation) {
+        myFixture.addFileToProject("p/Widget.java",
+            """
+            package p;
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            %s
+            public class Widget {
+                private String name;
+                public String getName() { return name; }
+            }
+            """.formatted(annotation));
+    }
+
+    /** Adds {@code p.Widget} under the two annotations given, with the {@code @BuilderArgsConstructor} stub. */
+    private void addBuilderArgsWidget(String classBuilder, String builderArgs) {
+        myFixture.addFileToProject("dev/simplified/annotations/BuilderArgsConstructor.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.TYPE)
+            public @interface BuilderArgsConstructor {
+                AccessLevel access() default AccessLevel.PACKAGE;
+            }
+            """);
+        myFixture.addFileToProject("p/Widget.java",
+            """
+            package p;
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.BuilderArgsConstructor;
+            import dev.simplified.annotations.ClassBuilder;
+            %s
+            %s
+            public class Widget {
+                private String name;
+                public String getName() { return name; }
+            }
+            """.formatted(classBuilder, builderArgs));
+    }
+
+    /** Opens a new file at the given path and returns the errors highlighted in it. */
+    private List<String> errorsIn(String path, String source) {
+        myFixture.addFileToProject(path, source);
+        myFixture.configureFromTempProjectFile(path);
+        return errors();
+    }
+
+    /** The error descriptions highlighted in the open file. */
+    private List<String> errors() {
+        List<String> errors = new ArrayList<>();
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            if (info.getSeverity() == HighlightSeverity.ERROR) errors.add(info.getDescription());
+        }
+        return errors;
+    }
+
+    /** The one method of this name, augmented members included. */
+    private static PsiMethod single(PsiClass owner, String name) {
+        PsiMethod[] found = owner.findMethodsByName(name, false);
+        assertEquals("exactly one " + name + " on " + owner.getName(), 1, found.length);
+        return found[0];
+    }
 
     /** Registers custom interface collection/map types plus their factories. */
     private void addCustomBagSources() {

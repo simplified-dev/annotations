@@ -308,4 +308,56 @@ public class LazyFieldInspectionTest extends LightJavaCodeInsightFixtureTestCase
         assertTrue(reportsNothingToDefer());
     }
 
+    // ------------------------------------------------------------------
+    // The access and name attributes
+    // ------------------------------------------------------------------
+
+    /**
+     * {@code access = NONE} is an error on the written value, in the sentence
+     * javac reports on the field. The editor said nothing, and contributed the
+     * public getter javac generates beside its error.
+     */
+    public void testAccessNone_isTheProcessorsErrorOnTheAttribute() {
+        myFixture.configureByText("Demo.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.Lazy;
+            public class Demo {
+                @Lazy(access = AccessLevel.NONE) private String value = "x";
+            }
+            """);
+        HighlightInfo found = null;
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            if (info.getSeverity() == HighlightSeverity.ERROR && info.getDescription() != null
+                && info.getDescription().startsWith("@Lazy(access = NONE)")) found = info;
+        }
+        assertNotNull("an error on the attribute", found);
+        assertEquals("@Lazy(access = NONE) would leave field 'value' unreadable - its storage holds the "
+                + "deferred supplier and the synthesised getter is the only read that resolves it",
+            found.getDescription());
+        assertEquals("AccessLevel.NONE", myFixture.getEditor().getDocument().getText()
+            .substring(found.getStartOffset(), found.getEndOffset()));
+    }
+
+    /**
+     * A {@code name} written as a constant is judged by the value it holds, as
+     * javac reads it; one with no placeholder is the pattern error.
+     */
+    public void testNameConstantWithoutPlaceholder_isAnError() {
+        myFixture.configureByText("Demo.java",
+            """
+            import dev.simplified.annotations.Lazy;
+            public class Demo {
+                static final String READ = "value";
+                @Lazy(name = Demo.READ) private String label = "x";
+            }
+            """);
+        boolean found = false;
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            if (info.getSeverity() == HighlightSeverity.ERROR && info.getDescription() != null
+                && info.getDescription().startsWith("Naming pattern for 'name'")) found = true;
+        }
+        assertTrue("the constant's value has no placeholder", found);
+    }
+
 }

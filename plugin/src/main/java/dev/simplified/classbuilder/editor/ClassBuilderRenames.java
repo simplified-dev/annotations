@@ -54,7 +54,9 @@ public final class ClassBuilderRenames {
 
         PsiAnnotation annotation = target.getAnnotation(ClassBuilderConstants.ANNOTATION_FQN);
         if (annotation == null) return;
-        PsiClass builder = synthesisedBuilder(target);
+        GeneratedMemberFactory.EditorBuilderConfig config =
+            GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(annotation);
+        PsiClass builder = synthesisedBuilder(target, config);
         if (builder == null) return;
         PsiType type = declaredType(slot);
         if (type == null) return;
@@ -62,8 +64,6 @@ public final class ClassBuilderRenames {
         String currentName = slot.getName();
         if (currentName == null) return;
 
-        GeneratedMemberFactory.EditorBuilderConfig config =
-            GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(annotation);
         List<String> current = GeneratedMemberFactory.setterNames(target, builder, config,
             PsiFieldShapeExtractor.buildShape(slot, currentName, type, config.setters()));
         List<String> renamed = GeneratedMemberFactory.setterNames(target, builder, config,
@@ -79,16 +79,25 @@ public final class ClassBuilderRenames {
     }
 
     /**
-     * The builder synthesised onto the target.
+     * The builder the target's setters were minted into.
+     *
+     * <p>Usually the synthesised one, which carries the generated mark. A target
+     * that declares its builder has no such class - the setters go into the one
+     * the author declared, which is theirs and marked nothing - so the mark
+     * alone finds none, and without the declared class the whole collection
+     * would come back empty, leaving every contributed setter under its old name
+     * until the next build re-minted them under the new one.
      *
      * @param target the annotated type
-     * @return the nested builder, or {@code null} when none was synthesised
+     * @param config resolved editor-side builder configuration
+     * @return the builder the setters live in, or {@code null} when there is none
      */
-    private static @Nullable PsiClass synthesisedBuilder(@NotNull PsiClass target) {
+    private static @Nullable PsiClass synthesisedBuilder(@NotNull PsiClass target,
+                                                         @NotNull GeneratedMemberFactory.EditorBuilderConfig config) {
         for (PsiClass nested : target.getInnerClasses()) {
             if (GeneratedMemberMarker.isGenerated(nested)) return nested;
         }
-        return null;
+        return ClassBuilderConstants.declaredBuilderOf(target, config.builderName());
     }
 
     /**

@@ -1,0 +1,15 @@
+# A link merges into its declared builder: the slot's field and setter, and the
+# concrete self() and build() overriding the ancestor's, land beside the
+# author's verb, and the target gets all three entry points. The ancestor's
+# setter is inherited, which a member listing does not show, so the apt case
+# proves it through a consumer instead.
+type demo.Link
+
+target +builder
+target +from
+target +mutate
+
+builder +apply
+builder +extra
+builder +build
+builder +self

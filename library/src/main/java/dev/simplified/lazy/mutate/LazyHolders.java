@@ -63,6 +63,24 @@ public final class LazyHolders {
     }
 
     /**
+     * Whether a field of this name is the memoized-value sibling of a
+     * {@code @Lazy} field.
+     *
+     * <p>Asked where a pass walks another type's fields and has to tell storage
+     * from a property. The sibling is private, instance and non-transient, so the
+     * tests that exclude the rest of a type's non-properties do not exclude it,
+     * and a builder that collected it would publish a setter for a slot no
+     * constructor takes. Spelling it once here is what keeps that judgement in
+     * the same place as the name it judges.
+     *
+     * @param name the field's name
+     * @return whether the name is a value sibling's
+     */
+    public static boolean isValueField(String name) {
+        return name.startsWith("$value$");
+    }
+
+    /**
      * Returns the name of the method that resolves a {@code @Lazy} field,
      * computing the value on first call and reusing it after.
      *

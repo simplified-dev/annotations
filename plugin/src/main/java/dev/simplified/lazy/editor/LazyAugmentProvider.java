@@ -213,7 +213,10 @@ public final class LazyAugmentProvider extends AbstractRecursionSafeAugmentProvi
 
         AnnotatedLightModifierList modifiers = new AnnotatedLightModifierList(manager, JavaLanguage.INSTANCE);
         String accessKeyword = readAccessKeyword(field);
-        if (!accessKeyword.isEmpty()) modifiers.addModifier(accessKeyword);
+        // Package-private is spelled out: a light modifier list carrying none of
+        // the four access modifiers reads as public to the platform's access
+        // check, which would resolve a call from another package javac refuses.
+        modifiers.addModifier(accessKeyword.isEmpty() ? PsiModifier.PACKAGE_LOCAL : accessKeyword);
         for (Map.Entry<String, PsiAnnotation> entry : propagated.entrySet()) {
             modifiers.add(entry.getKey(), entry.getValue());
         }
@@ -281,7 +284,9 @@ public final class LazyAugmentProvider extends AbstractRecursionSafeAugmentProvi
      * Reads {@code @Lazy.access()} as a PSI modifier keyword. Maps
      * {@link AccessLevel#PACKAGE PACKAGE} to the
      * empty string (no keyword); everything else returns the lowercase
-     * Java modifier. Default when unset is {@code "public"}.
+     * Java modifier. Default when unset is {@code "public"}, and
+     * {@link AccessLevel#NONE NONE} reads as that default too: the processor
+     * reports it on the field and generates the getter public beside the error.
      */
     private static String readAccessKeyword(PsiField field) {
         PsiAnnotation lazy = WrittenAnnotations.find(field, LAZY_FQN);

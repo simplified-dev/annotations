@@ -1,4 +1,6 @@
 package dev.simplified.lazy.editor;
+import com.intellij.codeInsight.daemon.impl.HighlightInfo;
+import com.intellij.lang.annotation.HighlightSeverity;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiFile;
@@ -8,6 +10,9 @@ import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiType;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
 import dev.simplified.shared.psi.GeneratedMemberMarker;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Exercises {@link LazyAugmentProvider}: a class with a {@code @Lazy} field
@@ -38,7 +43,13 @@ public class LazyAugmentProviderTest extends LightJavaCodeInsightFixtureTestCase
             public @interface Lazy {
                 NamingStyle style() default NamingStyle.SIMPLIFIED;
                 String name() default "";
+                AccessLevel access() default AccessLevel.PUBLIC;
             }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/AccessLevel.java",
+            """
+            package dev.simplified.annotations;
+            public enum AccessLevel { PUBLIC, PROTECTED, PACKAGE, PRIVATE, NONE }
             """);
     }
 
@@ -110,6 +121,33 @@ public class LazyAugmentProviderTest extends LightJavaCodeInsightFixtureTestCase
             """);
         assertEquals(1, holder.findMethodsByName("fetchLabel", false).length);
         assertEquals(0, holder.findMethodsByName("getLabel", false).length);
+    }
+
+    /**
+     * A name written as a {@code String} constant the target declares is read
+     * as the value it holds, as javac reads it, so the getter is spelled from it
+     * and a call to it resolves. The editor used to read only a literal, so it
+     * offered {@code getLabel()} where javac generates {@code fetchLabel()}.
+     */
+    public void testNameWrittenAsAConstant_namesTheGetter() {
+        PsiClass holder = configure("Holder",
+            """
+            import dev.simplified.annotations.Lazy;
+            public class Holder {
+                static final String FETCH = "fetch{}";
+                @Lazy(name = Holder.FETCH)
+                private String label = "x";
+                String read() { return fetchLabel(); }
+            }
+            """);
+        assertEquals(1, holder.findMethodsByName("fetchLabel", false).length);
+        assertEquals(0, holder.findMethodsByName("getLabel", false).length);
+        List<String> unresolved = new ArrayList<>();
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            if (info.getSeverity() == HighlightSeverity.ERROR && info.getDescription() != null
+                && info.getDescription().contains("fetchLabel")) unresolved.add(info.getDescription());
+        }
+        assertEquals("javac compiles the call to fetchLabel()", List.of(), unresolved);
     }
 
     /** A hand-written accessor still wins, whatever the style spelled. */
@@ -305,5 +343,64 @@ public class LazyAugmentProviderTest extends LightJavaCodeInsightFixtureTestCase
         PsiMethod[] getters = cls.findMethodsByName("getFoo", false);
         // Allow either: provider may or may not skip; document.
         assertTrue("getter set is bounded", getters.length <= 1);
+    }
+
+    /**
+     * A getter at {@code access = PACKAGE} is refused from another package, as
+     * javac refuses it. The light getter carried no access modifier, which the
+     * platform's access check reads as public.
+     */
+    public void testPackageGetter_isClosedToAnotherPackage() {
+        addMemo();
+        List<String> errors = errorsIn("q/UseMemo.java",
+            """
+            package q;
+            public class UseMemo {
+                void go(p.Memo m) { m.getNote(); }
+            }
+            """);
+        assertEquals("javac: cannot be accessed from outside package; editor: " + errors, 1, errors.size());
+    }
+
+    /** From its own package the same getter stays reachable. */
+    public void testPackageGetter_resolvesFromItsOwnPackage() {
+        addMemo();
+        List<String> errors = errorsIn("p/UseMemo.java",
+            """
+            package p;
+            public class UseMemo {
+                void go(Memo m) { m.getNote(); }
+            }
+            """);
+        assertTrue("javac compiles this; editor errors: " + errors, errors.isEmpty());
+    }
+
+    private void addMemo() {
+        myFixture.addFileToProject("p/Memo.java",
+            """
+            package p;
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.Lazy;
+            public class Memo {
+                @Lazy(access = AccessLevel.PACKAGE) private Note note = new Note();
+            }
+            """);
+        myFixture.addFileToProject("p/Note.java",
+            """
+            package p;
+            public class Note {
+            }
+            """);
+    }
+
+    /** Opens a new file at the given path and returns the errors highlighted in it. */
+    private List<String> errorsIn(String path, String source) {
+        myFixture.addFileToProject(path, source);
+        myFixture.configureFromTempProjectFile(path);
+        List<String> errors = new ArrayList<>();
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            if (info.getSeverity() == HighlightSeverity.ERROR) errors.add(info.getDescription());
+        }
+        return errors;
     }
 }

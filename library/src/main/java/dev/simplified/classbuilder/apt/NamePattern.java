@@ -135,6 +135,11 @@ public final class NamePattern {
      * count and that the literal text around it can occupy its position in a
      * Java identifier.
      *
+     * <p>A written {@link SetterNames#INHERIT} is valid: it takes the style's
+     * pattern, as the unwritten default does, and {@link #inherit} resolves it
+     * to that pattern. Its value is the empty string, so an empty literal is
+     * read the same way, there being no telling the two apart.
+     *
      * @param pattern the pattern to check
      * @param placeholderRequired whether omitting the placeholder is an error,
      *                            true for the per-field setters and false for
@@ -142,8 +147,7 @@ public final class NamePattern {
      * @return a message describing the defect, or {@code null} when valid
      */
     public static String patternError(String pattern, boolean placeholderRequired) {
-        if (pattern == null || !emits(pattern)) return null;
-        if (pattern.isEmpty()) return "must not be empty";
+        if (pattern == null || !emits(pattern) || SetterNames.INHERIT.equals(pattern)) return null;
         int at = pattern.indexOf(PLACEHOLDER);
         if (at < 0) {
             if (placeholderRequired) {

@@ -143,6 +143,76 @@ public final class ArgsConstants {
     }
 
     /**
+     * The parameters of each constructor the written constructor annotations
+     * append to the class, in the order the processor appends them.
+     *
+     * <p>Decided as the processor's constructor pass decides it, with the field
+     * selection through {@link ArgsSelection}: a record or an interface is given
+     * none, {@code @BuilderArgsConstructor} is the builder pass's own to emit, an
+     * annotation at {@code AccessLevel.NONE} appends nothing, and
+     * {@code @NoArgsConstructor} appends nothing where it would leave a
+     * {@code final} field unassigned without {@code force}. Read off the written
+     * annotations and the class's own fields, never through an augment-aware
+     * call, so an augment provider can ask it of a class it is not augmenting.
+     *
+     * @param target the class the annotations are written on
+     * @return each appended constructor's parameters, in declaration order
+     */
+    public static List<List<PsiField>> appendedConstructors(PsiClass target) {
+        List<List<PsiField>> out = new ArrayList<>();
+        for (AppendedConstructor appended : appended(target)) out.add(appended.parameters());
+        return out;
+    }
+
+    /**
+     * A constructor the written constructor annotations append to a class.
+     *
+     * @param mode the policy of the annotation that appends it
+     * @param parameters the fields it takes, in declaration order
+     */
+    public record AppendedConstructor(ArgsMode mode, List<PsiField> parameters) { }
+
+    /**
+     * Each constructor the written constructor annotations append to the class,
+     * with the annotation appending it - the constructors whose parameters
+     * {@link #appendedConstructors} lists.
+     *
+     * @param target the class the annotations are written on
+     * @return the appended constructors, in the order the processor appends them
+     */
+    public static List<AppendedConstructor> appended(PsiClass target) {
+        List<AppendedConstructor> out = new ArrayList<>();
+        if (target.isRecord() || target.isInterface()) return out;
+        for (PsiAnnotation annotation : written(target)) {
+            ArgsMode mode = modeOf(annotation);
+            if (!appends(target, annotation, mode)) continue;
+            out.add(new AppendedConstructor(mode, select(target, mode, List.of())));
+        }
+        return out;
+    }
+
+    /**
+     * Whether one written constructor annotation appends a constructor, as the
+     * processor's constructor pass decides it for a class or an enum.
+     *
+     * <p>{@code @BuilderArgsConstructor} is the builder pass's own to emit, an
+     * annotation at {@code AccessLevel.NONE} appends nothing, and
+     * {@code @NoArgsConstructor} appends nothing where it would leave a
+     * {@code final} field unassigned without {@code force} - the processor
+     * reports that and moves on.
+     *
+     * @param target the class the annotation is written on
+     * @param annotation the written annotation
+     * @param mode its mode, or {@code null} when it is not one of the four
+     * @return whether the processor appends its constructor
+     */
+    public static boolean appends(PsiClass target, PsiAnnotation annotation, @Nullable ArgsMode mode) {
+        if (mode == null || mode == ArgsMode.BUILDER) return false;
+        if (accessKeyword(annotation, mode) == null) return false;
+        return mode != ArgsMode.NONE || force(annotation) || unassignedFinals(target).isEmpty();
+    }
+
+    /**
      * Whether the field carries an annotation of this simple name.
      *
      * <p>Matched on the reference text rather than by resolving it, which is

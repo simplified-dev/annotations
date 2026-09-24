@@ -1,5 +1,7 @@
 package dev.simplified.classbuilder.editor;
 
+import com.intellij.codeInsight.daemon.impl.HighlightInfo;
+import com.intellij.lang.annotation.HighlightSeverity;
 import com.intellij.openapi.application.AccessToken;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiFile;
@@ -357,7 +359,56 @@ public class ClassBuilderExecutableTargetTest extends LightJavaCodeInsightFixtur
     }
 
     /**
-     * The processor rejects a type and a member both carrying the annotation, so
+     * The processor refuses every annotated member of a type declaring a
+     * {@code @Lazy} field and generates nothing, so the editor contributes no
+     * builder either. It used to synthesise one, a completion list populated up
+     * to the failing build.
+     */
+    public void testMemberOfATypeWithALazyField_offersNothing() {
+        myFixture.addFileToProject("dev/simplified/annotations/Lazy.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
+            public @interface Lazy { }
+            """);
+        PsiClass target = targetFor("Deferred",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Lazy;
+            public final class Deferred {
+                @Lazy private final String value;
+                @ClassBuilder
+                Deferred(String value) { this.value = value; }
+            }
+            """);
+        assertEquals("javac refuses it, so the editor offers nothing",
+            0, target.findMethodsByName("builder", false).length);
+        assertEquals(0, target.getInnerClasses().length);
+    }
+
+    /**
+     * A second annotated member is refused and the first keeps the type, so the
+     * builder's slots are the first member's parameters.
+     */
+    public void testASecondAnnotatedMember_leavesTheFirstsBuilder() {
+        PsiClass builder = builderFor("Twice",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Twice {
+                @ClassBuilder
+                Twice(int first) { }
+                @ClassBuilder
+                public static Twice of(String second) { return new Twice(1); }
+            }
+            """);
+        List<String> names = methodNames(builder);
+        assertTrue("the first member's parameter is the slot: " + names, names.contains("first"));
+        assertFalse("not the second's: " + names, names.contains("second"));
+    }
+
+    /**
+     * The processor refuses a type and a member both carrying the annotation, so
      * there is only ever one builder to model; the editor reads the type's,
      * which is the one the author is most likely to have meant.
      */
@@ -404,9 +455,83 @@ public class ClassBuilderExecutableTargetTest extends LightJavaCodeInsightFixtur
         }
     }
 
+    /**
+     * A static factory whose type parameter is bounded by itself. The processor
+     * re-declares the bound on {@code builder()} and on the builder class as
+     * written, so an explicit witness satisfying it compiles and runs, and so
+     * does the builder named with it; the editor's copies of the bound named the
+     * factory's parameter rather than their own, so no witness could satisfy
+     * them and both were red.
+     */
+    public void testABoundedStaticFactory_entryPointTakesAWitnessWithinTheBound() {
+        myFixture.addFileToProject("demo/Range.java",
+            """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Range<T extends Comparable<T>> {
+                private final T low;
+                private final T high;
+                private Range(T low, T high) { this.low = low; this.high = high; }
+                public T low() { return low; }
+                @ClassBuilder
+                public static <T extends Comparable<T>> Range<T> of(T low, T high) { return new Range<>(low, high); }
+            }
+            """);
+        myFixture.configureByText("UseRange.java",
+            """
+            package demo;
+            public class UseRange {
+                public static int go() { return Range.<Integer>builder().low(1).high(5).build().low(); }
+                public static int named() {
+                    Range.Builder<Integer> b = Range.<Integer>builder();
+                    return b.low(1).high(5).build().low();
+                }
+            }
+            """);
+        assertEquals("javac compiles and runs the call", List.of(), errors());
+    }
+
+    /** Two parameters, the first bounded by itself and the second free, witnessed in order. */
+    public void testATwoParameterBoundedStaticFactory_entryPointTakesBothWitnesses() {
+        myFixture.addFileToProject("demo/Entry.java",
+            """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Entry<K extends Comparable<K>, V> {
+                private final K key;
+                private final V value;
+                private Entry(K key, V value) { this.key = key; this.value = value; }
+                public K key() { return key; }
+                public V value() { return value; }
+                @ClassBuilder
+                public static <K extends Comparable<K>, V> Entry<K, V> of(K key, V value) { return new Entry<>(key, value); }
+            }
+            """);
+        myFixture.configureByText("UseEntry.java",
+            """
+            package demo;
+            public class UseEntry {
+                public static String go() {
+                    Entry<String, Integer> e = Entry.<String, Integer>builder().key("k").value(2).build();
+                    return e.key() + e.value();
+                }
+            }
+            """);
+        assertEquals("javac compiles and runs the call", List.of(), errors());
+    }
+
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+
+    private List<String> errors() {
+        List<String> out = new ArrayList<>();
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            if (info.getSeverity() == HighlightSeverity.ERROR)
+                out.add("[" + info.getText() + "] " + info.getDescription());
+        }
+        return out;
+    }
 
     private PsiClass targetFor(String className, String source) {
         PsiFile file = myFixture.configureByText(className + ".java", source);

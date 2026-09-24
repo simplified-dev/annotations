@@ -3,6 +3,7 @@ import com.sun.tools.javac.code.BoundKind;
 import com.sun.tools.javac.code.Flags;
 import com.sun.tools.javac.code.TypeTag;
 import com.sun.tools.javac.tree.JCTree.JCBlock;
+import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import com.sun.tools.javac.tree.JCTree.JCExpression;
 import com.sun.tools.javac.tree.JCTree.JCMethodDecl;
 import com.sun.tools.javac.tree.JCTree.JCStatement;
@@ -12,6 +13,7 @@ import com.sun.tools.javac.tree.TreeMaker;
 import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
+import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.lazy.mutate.LazyHolders;
 import dev.simplified.shared.javac.AstMarkers;
@@ -29,7 +31,8 @@ import dev.simplified.shared.javac.JavacTypeFactory;
  * protected Target(Builder b) { super(b); this.ownField = b.ownField; ... }
  * }</pre>
  *
- * <p>Fields are assigned in declaration order. Nested {@code Builder.field}
+ * <p>Fields are assigned in declaration order, every {@code @Lazy} holder
+ * ahead of the rest. Nested {@code Builder.field}
  * access is legal here because {@code Builder} is declared inside
  * {@code Target}, so private members are reachable from the enclosing class.
  */
@@ -72,7 +75,12 @@ final class CopyConstructorFactory {
                 List.of(make.Ident(names.fromString("b")))
             )));
         }
-        for (FieldSpec f : ctx.fields()) body.append(assignFromBuilder(f));
+        // Every @Lazy holder is assigned ahead of the other fields, so an
+        // instance default computed here that reads a lazy field finds it.
+        for (FieldSpec f : ctx.fields())
+            if (f.lazy) body.append(assignFromBuilder(f));
+        for (FieldSpec f : ctx.fields())
+            if (!f.lazy) body.append(assignFromBuilder(f));
         return buildCtor(List.of(param), body.toList(), Flags.PROTECTED);
     }
 
@@ -176,17 +184,26 @@ final class CopyConstructorFactory {
     }
 
     /**
-     * Detects a hand-written constructor with a single {@code Builder}-typed
-     * parameter (by simple name) so we can respect the user's version.
+     * Detects a hand-written constructor whose one parameter is the target's
+     * own builder, so the author's version is kept and no second one of the
+     * same erasure is appended.
+     *
+     * <p>The parameter type is read as written and judged by
+     * {@link DeclaredBuilderShape#namesOwnBuilder}, the rule the editor applies
+     * to the same source.
+     *
+     * @param target the annotated type
+     * @param builderSimpleName the simple name of the target's builder
+     * @return whether the target declares its own copy constructor
      */
-    static boolean hasCopyConstructor(com.sun.tools.javac.tree.JCTree.JCClassDecl target, String builderSimpleName) {
+    static boolean hasCopyConstructor(JCClassDecl target, String builderSimpleName) {
+        String targetName = target.name.toString();
         for (JCTree def : target.defs) {
             if (!(def instanceof JCMethodDecl m)) continue;
             if (!m.name.toString().equals("<init>")) continue;
             if (m.params.size() != 1) continue;
             String paramType = m.params.head.vartype.toString();
-            if (paramType.equals(builderSimpleName)) return true;
-            if (paramType.startsWith(builderSimpleName + "<")) return true;
+            if (DeclaredBuilderShape.namesOwnBuilder(paramType, targetName, builderSimpleName)) return true;
         }
         return false;
     }

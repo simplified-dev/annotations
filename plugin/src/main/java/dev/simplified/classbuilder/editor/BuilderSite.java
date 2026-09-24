@@ -3,10 +3,7 @@ package dev.simplified.classbuilder.editor;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiMethod;
-import com.intellij.psi.PsiModifier;
-import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypeParameter;
-import com.intellij.psi.PsiTypes;
 import com.intellij.psi.impl.source.PsiExtensibleClass;
 import dev.simplified.classbuilder.inspect.ClassBuilderConstants;
 import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
@@ -31,8 +28,8 @@ import java.util.List;
  *        when the annotation is on the type
  * @param annotation the {@code @ClassBuilder} itself, wherever it is written
  */
-record BuilderSite(@NotNull PsiClass owner, @Nullable PsiMethod executable,
-                   @NotNull PsiAnnotation annotation) {
+public record BuilderSite(@NotNull PsiClass owner, @Nullable PsiMethod executable,
+                          @NotNull PsiAnnotation annotation) {
 
     /**
      * Resolves where {@code target}'s builder is declared.
@@ -50,10 +47,15 @@ record BuilderSite(@NotNull PsiClass owner, @Nullable PsiMethod executable,
      * runs under the augment providers' re-entry guard, so a lookup started from
      * anywhere inside synthesis answers {@code null} rather than recursing.
      *
+     * <p>The one reading of which annotation the processor builds from, for the
+     * inspections as for the augment providers: an annotated member it refuses,
+     * or one beside an annotated type, is never the site answered, so nothing
+     * judges a merge javac never runs.
+     *
      * @param target the class to read
      * @return the site, or {@code null} when nothing here declares a builder
      */
-    static @Nullable BuilderSite of(@NotNull PsiClass target) {
+    public static @Nullable BuilderSite of(@NotNull PsiClass target) {
         if (AbstractRecursionSafeAugmentProvider.isInProgress(target)) return null;
         return AbstractRecursionSafeAugmentProvider.withInProgress(target, () -> resolve(target));
     }
@@ -65,24 +67,27 @@ record BuilderSite(@NotNull PsiClass owner, @Nullable PsiMethod executable,
             PsiAnnotation written =
                 WrittenAnnotations.findOnMember(own, ClassBuilderConstants.ANNOTATION_FQN);
             if (written == null) continue;
-            if (!usable(own)) continue;
+            if (!usable(target, own)) continue;
             return new BuilderSite(target, own, written);
         }
         return null;
     }
 
     /**
-     * Whether the annotated member can produce a builder at all, on the same
-     * terms the processor applies: a factory has to be reachable without an
-     * instance, and has to return something for {@code build()} to hand back.
-     * A member failing either is one javac rejects, so synthesising for it would
-     * put a builder in completion that the build then refuses.
+     * Whether the annotated member can produce a builder at all, on the terms
+     * the processor applies: {@link ClassBuilderConstants#executableRefusal}
+     * answers nothing for it. An instance method, a {@code void} method, a
+     * member of a type declaring a {@code @Lazy} field and a second annotated
+     * member are each refused with an error and generate nothing, so
+     * synthesising for one would put a builder in completion that the build
+     * never produces.
+     *
+     * @param owner the type the member is declared in
+     * @param method the annotated member
+     * @return whether the processor builds from it
      */
-    private static boolean usable(PsiMethod method) {
-        if (method.isConstructor()) return true;
-        if (!method.hasModifierProperty(PsiModifier.STATIC)) return false;
-        PsiType returnType = method.getReturnType();
-        return returnType != null && !PsiTypes.voidType().equals(returnType);
+    private static boolean usable(PsiClass owner, PsiMethod method) {
+        return ClassBuilderConstants.executableRefusal(owner, method) == null;
     }
 
     private static List<PsiMethod> ownMethods(PsiClass target) {
@@ -106,12 +111,24 @@ record BuilderSite(@NotNull PsiClass owner, @Nullable PsiMethod executable,
      *
      * <p>A {@code static} factory's own, since it cannot name the enclosing
      * type's; the enclosing type's everywhere else, a constructor running under
-     * exactly those.
+     * exactly those. The choice is
+     * {@link ClassBuilderConstants#typeParameterSource}, the one the declared
+     * builder's shape is measured against.
      *
      * @return the parameters to copy onto the builder
      */
     PsiTypeParameter[] typeParameterSource() {
-        return isStaticFactory() ? executable.getTypeParameters() : owner.getTypeParameters();
+        return ClassBuilderConstants.typeParameterSource(owner, executable);
+    }
+
+    /**
+     * The type of each of the annotated member's seeds as written, each of which
+     * {@code builder(..)} takes and passes to the builder's constructor.
+     *
+     * @return the seeds' types in parameter order, empty when the annotation is on the type
+     */
+    List<String> seedTypes() {
+        return executable == null ? List.of() : MergedSlotStorage.seedTypes(executable);
     }
 
 }

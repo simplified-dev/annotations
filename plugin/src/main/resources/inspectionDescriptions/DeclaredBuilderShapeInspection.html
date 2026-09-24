@@ -1,0 +1,197 @@
+<html>
+<body>
+Reports a builder declared beside <code>@ClassBuilder</code> whose shape cannot
+carry the generated members.
+
+<p>
+The processor refuses these with a compile error, and until this fires the
+editor had no analogue: the whole generated surface appeared in completion on a
+class the build was going to reject, so the first sign of the problem was a
+failure inside code the author never wrote.
+</p>
+
+<!-- tooltip end -->
+
+<p>
+The shapes refused, each for a reason the generated members cannot work around:
+</p>
+
+<ul>
+  <li><b>A record, an enum or an interface</b> - a record takes no instance
+      field, an enum no <code>new</code> and an interface neither, so only a
+      class can hold the slot fields and the constructor the entry points
+      call.</li>
+  <li><b>Not <code>static</code></b> - an inner class captures the enclosing
+      instance, so the static entry point has nothing to create one from.</li>
+  <li><b><code>abstract</code> where the entry points instantiate it</b> - the
+      builder a standalone target or a concrete link declares is what
+      <code>builder()</code> calls <code>new</code> on.</li>
+  <li><b>The wrong type parameters</b> - the generated members are written in
+      the builder's own re-declared parameters, so they have to be present and
+      in the same order for a setter to name a slot's type at all.</li>
+  <li><b>Other bounds on them</b> - the generated members apply the builder's
+      parameters to the target and the target's to the builder, so each
+      re-declared parameter carries the bounds the target writes on it, compared
+      by simple name in any order; a looser bound fails the generated
+      <code>build()</code> and a narrower one the generated
+      <code>builder()</code>.</li>
+  <li><b>An unbounded or otherwise bounded trailing pair</b> on a self-typed
+      builder - every link binds the pair to itself and its own builder, so
+      the first type the first parameter's bound names has to be the target,
+      <code>Object</code>, or a supertype of the target at any depth - one its
+      own <code>extends</code> or <code>implements</code> clause names, or one
+      it reaches further up, which is resolved - and the second has to be
+      bounded by the builder applied to the pair in order. A name that resolves
+      to nothing is refused. Further types of an intersection bound are
+      accepted here, and judged on each link below.</li>
+  <li><b>The wrong <code>extends</code> clause</b> - a chained builder inherits
+      the parent's setters through it, so it has to name the annotated
+      ancestor's builder, qualifier included, and pass it the ancestor's own
+      arguments followed by the link and its builder, or on an abstract
+      builder its own trailing pair.</li>
+  <li><b>A build method returning something else</b>, on a chain only - the
+      method a link inherits has to be the one its role declares, or on a
+      root the root itself, which every link's build method overrides.
+      Standing alone nothing generated calls <code>build()</code>, so an
+      author's own is kept whatever it returns.</li>
+</ul>
+
+<p>
+A target in a SuperBuilder chain merges into its declared builder as well, so
+a root, a concrete link and a chained abstract are each judged against the
+shape their role generates. A root or chained abstract's builder whose
+constructors all take parameters, or whose <code>self()</code> - declared, or
+on a root inherited from a supertype - is <code>final</code>, is reported on
+its name, since every link below calls the one and overrides the other. So is
+a root's builder inheriting a <code>self()</code> that, as its extends clause
+instantiates the supertype, returns another type than the pair's builder
+parameter - <code>extends Fluent&lt;String&gt;</code> where every generated
+setter returns <code>self()</code> as <code>B</code>. A link
+whose annotated ancestor declares a builder the extends clause cannot name is
+reported on the annotation instead, whether or not the link declares its own,
+as is a link the ancestor's builder is out of reach of - declared, or generated
+at the access the ancestor's <code>@ClassBuilder(access)</code> asks for -
+being <code>private</code> from another top-level class or package-private from
+another package, and a link whose extends clause names a generic ancestor
+without its type arguments. A concrete link is reported on its annotation, too,
+where the nearest <code>self()</code> it overrides is <code>final</code> on a
+compiled ancestor - one built without the processor, whose own builder nothing
+judged; a source ancestor's is reported on that ancestor's builder alone. So is
+a concrete link, or a chained abstract whose builder is generated, that is not
+within a type an ancestor's builder bounds the type it builds by, as
+instantiated for it - <code>T extends Shape &amp; Comparable&lt;Shape&gt;</code>
+above a link that does not implement <code>Comparable&lt;Shape&gt;</code>.
+</p>
+
+<p>
+A constructor or static factory target merges into the builder its enclosing
+type declares, a static factory inside an interface included, so that builder
+is judged the same way. Its type parameters are measured against the ones the
+generated members are written in: a static factory's own, and the enclosing
+type's for a constructor. An annotated member the processor refuses - an
+instance or <code>void</code> method, or one beside an annotated type - merges
+nothing and is not judged.
+</p>
+
+<p>
+On a shape the merge accepts, a field the author declares in the builder under
+a slot's name is also checked against the type the generated setters assign,
+type arguments included. A primitive field over its box is accepted, the setter
+assigning it under unboxing; a box over its primitive is reported, since an unset
+one reaches the primitive constructor parameter as <code>null</code>. A
+field written C-style, <code>String tags[]</code>, is read with its brackets,
+and a varargs parameter's slot is the array it is.
+That is the field's declared type, except for a
+<code>@Lazy</code> field and a field whose kept initializer reads the instance -
+names <code>this</code>, <code>super</code> or an instance member, a getter or
+setter <code>@Getter</code>, <code>@Setter</code> or <code>@Lazy</code>
+generates among them - which the builder holds as a <code>Supplier</code> of it:
+so <code>private String note;</code> beside a <code>@Lazy String note</code> is
+reported, and <code>private Supplier&lt;String&gt; note;</code> is not. A
+<code>@Collector</code> slot whose initializer reads the instance is held in a
+plain <code>java.util</code> container of its elements - <code>List</code>,
+<code>Set</code> or <code>Map</code> - so <code>private List&lt;String&gt;
+tags;</code> holds an <code>ArrayList&lt;String&gt; tags</code> slot and
+<code>private ArrayList&lt;String&gt; tags;</code> is reported. A field under a slot's name declared <code>final</code> is
+reported whatever its type where one of the slot's generated setters that
+assigns it is appended - the author writing no method of its name and erased
+parameter types; where the author writes every one of them, nothing generated
+assigns the field. A singular add, put, remove or clear, and each bulk setter
+of an <code>@Collector(append = true)</code> slot, only add into or take from
+the container the field holds, and do not count. A <code>@BuilderSeed</code>
+has no setter and is never reported.
+</p>
+
+<p>
+An author method of a generated setter's name and erased parameter types takes
+its place, and where that setter is the one <code>from(T)</code> and
+<code>mutate()</code> call - the one taking the slot's own type - they pass it
+the slot. Where the two parameters are distinct parameterisations of one
+generic type - <code>items(List&lt;Integer&gt;)</code> beside a
+<code>List&lt;String&gt;</code> slot, neither a wildcard nor one of the
+builder's type parameters - javac cannot pass it, and the method is reported on
+its name wherever either copy entry point is emitted.
+</p>
+
+<p>
+A generated setter the merge appends overrides whatever the builder inherits
+under its name and erased parameter types, a parameter typed by one of the
+builder's type variables taking that variable's bound - <code>value(T)</code>
+meets an inherited <code>value(Object)</code>. Where that inherited method is
+<code>static</code> or <code>final</code>, or returns <code>void</code>, a
+primitive or a type the builder is not assignable to, javac refuses the setter
+on the target's line; the builder's name is reported instead, naming the method
+and the supertype that declares it. The supertypes are the builder's
+superclasses up to and including <code>java.lang.Object</code> - a
+<code>long wait</code> slot's setter meets its final <code>wait(long)</code> -
+and its superinterfaces, whose static methods a class does not inherit. An
+inherited method of the same erasure whose parameter, as the builder's extends
+clause instantiates its supertype, is not the setter's type variable -
+<code>value(T)</code> beside a non-final <code>value(Object)</code>, or
+<code>value(T extends Number)</code> beside <code>value(Number)</code> - is
+neither overridden nor overloaded, which javac refuses as a name clash, and is
+reported on the builder's name as one. A generic supertype's
+<code>value(X)</code> that the builder passes its <code>T</code> is the method
+<code>value(T)</code> overrides. An inherited method the setter can override,
+one returning the builder's own self type among them, and one taking other
+parameter types, are left alone.
+</p>
+
+<p>
+On a constructor or static factory target, a <code>@BuilderSeed</code>
+parameter is appended to the declared builder as a <code>final</code> field,
+and only the author's constructors can assign it. A constructor that leaves it
+unassigned is reported, as is a builder declaring no constructor at all -
+javac refuses both - unless an instance initializer of the builder assigns
+it, which assigns it for every constructor. A constructor that may assign it
+where it is already assigned - after an instance initializer, after the
+<code>this(..)</code> call it delegates through, or twice itself, on two paths
+that meet or inside a loop - is reported too, the field being
+<code>final</code>, on the second assignment where javac reports one. A
+constructor an <code>@AllArgsConstructor</code>,
+<code>@RequiredArgsConstructor</code> or <code>@NoArgsConstructor</code> on the
+builder appends takes the builder's fields as they stand before the merge, so
+it leaves the seed unassigned; it is reported on the builder's name, where
+javac reports it, naming the appended constructor.
+</p>
+
+<p>
+On a class or record target and on a constructor or static factory target, a
+<code>builderConstructorAccess</code> written on the annotation while the
+declared builder declares a constructor of its own is reported as a warning on
+that attribute: the author's constructor keeps the access it is written with.
+Where the declared builder declares no constructor, its implicit default takes
+the attribute's access instead. On a SuperBuilder chain role or an interface
+target the attribute reaches no builder at all, and a value other than the
+default written there is reported as a warning on the attribute too.
+</p>
+
+<p>
+Shape rejections are reported at error level because the alternative is javac failing on a generated
+line. The message is the one the processor prints, rendered from the same
+decision, so the editor is red exactly where and for exactly the reason the
+build is.
+</p>
+
+</body>
+</html>

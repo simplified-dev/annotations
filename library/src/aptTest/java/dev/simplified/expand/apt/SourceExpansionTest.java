@@ -292,4 +292,206 @@ public class SourceExpansionTest {
         }
     }
 
+    // ------------------------------------------------------------------
+    // What the copy is named, and what happens to one the build stops making
+    // ------------------------------------------------------------------
+
+    /**
+     * The copy is named for the type it declares, not the file it was read from.
+     *
+     * <p>Only a public type has to share its file's name, so a unit declaring a
+     * package-private one may be read from a file called anything. A link
+     * resolves against the declared type, so that is what the copy is named for -
+     * and it is also what keeps two units of one file name from landing on one
+     * path and overwriting each other.
+     */
+    @Test
+    public void theCopyIsNamedForTheTypeItDeclares() throws IOException {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.Holder",
+            "package demo;",
+            "import dev.simplified.annotations.Getter;",
+            "/** Declared under a file of another name. */",
+            "@Getter",
+            "class Tucked {",
+            "    /** The name. */",
+            "    private String name;",
+            "}"));
+        assertThat(c).succeeded();
+
+        assertTrue("the copy takes the declared type's name - wrote: " + listing(),
+            Files.exists(this.expandTo.resolve("demo/Tucked.java")));
+        assertFalse("the copy must not be named for the file it was read from",
+            Files.exists(this.expandTo.resolve("demo/Holder.java")));
+        assertTrue(expanded("demo/Tucked.java").contains("getName()"));
+    }
+
+    /**
+     * A copy the build stops producing is removed rather than left to be read.
+     *
+     * <p>The expander only ever created files, so a renamed or deleted type left
+     * its copy in place and the doclet went on documenting a type that no longer
+     * existed. Two compilations over one target directory are what a consumer's
+     * second build is, so that is what this runs.
+     */
+    @Test
+    public void aCopyTheBuildStopsMakingIsRemoved() throws IOException {
+        Compilation first = compile(
+            JavaFileObjects.forSourceLines("demo.Kept",
+                "package demo;",
+                "/** Survives the rename. */",
+                "public class Kept { }"),
+            JavaFileObjects.forSourceLines("demo.Dropped",
+                "package demo;",
+                "/** Renamed away in the second build. */",
+                "public class Dropped { }"));
+        assertThat(first).succeeded();
+        assertTrue(Files.exists(this.expandTo.resolve("demo/Dropped.java")));
+
+        Path target = this.expandTo;
+        Compilation second = Compiler.javac()
+            .withProcessors(new ClassBuilderProcessor(), new SourceExpanderProcessor())
+            .withOptions("-A" + SourceExpanderProcessor.EXPAND_TO + "=" + target)
+            .compile(JavaFileObjects.forSourceLines("demo.Kept",
+                "package demo;",
+                "/** Survives the rename. */",
+                "public class Kept { }"));
+        assertThat(second).succeeded();
+
+        assertTrue("a type the build still produces keeps its copy",
+            Files.exists(target.resolve("demo/Kept.java")));
+        assertFalse("a type the build no longer produces must not keep its copy",
+            Files.exists(target.resolve("demo/Dropped.java")));
+    }
+
+    /**
+     * A directory the expander did not write is left alone.
+     *
+     * <p>The target is a directory the consumer names, so the removal above must
+     * never reach a file this tool did not create. With no record of a previous
+     * run there is nothing it may delete, whatever the directory happens to hold.
+     */
+    @Test
+    public void aFileTheExpanderDidNotWriteIsNeverRemoved() throws IOException {
+        Path target = this.folder.newFolder("shared").toPath();
+        Path foreign = target.resolve("demo");
+        Files.createDirectories(foreign);
+        Path keep = foreign.resolve("Handwritten.java");
+        Files.writeString(keep, "package demo; class Handwritten { }", StandardCharsets.UTF_8);
+
+        Compilation c = Compiler.javac()
+            .withProcessors(new ClassBuilderProcessor(), new SourceExpanderProcessor())
+            .withOptions("-A" + SourceExpanderProcessor.EXPAND_TO + "=" + target)
+            .compile(JavaFileObjects.forSourceLines("demo.Mine",
+                "package demo;",
+                "/** Written by this run. */",
+                "public class Mine { }"));
+        assertThat(c).succeeded();
+
+        assertTrue("a file the expander did not write must survive",
+            Files.exists(keep));
+        assertEquals("package demo; class Handwritten { }",
+            Files.readString(keep, StandardCharsets.UTF_8));
+    }
+
+    /**
+     * A unit may declare package-private types above its public one, and a copy
+     * named after one of those puts a public type in a file of the wrong name -
+     * which javadoc rejects outright rather than merely failing to link.
+     */
+    @Test
+    public void theCopyIsNamedForThePublicType_evenWhenItIsNotDeclaredFirst() throws IOException {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.Utils",
+            "package demo;",
+            "/** An internal helper. */",
+            "class Internal { }",
+            "/** The public one. */",
+            "public class Utils { }"));
+        assertThat(c).succeeded();
+        assertTrue("expected demo/Utils.java, wrote: " + listing(),
+            Files.exists(this.expandTo.resolve("demo/Utils.java")));
+        assertFalse("and not a file named for the package-private type: " + listing(),
+            Files.exists(this.expandTo.resolve("demo/Internal.java")));
+    }
+
+    // ------------------------------------------------------------------
+    // A chain, where every member returns the builder's own self type
+    // ------------------------------------------------------------------
+
+    /**
+     * A self-typed builder's members return the second of its trailing pair
+     * rather than the builder's own name, so the owner test answered no for
+     * every one of them and each fell through to a sentence written for a
+     * different member - the self accessor being documented as the build method
+     * most visibly.
+     */
+    @Test
+    public void expansionRendersASelfTypedBuildersMembersAsReturningItsOwner() throws IOException {
+        Compilation c = compile(JavaFileObjects.forSourceLines("demo.Rooted",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "/** A rooted thing. */",
+            "@ClassBuilder(validate = false)",
+            "public abstract class Rooted {",
+            "    private String label;",
+            "    private boolean animated;",
+            "    public String getLabel() { return label; }",
+            "    public boolean isAnimated() { return animated; }",
+            "}"));
+        assertThat(c).succeeded();
+        String expanded = expanded("demo/Rooted.java");
+
+        assertTrue("the self accessor gets its own sentence: " + expanded,
+            expanded.contains("Returns this builder as its own type."));
+        assertEquals("and it is the only member that does - a boolean's zero-argument setter "
+                + "takes no arguments either, and is a setter: " + expanded,
+            1, occurrences(expanded, "Returns this builder as its own type."));
+        assertEquals("and exactly one member is the build method: " + expanded,
+            1, occurrences(expanded, "Builds a new instance from the values set so far."));
+        assertTrue("a self-typed setter still reads as a setter: " + expanded,
+            expanded.contains("Sets the value and returns this builder."));
+        assertTrue("and its @return names the builder: " + expanded,
+            expanded.contains("@return this builder"));
+    }
+
+    /**
+     * A link in another package naming its root fully qualified is rendered
+     * with the extends clause the build compiles, the root's builder spelled by
+     * its canonical name. The build failed on that clause, spelled
+     * {@code Shape.Builder}, and nothing was written.
+     */
+    @Test
+    public void aLinkInAnotherPackageExtendsItsRootsBuilderByItsCanonicalName() throws IOException {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "/** A shape. */",
+                "@ClassBuilder(validate = false)",
+                "public abstract class Shape {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "}"),
+            JavaFileObjects.forSourceLines("other.Circle",
+                "package other;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "/** A circle. */",
+                "@ClassBuilder(validate = false)",
+                "public class Circle extends demo.Shape {",
+                "    private int radius;",
+                "    public int getRadius() { return radius; }",
+                "}"));
+        assertThat(c).succeeded();
+        String expanded = expanded("other/Circle.java");
+        assertTrue("the builder extends the root's by its canonical name: " + expanded,
+            expanded.contains("extends demo.Shape.Builder<Circle, Builder>"));
+    }
+
+    private static int occurrences(String haystack, String needle) {
+        int found = 0;
+        for (int at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + 1)) {
+            found++;
+        }
+        return found;
+    }
+
 }

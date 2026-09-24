@@ -289,6 +289,30 @@ public class ArgsConstructorMutatorTest {
     }
 
     /**
+     * The refused {@code @NoArgsConstructor} appends nothing, so its error is
+     * the only one: a {@code new Tagged()} elsewhere is not reported beside it.
+     */
+    @Test
+    public void noArgs_refusedOverAnUnassignedFinal_isTheOnlyError() {
+        JavaFileObject tagged = JavaFileObjects.forSourceLines("demo.Tagged",
+            "package demo;",
+            "import dev.simplified.annotations.NoArgsConstructor;",
+            "@NoArgsConstructor",
+            "public class Tagged {",
+            "    private final String tag;",
+            "}");
+        JavaFileObject use = JavaFileObjects.forSourceLines("demo.Use",
+            "package demo;",
+            "public class Use {",
+            "    Tagged make() { return new Tagged(); }",
+            "}");
+        Compilation c = compile(tagged, use);
+        assertThat(c).hadErrorContaining("@NoArgsConstructor would leave final field 'tag' unassigned")
+            .inFile(tagged).onLine(4);
+        assertThat(c).hadErrorCount(1);
+    }
+
+    /**
      * {@code force} deliberately violates the type's own nullness contract - the
      * JSON layer fills the fields immediately afterwards, and the alternative is
      * giving up {@code final}.
@@ -596,6 +620,110 @@ public class ArgsConstructorMutatorTest {
             "    private String name;",
             "}"));
         assertTrue(Modifier.isPrivate(target.getDeclaredConstructors()[0].getModifiers()));
+    }
+
+    /**
+     * {@code @BuilderArgsConstructor(access = NONE)} is the annotation's one
+     * error, and the builder pass still generates the constructor its
+     * {@code build()} calls, at {@code constructorAccess}, so a same-package
+     * {@code new Named("x")} compiles beside it. The value used to reach the
+     * modifier switch as well and fail the target a second time with
+     * {@code Failed to generate builder for demo.Named: AccessLevel.NONE is
+     * rejected before constructor synthesis}.
+     */
+    @Test
+    public void builderArgsAccessNone_isTheOneErrorAndTheConstructorIsStillGenerated() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Named",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.BuilderArgsConstructor;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false)",
+                "@BuilderArgsConstructor(access = AccessLevel.NONE)",
+                "public class Named {",
+                "    private String name;",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseNamed",
+                "package demo;",
+                "public class UseNamed {",
+                "    static Named direct() { return new Named(\"x\"); }",
+                "    static Named built() { return Named.builder().name(\"x\").build(); }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@BuilderArgsConstructor(access = NONE) generates nothing");
+        assertEquals("the annotation's error alone: " + c.errors(), 1, c.errors().size());
+    }
+
+    /**
+     * {@code @BuilderArgsConstructor(access = PRIVATE)} makes the constructor
+     * {@code build()} calls private over the default {@code constructorAccess},
+     * so a same-package {@code new Widget("x")} is refused.
+     */
+    @Test
+    public void builderArgsConstructorPrivate_refusesASamePackageCall() {
+        Compilation c = compile(
+            builderArgsWidget("@ClassBuilder(validate = false)",
+                "@BuilderArgsConstructor(access = AccessLevel.PRIVATE)"),
+            JavaFileObjects.forSourceLines("p.UseWidget",
+                "package p;",
+                "public class UseWidget {",
+                "    static Widget direct() { return new Widget(\"x\"); }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("has private access in p.Widget");
+        assertEquals("the call's error alone: " + c.errors(), 1, c.errors().size());
+    }
+
+    /**
+     * {@code @BuilderArgsConstructor(access = PUBLIC)} wins over
+     * {@code constructorAccess = PACKAGE}, so a call from another package builds.
+     */
+    @Test
+    public void builderArgsConstructorPublic_acceptsACallFromAnotherPackageOverPackageConstructorAccess() {
+        Compilation c = compile(
+            builderArgsWidget("@ClassBuilder(validate = false, constructorAccess = AccessLevel.PACKAGE)",
+                "@BuilderArgsConstructor(access = AccessLevel.PUBLIC)"),
+            JavaFileObjects.forSourceLines("q.UseWidget",
+                "package q;",
+                "public class UseWidget {",
+                "    static p.Widget direct() { return new p.Widget(\"x\"); }",
+                "}"));
+        assertThat(c).succeeded();
+    }
+
+    /**
+     * {@code @BuilderArgsConstructor(access = NONE)} reads as unwritten, so the
+     * constructor takes {@code constructorAccess = PUBLIC} and a call from
+     * another package draws no error beside the annotation's own.
+     */
+    @Test
+    public void builderArgsConstructorNone_takesConstructorAccess() {
+        Compilation c = compile(
+            builderArgsWidget("@ClassBuilder(validate = false, constructorAccess = AccessLevel.PUBLIC)",
+                "@BuilderArgsConstructor(access = AccessLevel.NONE)"),
+            JavaFileObjects.forSourceLines("q.UseWidget",
+                "package q;",
+                "public class UseWidget {",
+                "    static p.Widget direct() { return new p.Widget(\"x\"); }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@BuilderArgsConstructor(access = NONE) generates nothing");
+        assertEquals("the annotation's error alone: " + c.errors(), 1, c.errors().size());
+    }
+
+    /** A {@code p.Widget} with one field under the two annotations given. */
+    private static JavaFileObject builderArgsWidget(String classBuilder, String builderArgs) {
+        return JavaFileObjects.forSourceLines("p.Widget",
+            "package p;",
+            "import dev.simplified.annotations.AccessLevel;",
+            "import dev.simplified.annotations.BuilderArgsConstructor;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            classBuilder,
+            builderArgs,
+            "public class Widget {",
+            "    private String name;",
+            "}");
     }
 
     // ------------------------------------------------------------------

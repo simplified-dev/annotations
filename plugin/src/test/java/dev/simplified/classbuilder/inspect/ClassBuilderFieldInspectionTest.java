@@ -3,11 +3,15 @@ package dev.simplified.classbuilder.inspect;
 import com.intellij.codeInsight.daemon.impl.HighlightInfo;
 import com.intellij.codeInspection.LocalInspectionTool;
 import com.intellij.lang.annotation.HighlightSeverity;
+import com.intellij.openapi.application.AccessToken;
 import com.intellij.testFramework.LightProjectDescriptor;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
+import dev.simplified.classbuilder.apt.ExecutableTargetRefusal;
+import dev.simplified.testutil.JSvgErrorSuppressor;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
@@ -25,11 +29,23 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
         return LightJavaCodeInsightFixtureTestCase.JAVA_17;
     }
 
+    private AccessToken jsvgSuppressor;
+
     @Override
     protected void setUp() throws Exception {
         super.setUp();
+        jsvgSuppressor = JSvgErrorSuppressor.install();
         myFixture.enableInspections((Class<? extends LocalInspectionTool>) ClassBuilderFieldInspection.class);
         addAnnotationSources();
+    }
+
+    @Override
+    protected void tearDown() throws Exception {
+        try {
+            if (jsvgSuppressor != null) jsvgSuppressor.close();
+        } finally {
+            super.tearDown();
+        }
     }
 
     private void addAnnotationSources() {
@@ -37,8 +53,52 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
             """
             package dev.simplified.annotations;
             import java.lang.annotation.*;
-            @Retention(RetentionPolicy.CLASS) @Target(ElementType.TYPE)
-            public @interface ClassBuilder { }
+            @Retention(RetentionPolicy.CLASS)
+            @Target({ElementType.TYPE, ElementType.CONSTRUCTOR, ElementType.METHOD})
+            public @interface ClassBuilder {
+                BuilderNames builder() default @BuilderNames;
+                SetterNames setters() default @SetterNames;
+                AccessLevel access() default AccessLevel.PUBLIC;
+                AccessLevel constructorAccess() default AccessLevel.PACKAGE;
+                AccessLevel builderConstructorAccess() default AccessLevel.PACKAGE;
+            }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/BuilderNames.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target({})
+            public @interface BuilderNames {
+                String INHERIT = "";
+                String NONE = "-";
+                String type() default INHERIT;
+                String builder() default INHERIT;
+                String build() default INHERIT;
+                String from() default INHERIT;
+                String toBuilder() default INHERIT;
+            }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/SetterNames.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target({ElementType.FIELD, ElementType.PARAMETER})
+            public @interface SetterNames {
+                String INHERIT = "";
+                String NONE = "-";
+                String set() default INHERIT;
+                String flag() default INHERIT;
+                String add() default INHERIT;
+                String put() default INHERIT;
+                String compute() default INHERIT;
+                String clear() default INHERIT;
+                String remove() default INHERIT;
+            }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/AccessLevel.java",
+            """
+            package dev.simplified.annotations;
+            public enum AccessLevel { PUBLIC, PROTECTED, PACKAGE, PRIVATE, NONE }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/Formattable.java",
             """
@@ -107,6 +167,13 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
             import java.lang.annotation.*;
             @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
             public @interface BuilderIgnore { }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/Lazy.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.FIELD)
+            public @interface Lazy { }
             """);
     }
 
@@ -385,5 +452,437 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
             """);
         assertTrue(hasErrorContaining(
             "@BuildFlag is only read on an abstract zero-arg accessor of an interface target"));
+    }
+
+    /**
+     * {@code builderConstructorAccess = NONE} is an error on the written value,
+     * in the processor's sentence. It used to be read as package-private here
+     * while the processor failed the target with an internal message.
+     */
+    public void testBuilderConstructorAccessNone_isAnErrorOnTheAttribute() {
+        myFixture.configureByText("Closed.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builderConstructorAccess = AccessLevel.NONE)
+            public class Closed {
+                String name;
+            }
+            """);
+        HighlightInfo found = null;
+        for (HighlightInfo h : myFixture.doHighlighting()) {
+            if (h.getSeverity() == HighlightSeverity.ERROR && h.getDescription() != null
+                && h.getDescription().startsWith("@ClassBuilder(builderConstructorAccess")) {
+                found = h;
+            }
+        }
+        assertNotNull("an error on the attribute", found);
+        assertEquals("@ClassBuilder(builderConstructorAccess = NONE) is not expressible - every "
+                + "builder has a constructor, so choose PRIVATE, PACKAGE, PROTECTED or PUBLIC",
+            found.getDescription());
+        assertEquals("AccessLevel.NONE", myFixture.getEditor().getDocument().getText()
+            .substring(found.getStartOffset(), found.getEndOffset()));
+    }
+
+    /** Every other level is legal, so nothing is said. */
+    public void testBuilderConstructorAccessPrivate_isClean() {
+        myFixture.configureByText("Closed.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builderConstructorAccess = AccessLevel.PRIVATE)
+            public class Closed {
+                String name;
+            }
+            """);
+        assertFalse(hasErrorContaining("builderConstructorAccess"));
+    }
+
+    /**
+     * {@code access = NONE} is an error on the written value, in the
+     * processor's sentence. It used to pass here in silence while the processor
+     * failed the target with an internal message.
+     */
+    public void testAccessNone_isAnErrorOnTheAttribute() {
+        myFixture.configureByText("Closed.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(access = AccessLevel.NONE)
+            public class Closed {
+                String name;
+            }
+            """);
+        HighlightInfo found = null;
+        for (HighlightInfo h : myFixture.doHighlighting()) {
+            if (h.getSeverity() == HighlightSeverity.ERROR && h.getDescription() != null
+                && h.getDescription().startsWith("@ClassBuilder(access")) {
+                found = h;
+            }
+        }
+        assertNotNull("an error on the attribute", found);
+        assertEquals("@ClassBuilder(access = NONE) is not expressible - the builder class is always "
+                + "generated, so choose PRIVATE, PACKAGE, PROTECTED or PUBLIC",
+            found.getDescription());
+        assertEquals("AccessLevel.NONE", myFixture.getEditor().getDocument().getText()
+            .substring(found.getStartOffset(), found.getEndOffset()));
+    }
+
+    /**
+     * {@code constructorAccess = NONE} is an error on the written value, in the
+     * processor's sentence. The editor said nothing, while javac failed the
+     * target with an internal message.
+     */
+    public void testConstructorAccessNone_isAnErrorOnTheAttribute() {
+        myFixture.configureByText("Acc.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(constructorAccess = AccessLevel.NONE)
+            public class Acc {
+                String name;
+            }
+            """);
+        HighlightInfo found = null;
+        for (HighlightInfo h : myFixture.doHighlighting()) {
+            if (h.getSeverity() == HighlightSeverity.ERROR && h.getDescription() != null
+                && h.getDescription().startsWith("@ClassBuilder(constructorAccess")) {
+                found = h;
+            }
+        }
+        assertNotNull("an error on the attribute", found);
+        assertEquals("@ClassBuilder(constructorAccess = NONE) is not expressible - it is the access of the "
+                + "constructor build() calls, so choose PRIVATE, PACKAGE, PROTECTED or PUBLIC",
+            found.getDescription());
+        assertEquals("AccessLevel.NONE", myFixture.getEditor().getDocument().getText()
+            .substring(found.getStartOffset(), found.getEndOffset()));
+    }
+
+    /** Every other level is legal, so nothing is said. */
+    public void testAccessPackage_isClean() {
+        myFixture.configureByText("Open.java",
+            """
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(access = AccessLevel.PACKAGE)
+            public class Open {
+                String name;
+            }
+            """);
+        assertFalse(hasErrorContaining("@ClassBuilder(access"));
+    }
+
+    /**
+     * {@code type = BuilderNames.NONE} is refused as the literal is: the
+     * constant is recognised by name. The check used to read only a literal,
+     * so the constant passed in silence while javac refused it.
+     */
+    public void testTypeSuppressedByConstant_isAnError() {
+        myFixture.configureByText("Named.java",
+            """
+            import dev.simplified.annotations.BuilderNames;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builder = @BuilderNames(type = BuilderNames.NONE))
+            public class Named {
+                String name;
+            }
+            """);
+        assertTrue(hasErrorContaining("'type' cannot be suppressed"));
+    }
+
+    /**
+     * A pattern written as a {@code String} constant is judged by the value it
+     * holds, as javac judges it. The check used to read only a literal.
+     */
+    public void testPatternWrittenAsAConstant_isJudgedByItsValue() {
+        myFixture.configureByText("Named.java",
+            """
+            import dev.simplified.annotations.BuilderNames;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builder = @BuilderNames(from = Named.COPY))
+            public class Named {
+                static final String COPY = "1copy";
+                String name;
+            }
+            """);
+        assertTrue(hasErrorContaining("Naming pattern for 'from' expands to an invalid Java identifier"));
+    }
+
+    /**
+     * {@code BuilderNames.INHERIT} written on every attribute takes the style's
+     * name, as javac takes it, so no attribute is reported. Each was an error
+     * reading {@code Naming pattern for 'type' must not be empty}.
+     */
+    public void testBuilderNamesWrittenAsInherit_isClean() {
+        myFixture.configureByText("Named.java",
+            """
+            import dev.simplified.annotations.BuilderNames;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builder = @BuilderNames(type = BuilderNames.INHERIT, builder = BuilderNames.INHERIT,
+                build = BuilderNames.INHERIT, from = BuilderNames.INHERIT, toBuilder = BuilderNames.INHERIT))
+            public class Named {
+                String name;
+            }
+            """);
+        assertEquals(List.of(), namingProblems());
+    }
+
+    /**
+     * An empty literal is the value {@code INHERIT} holds and is read the same,
+     * as javac reads it. It was an error reading
+     * {@code Naming pattern for 'from' must not be empty}.
+     */
+    public void testBuilderNamesWrittenAsAnEmptyLiteral_isClean() {
+        myFixture.configureByText("Named.java",
+            """
+            import dev.simplified.annotations.BuilderNames;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builder = @BuilderNames(from = ""))
+            public class Named {
+                String name;
+            }
+            """);
+        assertEquals(List.of(), namingProblems());
+    }
+
+    /**
+     * {@code SetterNames.INHERIT} written on every role, on the target and on a
+     * field, takes the style's pattern, and javac builds it. Each role was an
+     * error reading {@code Naming pattern for 'set' must not be empty}.
+     */
+    public void testSetterNamesWrittenAsInherit_isClean() {
+        myFixture.configureByText("Named.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.SetterNames;
+            @ClassBuilder(setters = @SetterNames(set = SetterNames.INHERIT, flag = SetterNames.INHERIT,
+                add = SetterNames.INHERIT, put = SetterNames.INHERIT, compute = SetterNames.INHERIT,
+                clear = SetterNames.INHERIT, remove = SetterNames.INHERIT))
+            public class Named {
+                String name;
+                @SetterNames(set = SetterNames.INHERIT)
+                boolean active;
+            }
+            """);
+        assertEquals(List.of(), namingProblems());
+    }
+
+    /**
+     * A field's own {@code @SetterNames} expands once, so a pattern without the
+     * placeholder is that setter's name and javac builds it, a call to
+     * {@code withName("x")} included. It was an error reading
+     * {@code Naming pattern for 'set' must contain the '{}' placeholder,
+     * otherwise every field generates the same method name}.
+     */
+    public void testSetterNamesOnAFieldWithoutThePlaceholder_isClean() {
+        myFixture.configureByText("Cfg.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.SetterNames;
+            @ClassBuilder
+            public class Cfg {
+                @SetterNames(set = "withName") String name;
+                static Object use() { return Cfg.builder().withName("x"); }
+            }
+            """);
+        assertEquals(List.of(), namingProblems());
+        assertEquals(List.of(), errors());
+    }
+
+    /**
+     * A constructor parameter's own {@code @SetterNames} expands once as a
+     * field's does, so a pattern without the placeholder is clean.
+     */
+    public void testSetterNamesOnAParameterWithoutThePlaceholder_isClean() {
+        myFixture.configureByText("Ranged.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.SetterNames;
+            public final class Ranged {
+                @ClassBuilder
+                Ranged(int min, @SetterNames(set = "upTo") int max) { }
+            }
+            """);
+        assertEquals(List.of(), namingProblems());
+    }
+
+    /**
+     * The target's {@code @SetterNames} fans out over every slot, so a pattern
+     * without the placeholder stays reported, as javac reports it.
+     */
+    public void testSetterNamesOnTheTargetWithoutThePlaceholder_isReported() {
+        myFixture.configureByText("Cfg.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.SetterNames;
+            @ClassBuilder(setters = @SetterNames(set = "withName"))
+            public class Cfg {
+                String name;
+            }
+            """);
+        assertEquals(List.of("Naming pattern for 'set' must contain the '{}' placeholder, otherwise every field "
+            + "generates the same method name"), namingProblems());
+    }
+
+    /** The description of every ERROR highlight in the open file. */
+    private List<String> errors() {
+        List<String> out = new ArrayList<>();
+        for (HighlightInfo h : myFixture.doHighlighting()) {
+            if (h.getSeverity() == HighlightSeverity.ERROR && h.getDescription() != null) out.add(h.getDescription());
+        }
+        return out;
+    }
+
+    /** The description of every highlight about a naming pattern. */
+    private List<String> namingProblems() {
+        List<String> out = new ArrayList<>();
+        for (HighlightInfo h : myFixture.doHighlighting()) {
+            String description = h.getDescription();
+            if (description != null && description.startsWith("Naming pattern")) out.add(description);
+        }
+        return out;
+    }
+
+    // ------------------------------------------------------------------
+    // A constructor or static factory the processor refuses
+    //
+    // Each is one javac error on the annotated member, in the sentence the
+    // shared rule holds, and the processor generates nothing for it. The editor
+    // reports the same sentence on the annotation.
+    // ------------------------------------------------------------------
+
+    /**
+     * The ERROR highlights whose description starts with {@code @ClassBuilder},
+     * each as {@code [highlighted text] description}.
+     */
+    private List<String> classBuilderErrors() {
+        List<String> out = new ArrayList<>();
+        for (HighlightInfo h : myFixture.doHighlighting()) {
+            if (h.getSeverity() != HighlightSeverity.ERROR || h.getDescription() == null) continue;
+            if (!h.getDescription().startsWith("@ClassBuilder")) continue;
+            out.add("[" + myFixture.getEditor().getDocument().getText()
+                .substring(h.getStartOffset(), h.getEndOffset()) + "] " + h.getDescription());
+        }
+        return out;
+    }
+
+    public void testAnInstanceMethodTarget_isTheProcessorsErrorOnTheAnnotation() {
+        myFixture.configureByText("Job.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Job {
+                private final String name;
+                Job(String name) { this.name = name; }
+                @ClassBuilder
+                public Job copy(String name) { return new Job(name); }
+            }
+            """);
+        assertEquals(List.of("[@ClassBuilder] " + ExecutableTargetRefusal.instanceMethod()),
+            classBuilderErrors());
+    }
+
+    public void testAVoidMethodTarget_isTheProcessorsErrorOnTheAnnotation() {
+        myFixture.configureByText("Voided.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Voided {
+                @ClassBuilder
+                public static void go(int n) { }
+            }
+            """);
+        assertEquals(List.of("[@ClassBuilder] " + ExecutableTargetRefusal.voidMethod()),
+            classBuilderErrors());
+    }
+
+    public void testAMemberOfAnAnnotatedType_isTheProcessorsErrorOnTheAnnotation() {
+        myFixture.configureByText("Both.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public final class Both {
+                private final int n;
+                @ClassBuilder(access = dev.simplified.annotations.AccessLevel.PUBLIC)
+                Both(int n) { this.n = n; }
+            }
+            """);
+        assertEquals(List.of("[@ClassBuilder(access = dev.simplified.annotations.AccessLevel.PUBLIC)] "
+                + ExecutableTargetRefusal.besideAnnotatedType("Both")),
+            classBuilderErrors());
+    }
+
+    public void testASecondAnnotatedMember_isTheProcessorsErrorOnItsAnnotation() {
+        myFixture.configureByText("Twice.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Twice {
+                private final int n;
+                @ClassBuilder
+                Twice(int n) { this.n = n; }
+                @ClassBuilder(access = dev.simplified.annotations.AccessLevel.PUBLIC)
+                public static Twice of(int n) { return new Twice(n); }
+            }
+            """);
+        assertEquals(List.of("[@ClassBuilder(access = dev.simplified.annotations.AccessLevel.PUBLIC)] "
+                + ExecutableTargetRefusal.secondMember("Twice")),
+            classBuilderErrors());
+    }
+
+    public void testAMemberOfATypeWithALazyField_isTheProcessorsErrorOnTheAnnotation() {
+        myFixture.configureByText("Deferred.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Lazy;
+            public final class Deferred {
+                @Lazy private final String value;
+                @ClassBuilder
+                Deferred(String value) { this.value = value; }
+            }
+            """);
+        assertEquals(List.of("[@ClassBuilder] " + ExecutableTargetRefusal.lazyField("Deferred", "value")),
+            classBuilderErrors());
+    }
+
+    /** A refused member ahead of a usable one takes nothing, so the usable one is not a second member. */
+    public void testAUsableMemberAfterARefusedOne_isNotASecondMember() {
+        myFixture.configureByText("After.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class After {
+                private final int n;
+                After(int n) { this.n = n; }
+                @ClassBuilder
+                public After copy(int n) { return new After(n); }
+                @ClassBuilder(access = dev.simplified.annotations.AccessLevel.PUBLIC)
+                public static After of(int n) { return new After(n); }
+            }
+            """);
+        assertEquals(List.of("[@ClassBuilder] " + ExecutableTargetRefusal.instanceMethod()),
+            classBuilderErrors());
+    }
+
+    public void testAStaticFactoryTarget_isClean() {
+        myFixture.configureByText("Span.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Span {
+                private Span(String label) { }
+                @ClassBuilder
+                public static Span of(String label) { return new Span(label); }
+            }
+            """);
+        assertEquals(List.of(), classBuilderErrors());
+    }
+
+    public void testAConstructorTarget_isClean() {
+        myFixture.configureByText("Range.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            public final class Range {
+                private final int min;
+                @ClassBuilder
+                Range(int min) { this.min = min; }
+            }
+            """);
+        assertEquals(List.of(), classBuilderErrors());
     }
 }

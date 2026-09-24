@@ -17,6 +17,8 @@ import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 import static com.google.testing.compile.CompilationSubject.assertThat;
 import static org.junit.Assert.assertEquals;
@@ -752,5 +754,528 @@ public class BuilderConfigAttributesTest {
             hasMethod(target, "builder"));
         assertTrue("from(T) remains when only mutate is disabled",
             hasMethod(target, "from", target));
+    }
+
+    /** The sentence both halves report for {@code builderConstructorAccess = NONE}. */
+    private static final String NONE_REJECTED =
+        "@ClassBuilder(builderConstructorAccess = NONE) is not expressible - every builder has a "
+            + "constructor, so choose PRIVATE, PACKAGE, PROTECTED or PUBLIC";
+
+    /**
+     * {@code builderConstructorAccess = NONE} is one error at the annotation, and
+     * the builder is generated as under the default beside it, so nothing
+     * generated fails with it. The value used to reach the constructor's
+     * modifier switch and fail the whole target with that switch's internal
+     * message.
+     */
+    @Test
+    public void builderConstructorAccess_noneIsRejectedAtTheAnnotation() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Closed",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, builderConstructorAccess = AccessLevel.NONE)",
+                "public class Closed {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseClosed",
+                "package demo;",
+                "public class UseClosed {",
+                "    public static String go() { return new Closed.Builder().name(\"x\").build().getName(); }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(NONE_REJECTED);
+        assertEquals("the one error, and a package-private builder beside it: " + c.errors(),
+            1, c.errors().size());
+    }
+
+    /** A constructor target reads the attribute through the same rule. */
+    @Test
+    public void builderConstructorAccess_noneIsRejectedOnAConstructorTarget() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Gate",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public final class Gate {",
+                "    @ClassBuilder(builderConstructorAccess = AccessLevel.NONE)",
+                "    Gate(String key) { }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(NONE_REJECTED);
+        assertEquals(c.errors().toString(), 1, c.errors().size());
+    }
+
+    /**
+     * An interface target's sibling builder never reads the attribute, and the
+     * value is rejected there too, since no builder anywhere is without a
+     * constructor. It used to be accepted in silence.
+     */
+    @Test
+    public void builderConstructorAccess_noneIsRejectedOnAnInterface() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(builderConstructorAccess = AccessLevel.NONE)",
+                "public interface Shape {",
+                "    String name();",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(NONE_REJECTED);
+    }
+
+    /** The sentence both halves report where {@code builderConstructorAccess} reaches no constructor. */
+    private static String inertOn(String targetName) {
+        return "@ClassBuilder(builderConstructorAccess) has no effect on '" + targetName + "' - it applies "
+            + "only to the builder of a class or record outside a SuperBuilder chain, or of a constructor or "
+            + "factory target, never to a chain's builder or an interface's. Drop the attribute";
+    }
+
+    /** An abstract chain root below which a concrete link sits, the root carrying {@code attribute}. */
+    private static JavaFileObject[] chainWithRootAttribute(String attribute, String linkAttribute) {
+        return new JavaFileObject[]{
+            JavaFileObjects.forSourceLines("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false" + attribute + ")",
+                "public abstract class Shape {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.Circle",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false" + linkAttribute + ")",
+                "public class Circle extends Shape {",
+                "    private int radius;",
+                "    public int getRadius() { return radius; }",
+                "}")
+        };
+    }
+
+    /** The warnings a compilation raised about {@code builderConstructorAccess}. */
+    private static List<String> accessWarnings(Compilation c) {
+        List<String> out = new ArrayList<>();
+        for (var warning : c.warnings()) {
+            String message = warning.getMessage(null);
+            if (message.startsWith("@ClassBuilder(builderConstructorAccess)"))
+                out.add(warning.getSource().getName() + ":" + warning.getLineNumber() + " " + message);
+        }
+        return out;
+    }
+
+    /**
+     * A chain role's builder keeps javac's default constructor, so
+     * {@code builderConstructorAccess} written on an abstract root changes
+     * nothing, and says so on the annotation. It was accepted in silence.
+     */
+    @Test
+    public void builderConstructorAccess_onAnAbstractRootWithALink_isWarned() {
+        Compilation c = compile(chainWithRootAttribute(", builderConstructorAccess = AccessLevel.PRIVATE", ""));
+        assertThat(c).succeeded();
+        assertEquals(List.of("demo/Shape.java:4 " + inertOn("Shape")), accessWarnings(c));
+    }
+
+    /** A concrete link's builder is a chain role's too, and is warned the same way. */
+    @Test
+    public void builderConstructorAccess_onAConcreteLink_isWarned() {
+        Compilation c = compile(chainWithRootAttribute("", ", builderConstructorAccess = AccessLevel.PUBLIC"));
+        assertThat(c).succeeded();
+        assertEquals(List.of("demo/Circle.java:4 " + inertOn("Circle")), accessWarnings(c));
+    }
+
+    /**
+     * An interface target's sibling builder keeps its implicit constructor, so
+     * the attribute written there is warned on the annotation.
+     */
+    @Test
+    public void builderConstructorAccess_onAnInterface_isWarned() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Face",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(builderConstructorAccess = AccessLevel.PRIVATE)",
+                "public interface Face {",
+                "    String name();",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals(List.of("demo/Face.java:4 " + inertOn("Face")), accessWarnings(c));
+    }
+
+    /**
+     * The default written out requests nothing, on a chain role or an
+     * interface, and a class standing alone takes the attribute, so neither
+     * says anything.
+     */
+    @Test
+    public void builderConstructorAccess_atItsDefaultOrWhereItApplies_isNotWarned() {
+        Compilation chain = compile(chainWithRootAttribute(", builderConstructorAccess = AccessLevel.PACKAGE",
+            ", builderConstructorAccess = AccessLevel.PACKAGE"));
+        assertThat(chain).succeeded();
+        assertEquals(List.of(), accessWarnings(chain));
+        Compilation face = compile(
+            JavaFileObjects.forSourceLines("demo.Face",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(builderConstructorAccess = AccessLevel.PACKAGE)",
+                "public interface Face {",
+                "    String name();",
+                "}"));
+        assertThat(face).succeeded();
+        assertEquals(List.of(), accessWarnings(face));
+        Compilation alone = compile(
+            JavaFileObjects.forSourceLines("demo.Alone",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, builderConstructorAccess = AccessLevel.PRIVATE)",
+                "public class Alone {",
+                "    private String name;",
+                "}"));
+        assertThat(alone).succeeded();
+        assertEquals(List.of(), accessWarnings(alone));
+    }
+
+    /** The sentence both halves report for {@code access = NONE}. */
+    private static final String ACCESS_NONE_REJECTED =
+        "@ClassBuilder(access = NONE) is not expressible - the builder class is always generated, "
+            + "so choose PRIVATE, PACKAGE, PROTECTED or PUBLIC";
+
+    /**
+     * {@code access = NONE} is one error at the annotation, and the builder and
+     * its entry points are generated public beside it, so a caller of them
+     * compiles. The value used to reach the modifier switch and fail the target
+     * with {@code AccessLevel.NONE has no modifier flag - callers must check
+     * emits() first}.
+     */
+    @Test
+    public void access_noneIsRejectedAtTheAnnotation() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Closed",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, access = AccessLevel.NONE)",
+                "public class Closed {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseClosed",
+                "package demo;",
+                "public class UseClosed {",
+                "    public static String go() {",
+                "        Closed.Builder b = Closed.builder().name(\"x\");",
+                "        return Closed.from(b.build()).build().getName() + b.build().mutate().build().getName();",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(ACCESS_NONE_REJECTED);
+        assertEquals("the one error, with the members generated at the default beside it: " + c.errors(),
+            1, c.errors().size());
+    }
+
+    /** A record target reads the attribute through the same rule. */
+    @Test
+    public void access_noneIsRejectedOnARecord() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Point",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, access = AccessLevel.NONE)",
+                "public record Point(int x, int y) { }"),
+            JavaFileObjects.forSourceLines("demo.UsePoint",
+                "package demo;",
+                "public class UsePoint {",
+                "    public static int go() { return Point.builder().x(1).y(2).build().y(); }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(ACCESS_NONE_REJECTED);
+        assertEquals(c.errors().toString(), 1, c.errors().size());
+    }
+
+    /**
+     * An interface target's sibling builder takes its access from the attribute
+     * as well, and is generated public beside the same error rather than
+     * failing on the keyword the value has none of.
+     */
+    @Test
+    public void access_noneIsRejectedOnAnInterface() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, access = AccessLevel.NONE)",
+                "public interface Shape {",
+                "    String name();",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseShape",
+                "package demo;",
+                "public class UseShape {",
+                "    public static String go() { return Shape.builder().name(\"x\").build().name(); }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(ACCESS_NONE_REJECTED);
+        assertEquals(c.errors().toString(), 1, c.errors().size());
+    }
+
+    /** The sentence both halves report for {@code constructorAccess = NONE}. */
+    private static final String CONSTRUCTOR_ACCESS_NONE_REJECTED =
+        "@ClassBuilder(constructorAccess = NONE) is not expressible - it is the access of the constructor "
+            + "build() calls, so choose PRIVATE, PACKAGE, PROTECTED or PUBLIC";
+
+    /**
+     * {@code constructorAccess = NONE} is one error at the annotation, and the
+     * all-args constructor {@code build()} calls is generated at the default,
+     * package-private, beside it - so the builder and a same-package
+     * {@code new Acc("x")} compile. The value used to reach the modifier switch
+     * and fail the target with {@code Failed to generate builder for demo.Acc:
+     * AccessLevel.NONE is rejected before constructor synthesis}.
+     */
+    @Test
+    public void constructorAccess_noneIsRejectedAtTheAnnotation() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Acc",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, constructorAccess = AccessLevel.NONE)",
+                "public class Acc {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseAcc",
+                "package demo;",
+                "public class UseAcc {",
+                "    public static String go() {",
+                "        return Acc.builder().name(\"x\").build().getName() + new Acc(\"y\").getName();",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(CONSTRUCTOR_ACCESS_NONE_REJECTED);
+        assertEquals("the one error, with the constructor generated at the default beside it: " + c.errors(),
+            1, c.errors().size());
+    }
+
+    /**
+     * A record synthesises no constructor, and the value is still refused, as
+     * {@code access = NONE} and {@code builderConstructorAccess = NONE} are on
+     * every kind of target. It used to compile in silence.
+     */
+    @Test
+    public void constructorAccess_noneIsRejectedOnARecord() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Point",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, constructorAccess = AccessLevel.NONE)",
+                "public record Point(int x, int y) { }"),
+            JavaFileObjects.forSourceLines("demo.UsePoint",
+                "package demo;",
+                "public class UsePoint {",
+                "    public static int go() { return Point.builder().x(1).y(2).build().y(); }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(CONSTRUCTOR_ACCESS_NONE_REJECTED);
+        assertEquals(c.errors().toString(), 1, c.errors().size());
+    }
+
+    /** An interface target reads the attribute through the same rule. */
+    @Test
+    public void constructorAccess_noneIsRejectedOnAnInterface() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Shape",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, constructorAccess = AccessLevel.NONE)",
+                "public interface Shape {",
+                "    String name();",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseShape",
+                "package demo;",
+                "public class UseShape {",
+                "    public static String go() { return Shape.builder().name(\"x\").build().name(); }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(CONSTRUCTOR_ACCESS_NONE_REJECTED);
+        assertEquals(c.errors().toString(), 1, c.errors().size());
+    }
+
+    /** A constructor or factory target reports it on its own annotation. */
+    @Test
+    public void constructorAccess_noneIsRejectedOnAFactory() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Made",
+                "package demo;",
+                "import dev.simplified.annotations.AccessLevel;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "public class Made {",
+                "    final String name;",
+                "    private Made(String name) { this.name = name; }",
+                "    @ClassBuilder(validate = false, constructorAccess = AccessLevel.NONE)",
+                "    static Made make(String name) { return new Made(name); }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseMade",
+                "package demo;",
+                "public class UseMade {",
+                "    public static String go() { return Made.builder().name(\"x\").build().name; }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining(CONSTRUCTOR_ACCESS_NONE_REJECTED);
+        assertEquals(c.errors().toString(), 1, c.errors().size());
+    }
+
+    /**
+     * {@code from = NONE} brought in by a static import withholds {@code from(T)},
+     * so a call to it does not compile. The editor twin reads the import list.
+     */
+    @Test
+    public void builderNames_noneByStaticImportSuppressesFrom() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Config",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderNames;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import static dev.simplified.annotations.BuilderNames.NONE;",
+                "@ClassBuilder(validate = false, builder = @BuilderNames(from = NONE))",
+                "public class Config {",
+                "    private String name;",
+                "    static Object go(Config c) { return Config.from(c); }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("cannot find symbol");
+        assertEquals(c.errors().toString(), 1, c.errors().size());
+    }
+
+    /** A {@code String} constant the target declares names the member it is written on. */
+    @Test
+    public void builderNames_buildNamedByATargetConstant() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Config",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderNames;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, builder = @BuilderNames(build = Config.FINISH))",
+                "public class Config {",
+                "    static final String FINISH = \"make\";",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseConfig",
+                "package demo;",
+                "public class UseConfig {",
+                "    public static String go() { return Config.builder().name(\"x\").make().getName(); }",
+                "}"));
+        assertThat(c).succeeded();
+        Class<?> use = Class.forName("demo.UseConfig", true, loadClasses(c));
+        assertEquals("x", use.getMethod("go").invoke(null));
+    }
+
+    /**
+     * {@code BuilderNames.INHERIT} written on every attribute takes the style's
+     * name, as the unwritten default does, so the builder class and all four
+     * members keep their default names. javac refused each written value with
+     * {@code @BuilderNames 'type' must not be empty}.
+     */
+    @Test
+    public void builderNames_writtenInheritNamesEveryMemberAsTheDefault() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Config",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderNames;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, builder = @BuilderNames(type = BuilderNames.INHERIT,",
+                "    builder = BuilderNames.INHERIT, build = BuilderNames.INHERIT,",
+                "    from = BuilderNames.INHERIT, toBuilder = BuilderNames.INHERIT))",
+                "public class Config {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseConfig",
+                "package demo;",
+                "public class UseConfig {",
+                "    public static String go() {",
+                "        Config.Builder builder = Config.builder().name(\"x\");",
+                "        Config first = builder.build();",
+                "        return Config.from(first).build().getName() + first.mutate().name(\"y\").build().getName();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        Class<?> use = Class.forName("demo.UseConfig", true, loadClasses(c));
+        assertEquals("xy", use.getMethod("go").invoke(null));
+    }
+
+    /**
+     * An empty literal is the value {@code INHERIT} holds, so it cannot be told
+     * apart from the constant and names the member as the default does. javac
+     * refused it with {@code @BuilderNames 'from' must not be empty}.
+     */
+    @Test
+    public void builderNames_writtenEmptyLiteralNamesTheMemberAsTheDefault() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Config",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderNames;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, builder = @BuilderNames(from = \"\"))",
+                "public class Config {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseConfig",
+                "package demo;",
+                "public class UseConfig {",
+                "    public static String go() {",
+                "        return Config.from(Config.builder().name(\"x\").build()).build().getName();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        Class<?> use = Class.forName("demo.UseConfig", true, loadClasses(c));
+        assertEquals("x", use.getMethod("go").invoke(null));
+    }
+
+    /**
+     * {@code SetterNames.INHERIT} written on every role, on the target and on a
+     * field, takes the style's pattern, so each setter keeps its default name.
+     */
+    @Test
+    public void setterNames_writtenInheritNamesEverySetterAsTheDefault() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Config",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import dev.simplified.annotations.SetterNames;",
+                "@ClassBuilder(validate = false, setters = @SetterNames(set = SetterNames.INHERIT,",
+                "    flag = SetterNames.INHERIT, add = SetterNames.INHERIT, put = SetterNames.INHERIT,",
+                "    compute = SetterNames.INHERIT, clear = SetterNames.INHERIT, remove = SetterNames.INHERIT))",
+                "public class Config {",
+                "    private String name;",
+                "    @SetterNames(set = SetterNames.INHERIT)",
+                "    private boolean active;",
+                "    public String getName() { return name; }",
+                "    public boolean isActive() { return active; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseConfig",
+                "package demo;",
+                "public class UseConfig {",
+                "    public static String go() {",
+                "        Config built = Config.builder().name(\"x\").active(true).build();",
+                "        return built.getName() + built.isActive() + Config.builder().isActive().build().isActive();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        Class<?> use = Class.forName("demo.UseConfig", true, loadClasses(c));
+        assertEquals("xtruetrue", use.getMethod("go").invoke(null));
     }
 }

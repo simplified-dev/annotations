@@ -13,6 +13,9 @@ import com.intellij.testFramework.LightProjectDescriptor;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Exercises {@link GeneratedMemberRenameProcessor} and its two companions: a
  * generated member is spelled from the slot behind it, so renaming the slot has
@@ -142,6 +145,74 @@ public class GeneratedMemberRenameTest extends LightJavaCodeInsightFixtureTestCa
         rename(widget, "label", "caption");
 
         assertTrue("got " + caller.getText(), caller.getText().contains(".caption(\"x\")"));
+    }
+
+    /**
+     * A merged builder is the author's own class and carries no generated mark,
+     * so the lookup that found the builder by that mark found none and the whole
+     * collection came back empty - every contributed setter kept its old name
+     * until the next build re-minted it under the new one.
+     */
+    public void testRenamingASlot_renamesTheContributedSettersOnADeclaredBuilder() {
+        PsiClass settings = configure("Settings",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Settings {
+                String label;
+                public static class Builder {
+                    public Builder apply(Runnable task) { return this; }
+                }
+            }
+            """);
+        PsiFile caller = myFixture.addFileToProject("Caller.java",
+            """
+            public class Caller {
+                Settings make() { return Settings.builder().label("x").build(); }
+            }
+            """);
+
+        rename(settings, "label", "caption");
+
+        assertTrue("got " + caller.getText(), caller.getText().contains(".caption(\"x\")"));
+    }
+
+    /**
+     * The author's own setter on a declared builder is a written method, never a
+     * minted one, so renaming the slot leaves it and its callers alone - while
+     * the merge contributes the setter the new name spells beside it. This used
+     * to hold only because nothing was merged into the declared builder at all.
+     */
+    public void testRenamingASlot_leavesTheAuthorsOwnSetterOnTheDeclaredBuilderAlone() {
+        PsiClass settings = configure("Untouched",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Untouched {
+                String label;
+                public static class Builder {
+                    public Builder label(String label) { return this; }
+                }
+            }
+            """);
+        PsiFile caller = myFixture.addFileToProject("Caller.java",
+            """
+            public class Caller {
+                void use(Untouched.Builder b) { b.label("x"); }
+            }
+            """);
+
+        rename(settings, "label", "caption");
+
+        assertTrue("the author's own setter keeps its name: " + caller.getText(),
+            caller.getText().contains(".label(\"x\")"));
+        PsiClass builder = settings.findInnerClassByName("Builder", false);
+        assertNotNull("the declared builder is still there", builder);
+        List<String> names = new ArrayList<>();
+        for (PsiMethod method : builder.getMethods()) names.add(method.getName());
+        assertTrue("the author's setter stays: " + names, names.contains("label"));
+        assertTrue("and the merge contributes the renamed slot's setter beside it: " + names,
+            names.contains("caption"));
     }
 
     /**

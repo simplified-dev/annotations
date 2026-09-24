@@ -612,8 +612,9 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     }
 
     /**
-     * Reports every reason an annotated executable cannot produce a builder,
-     * each at the declaration that causes it.
+     * Reports the reason an annotated executable cannot produce a builder, at
+     * the member, in the sentence {@link ExecutableTargetRefusal} answers - the
+     * one the editor reports on the same source.
      *
      * @param executable the annotated member
      * @param enclosing the type it is declared in
@@ -626,46 +627,22 @@ public class ClassBuilderProcessor extends AbstractProcessor {
                                           Set<TypeElement> typeTargets, Set<TypeElement> claimed,
                                           Messager messager) {
         boolean method = executable.getKind() == ElementKind.METHOD;
-        if (method && !executable.getModifiers().contains(Modifier.STATIC)) {
-            messager.printMessage(Diagnostic.Kind.ERROR,
-                "@ClassBuilder on an instance method has no receiver to call it on - builder() is "
-                    + "static, so the factory it builds through must be static too",
-                executable);
-            return false;
-        }
-        if (method && executable.getReturnType().getKind() == javax.lang.model.type.TypeKind.VOID) {
-            messager.printMessage(Diagnostic.Kind.ERROR,
-                "@ClassBuilder on a void method has nothing for build() to return",
-                executable);
-            return false;
-        }
-        if (typeTargets.contains(enclosing) || lookup.hasAnnotation(enclosing, ANNOTATION_FQN)) {
-            messager.printMessage(Diagnostic.Kind.ERROR,
-                "@ClassBuilder is on " + enclosing.getSimpleName() + " as well as on this member - "
-                    + "one type carries one builder, so keep whichever set of slots is wanted and "
-                    + "drop the other annotation",
-                executable);
-            return false;
-        }
-        if (claimed.contains(enclosing)) {
-            messager.printMessage(Diagnostic.Kind.ERROR,
-                "@ClassBuilder is already on another member of " + enclosing.getSimpleName()
-                    + " - one type carries one builder",
-                executable);
-            return false;
-        }
+        String lazyField = null;
         for (Element enclosed : enclosing.getEnclosedElements()) {
             if (enclosed.getKind() != ElementKind.FIELD) continue;
             if (!lookup.hasAnnotation(enclosed, LAZY_FQN)) continue;
-            messager.printMessage(Diagnostic.Kind.ERROR,
-                "@ClassBuilder on a member of " + enclosing.getSimpleName() + ", whose field '"
-                    + enclosed.getSimpleName() + "' is @Lazy - that rewrites the field's storage "
-                    + "and every constructor parameter feeding it, so the slots this builder passes "
-                    + "would no longer match. Move @ClassBuilder onto the type",
-                executable);
-            return false;
+            lazyField = enclosed.getSimpleName().toString();
+            break;
         }
-        return true;
+        String refusal = ExecutableTargetRefusal.refusal(method,
+            executable.getModifiers().contains(Modifier.STATIC),
+            method && executable.getReturnType().getKind() == javax.lang.model.type.TypeKind.VOID,
+            enclosing.getSimpleName().toString(),
+            typeTargets.contains(enclosing) || lookup.hasAnnotation(enclosing, ANNOTATION_FQN),
+            claimed.contains(enclosing), lazyField);
+        if (refusal == null) return true;
+        messager.printMessage(Diagnostic.Kind.ERROR, refusal, executable);
+        return false;
     }
 
     /**
@@ -681,6 +658,9 @@ public class ClassBuilderProcessor extends AbstractProcessor {
                                    Messager messager) {
         BuilderConfig config = extractConfig(executable, enclosing.getSimpleName().toString());
         validateNaming(executable, config, messager);
+        validateAccess(executable, messager);
+        validateConstructorAccess(executable, messager);
+        validateBuilderConstructorAccess(executable, messager);
         if (!config.excludeSet().isEmpty()) {
             messager.printMessage(Diagnostic.Kind.ERROR,
                 "@ClassBuilder(exclude) names fields, and this builder's slots are "
@@ -755,6 +735,10 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     private void processClass(TypeElement target, Messager messager) {
         BuilderConfig config = extractConfig(target);
         validateNaming(target, config, messager);
+        validateAccess(target, messager);
+        validateConstructorAccess(target, messager);
+        validateBuilderConstructorAccess(target, messager);
+        warnMisplacedBuilderConstructorAccess(target, false, BuilderMutator.chainRoleOf(target), messager);
         List<FieldSpec> fields = collectFields(target, config);
         validateSlotNaming(fields, config.setters(), target, messager);
         validateDefaultProviders(target, fields, messager);
@@ -1141,6 +1125,10 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     private void processInterface(TypeElement target, Messager messager) throws IOException {
         BuilderConfig config = extractConfig(target);
         validateNaming(target, config, messager);
+        validateAccess(target, messager);
+        validateConstructorAccess(target, messager);
+        validateBuilderConstructorAccess(target, messager);
+        warnMisplacedBuilderConstructorAccess(target, true, ChainRole.STANDALONE, messager);
 
         // generateImpl=false means the user takes responsibility for producing
         // the instance build() constructs. That only works if factoryMethod is
@@ -1202,7 +1190,7 @@ public class ClassBuilderProcessor extends AbstractProcessor {
             JCClassDecl targetTree = javacBridge.get().treeOf(target);
             if (targetTree != null) {
                 new InterfaceBootstrapMutator(javacBridge.get(), messager, target, targetTree,
-                    config, emitter.builderClassName()).appendAll();
+                    config, emitter.builderClassName(), fields).appendAll();
             }
         }
     }
@@ -1245,26 +1233,37 @@ public class ClassBuilderProcessor extends AbstractProcessor {
      */
     private BuilderConfig extractConfig(Element target, String nameSubject) {
         NamingStyle style = parseStyle(lookup.stringAttr(target, ANNOTATION_FQN, "style", "SIMPLIFIED"));
-        AccessLevel access = parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, "access", "PUBLIC"));
-        AccessLevel constructorAccess =
-            parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, "constructorAccess", "PACKAGE"));
+        // NONE is reported at the annotation by validateAccess, and the builder
+        // class and entry points are then generated at the default, on the
+        // class, record, executable and interface paths alike.
+        AccessLevel access = parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, BuilderAccess.ATTRIBUTE,
+            BuilderAccess.DEFAULT.name()));
+        if (!BuilderAccess.expressible(access))
+            access = BuilderAccess.DEFAULT;
+        // NONE is reported at the annotation by validateConstructorAccess, and
+        // the constructor build() calls is then generated at the default.
+        AccessLevel constructorAccess = ConstructorAccess.generatedAt(lookup.stringAttr(target, ANNOTATION_FQN,
+            ConstructorAccess.ATTRIBUTE, null));
+        // NONE is reported at the annotation by validateBuilderConstructorAccess,
+        // and the builder is then generated as under the default, so that error
+        // is the only one the author sees - the editor contributes the same.
         AccessLevel builderConstructorAccess =
-            parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, "builderConstructorAccess", "PACKAGE"));
+            parseAccess(lookup.stringAttr(target, ANNOTATION_FQN, BuilderConstructorAccess.ATTRIBUTE, "PACKAGE"));
+        if (!BuilderConstructorAccess.expressible(builderConstructorAccess))
+            builderConstructorAccess = AccessLevel.PACKAGE;
         boolean retainInit = lookup.booleanAttr(target, ANNOTATION_FQN, "retainInit", true);
         boolean generateCopyConstructor = lookup.booleanAttr(target, ANNOTATION_FQN, "generateCopyConstructor", true);
         boolean generateImpl = lookup.booleanAttr(target, ANNOTATION_FQN, "generateImpl", true);
         boolean validate = lookup.booleanAttr(target, ANNOTATION_FQN, "validate", true);
         boolean emitContracts = lookup.booleanAttr(target, ANNOTATION_FQN, "emitContracts", true);
         boolean emitGenerated = lookup.booleanAttr(target, ANNOTATION_FQN, "emitGenerated", true);
-        boolean mergeDeclaredBuilder =
-            lookup.booleanAttr(target, ANNOTATION_FQN, "mergeDeclaredBuilder", false);
         String factoryMethod = lookup.stringAttr(target, ANNOTATION_FQN, "factoryMethod", "");
         Set<String> excludeSet = new HashSet<>(Arrays.asList(lookup.stringArrayAttr(target, ANNOTATION_FQN, "exclude")));
         return new BuilderConfig(
             extractBuilderNames(target, style, nameSubject), extractSetterNames(target, style),
             access, constructorAccess, builderConstructorAccess, retainInit,
             generateCopyConstructor, generateImpl, validate, emitContracts, emitGenerated,
-            mergeDeclaredBuilder, factoryMethod, excludeSet
+            factoryMethod, excludeSet
         );
     }
 
@@ -1397,6 +1396,83 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     }
 
     /**
+     * Reports {@code builderConstructorAccess = NONE} at the annotation.
+     *
+     * <p>Every builder has a constructor, so the value names nothing to
+     * suppress. The configuration generates as under the default beside the
+     * error, which keeps every generated line compilable and leaves this the
+     * one diagnostic, on every kind of target alike.
+     *
+     * @param target the annotated element
+     * @param messager sink for diagnostics
+     */
+    private void validateBuilderConstructorAccess(Element target, Messager messager) {
+        String written = lookup.stringAttr(target, ANNOTATION_FQN, BuilderConstructorAccess.ATTRIBUTE, null);
+        if (written == null || BuilderConstructorAccess.expressible(parseAccess(written))) return;
+        messager.printMessage(Diagnostic.Kind.ERROR, BuilderConstructorAccess.notExpressible(), target,
+            lookup.findMirror(target, ANNOTATION_FQN));
+    }
+
+    /**
+     * Warns at the annotation where {@code builderConstructorAccess} is written
+     * on a type whose builder it never reaches - a SuperBuilder chain role, or
+     * an interface.
+     *
+     * <p>The decision and its wording are {@link BuilderConstructorAccess#misplaced},
+     * which the editor asks of the same written name.
+     *
+     * @param target the annotated type
+     * @param interfaceTarget whether the target is an interface
+     * @param role the target's position in a chain
+     * @param messager sink for diagnostics
+     */
+    private void warnMisplacedBuilderConstructorAccess(TypeElement target, boolean interfaceTarget, ChainRole role,
+                                                       Messager messager) {
+        String written = lookup.stringAttr(target, ANNOTATION_FQN, BuilderConstructorAccess.ATTRIBUTE, null);
+        String message = BuilderConstructorAccess.misplaced(target.getSimpleName().toString(), interfaceTarget,
+            role, written);
+        if (message != null)
+            messager.printMessage(Diagnostic.Kind.WARNING, message, target, lookup.findMirror(target, ANNOTATION_FQN));
+    }
+
+    /**
+     * Reports {@code constructorAccess = NONE} at the annotation.
+     *
+     * <p>The value is the access of the constructor a generated {@code build()}
+     * calls, so a level naming no modifier has nothing to apply to. The
+     * configuration generates at the default beside the error, which keeps
+     * every generated line compilable and leaves this the one diagnostic, on
+     * every kind of target alike.
+     *
+     * @param target the annotated element
+     * @param messager sink for diagnostics
+     */
+    private void validateConstructorAccess(Element target, Messager messager) {
+        String written = lookup.stringAttr(target, ANNOTATION_FQN, ConstructorAccess.ATTRIBUTE, null);
+        if (written == null || ConstructorAccess.expressible(parseAccess(written))) return;
+        messager.printMessage(Diagnostic.Kind.ERROR, ConstructorAccess.notExpressible(), target,
+            lookup.findMirror(target, ANNOTATION_FQN));
+    }
+
+    /**
+     * Reports {@code access = NONE} at the annotation.
+     *
+     * <p>The builder class is generated whatever else is suppressed, so the
+     * value names no member it could withhold. The configuration generates at
+     * the default beside the error, which keeps every generated line compilable
+     * and leaves this the one diagnostic, on every kind of target alike.
+     *
+     * @param target the annotated element
+     * @param messager sink for diagnostics
+     */
+    private void validateAccess(Element target, Messager messager) {
+        String written = lookup.stringAttr(target, ANNOTATION_FQN, BuilderAccess.ATTRIBUTE, null);
+        if (written == null || BuilderAccess.expressible(parseAccess(written))) return;
+        messager.printMessage(Diagnostic.Kind.ERROR, BuilderAccess.notExpressible(), target,
+            lookup.findMirror(target, ANNOTATION_FQN));
+    }
+
+    /**
      * Checks each slot's resolved patterns, which a {@code @SetterNames} written
      * on the slot may differ from the target's.
      *
@@ -1449,7 +1525,8 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     /**
      * Checks the once-per-target names. The placeholder is optional here, every
      * default being a plain literal, so only malformed text and a suppressed
-     * {@code type} or {@code build} are errors.
+     * {@code type} or {@code build} are errors; a written {@code INHERIT} takes
+     * the style's name, as the unwritten default does.
      */
     private void validateBuilderNames(Element target, Messager messager) {
         AnnotationMirror names =

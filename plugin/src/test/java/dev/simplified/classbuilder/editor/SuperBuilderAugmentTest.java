@@ -7,6 +7,7 @@ import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
+import com.intellij.psi.PsiParameter;
 import com.intellij.testFramework.LightProjectDescriptor;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
 import dev.simplified.testutil.JSvgErrorSuppressor;
@@ -44,27 +45,36 @@ public class SuperBuilderAugmentTest extends LightJavaCodeInsightFixtureTestCase
             """
             package dev.simplified.annotations;
             import java.lang.annotation.*;
-            @Retention(RetentionPolicy.CLASS) @Target(ElementType.TYPE)
+            @Retention(RetentionPolicy.CLASS)
+            @Target({ElementType.TYPE, ElementType.CONSTRUCTOR, ElementType.METHOD})
             public @interface ClassBuilder {
                 BuilderNames builder() default @BuilderNames;
                 NamingStyle style() default NamingStyle.SIMPLIFIED;
                 SetterNames setters() default @SetterNames;
                 String factoryMethod() default "";
+                boolean retainInit() default true;
+                boolean generateCopyConstructor() default true;
+                boolean validate() default true;
+                boolean emitContracts() default true;
+                boolean emitGenerated() default true;
+                boolean generateImpl() default true;
                 AccessLevel access() default AccessLevel.PUBLIC;
                 AccessLevel constructorAccess() default AccessLevel.PACKAGE;
+                AccessLevel builderConstructorAccess() default AccessLevel.PACKAGE;
                 String[] exclude() default {};
             }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/NamingStyle.java",
             """
             package dev.simplified.annotations;
-            public enum NamingStyle { SIMPLIFIED, LOMBOK, BEAN }
+            public enum NamingStyle { SIMPLIFIED, LOMBOK, BEAN, FLUENT }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/SetterNames.java",
             """
             package dev.simplified.annotations;
             import java.lang.annotation.*;
-            @Retention(RetentionPolicy.CLASS) @Target({})
+            @Retention(RetentionPolicy.CLASS)
+            @Target({ElementType.FIELD, ElementType.PARAMETER})
             public @interface SetterNames {
                 String INHERIT = "";
                 String NONE = "-";
@@ -74,6 +84,7 @@ public class SuperBuilderAugmentTest extends LightJavaCodeInsightFixtureTestCase
                 String put() default INHERIT;
                 String compute() default INHERIT;
                 String clear() default INHERIT;
+                String remove() default INHERIT;
             }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/BuilderNames.java",
@@ -94,7 +105,7 @@ public class SuperBuilderAugmentTest extends LightJavaCodeInsightFixtureTestCase
         myFixture.addFileToProject("dev/simplified/annotations/AccessLevel.java",
             """
             package dev.simplified.annotations;
-            public enum AccessLevel { PUBLIC, PROTECTED, PACKAGE, PRIVATE }
+            public enum AccessLevel { PUBLIC, PROTECTED, PACKAGE, PRIVATE, NONE }
             """);
     }
 
@@ -142,6 +153,163 @@ public class SuperBuilderAugmentTest extends LightJavaCodeInsightFixtureTestCase
     // ------------------------------------------------------------------
     // Shape
     // ------------------------------------------------------------------
+
+    // ------------------------------------------------------------------
+    // The chain's copy constructor
+    //
+    // The processor emits protected Target(Builder) on every chain role and the
+    // editor synthesised none, so an author writing super(builder) in a
+    // constructor of their own was red over source that builds. It is
+    // contributed under both of the processor's gates rather than on the role,
+    // because gating on the role alone produces the inverse divergence wherever
+    // the attribute is written false or the author declared their own.
+    // ------------------------------------------------------------------
+
+    /** Every constructor the editor offers on the target, by parameter type. */
+    private List<String> constructorParameterTypesOf(PsiClass target) {
+        List<String> out = new ArrayList<>();
+        for (PsiMethod method : target.getMethods()) {
+            if (!method.isConstructor()) continue;
+            PsiParameter[] parameters = method.getParameterList().getParameters();
+            out.add(parameters.length == 1 ? parameters[0].getType().getPresentableText() : "");
+        }
+        return out;
+    }
+
+    public void testChainCopyConstructor_isOffered() {
+        addPlainChain();
+        myFixture.configureByText("Use.java", "package b;\npublic class Use { }\n");
+        List<String> types = constructorParameterTypesOf(myFixture.findClass("b.K"));
+        assertTrue("a concrete link takes its own builder plainly: " + types,
+            types.contains("Builder"));
+    }
+
+    /** A root's builder carries the self-typed pair, so its constructor takes the wildcard form. */
+    public void testChainCopyConstructorOnARoot_takesTheWildcardBuilder() {
+        addPlainChain();
+        myFixture.configureByText("Use.java", "package b;\npublic class Use { }\n");
+        List<String> types = constructorParameterTypesOf(myFixture.findClass("b.P"));
+        assertTrue("a root accepts any subclass builder: " + types,
+            types.contains("Builder<?, ?>"));
+    }
+
+    public void testWithGenerateCopyConstructorFalse_isNotOffered() {
+        myFixture.addFileToProject("c/P.java",
+            """
+            package c;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(generateCopyConstructor = false)
+            public abstract class P { String t; }
+            """);
+        myFixture.configureByText("Use.java", "package c;\npublic class Use { }\n");
+        List<String> types = constructorParameterTypesOf(myFixture.findClass("c.P"));
+        assertFalse("the attribute is read, so nothing is contributed: " + types,
+            types.contains("Builder<?, ?>"));
+    }
+
+    public void testWhereTheTargetDeclaresItsOwn_isNotOfferedTwice() {
+        myFixture.addFileToProject("d/P.java",
+            """
+            package d;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class P {
+                String t;
+                protected P(Builder<?, ?> b) { }
+            }
+            """);
+        myFixture.configureByText("Use.java", "package d;\npublic class Use { }\n");
+        List<String> types = constructorParameterTypesOf(myFixture.findClass("d.P"));
+        assertEquals("the author's version wins and nothing lands beside it: " + types,
+            1, types.stream().filter(t -> t.startsWith("Builder")).count());
+    }
+
+    /** An unrelated one-parameter constructor is not the author's copy constructor. */
+    public void testWhereTheTargetDeclaresAnUnrelatedConstructor_isStillOffered() {
+        myFixture.addFileToProject("e/P.java",
+            """
+            package e;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class P {
+                String t;
+                protected P(String t) { this.t = t; }
+            }
+            """);
+        myFixture.configureByText("Use.java", "package e;\npublic class Use { }\n");
+        List<String> types = constructorParameterTypesOf(myFixture.findClass("e.P"));
+        assertTrue("the builder-taking one is still missing without this: " + types,
+            types.contains("Builder<?, ?>"));
+        assertTrue("and the author's own is untouched: " + types, types.contains("String"));
+    }
+
+    /**
+     * An author copy constructor naming the builder through its target -
+     * {@code P.Builder<?, ?>} on the root, {@code q.K.Builder} on the link - is
+     * the author's version as much as the simple spelling is. The editor
+     * matched only the simple spelling and contributed a light constructor of
+     * the same erasure, which the platform reported as already defined on the
+     * author's line.
+     */
+    public void testWhereTheTargetDeclaresItsOwnQualified_isNotOfferedTwice() {
+        myFixture.addFileToProject("q/P.java",
+            """
+            package q;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class P {
+                String t;
+                protected P(P.Builder<?, ?> b) { }
+            }
+            """);
+        myFixture.configureByText("K.java",
+            """
+            package q;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class K extends P {
+                int n;
+                protected K(q.K.Builder b) { super(b); }
+            }
+            """);
+        assertNoErrors();
+        myFixture.configureFromTempProjectFile("q/P.java");
+        assertNoErrors();
+        for (String name : List.of("q.P", "q.K")) {
+            List<String> types = constructorParameterTypesOf(myFixture.findClass(name));
+            assertEquals("the author's version wins and nothing lands beside it on " + name + ": " + types,
+                1, types.stream().filter(t -> t.startsWith("Builder")).count());
+        }
+    }
+
+    /**
+     * A constructor taking an ancestor's builder shares the simple name but not
+     * the erasure, so the link's own copy constructor is still contributed.
+     */
+    public void testWhereTheTargetTakesTheAncestorsBuilder_isStillOffered() {
+        addPlainChain();
+        myFixture.addFileToProject("b/J.java",
+            """
+            package b;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class J extends P {
+                int n;
+                J(P.Builder<?, ?> b) { super(b); }
+            }
+            """);
+        myFixture.configureByText("Use.java", "package b;\npublic class Use { }\n");
+        PsiClass link = myFixture.findClass("b.J");
+        List<String> own = new ArrayList<>();
+        for (PsiMethod method : link.getConstructors()) {
+            PsiParameter[] parameters = method.getParameterList().getParameters();
+            if (parameters.length == 1) own.add(parameters[0].getType().getCanonicalText());
+        }
+        assertTrue("the link's own copy constructor is still missing without this: " + own,
+            own.contains("b.J.Builder"));
+        assertTrue("and the author's is untouched: " + own,
+            own.stream().anyMatch(type -> type.startsWith("b.P.Builder<")));
+    }
 
     public void testRootBuilder_isAbstractAndSelfTyped() {
         myFixture.configureByText("P.java",
@@ -454,6 +622,353 @@ public class SuperBuilderAugmentTest extends LightJavaCodeInsightFixtureTestCase
         assertEquals("an unannotated class in between must break the chain",
             0, cBuilder.findMethodsByName("t", true).length);
         assertEquals(1, cBuilder.findMethodsByName("n", true).length);
+    }
+
+    /**
+     * A chained abstract inherits the root's {@code self()} and {@code build()},
+     * and the processor declares neither on its builder. The editor declared
+     * both again, abstract, on every chained-abstract builder it synthesised.
+     */
+    public void testChainedAbstractBuilder_declaresNoSelfOrBuild() {
+        myFixture.addFileToProject("h/R.java",
+            """
+            package h;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class R { String a; }
+            """);
+        myFixture.configureByText("M.java",
+            """
+            package h;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class M extends R { String b; }
+            """);
+        PsiClass builder = ((PsiJavaFile) myFixture.getFile()).getClasses()[0].getInnerClasses()[0];
+        List<String> names = new ArrayList<>();
+        for (PsiMethod method : builder.getMethods()) names.add(method.getName());
+        assertTrue("the setter is its own: " + names, names.contains("b"));
+        assertFalse("and the pair is inherited, not redeclared: " + names,
+            names.contains("self") || names.contains("build"));
+    }
+
+    // ------------------------------------------------------------------
+    // The chain merge
+    //
+    // A root, a link or a chained abstract declaring its own builder has the
+    // role's members merged into it. The editor left each declaration exactly
+    // as written, the processor having aborted on it.
+    // ------------------------------------------------------------------
+
+    /** A root's author verb calls a merged setter and returns the declared self type. */
+    public void testMergeOnARoot_offersSelfTypedSettersBesideTheAuthorsVerbs() {
+        myFixture.addFileToProject("m/Shape.java",
+            """
+            package m;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Shape {
+                String name;
+                public String getName() { return name; }
+                public abstract static class Builder<T extends Shape, B extends Builder<T, B>> {
+                    public B named(String first, String last) { return name(first + " " + last); }
+                }
+            }
+            """);
+        myFixture.addFileToProject("m/Circle.java",
+            """
+            package m;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Circle extends Shape {
+                int radius;
+                public int getRadius() { return radius; }
+            }
+            """);
+        myFixture.configureByText("Use.java",
+            """
+            import m.Circle;
+            public class Use {
+                public static String go() {
+                    return Circle.builder().named("a", "b").radius(2).build().getName();
+                }
+            }
+            """);
+        assertNoErrors();
+        myFixture.configureFromTempProjectFile("m/Shape.java");
+        assertNoErrors();
+    }
+
+    /**
+     * A link's author verb reads a merged slot field, and the entry points
+     * return the declared class, so a chain through the verb and the inherited
+     * setter resolves from every entry point.
+     */
+    public void testMergeOnALink_offersInheritedAndOwnSetters() {
+        myFixture.addFileToProject("n/Base.java",
+            """
+            package n;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Base {
+                String label;
+                public String getLabel() { return label; }
+            }
+            """);
+        myFixture.configureByText("Link.java",
+            """
+            package n;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Link extends Base {
+                String extra;
+                public String getExtra() { return extra; }
+                public static class Builder extends Base.Builder<Link, Builder> {
+                    public Builder shout() { this.extra = this.extra.toUpperCase(); return this; }
+                }
+            }
+            class Use {
+                String go(Link link) {
+                    return Link.builder().extra("x").shout().label("l").build().getLabel()
+                        + Link.from(link).shout().build().getExtra()
+                        + link.mutate().shout().label("m").build().getExtra();
+                }
+            }
+            """);
+        assertNoErrors();
+    }
+
+    /**
+     * A root and a link each declaring their builder and a copy constructor
+     * spelled through the target - {@code Shape.Builder<?, ?>} and
+     * {@code Link.Builder}, as a migrated {@code @SuperBuilder} class writes
+     * them - keep that constructor alone. The editor contributed a second
+     * beside each, reported as {@code 'Link(Builder)' is already defined in
+     * 'u.Link'} on the author's line.
+     */
+    public void testMergeWithAQualifiedCopyConstructor_isNotOfferedTwice() {
+        myFixture.addFileToProject("u/Shape.java",
+            """
+            package u;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Shape {
+                String name;
+                public String getName() { return name; }
+                protected Shape(Shape.Builder<?, ?> b) { this.name = b.name; }
+                public abstract static class Builder<T extends Shape, B extends Builder<T, B>> { }
+            }
+            """);
+        myFixture.configureByText("Link.java",
+            """
+            package u;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Link extends Shape {
+                String extra;
+                public String getExtra() { return extra; }
+                protected Link(Link.Builder b) { super(b); this.extra = b.extra; }
+                public static class Builder extends Shape.Builder<Link, Builder> { }
+            }
+            class Use {
+                String go() { return Link.builder().name("n").extra("x").build().getExtra(); }
+            }
+            """);
+        assertNoErrors();
+        myFixture.configureFromTempProjectFile("u/Shape.java");
+        assertNoErrors();
+        for (String name : List.of("u.Shape", "u.Link")) {
+            List<String> types = constructorParameterTypesOf(myFixture.findClass(name));
+            assertEquals("the author's version wins and nothing lands beside it on " + name + ": " + types,
+                1, types.stream().filter(t -> t.startsWith("Builder")).count());
+        }
+    }
+
+    /**
+     * A chained abstract's declared builder keeps its verbs and is given its own
+     * setters, which every level below resolves through; it declares neither of
+     * the root's pair, as the processor leaves it.
+     */
+    public void testMergeOnAThreeLevelChain_everyLevelsSettersResolve() {
+        myFixture.addFileToProject("o/R.java",
+            """
+            package o;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class R {
+                String a;
+                public String getA() { return a; }
+            }
+            """);
+        myFixture.addFileToProject("o/M.java",
+            """
+            package o;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class M extends R {
+                String b;
+                public abstract static class Builder<T extends M, B extends Builder<T, B>>
+                        extends R.Builder<T, B> {
+                    public B shapeless() { return b("none"); }
+                }
+            }
+            """);
+        myFixture.addFileToProject("o/L.java",
+            """
+            package o;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class L extends M {
+                int c;
+            }
+            """);
+        myFixture.configureByText("Use.java",
+            """
+            import o.L;
+            public class Use {
+                public static String go() {
+                    return L.builder().a("A").shapeless().c(3).b("B").build().getA();
+                }
+            }
+            """);
+        assertNoErrors();
+        PsiClass declared = myFixture.findClass("o.M").getInnerClasses()[0];
+        List<String> names = new ArrayList<>();
+        for (PsiMethod method : declared.getMethods()) names.add(method.getName());
+        assertTrue("the setter is merged in: " + names, names.contains("b"));
+        assertFalse("and neither of the root's pair: " + names,
+            names.contains("self") || names.contains("build"));
+    }
+
+    /** A generic root's declared builder forwards its parameter to a generic link. */
+    public void testMergeOnAGenericChain_forwardsTheParameter() {
+        myFixture.addFileToProject("p/Base.java",
+            """
+            package p;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Base<V> {
+                V item;
+                public V getItem() { return item; }
+                public abstract static class Builder<V, T extends Base<V>, B extends Builder<V, T, B>> {
+                    public B cleared() { return item(null); }
+                }
+            }
+            """);
+        myFixture.addFileToProject("p/Impl.java",
+            """
+            package p;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Impl<V> extends Base<V> {
+                int n;
+            }
+            """);
+        myFixture.configureByText("Use.java",
+            """
+            import p.Impl;
+            public class Use {
+                public static String go() {
+                    return Impl.<String>builder().cleared().item("x").n(1).build().getItem();
+                }
+            }
+            """);
+        assertNoErrors();
+    }
+
+    /**
+     * No chain builder carries a declared constructor: the processor writes none
+     * on any role, so javac's default at the builder class's access - public
+     * here - is what a caller in another package constructs a link's builder
+     * through, and PSI's implicit default is the same constructor. The editor
+     * used to contribute a package-private one at builderConstructorAccess on
+     * every role, red over source that builds.
+     */
+    public void testAChainBuilder_keepsTheImplicitDefault() {
+        myFixture.addFileToProject("r/Doc.java",
+            """
+            package r;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Doc {
+                String title;
+                public String getTitle() { return title; }
+            }
+            """);
+        myFixture.addFileToProject("r/Article.java",
+            """
+            package r;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Article extends Doc {
+                int words;
+                public int getWords() { return words; }
+            }
+            """);
+        myFixture.configureByText("UseArticle.java",
+            """
+            import r.Article;
+            public class UseArticle {
+                String go() { return new Article.Builder().title("t").words(3).build().getTitle(); }
+            }
+            """);
+        assertNoErrors();
+        PsiClass article = myFixture.findClass("r.Article");
+        PsiClass doc = myFixture.findClass("r.Doc");
+        assertEquals("the link's builder", 0, builderOf(article).getConstructors().length);
+        assertEquals("the root's builder", 0, builderOf(doc).getConstructors().length);
+    }
+
+    /**
+     * Every chain role's generated builder declares one field per slot of its
+     * own target, so an author copy constructor reads its slots off the builder
+     * it is handed - on a root, a chained abstract and a concrete link. The
+     * generated builder carried no fields in the editor, and each read was
+     * {@code Cannot resolve symbol} over source that builds.
+     */
+    public void testAuthorCopyConstructorsReadingTheirSlots_resolveOnEveryRole() {
+        myFixture.addFileToProject("s/Shape.java",
+            """
+            package s;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Shape {
+                String name;
+                protected Shape(Builder<?, ?> b) { this.name = b.name + "!"; }
+            }
+            """);
+        myFixture.addFileToProject("s/Polygon.java",
+            """
+            package s;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public abstract class Polygon extends Shape {
+                int sides;
+                protected Polygon(Builder<?, ?> b) { super(b); this.sides = b.sides; }
+            }
+            """);
+        myFixture.addFileToProject("s/Square.java",
+            """
+            package s;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Square extends Polygon {
+                double edge;
+                protected Square(Builder b) { super(b); this.edge = b.edge; }
+            }
+            """);
+        for (String path : List.of("s/Shape.java", "s/Polygon.java", "s/Square.java")) {
+            myFixture.configureFromTempProjectFile(path);
+            assertNoErrors();
+        }
+    }
+
+    /** The builder the editor lists on a target. */
+    private static PsiClass builderOf(PsiClass target) {
+        for (PsiClass nested : target.getInnerClasses()) {
+            if ("Builder".equals(nested.getName())) return nested;
+        }
+        throw new AssertionError("expected a Builder on " + target.getName());
     }
 
 }

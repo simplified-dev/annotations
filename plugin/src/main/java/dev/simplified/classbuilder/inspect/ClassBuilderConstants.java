@@ -1,15 +1,68 @@
 package dev.simplified.classbuilder.inspect;
 
+import com.intellij.openapi.util.TextRange;
+import com.intellij.openapi.util.text.StringUtil;
+import com.intellij.psi.CommonClassNames;
+import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationMemberValue;
+import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiClassType;
+import com.intellij.psi.PsiCompiledElement;
+import com.intellij.psi.PsiConstantEvaluationHelper;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiElementFactory;
+import com.intellij.psi.PsiExpression;
+import com.intellij.psi.PsiField;
+import com.intellij.psi.PsiImportList;
+import com.intellij.psi.PsiImportStaticStatement;
+import com.intellij.psi.PsiJavaCodeReferenceElement;
+import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiLiteralExpression;
+import com.intellij.psi.PsiMethod;
+import com.intellij.psi.PsiModifier;
+import com.intellij.psi.PsiModifierListOwner;
+import com.intellij.psi.PsiParameter;
 import com.intellij.psi.PsiReferenceExpression;
+import com.intellij.psi.PsiReferenceList;
+import com.intellij.psi.PsiReferenceParameterList;
+import com.intellij.psi.PsiSubstitutor;
+import com.intellij.psi.PsiType;
+import com.intellij.psi.PsiTypeElement;
+import com.intellij.psi.PsiTypeParameter;
+import com.intellij.psi.PsiTypes;
+import com.intellij.psi.impl.source.PsiExtensibleClass;
+import com.intellij.psi.util.PsiTreeUtil;
+import com.intellij.psi.util.PsiUtil;
+import com.intellij.psi.util.TypeConversionUtil;
+import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.NamingStyle;
+import dev.simplified.annotations.SetterNames;
+import dev.simplified.args.apt.ArgsMode;
+import dev.simplified.args.inspect.ArgsConstants;
+import dev.simplified.classbuilder.apt.BuilderAccess;
 import dev.simplified.classbuilder.apt.BuilderScheme;
+import dev.simplified.classbuilder.apt.ChainBuilderReach;
+import dev.simplified.classbuilder.apt.ChainRole;
+import dev.simplified.classbuilder.apt.DeclaredBuildMethod;
+import dev.simplified.classbuilder.apt.DeclaredBuilderFacts;
+import dev.simplified.classbuilder.apt.DeclaredBuilderRejection;
+import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
+import dev.simplified.classbuilder.apt.ExecutableTargetRefusal;
+import dev.simplified.classbuilder.apt.RoleExpectation;
 import dev.simplified.classbuilder.apt.SetterScheme;
+import dev.simplified.classbuilder.editor.MergedSlotStorage;
+import dev.simplified.shared.psi.AbstractRecursionSafeAugmentProvider;
+import dev.simplified.shared.psi.WrittenAnnotations;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -48,6 +101,9 @@ public final class ClassBuilderConstants {
     public static final @NotNull String NEGATE_FQN = "dev.simplified.annotations.Negate";
     public static final @NotNull String FORMATTABLE_FQN = "dev.simplified.annotations.Formattable";
     public static final @NotNull String LAZY_FQN = "dev.simplified.annotations.Lazy";
+
+    /** The marker the processor writes onto everything it emits, which a class file keeps. */
+    public static final @NotNull String GENERATED_FQN = "dev.simplified.annotations.Generated";
 
     /**
      * FQNs of every annotation whose PSI changes should invalidate the editor-
@@ -98,7 +154,8 @@ public final class ClassBuilderConstants {
     public static final @NotNull String ATTR_CONSTRUCTOR_ACCESS = "constructorAccess";
     public static final @NotNull String ATTR_BUILDER_CONSTRUCTOR_ACCESS = "builderConstructorAccess";
     public static final @NotNull String ATTR_FACTORY_METHOD = "factoryMethod";
-    public static final @NotNull String ATTR_MERGE_DECLARED_BUILDER = "mergeDeclaredBuilder";
+    public static final @NotNull String ATTR_GENERATE_COPY_CONSTRUCTOR = "generateCopyConstructor";
+    public static final @NotNull String ATTR_RETAIN_INIT = "retainInit";
 
     /** Attribute names of {@code @SetterNames}, in declaration order. */
     public static final @NotNull String[] SETTER_ROLES =
@@ -106,6 +163,14 @@ public final class ClassBuilderConstants {
 
     /** Attribute names of {@code @BuilderNames}, in declaration order. */
     public static final @NotNull String[] BUILDER_ROLES = {"type", "builder", "build", "from", "toBuilder"};
+
+    /** The two naming annotations by their fully qualified names, which is how a static import spells them. */
+    private static final @NotNull Set<String> NAMING_CLASSES_QUALIFIED =
+        Set.of(SETTER_NAMES_FQN, "dev.simplified.annotations.BuilderNames");
+
+    /** Every spelling a qualified {@code NONE} or {@code INHERIT} reference gives the class it is declared on. */
+    private static final @NotNull Set<String> NAMING_CLASSES =
+        Set.of("SetterNames", "BuilderNames", SETTER_NAMES_FQN, "dev.simplified.annotations.BuilderNames");
 
     private ClassBuilderConstants() {}
 
@@ -117,11 +182,22 @@ public final class ClassBuilderConstants {
     }
 
     /**
-     * Reads a string attribute only when it is written at the annotation,
-     * mirroring the processor's {@code getElementValues()} view rather than
-     * {@code findAttributeValue}'s defaults-included one. Returning
-     * {@code null} for an unwritten attribute is what lets the schemes tell
-     * "inherit from the style" from an explicit value, empty ones included.
+     * Reads a naming attribute of {@code @BuilderNames} or {@code @SetterNames}
+     * only when it is written at the annotation, mirroring the processor's
+     * {@code getElementValues()} view rather than {@code findAttributeValue}'s
+     * defaults-included one. Returning {@code null} for an unwritten attribute
+     * is what lets the schemes tell "inherit from the style" from an explicit
+     * value, empty ones included.
+     *
+     * <p>javac hands the processor the value a constant holds, so a written
+     * constant is read as that value rather than as unwritten. The two the
+     * annotations declare, {@code NONE} and {@code INHERIT}, are recognised by
+     * name without resolving - qualified by either annotation's simple or fully
+     * qualified name, or unqualified where the file statically imports them
+     * from one of the two. Any other expression goes to the platform's constant
+     * evaluator under the owning class's re-entry guard, since resolving it can
+     * reach the augment pass that is reading this attribute; one the evaluator
+     * cannot answer stays unwritten.
      *
      * @param annotation the annotation to read, or {@code null}
      * @param attr the attribute name
@@ -130,8 +206,212 @@ public final class ClassBuilderConstants {
     public static @Nullable String writtenStringAttr(@Nullable PsiAnnotation annotation, @NotNull String attr) {
         if (annotation == null) return null;
         PsiAnnotationMemberValue value = annotation.findDeclaredAttributeValue(attr);
-        if (value instanceof PsiLiteralExpression literal && literal.getValue() instanceof String s) return s;
+        if (value == null) return null;
+        if (value instanceof PsiLiteralExpression literal)
+            return literal.getValue() instanceof String s ? s : null;
+        String named = namingConstant(value);
+        return named != null ? named : evaluatedString(value);
+    }
+
+    /**
+     * The value of {@code NONE} or {@code INHERIT} when the expression names one
+     * of the two as declared on {@code @BuilderNames} or {@code @SetterNames},
+     * read from the reference and the file's static imports alone.
+     *
+     * @param value the written attribute value
+     * @return the constant's value, or {@code null} when the expression names neither
+     */
+    private static @Nullable String namingConstant(@NotNull PsiAnnotationMemberValue value) {
+        if (!(value instanceof PsiReferenceExpression reference)) return null;
+        String name = reference.getReferenceName();
+        String constant = namingConstantValue(name);
+        if (constant == null) return null;
+        PsiExpression qualifier = reference.getQualifierExpression();
+        if (qualifier != null)
+            return NAMING_CLASSES.contains(qualifier.getText().replaceAll("\\s", "")) ? constant : null;
+        return staticallyImported(reference, name) ? constant : null;
+    }
+
+    /**
+     * What a constant of that name holds on both naming annotations.
+     *
+     * @param name the referenced name, or {@code null}
+     * @return the value, or {@code null} when the name is neither constant
+     */
+    private static @Nullable String namingConstantValue(@Nullable String name) {
+        if ("NONE".equals(name)) return SetterNames.NONE;
+        if ("INHERIT".equals(name)) return SetterNames.INHERIT;
         return null;
+    }
+
+    /**
+     * Whether the file statically imports the name from one of the naming
+     * annotations, by a single import of it or an import on demand.
+     *
+     * @param reference the unqualified reference
+     * @param name its name
+     * @return whether an import brings it in
+     */
+    private static boolean staticallyImported(@NotNull PsiElement reference, @NotNull String name) {
+        if (!(reference.getContainingFile() instanceof PsiJavaFile file)) return false;
+        PsiImportList imports = file.getImportList();
+        if (imports == null) return false;
+        for (PsiImportStaticStatement statement : imports.getImportStaticStatements()) {
+            PsiJavaCodeReferenceElement imported = statement.getImportReference();
+            if (imported == null) continue;
+            String text = imported.getText().replaceAll("\\s", "");
+            String declaring;
+            if (statement.isOnDemand()) declaring = text;
+            else if (text.endsWith("." + name)) declaring = text.substring(0, text.length() - name.length() - 1);
+            else continue;
+            if (NAMING_CLASSES_QUALIFIED.contains(declaring)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Evaluates a written constant expression to the {@code String} javac
+     * would read from it.
+     *
+     * <p>Runs under the re-entry guard of the class the value is written in,
+     * since resolving a name in it can reach an augment pass that is reading
+     * this very attribute, and follows {@code final} fields through their
+     * initializers rather than asking them, so no declared type is resolved.
+     * Every reader of a {@code String} annotation attribute a constant can
+     * spell asks this rather than the platform's evaluator directly.
+     *
+     * @param value the written attribute value
+     * @return the string it evaluates to, or {@code null} when it evaluates to none
+     */
+    public static @Nullable String evaluatedString(@NotNull PsiAnnotationMemberValue value) {
+        PsiConstantEvaluationHelper evaluator =
+            JavaPsiFacade.getInstance(value.getProject()).getConstantEvaluationHelper();
+        PsiClass owner = PsiTreeUtil.getParentOfType(value, PsiClass.class);
+        Object result = owner == null
+            ? constantValue(evaluator, value, new HashSet<>())
+            : AbstractRecursionSafeAugmentProvider.withInProgress(owner,
+                () -> constantValue(evaluator, value, new HashSet<>()));
+        return result instanceof String s ? s : null;
+    }
+
+    /**
+     * Evaluates an expression through the platform's constant evaluator, with
+     * every reference to a {@code final} field in it replaced by the literal of
+     * the value that field holds, followed through its initializer rather than
+     * asked of the field.
+     *
+     * <p>The field's own answer reads its declared type first, and this runs
+     * inside the augment pass a resolve of that very type can have started -
+     * a {@code String} constant declared on the target is the ordinary case -
+     * so asking it re-enters the resolve in progress. The initializer is what
+     * the field's value is computed from, so following it gives the same
+     * answer without the type, and the evaluator is then handed an expression
+     * of literals and operators only. A compiled field has no source type to
+     * resolve and answers for itself.
+     *
+     * @param evaluator the platform's constant evaluator
+     * @param expression the expression to evaluate
+     * @param following the fields whose initializers are being followed, which ends a cycle
+     * @return the constant value, or {@code null} when the expression is not a constant
+     */
+    private static @Nullable Object constantValue(@NotNull PsiConstantEvaluationHelper evaluator,
+                                                  @NotNull PsiElement expression,
+                                                  @NotNull Set<PsiField> following) {
+        PsiField field = finalField(expression);
+        if (field != null) return fieldValue(evaluator, field, following);
+        List<PsiReferenceExpression> references = finalFieldReferences(expression);
+        if (references.isEmpty()) return evaluator.computeConstantExpression(expression);
+
+        int start = expression.getTextRange().getStartOffset();
+        StringBuilder text = new StringBuilder(expression.getText());
+        for (int i = references.size() - 1; i >= 0; i--) {
+            PsiReferenceExpression reference = references.get(i);
+            String literal = literalText(constantValue(evaluator, reference, following));
+            if (literal == null) return null;
+            TextRange range = reference.getTextRange().shiftLeft(start);
+            text.replace(range.getStartOffset(), range.getEndOffset(), literal);
+        }
+        PsiExpression literals = JavaPsiFacade.getElementFactory(expression.getProject())
+            .createExpressionFromText(text.toString(), expression);
+        return evaluator.computeConstantExpression(literals);
+    }
+
+    /**
+     * The value a {@code final} field holds, from its initializer.
+     *
+     * @param evaluator the platform's constant evaluator
+     * @param field the field to read
+     * @param following the fields whose initializers are being followed
+     * @return the constant value, or {@code null} when it holds none
+     */
+    private static @Nullable Object fieldValue(@NotNull PsiConstantEvaluationHelper evaluator,
+                                               @NotNull PsiField field,
+                                               @NotNull Set<PsiField> following) {
+        if (field instanceof PsiCompiledElement) return field.computeConstantValue();
+        PsiExpression initializer = field.getInitializer();
+        if (initializer == null || !following.add(field)) return null;
+        try {
+            return constantValue(evaluator, initializer, following);
+        } finally {
+            following.remove(field);
+        }
+    }
+
+    /**
+     * The {@code final} field an expression is a reference to.
+     *
+     * @param expression the expression to read
+     * @return the field, or {@code null} when the expression names none
+     */
+    private static @Nullable PsiField finalField(@NotNull PsiElement expression) {
+        return expression instanceof PsiReferenceExpression reference
+            && reference.resolve() instanceof PsiField field
+            && field.hasModifierProperty(PsiModifier.FINAL) ? field : null;
+    }
+
+    /**
+     * The outermost references to a {@code final} field inside an expression,
+     * in source order.
+     *
+     * @param expression the expression to read
+     * @return the references, none nested in another
+     */
+    private static @NotNull List<PsiReferenceExpression> finalFieldReferences(@NotNull PsiElement expression) {
+        List<PsiReferenceExpression> out = new ArrayList<>();
+        for (PsiReferenceExpression reference : PsiTreeUtil.findChildrenOfType(expression,
+            PsiReferenceExpression.class)) {
+            if (!out.isEmpty() && out.get(out.size() - 1).getTextRange().contains(reference.getTextRange()))
+                continue;
+            if (finalField(reference) != null) out.add(reference);
+        }
+        return out;
+    }
+
+    /**
+     * A constant value spelled as the Java literal that evaluates to it.
+     *
+     * @param value the value, or {@code null}
+     * @return the literal, or {@code null} when the value has none
+     */
+    private static @Nullable String literalText(@Nullable Object value) {
+        if (value instanceof String s) return "\"" + StringUtil.escapeStringCharacters(s) + "\"";
+        if (value instanceof Character c) return "'" + StringUtil.escapeCharCharacters(String.valueOf(c)) + "'";
+        if (value instanceof Boolean || value instanceof Integer) return value.toString();
+        if (value instanceof Long l) return l + "L";
+        if (value instanceof Short || value instanceof Byte) return "((" + primitiveName(value) + ") " + value + ")";
+        if (value instanceof Double d) return Double.isFinite(d) ? d.toString() : null;
+        if (value instanceof Float f) return Float.isFinite(f) ? f + "f" : null;
+        return null;
+    }
+
+    /**
+     * The primitive a boxed {@code short} or {@code byte} unboxes to.
+     *
+     * @param value the boxed value
+     * @return the primitive's keyword
+     */
+    private static @NotNull String primitiveName(@NotNull Object value) {
+        return value instanceof Short ? "short" : "byte";
     }
 
     /** Reads the {@code style} attribute, defaulting to {@link NamingStyle#SIMPLIFIED}. */
@@ -275,6 +555,1134 @@ public final class ClassBuilderConstants {
             }
         }
         return fallback;
+    }
+
+    // ------------------------------------------------------------------
+    // Chain role and the declared builder
+    // ------------------------------------------------------------------
+
+    /**
+     * Classifies a target's position in a SuperBuilder chain.
+     *
+     * <p>The two questions are the ones {@code BuilderMutator.mutate} dispatches
+     * on, asked of PSI here and of the element model there, so the editor's model
+     * of a chain is the shape javac will emit.
+     *
+     * @param target the annotated type
+     * @return its position in a chain, never null
+     */
+    public static @NotNull ChainRole chainRoleOf(@NotNull PsiClass target) {
+        boolean isAbstract = target.hasModifierProperty(PsiModifier.ABSTRACT) && !target.isInterface();
+        return ChainRole.of(isAbstract, annotatedSuperOf(target) != null);
+    }
+
+    /**
+     * The direct superclass when it also carries {@code @ClassBuilder}. Only the
+     * immediate parent is consulted, matching the processor's
+     * {@code findAnnotatedDirectSuper} - an unannotated class in between breaks
+     * the chain rather than being skipped over.
+     *
+     * @param target the annotated type
+     * @return the annotated superclass, or {@code null}
+     */
+    public static @Nullable PsiClass annotatedSuperOf(@NotNull PsiClass target) {
+        if (target.isInterface() || target.isRecord() || target.isEnum()) return null;
+        PsiClass superClass = target.getSuperClass();
+        if (superClass == null) return null;
+        if (CommonClassNames.JAVA_LANG_OBJECT.equals(superClass.getQualifiedName())) return null;
+        return WrittenAnnotations.has(superClass, ANNOTATION_FQN) ? superClass : null;
+    }
+
+    /**
+     * The nested type the target declares under the configured builder name.
+     *
+     * <p>Read through {@link PsiExtensibleClass#getOwnInnerClasses()} rather than
+     * {@code getChildren()} or {@code getInnerClasses()}: the first forces a full
+     * AST load, which is illegal for a file not open in the editor and throws
+     * during cross-file highlighting, and the second is augment-aware and would
+     * re-enter the provider that asked.
+     *
+     * @param target the annotated type
+     * @param builderName the configured builder class name
+     * @return the declared class, or {@code null} when the target declares none
+     */
+    public static @Nullable PsiClass declaredBuilderOf(@NotNull PsiClass target,
+                                                       @NotNull String builderName) {
+        if (!(target instanceof PsiExtensibleClass extensible)) return null;
+        for (PsiClass nested : extensible.getOwnInnerClasses()) {
+            if (builderName.equals(nested.getName())) return nested;
+        }
+        return null;
+    }
+
+    /**
+     * Why the processor refuses {@code @ClassBuilder} on this constructor or
+     * static factory, in the sentence it reports, or {@code null} when the
+     * member can carry a builder.
+     *
+     * <p>The decision is {@link ExecutableTargetRefusal#refusal}, asked of what
+     * PSI holds without resolving: the member's kind, {@code static} modifier and
+     * written return type, the owner's own annotation and first {@code @Lazy}
+     * field matched by name, and whether an earlier annotated member of the owner
+     * is itself refused nothing - which is the member that took the owner's
+     * builder, as the processor claims it in declaration order. Members and
+     * fields are the owner's own, so nothing here re-enters an augment provider.
+     *
+     * @param owner the type the member is declared in
+     * @param member the member carrying {@code @ClassBuilder}
+     * @return the refusal, or {@code null} when the member is usable
+     */
+    public static @Nullable String executableRefusal(@NotNull PsiClass owner, @NotNull PsiMethod member) {
+        String ownerName = owner.getName() == null ? "" : owner.getName();
+        boolean ownerAnnotated = WrittenAnnotations.find(owner, ANNOTATION_FQN) != null;
+        String lazyField = null;
+        for (PsiField field : ownFields(owner)) {
+            if (WrittenAnnotations.findOnMember(field, LAZY_FQN) == null) continue;
+            lazyField = field.getName();
+            break;
+        }
+        boolean claimed = false;
+        for (PsiMethod earlier : ownMethodsOf(owner)) {
+            if (earlier.equals(member)) break;
+            if (WrittenAnnotations.findOnMember(earlier, ANNOTATION_FQN) == null) continue;
+            if (refusalOf(earlier, ownerName, ownerAnnotated, false, lazyField) == null) {
+                claimed = true;
+                break;
+            }
+        }
+        return refusalOf(member, ownerName, ownerAnnotated, claimed, lazyField);
+    }
+
+    /**
+     * Asks {@link ExecutableTargetRefusal#refusal} of one member.
+     *
+     * @param member the annotated member
+     * @param ownerName the simple name of its type
+     * @param ownerAnnotated whether that type carries {@code @ClassBuilder}
+     * @param claimed whether an earlier member already took the type's builder
+     * @param lazyField the type's first {@code @Lazy} field, or {@code null}
+     * @return the refusal, or {@code null} when the member is usable
+     */
+    private static @Nullable String refusalOf(PsiMethod member, String ownerName, boolean ownerAnnotated,
+                                              boolean claimed, @Nullable String lazyField) {
+        boolean method = !member.isConstructor();
+        return ExecutableTargetRefusal.refusal(method, member.hasModifierProperty(PsiModifier.STATIC),
+            method && PsiTypes.voidType().equals(member.getReturnType()), ownerName, ownerAnnotated,
+            claimed, lazyField);
+    }
+
+    /** The class's own methods, without anything a provider contributed. */
+    private static List<PsiMethod> ownMethodsOf(PsiClass owner) {
+        return owner instanceof PsiExtensibleClass extensible
+            ? extensible.getOwnMethods()
+            : List.of(owner.getMethods());
+    }
+
+    /** The class's own fields, without anything a provider contributed. */
+    private static List<PsiField> ownFields(PsiClass owner) {
+        return owner instanceof PsiExtensibleClass extensible
+            ? extensible.getOwnFields()
+            : List.of(owner.getFields());
+    }
+
+    /**
+     * Whether the entry points alone are withheld, the builder itself still
+     * being generated.
+     *
+     * <p>Every entry point instantiates the builder with the seeds, in parameter
+     * order, and a declared builder's constructors are the author's and the ones
+     * a constructor annotation written on it appends, so one where none of those
+     * is a constructor javac would call with the seeds leaves the entry points
+     * with nothing to call and the processor skips them with a note, which
+     * {@link DeclaredBuilderSkipsEntryPointsInspection} reports in the editor in
+     * the same words. Everything else still runs - the
+     * merge appends every setter, a class target still gets the all-args
+     * constructor {@code build()} calls, and a chain link still gets its copy
+     * constructor. Withholding the whole member list here would take that
+     * constructor with it, and put a same-package {@code new Target(...)} red
+     * over source that builds.
+     *
+     * <p>The rule is {@link DeclaredBuilderShape#instantiable}, which the
+     * processor asks of the same parameter types - a constructor whose throws
+     * clause {@link DeclaredBuilderShape#throwsNothingChecked} does not accept
+     * counted as none the entry points can call. On a class or
+     * record target, a chain link among them, there is no seed, so the
+     * constructor that serves is a no-argument one; on a constructor or factory
+     * target it is the one javac selects for the seeds {@code builder(..)}
+     * passes, as far as names can tell. An
+     * interface type target's entry points call its sibling builder, never a
+     * class nested in the interface body; a constructor or factory inside an
+     * interface merges into that class as it does anywhere else.
+     *
+     * @param target the type the builder nests in
+     * @param builderName the configured builder class name
+     * @param executable whether the annotation sits on a constructor or factory method
+     * @param seedTypes the type of each seed the entry points pass, in parameter order
+     * @return whether the entry points are skipped
+     */
+    public static boolean withholdsEntryPointsOnly(@NotNull PsiClass target,
+                                                   @NotNull String builderName,
+                                                   boolean executable,
+                                                   @NotNull List<String> seedTypes) {
+        if (target.isInterface() && !executable) return false;
+        PsiClass declared = declaredBuilderOf(target, builderName);
+        return declared != null
+            && !DeclaredBuilderShape.instantiable(constructorSignatures(declared, false),
+                constructorSignatures(declared, true), seedTypes, typeParameterNames(declared));
+    }
+
+    /**
+     * The names of the type parameters a class declares - a declared builder's,
+     * which the seed match reads a parameter spelling one of as able to take
+     * the seed, or the target's, ahead of a self-typed pair.
+     *
+     * @param declared the class, a builder the author wrote or its target
+     * @return the names, in declaration order
+     */
+    private static @NotNull List<String> typeParameterNames(@NotNull PsiClass declared) {
+        List<String> out = new ArrayList<>();
+        for (PsiTypeParameter parameter : declared.getTypeParameters()) out.add(parameter.getName());
+        return out;
+    }
+
+    /**
+     * Whether the entry points are skipped only because the constructor javac
+     * selects for what they pass declares a throws clause that may name a
+     * checked exception, which decides the wording of the note, as
+     * {@link DeclaredBuilderShape#skippedForAThrowsClause} decides it for the
+     * processor.
+     *
+     * @param declared the builder the author wrote
+     * @param seedTypes the type of each seed the entry points pass, in parameter order
+     * @return whether a constructor is selected and it declares such a throws clause
+     */
+    public static boolean skippedForAThrowsClause(@NotNull PsiClass declared, @NotNull List<String> seedTypes) {
+        return DeclaredBuilderShape.skippedForAThrowsClause(constructorSignatures(declared, false),
+            constructorSignatures(declared, true), seedTypes, typeParameterNames(declared));
+    }
+
+    /**
+     * The parameter types of each constructor the processor finds on the
+     * declared builder when it counts the entry points' constructors: the
+     * author's, and each one a constructor annotation written on the builder
+     * appends.
+     *
+     * <p>The constructor pass runs before the merge, so what those annotations
+     * append is in the builder by then, and the processor counts it beside the
+     * author's. Here it is the args provider's light constructor, which no own
+     * read returns, so it is derived as that pass derives it - from the written
+     * annotations and the builder's own fields, through
+     * {@link ArgsConstants#appendedConstructors} - and a constructor it appends
+     * declares no throws clause.
+     *
+     * @param declared the builder the author wrote
+     * @param callableOnly whether to read only the constructors whose throws clause
+     *     {@link DeclaredBuilderShape#throwsNothingChecked} accepts
+     * @return each constructor's parameter types, the author's first
+     */
+    private static @NotNull List<List<String>> constructorSignatures(@NotNull PsiClass declared,
+                                                                    boolean callableOnly) {
+        List<List<String>> out = declaredConstructorSignatures(declared, callableOnly);
+        for (List<PsiField> parameters : ArgsConstants.appendedConstructors(declared)) {
+            List<String> types = new ArrayList<>(parameters.size());
+            for (PsiField field : parameters) {
+                String written = MergedSlotStorage.writtenTypeText(field);
+                types.add(written == null ? "" : written);
+            }
+            out.add(types);
+        }
+        return out;
+    }
+
+    /**
+     * The parameter types of each constructor the author declared, as written.
+     *
+     * <p>Read through {@link PsiExtensibleClass#getOwnMethods()} rather than
+     * {@code getConstructors()}, the latter being augment-aware, and read as
+     * text rather than resolved. The implicit default of a class declaring none
+     * is not in the list, which is what {@link DeclaredBuilderShape#instantiable}
+     * expects.
+     *
+     * @param declared the builder the author wrote
+     * @param callableOnly whether to read only the constructors whose throws clause
+     *     {@link DeclaredBuilderShape#throwsNothingChecked} accepts
+     * @return each constructor's parameter types, in declaration order
+     */
+    private static @NotNull List<List<String>> declaredConstructorSignatures(@NotNull PsiClass declared,
+                                                                            boolean callableOnly) {
+        List<List<String>> out = new ArrayList<>();
+        if (!(declared instanceof PsiExtensibleClass extensible)) return out;
+        for (PsiMethod own : extensible.getOwnMethods()) {
+            if (!own.isConstructor()) continue;
+            if (callableOnly && !throwsNothingChecked(own, declared)) continue;
+            List<String> types = new ArrayList<>();
+            for (PsiParameter parameter : own.getParameterList().getParameters()) {
+                String written = MergedSlotStorage.writtenTypeText(parameter);
+                types.add(written == null ? "" : written);
+            }
+            out.add(types);
+        }
+        return out;
+    }
+
+    /**
+     * Whether a constructor's throws clause names only unchecked exception
+     * types, as {@link DeclaredBuilderShape#throwsNothingChecked} decides it for
+     * the processor.
+     *
+     * <p>Each name is its reference element's text. A name the rule lists is
+     * answered without a resolve; any other is resolved - the throws clause's
+     * own class reference and nothing of the target's or the builder's members
+     * - inside the re-entry guard of the class the builder is declared in,
+     * since a resolve walks that class's nested types and the augment pass
+     * asking this may be the one that walk reaches.
+     *
+     * @param constructor the author's constructor
+     * @param declared the builder it is declared in
+     * @return whether the entry points can call it with nothing to handle what it throws
+     */
+    private static boolean throwsNothingChecked(@NotNull PsiMethod constructor, @NotNull PsiClass declared) {
+        List<String> names = new ArrayList<>();
+        Map<String, PsiJavaCodeReferenceElement> references = new HashMap<>();
+        for (PsiJavaCodeReferenceElement thrown : constructor.getThrowsList().getReferenceElements()) {
+            names.add(thrown.getText());
+            references.putIfAbsent(thrown.getText(), thrown);
+        }
+        PsiClass owner = declared.getContainingClass();
+        return DeclaredBuilderShape.throwsNothingChecked(names, name -> {
+            PsiJavaCodeReferenceElement reference = references.get(name);
+            if (reference == null) return false;
+            return owner == null
+                ? resolvesUnchecked(reference)
+                : AbstractRecursionSafeAugmentProvider.withInProgress(owner, () -> resolvesUnchecked(reference));
+        });
+    }
+
+    /**
+     * Whether a thrown name resolves to a subtype of {@link RuntimeException}
+     * or {@link Error}, read through its superclasses. A name that resolves to
+     * nothing is not.
+     *
+     * @param reference the throws clause's reference to the type
+     * @return whether a call throwing it needs nothing to handle it
+     */
+    private static boolean resolvesUnchecked(@NotNull PsiJavaCodeReferenceElement reference) {
+        if (!(reference.resolve() instanceof PsiClass resolved)) return false;
+        Set<PsiClass> seen = new HashSet<>();
+        for (PsiClass type = resolved; type != null && seen.add(type); type = type.getSuperClass()) {
+            String name = type.getQualifiedName();
+            if (CommonClassNames.JAVA_LANG_RUNTIME_EXCEPTION.equals(name)
+                || CommonClassNames.JAVA_LANG_ERROR.equals(name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether the author wrote the declared builder a constructor, beside which
+     * {@code builderConstructorAccess} changes nothing.
+     *
+     * <p>Read through {@link PsiExtensibleClass#getOwnMethods()}, so a light
+     * constructor this plugin contributes is never taken for the author's.
+     *
+     * @param declared the builder the author wrote
+     * @return whether it declares any constructor
+     */
+    public static boolean declaresConstructor(@NotNull PsiClass declared) {
+        return !declaredConstructorSignatures(declared, false).isEmpty();
+    }
+
+    /**
+     * Whether the declared builder is left with javac's default constructor and
+     * no other, which is the constructor the processor retypes to
+     * {@code builderConstructorAccess}.
+     *
+     * <p>The constructor pass runs before the merge, so a constructor annotation
+     * written on the declared builder has appended its constructor by the time
+     * the processor looks, and the retype declines beside that one as beside the
+     * author's. Here that constructor is the args provider's light one, which
+     * {@link #declaresConstructor} does not see, so the annotations are read as
+     * written; one at {@code AccessLevel.NONE} appends nothing.
+     *
+     * @param declared the builder the author wrote
+     * @return whether no constructor but javac's default is there to call
+     */
+    public static boolean keepsOnlyTheDefaultConstructor(@NotNull PsiClass declared) {
+        if (declaresConstructor(declared)) return false;
+        for (PsiAnnotation annotation : ArgsConstants.written(declared)) {
+            ArgsMode mode = ArgsConstants.modeOf(annotation);
+            if (mode == null || mode == ArgsMode.BUILDER) continue;
+            if (ArgsConstants.accessKeyword(annotation, mode) != null) return false;
+        }
+        return true;
+    }
+
+    // ------------------------------------------------------------------
+    // The declared builder's shape, as the shared decision states it
+    // ------------------------------------------------------------------
+
+    /**
+     * Why the merge cannot run into the builder this target declares, worded as
+     * the processor words it.
+     *
+     * <p>One entry point for the two callers that have to agree: the augment
+     * provider withholds where this answers and the inspection reports what it
+     * answers, so the editor cannot populate a builder it also marks red or stay
+     * silent about one it refuses to populate. The text comes back rather than
+     * the constant, because rendering it is where the two halves would otherwise
+     * pick different operands.
+     *
+     * <p>Every role merges, so every role is judged. A chain role is measured
+     * with the pair of self-type names the declaration spells and, on a linked
+     * role, against the annotated superclass's builder and the arguments the
+     * target passes that superclass - the same names the processor reads off its
+     * tree.
+     *
+     * <p>A constructor or factory target is standalone whatever its enclosing
+     * type is, a constructor having no chain to find, and its builder re-declares
+     * the type parameters of {@link #typeParameterSource} - a static factory's
+     * own - which is what the processor measures the declaration against.
+     *
+     * @param target the type the builder nests in
+     * @param executable the annotated constructor or static factory, or {@code null} when the
+     *     annotation is on the type
+     * @param declared the builder it declares
+     * @param names the resolved builder-member names
+     * @return the diagnostic, or {@code null} when the shape is usable
+     */
+    public static @Nullable String mergeRejection(@NotNull PsiClass target,
+                                                  @Nullable PsiMethod executable,
+                                                  @NotNull PsiClass declared,
+                                                  @NotNull BuilderScheme names) {
+        ChainRole role = executable != null ? ChainRole.STANDALONE : chainRoleOf(target);
+        String declaredName = declared.getName();
+        String targetName = target.getName();
+        if (declaredName == null || targetName == null) return null;
+        DeclaredBuilderFacts facts = declaredBuilderFacts(declared, names.build());
+        PsiClass ancestor = role.hasAnnotatedSuper() ? annotatedSuperOf(target) : null;
+        RoleExpectation expectation = roleExpectation(target,
+            typeParameterSource(target, executable), role, names.type(), facts.typeParameterNames(),
+            ancestor == null ? null : ancestor.getName(), superTypeArgumentTexts(target));
+        DeclaredBuilderRejection rejection = DeclaredBuilderShape.check(role, facts, expectation,
+            index -> firstBoundIsSupertype(target, declared, index));
+        return rejection == null
+            ? null
+            : DeclaredBuilderShape.describe(rejection, role, declaredName, targetName,
+                names.builder(), facts, expectation);
+    }
+
+    /**
+     * Whether the first bound written on one of a declared builder's type
+     * parameters names a supertype of the target at any depth, as the processor
+     * reads it from the element model.
+     *
+     * <p>Only the bound's own reference is resolved, and the target's
+     * supertypes through their extends and implements references, each
+     * supertype's own in turn - never a member of any of them - inside the
+     * re-entry guard of the target, whose nested types the resolve walks and
+     * whose augment pass may be the one asking. A reference that resolves to
+     * nothing, or to a type parameter, is not one.
+     *
+     * @param target the type the builder nests in
+     * @param declared the builder it declares
+     * @param index the position of the type parameter among the builder's own
+     * @return whether the bound names a supertype of the target
+     */
+    private static boolean firstBoundIsSupertype(@NotNull PsiClass target, @NotNull PsiClass declared, int index) {
+        PsiTypeParameter[] parameters = declared.getTypeParameters();
+        if (index < 0 || index >= parameters.length) return false;
+        PsiJavaCodeReferenceElement[] references = parameters[index].getExtendsList().getReferenceElements();
+        if (references.length == 0) return false;
+        return AbstractRecursionSafeAugmentProvider.withInProgress(target, () -> {
+            if (!(references[0].resolve() instanceof PsiClass bound) || bound instanceof PsiTypeParameter)
+                return false;
+            String name = bound.getQualifiedName();
+            return name != null && reachesSupertype(target, name, new HashSet<>());
+        });
+    }
+
+    /**
+     * Whether a type reaches the named class among its supertypes at any
+     * depth, walked through each one's resolved supertypes.
+     *
+     * @param type the type whose supertypes are walked
+     * @param qualifiedName the class looked for
+     * @param seen the supertypes already walked
+     * @return whether one of them is the class
+     */
+    private static boolean reachesSupertype(@NotNull PsiClass type, @NotNull String qualifiedName,
+                                            @NotNull Set<PsiClass> seen) {
+        for (PsiClass supertype : type.getSupers()) {
+            if (!seen.add(supertype)) continue;
+            if (qualifiedName.equals(supertype.getQualifiedName()) || reachesSupertype(supertype, qualifiedName, seen))
+                return true;
+        }
+        return false;
+    }
+
+    /**
+     * The annotated supertype whose own declared builder leaves this target with
+     * no builder to generate.
+     *
+     * <p>A link's builder extends the ancestor's, passing it the ancestor's own
+     * arguments plus the self-typed pair. Where the ancestor's author wrote that
+     * class themselves it takes whatever they declared - usually none - and the
+     * clause cannot be formed. The processor's answer is to generate nothing and
+     * say so; this is the same test, so the editor withholds the same builder
+     * rather than leaving it unrooted in silence.
+     *
+     * <p>An ancestor declaring nothing gets the generated builder, in the shape
+     * the clause expects, and blocks only at an access the link cannot reach. A
+     * target declaring its
+     * own builder is asked too, ahead of its own shape, as the processor asks
+     * it: that declaration's extends clause has to name the ancestor's builder
+     * just as a generated one does.
+     *
+     * <p>An ancestor whose author wrote the builder out of the link's reach -
+     * private from another top-level class, package-private from another
+     * package, or without a no-argument constructor the link's builder can call
+     * through its implicit {@code super()} - is blocking too, as
+     * {@link ChainBuilderReach#unreachable} decides it for both halves. So is an
+     * ancestor whose builder the generator writes at an access out of the
+     * link's reach, as {@link ChainBuilderReach#unreachableGenerated} decides
+     * it: a source ancestor's at the access its annotation asks for, and a
+     * compiled one's, which carries the generator's marker, at the access its
+     * class file holds. The marker is asked before the type-parameter count,
+     * so a builder the generator wrote is never taken for one its author
+     * declared.
+     *
+     * <p>Ahead of all of these, a generic ancestor the link's extends clause
+     * names without its type arguments blocks, as
+     * {@link DeclaredBuilderShape#rawGenericAncestor} decides it for both
+     * halves, whoever wrote the ancestor's builder.
+     *
+     * <p>After them, on a concrete link, so does a {@code final} {@code self()}
+     * - the nearest one {@link #linkSelfPublic} follows - on the builder of a
+     * compiled ancestor, as {@link ChainBuilderReach#unjudgedFinalSelf} decides
+     * it: the processor judged a source ancestor's on that ancestor's builder,
+     * and a compiled one's reaches the link unjudged.
+     *
+     * <p>Last, on a concrete link and on a chained abstract declaring no
+     * builder, so does a type a self-typed ancestor's builder bounds the type
+     * it builds by that the target is not within, as
+     * {@link ChainBuilderReach#unmetBuiltTypeBound} decides it - an
+     * intersection bound's further interface the target does not implement.
+     *
+     * @param target the annotated type
+     * @param builderName the builder class name the chain is written in
+     * @param executable whether the annotation sits on a constructor or factory method
+     * @return the blocking supertype, or {@code null} when the chain can be formed
+     */
+    public static @Nullable PsiClass ancestorBlockingGeneration(@NotNull PsiClass target,
+                                                                @NotNull String builderName,
+                                                                boolean executable) {
+        AncestorBlock block = ancestorBlock(target, builderName, executable);
+        return block == null ? null : block.ancestor();
+    }
+
+    /**
+     * The annotated supertype whose declared builder leaves this target with no
+     * builder to generate, with the sentence the processor reports it in.
+     *
+     * @param ancestor the blocking supertype
+     * @param message the error both halves report on the target's annotation
+     */
+    public record AncestorBlock(@NotNull PsiClass ancestor, @NotNull String message) { }
+
+    /**
+     * Decides what {@link #ancestorBlockingGeneration} decides, with the
+     * sentence the processor reports.
+     *
+     * @param target the annotated type
+     * @param builderName the builder class name the chain is written in
+     * @param executable whether the annotation sits on a constructor or factory method
+     * @return the blocking supertype and the error, or {@code null} when the chain can be formed
+     */
+    public static @Nullable AncestorBlock ancestorBlock(@NotNull PsiClass target, @NotNull String builderName,
+                                                        boolean executable) {
+        // An executable target is never in a chain - a constructor has no chain
+        // to find, and the processor's third path never looks for an annotated
+        // super. Asking anyway reads the enclosing class's own supertype and
+        // withholds a builder that is emitted.
+        if (executable) return null;
+        PsiClass parent = annotatedSuperOf(target);
+        if (parent == null) return null;
+        String targetName = target.getName() == null ? "" : target.getName();
+        String parentName = parent.getName() == null ? "" : parent.getName();
+        String raw = DeclaredBuilderShape.rawGenericAncestor(targetName, parentName,
+            parent.getTypeParameters().length, superTypeArgumentTexts(target).size());
+        if (raw != null) return new AncestorBlock(parent, raw);
+        boolean samePackage = PsiUtil.getPackageName(target) != null
+            && PsiUtil.getPackageName(target).equals(PsiUtil.getPackageName(parent));
+        PsiClass targetTop = PsiUtil.getTopLevelClass(target);
+        boolean sameTopLevel = targetTop != null && targetTop.equals(PsiUtil.getTopLevelClass(parent));
+        PsiClass declared = declaredBuilderOf(parent, builderName);
+        ChainBuilderReach.Unreachable reason;
+        if (declared == null) {
+            // A compiled ancestor with no builder in its class file has none a
+            // generator will write, so there is nothing to ask.
+            if (parent instanceof PsiCompiledElement) return null;
+            reason = ChainBuilderReach.unreachableGenerated(generatedAccessOf(parent), samePackage, sameTopLevel);
+        } else if (generatorMarked(declared)) {
+            // The generator's builder is answered as absent, as the processor
+            // answers it: it takes the clause, and only its access is asked.
+            reason = ChainBuilderReach.unreachableGenerated(accessOf(declared), samePackage, sameTopLevel);
+        } else {
+            if (declared.getTypeParameters().length != superTypeArgumentTexts(target).size() + 2) {
+                return new AncestorBlock(parent,
+                    DeclaredBuilderShape.ancestorDeclaresItsOwnBuilder(targetName, parentName));
+            }
+            reason = ChainBuilderReach.unreachable(accessOf(declared), declaresAnyConstructor(declared),
+                noArgumentConstructorAccess(declared), samePackage, sameTopLevel);
+        }
+        if (reason != null) {
+            return new AncestorBlock(parent,
+                ChainBuilderReach.unreachableAncestorBuilder(reason, targetName, parentName, builderName));
+        }
+        ChainRole role = chainRoleOf(target);
+        if (role == ChainRole.CONCRETE_LINK) {
+            // The nearest self() the link overrides is read through the
+            // ancestors' resolved supertypes, under this target's guard.
+            NearestSelf nearest = AbstractRecursionSafeAugmentProvider.withInProgress(target,
+                () -> nearestSelf(target, builderName));
+            String finalSelf = nearest == null
+                ? null
+                : ChainBuilderReach.unjudgedFinalSelf(targetName,
+                    nearest.ancestor().getName() == null ? "" : nearest.ancestor().getName(), builderName,
+                    nearest.self(), !(nearest.ancestor() instanceof PsiCompiledElement));
+            if (finalSelf != null) return new AncestorBlock(nearest.ancestor(), finalSelf);
+        }
+        if (!ChainBuilderReach.judgesBuiltTypeBounds(role, declaredBuilderOf(target, builderName) != null))
+            return null;
+        // The bounds are instantiated for this target and judged by resolving
+        // its supertypes and each bound's references, under this target's guard.
+        return AbstractRecursionSafeAugmentProvider.withInProgress(target,
+            () -> unmetBuiltTypeBound(target, builderName, role == ChainRole.CONCRETE_LINK));
+    }
+
+    /**
+     * The first type a self-typed ancestor's builder bounds the type it builds
+     * by that the target is not within, as
+     * {@link ChainBuilderReach#unmetBuiltTypeBound} decides it for each
+     * annotated ancestor upward from the direct one, the processor reading the
+     * same bounds from the element model.
+     *
+     * <p>Each ancestor's builder is read where its author wrote it, source or
+     * class file - a source ancestor's generated builder is contributed rather
+     * than declared, and its one bound is the ancestor itself. Each type of its
+     * built type's bound is instantiated for the target: the ancestor's own
+     * leading parameters by the arguments the target's supertype passes the
+     * ancestor, the built type by the target on a concrete link and left as it
+     * is on a chained abstract, and judged as a subtype with no unchecked
+     * conversion.
+     *
+     * @param target the annotated type
+     * @param builderName the builder class name the chain is written in
+     * @param concrete whether the target is a concrete link, which binds the built type to itself
+     * @return the ancestor declaring the bound and the error, or {@code null} when the target is within every type
+     */
+    private static @Nullable AncestorBlock unmetBuiltTypeBound(@NotNull PsiClass target, @NotNull String builderName,
+                                                               boolean concrete) {
+        // The target applied to its own type parameters, as the element model's
+        // type of a class declaration reads - not the raw type.
+        PsiElementFactory factory = JavaPsiFacade.getElementFactory(target.getProject());
+        PsiTypeParameter[] own = target.getTypeParameters();
+        PsiType[] arguments = new PsiType[own.length];
+        for (int i = 0; i < own.length; i++) arguments[i] = factory.createType(own[i]);
+        PsiType targetType = factory.createType(target, arguments);
+        String targetName = target.getName() == null ? "" : target.getName();
+        Set<PsiClass> seen = new HashSet<>();
+        for (PsiClass parent = annotatedSuperOf(target); parent != null && seen.add(parent);
+             parent = annotatedSuperOf(parent)) {
+            if (!chainRoleOf(parent).isSelfTyped()) continue;
+            PsiClass builder = declaredBuilderOf(parent, builderName);
+            if (builder == null) continue;
+            PsiTypeParameter[] parameters = builder.getTypeParameters();
+            int size = parameters.length;
+            if (size < 2) continue;
+            PsiSubstitutor inherited = TypeConversionUtil.getSuperClassSubstitutor(parent, target,
+                PsiSubstitutor.EMPTY);
+            PsiTypeParameter[] parentParameters = parent.getTypeParameters();
+            PsiSubstitutor substitutor = PsiSubstitutor.EMPTY;
+            for (int i = 0; i < size - 2 && i < parentParameters.length; i++)
+                substitutor = substitutor.put(parameters[i], inherited.substitute(parentParameters[i]));
+            if (concrete) substitutor = substitutor.put(parameters[size - 2], targetType);
+            List<PsiType> instantiated = new ArrayList<>();
+            List<String> texts = new ArrayList<>();
+            for (PsiClassType bound : parameters[size - 2].getExtendsListTypes()) {
+                PsiType type = substitutor.substitute(bound);
+                instantiated.add(type);
+                texts.add(type == null ? "" : type.getCanonicalText());
+            }
+            String unmet = ChainBuilderReach.unmetBuiltTypeBound(targetName,
+                parent.getName() == null ? "" : parent.getName(), builderName, texts,
+                i -> instantiated.get(i) != null
+                    && TypeConversionUtil.isAssignable(instantiated.get(i), targetType, false));
+            if (unmet != null) return new AncestorBlock(parent, unmet);
+        }
+        return null;
+    }
+
+    /**
+     * The access a source ancestor's {@code @ClassBuilder(access)} generates its
+     * builder at, read from the constant's name as written, as
+     * {@link BuilderAccess#generatedAt} reads it for the processor.
+     *
+     * @param ancestor the annotated ancestor
+     * @return the access
+     */
+    private static @NotNull AccessLevel generatedAccessOf(@NotNull PsiClass ancestor) {
+        PsiAnnotation annotation = WrittenAnnotations.find(ancestor, ANNOTATION_FQN);
+        PsiAnnotationMemberValue value = annotation == null
+            ? null
+            : annotation.findDeclaredAttributeValue(BuilderAccess.ATTRIBUTE);
+        return BuilderAccess.generatedAt(value instanceof PsiReferenceExpression reference
+            ? reference.getReferenceName()
+            : null);
+    }
+
+    /**
+     * The errors a builder declared on a self-typed role draws where the
+     * builders generated below it cannot extend it or override its
+     * {@code self()}, or where the generated setters cannot return the
+     * {@code self()} a root's builder inherits, as
+     * {@link ChainBuilderReach#unextendableBuilder},
+     * {@link ChainBuilderReach#finalSelf} and
+     * {@link ChainBuilderReach#mistypedInheritedSelf} word them for the
+     * processor.
+     *
+     * <p>Read as written: the builder's constructors with the ones a constructor
+     * annotation on it appends, and its own no-argument {@code self()} - on a
+     * root, where it declares none, the one it inherits, its supertypes
+     * resolved as the processor reads them from the element model.
+     *
+     * @param target the annotated type
+     * @param declared the builder it declares
+     * @return the errors, empty when a link below can extend the builder
+     */
+    public static @NotNull List<String> unextendableBuilder(@NotNull PsiClass target, @NotNull PsiClass declared) {
+        String declaredName = declared.getName() == null ? "" : declared.getName();
+        String targetName = target.getName() == null ? "" : target.getName();
+        List<String> out = new ArrayList<>(3);
+        String unextendable = ChainBuilderReach.unextendableBuilder(declaredName, targetName,
+            constructorSignatures(declared, false));
+        if (unextendable != null) out.add(unextendable);
+        ChainRole role = chainRoleOf(target);
+        ChainBuilderReach.SelfMethod declaredSelf = selfMethodOf(authoredSelf(declared));
+        ChainBuilderReach.SelfMethod inherited = declaredSelf == null && role == ChainRole.ABSTRACT_ROOT
+            ? inheritedSelf(declared)
+            : null;
+        ChainBuilderReach.SelfMethod self = ChainBuilderReach.rootSelf(declaredSelf, inherited);
+        String finalSelf = ChainBuilderReach.finalSelf(declaredName, targetName, self != null && self.isFinal());
+        if (finalSelf != null) out.add(finalSelf);
+        String selfBuilder = DeclaredBuilderShape.selfNames(role, typeParameterNames(target),
+            typeParameterNames(declared)).get(1);
+        String mistyped = ChainBuilderReach.mistypedInheritedSelf(declaredName, selfBuilder, inherited);
+        if (mistyped != null) out.add(mistyped);
+        return out;
+    }
+
+    /**
+     * Decides, through {@link ChainBuilderReach#linkSelfPublic}, whether the
+     * {@code self()} a link's generated builder overrides with is public - the
+     * nearest one {@link #nearestSelf} finds.
+     *
+     * @param target the link
+     * @param builderName the builder class name the chain is written in
+     * @return whether the link's {@code self()} is public
+     */
+    public static boolean linkSelfPublic(@NotNull PsiClass target, @NotNull String builderName) {
+        NearestSelf nearest = nearestSelf(target, builderName);
+        return ChainBuilderReach.linkSelfPublic(nearest == null ? null : nearest.self().isPublic());
+    }
+
+    /**
+     * An annotated ancestor whose builder holds the nearest {@code self()} a
+     * link overrides, with that {@code self()} as the rules read it.
+     *
+     * @param ancestor the annotated ancestor
+     * @param self its builder's own {@code self()}, or on a root the one its builder inherits
+     */
+    private record NearestSelf(@NotNull PsiClass ancestor, ChainBuilderReach.@NotNull SelfMethod self) { }
+
+    /**
+     * Finds the nearest {@code self()} a link's generated builder overrides.
+     *
+     * <p>The annotated ancestors are walked upward from the direct one, as the
+     * processor walks them, until one whose declared builder's author wrote a
+     * no-argument {@code self()}, or, on a root, whose declared builder inherits
+     * one. A builder carrying the generator's marker, and a concrete
+     * {@code self()} on an ancestor that is itself a concrete link - the shape
+     * the generator gives one - say nothing, as the processor's index reads
+     * them.
+     *
+     * @param target the link
+     * @param builderName the builder class name the chain is written in
+     * @return the ancestor holding it, or {@code null} when no ancestor has one
+     */
+    private static @Nullable NearestSelf nearestSelf(@NotNull PsiClass target, @NotNull String builderName) {
+        Set<PsiClass> seen = new HashSet<>();
+        for (PsiClass parent = annotatedSuperOf(target); parent != null && seen.add(parent);
+             parent = annotatedSuperOf(parent)) {
+            PsiClass declared = declaredBuilderOf(parent, builderName);
+            if (declared == null || generatorMarked(declared)) continue;
+            ChainRole role = chainRoleOf(parent);
+            PsiMethod own = authoredSelf(declared);
+            if (own != null && !role.isSelfTyped() && !own.hasModifierProperty(PsiModifier.ABSTRACT)) own = null;
+            ChainBuilderReach.SelfMethod declaredSelf = selfMethodOf(own);
+            ChainBuilderReach.SelfMethod inherited = declaredSelf == null && role == ChainRole.ABSTRACT_ROOT
+                ? inheritedSelf(declared)
+                : null;
+            ChainBuilderReach.SelfMethod self = ChainBuilderReach.rootSelf(declaredSelf, inherited);
+            if (self != null) return new NearestSelf(parent, self);
+        }
+        return null;
+    }
+
+    /**
+     * The nearest {@code self()} a root's declared builder inherits, as
+     * {@link ChainBuilderReach#inheritedAsSelf} decides it.
+     *
+     * <p>Its supertypes are walked depth first, each superclass ahead of the
+     * interfaces beside it, {@code java.lang.Object} left out, as the processor
+     * walks them in the element model. Each is resolved from the builder's own
+     * extends and implements references, as the chain resolves an ancestor
+     * from a target's, and read through its own methods, which no augment
+     * provider contributes to - so an augment provider may ask this inside its
+     * recursion guard. Its return type is read as a member of the builder,
+     * through the supertype's substitutor, as the processor reads it.
+     *
+     * @param builder the root's declared builder
+     * @return the inherited method, or {@code null} when the builder inherits none
+     */
+    public static ChainBuilderReach.@Nullable SelfMethod inheritedSelf(@NotNull PsiClass builder) {
+        return inheritedSelf(builder, builder, PsiUtil.getPackageName(builder), new HashSet<>());
+    }
+
+    /**
+     * Walks one type's supertypes for {@link #inheritedSelf(PsiClass)}.
+     *
+     * @param builder the root's declared builder, which the return type is read as a member of
+     * @param type the type whose supertypes are read
+     * @param home the builder's package name
+     * @param seen the supertypes already read
+     * @return the inherited method, or {@code null} when none is found below this type
+     */
+    private static ChainBuilderReach.@Nullable SelfMethod inheritedSelf(@NotNull PsiClass builder,
+                                                                       @NotNull PsiClass type, @Nullable String home,
+                                                                       @NotNull Set<PsiClass> seen) {
+        for (PsiClass supertype : type.getSupers()) {
+            if (CommonClassNames.JAVA_LANG_OBJECT.equals(supertype.getQualifiedName()) || !seen.add(supertype))
+                continue;
+            boolean samePackage = Objects.equals(home, PsiUtil.getPackageName(supertype));
+            for (PsiMethod method : ownMethodsOf(supertype)) {
+                if (method.isConstructor()) continue;
+                if (!ChainBuilderReach.inheritedAsSelf(method.getName(), method.getParameterList().getParametersCount(),
+                    method.hasModifierProperty(PsiModifier.STATIC), accessOf(method), samePackage)) {
+                    continue;
+                }
+                PsiType declaredReturn = method.getReturnType();
+                PsiType returned = declaredReturn == null
+                    ? null
+                    : TypeConversionUtil.getSuperClassSubstitutor(supertype, builder, PsiSubstitutor.EMPTY)
+                        .substitute(declaredReturn);
+                return new ChainBuilderReach.SelfMethod(method.hasModifierProperty(PsiModifier.PUBLIC),
+                    method.hasModifierProperty(PsiModifier.FINAL), String.valueOf(supertype.getName()),
+                    returned == null ? null : returned.getCanonicalText());
+            }
+            ChainBuilderReach.SelfMethod further = inheritedSelf(builder, supertype, home, seen);
+            if (further != null) return further;
+        }
+        return null;
+    }
+
+    /**
+     * Reads a {@code self()} as the rules read it.
+     *
+     * @param self the method, or {@code null}
+     * @return its access and finality, or {@code null} when there is no method
+     */
+    private static ChainBuilderReach.@Nullable SelfMethod selfMethodOf(@Nullable PsiMethod self) {
+        return self == null
+            ? null
+            : new ChainBuilderReach.SelfMethod(self.hasModifierProperty(PsiModifier.PUBLIC),
+                self.hasModifierProperty(PsiModifier.FINAL));
+    }
+
+    /**
+     * The no-argument {@code self()} a declared builder's author wrote, read
+     * from its own methods, one carrying the generator's marker aside.
+     *
+     * @param declared the builder
+     * @return the method, or {@code null} when the author wrote none
+     */
+    private static @Nullable PsiMethod authoredSelf(@NotNull PsiClass declared) {
+        for (PsiMethod own : ownMethodsOf(declared)) {
+            if (own.isConstructor() || !ChainBuilderReach.SELF.equals(own.getName())) continue;
+            if (!own.getParameterList().isEmpty()) continue;
+            if (generatorMarked(own)) continue;
+            return own;
+        }
+        return null;
+    }
+
+    /**
+     * Whether a builder or one of its members carries the marker the generator
+     * writes, which only a compiled ancestor's can.
+     *
+     * <p>A class file names each annotation by its binary name, so a compiled
+     * one is matched by the qualified name it carries - read off the class
+     * file, not resolved - where the written-text match
+     * {@link WrittenAnnotations#hasOnMember} asks for a qualifier or an import
+     * a class file has neither of. A source declaration is matched as written.
+     *
+     * @param owner the builder or member
+     * @return whether the generator wrote it
+     */
+    private static boolean generatorMarked(@NotNull PsiModifierListOwner owner) {
+        return owner instanceof PsiCompiledElement
+            ? WrittenAnnotations.has(owner, GENERATED_FQN)
+            : WrittenAnnotations.hasOnMember(owner, GENERATED_FQN);
+    }
+
+    /** The access a declaration's modifiers give it. */
+    private static @NotNull AccessLevel accessOf(@NotNull PsiModifierListOwner owner) {
+        return ChainBuilderReach.accessOf(owner.hasModifierProperty(PsiModifier.PUBLIC),
+            owner.hasModifierProperty(PsiModifier.PROTECTED), owner.hasModifierProperty(PsiModifier.PRIVATE));
+    }
+
+    /**
+     * Whether an ancestor's builder declares any constructor - its own, or one a
+     * constructor annotation on it appends, which a compiled builder carries as
+     * its own.
+     *
+     * @param declared the ancestor's builder
+     * @return whether it declares one
+     */
+    private static boolean declaresAnyConstructor(@NotNull PsiClass declared) {
+        for (PsiMethod own : ownMethodsOf(declared)) {
+            if (own.isConstructor()) return true;
+        }
+        return !(declared instanceof PsiCompiledElement) && !ArgsConstants.appended(declared).isEmpty();
+    }
+
+    /**
+     * The access of the no-argument constructor an ancestor's builder declares -
+     * its own, or the one a constructor annotation on it appends at the access
+     * the annotation asks for.
+     *
+     * @param declared the ancestor's builder
+     * @return the access, or {@code null} when it declares none
+     */
+    private static @Nullable AccessLevel noArgumentConstructorAccess(@NotNull PsiClass declared) {
+        for (PsiMethod own : ownMethodsOf(declared)) {
+            if (own.isConstructor() && own.getParameterList().isEmpty()) return accessOf(own);
+        }
+        if (declared instanceof PsiCompiledElement) return null;
+        for (ArgsConstants.AppendedConstructor appended : ArgsConstants.appended(declared)) {
+            if (!appended.parameters().isEmpty()) continue;
+            PsiAnnotation annotation = declared.getAnnotation(ArgsConstants.fqnOf(appended.mode()));
+            String keyword = annotation == null ? null : ArgsConstants.accessKeyword(annotation, appended.mode());
+            if (keyword == null) continue;
+            return ChainBuilderReach.accessOf(PsiModifier.PUBLIC.equals(keyword),
+                PsiModifier.PROTECTED.equals(keyword), PsiModifier.PRIVATE.equals(keyword));
+        }
+        return null;
+    }
+
+    /**
+     * The type arguments the target passes to its superclass, as written.
+     *
+     * @param target the annotated type
+     * @return the argument texts, read off the extends clause, in order
+     */
+    private static @NotNull List<String> superTypeArgumentTexts(@NotNull PsiClass target) {
+        PsiReferenceList extendsList = target.getExtendsList();
+        return extendsList == null ? List.of() : firstReferenceArguments(extendsList);
+    }
+
+    /**
+     * The type arguments of a reference list's first entry, each as written.
+     *
+     * @param list the extends list to read
+     * @return the argument texts, empty when the list is empty or its first entry is raw
+     */
+    private static @NotNull List<String> firstReferenceArguments(@NotNull PsiReferenceList list) {
+        PsiJavaCodeReferenceElement[] references = list.getReferenceElements();
+        if (references.length == 0) return List.of();
+        PsiReferenceParameterList parameters = references[0].getParameterList();
+        if (parameters == null) return List.of();
+        List<String> out = new ArrayList<>();
+        for (PsiTypeElement argument : parameters.getTypeParameterElements()) out.add(argument.getText());
+        return out;
+    }
+
+    /**
+     * Reads a declared builder as written, for
+     * {@link DeclaredBuilderShape#check}.
+     *
+     * <p>Every read here is a declared read and a textual one. The reference
+     * elements are asked for their text rather than for the types they resolve
+     * to, and the methods come from {@link PsiExtensibleClass#getOwnMethods()}
+     * rather than {@code getAllMethods()} or {@code findMethodsByName} - both of
+     * which are augment-aware, so a provider asking them while it runs would see
+     * whatever it contributed last and never settle.
+     *
+     * @param declared the builder the author wrote
+     * @param buildMethodName the configured name of the terminal method
+     * @return the facts the shape decision measures
+     */
+    public static @NotNull DeclaredBuilderFacts declaredBuilderFacts(@NotNull PsiClass declared,
+                                                                     @NotNull String buildMethodName) {
+        List<String> parameterNames = new ArrayList<>();
+        List<String> parameterBounds = new ArrayList<>();
+        for (PsiTypeParameter parameter : declared.getTypeParameters()) {
+            parameterNames.add(parameter.getName() == null ? "" : parameter.getName());
+            parameterBounds.add(boundsText(parameter));
+        }
+        PsiReferenceList extendsList = declared.getExtendsList();
+        String writtenSuper = firstReferenceText(extendsList);
+        return new DeclaredBuilderFacts(
+            declared.hasModifierProperty(PsiModifier.STATIC),
+            declared.hasModifierProperty(PsiModifier.ABSTRACT),
+            parameterNames, parameterBounds,
+            writtenSuper == null ? null : DeclaredBuilderShape.rawType(writtenSuper),
+            extendsList == null ? List.of() : firstReferenceArguments(extendsList),
+            declaredBuildMethod(declared, buildMethodName),
+            kindOf(declared));
+    }
+
+    /**
+     * The keyword a declared type is written with, as the processor reads it
+     * off the parser's flags.
+     *
+     * @param declared the type the author wrote
+     * @return one of the {@link DeclaredBuilderFacts} kind constants
+     */
+    private static @NotNull String kindOf(@NotNull PsiClass declared) {
+        if (declared.isAnnotationType()) return DeclaredBuilderFacts.ANNOTATION;
+        if (declared.isInterface()) return DeclaredBuilderFacts.INTERFACE;
+        if (declared.isEnum()) return DeclaredBuilderFacts.ENUM;
+        if (declared.isRecord()) return DeclaredBuilderFacts.RECORD;
+        return DeclaredBuilderFacts.CLASS;
+    }
+
+    /**
+     * The bounds written on a type parameter, read rather than resolved and
+     * joined as {@link DeclaredBuilderFacts#typeParameterBounds} holds them.
+     *
+     * @param parameter the parameter to read
+     * @return the bounds, or {@code null} when none is written
+     */
+    public static @Nullable String boundsText(@NotNull PsiTypeParameter parameter) {
+        PsiJavaCodeReferenceElement[] references = parameter.getExtendsList().getReferenceElements();
+        if (references.length == 0) return null;
+        List<String> out = new ArrayList<>(references.length);
+        for (PsiJavaCodeReferenceElement reference : references) out.add(reference.getText());
+        return String.join(" & ", out);
+    }
+
+    /**
+     * The type parameters a builder for this site re-declares.
+     *
+     * <p>A {@code static} factory's own, since it cannot name the enclosing
+     * type's; the enclosing type's everywhere else, a constructor running under
+     * exactly those. The processor makes the same choice when it reads the
+     * annotated member.
+     *
+     * @param owner the type the builder nests in
+     * @param executable the annotated constructor or static factory, or {@code null} when the
+     *     annotation is on the type
+     * @return the parameters, in declaration order
+     */
+    public static PsiTypeParameter[] typeParameterSource(@NotNull PsiClass owner,
+                                                                  @Nullable PsiMethod executable) {
+        return executable != null && !executable.isConstructor()
+            ? executable.getTypeParameters()
+            : owner.getTypeParameters();
+    }
+
+    /**
+     * What the role requires of a declared builder, derived by
+     * {@link DeclaredBuilderShape#expectation} from the names PSI holds.
+     *
+     * @param target the type the builder nests in
+     * @param typeParameters the parameters the builder re-declares, from {@link #typeParameterSource}
+     * @param role its position in a chain
+     * @param builderName the builder class name
+     * @param declaredTypeParameters the declared builder's type parameter names, in declaration order
+     * @param ancestorName the annotated superclass's simple name, or null when there is none
+     * @param superArguments the type arguments the target passes to its superclass, as written
+     * @return the expectation to measure the declaration against
+     */
+    public static @NotNull RoleExpectation roleExpectation(@NotNull PsiClass target,
+                                                           PsiTypeParameter[] typeParameters,
+                                                           @NotNull ChainRole role,
+                                                           @NotNull String builderName,
+                                                           @NotNull List<String> declaredTypeParameters,
+                                                           @Nullable String ancestorName,
+                                                           @NotNull List<String> superArguments) {
+        List<String> targetParameters = new ArrayList<>();
+        List<String> targetBounds = new ArrayList<>();
+        for (PsiTypeParameter parameter : typeParameters) {
+            targetParameters.add(parameter.getName() == null ? "" : parameter.getName());
+            targetBounds.add(boundsText(parameter));
+        }
+        String targetName = target.getName() == null ? "" : target.getName();
+        return DeclaredBuilderShape.expectation(role, targetName, builderName, targetParameters,
+            targetBounds, declaredTypeParameters, ancestorName, superArguments, supertypeTexts(target));
+    }
+
+    /**
+     * Each type the target's own extends and implements clauses name, as
+     * written.
+     *
+     * @param target the annotated type
+     * @return the reference texts, the extends clause's first
+     */
+    private static @NotNull List<String> supertypeTexts(@NotNull PsiClass target) {
+        List<String> out = new ArrayList<>();
+        for (PsiReferenceList list : new PsiReferenceList[] { target.getExtendsList(), target.getImplementsList() }) {
+            if (list == null) continue;
+            for (PsiJavaCodeReferenceElement reference : list.getReferenceElements()) out.add(reference.getText());
+        }
+        return out;
+    }
+
+    /**
+     * The no-argument build method the author wrote, by the configured name.
+     *
+     * @param declared the builder the author wrote
+     * @param buildMethodName the configured name of the terminal method
+     * @return the method as written, or {@code null} when the class declares none
+     */
+    private static @Nullable DeclaredBuildMethod declaredBuildMethod(@NotNull PsiClass declared,
+                                                                     @NotNull String buildMethodName) {
+        List<PsiMethod> own = declared instanceof PsiExtensibleClass extensible
+            ? extensible.getOwnMethods()
+            : List.of(declared.getMethods());
+        for (PsiMethod method : own) {
+            if (!buildMethodName.equals(method.getName())) continue;
+            if (!method.getParameterList().isEmpty()) continue;
+            PsiTypeElement returnType = method.getReturnTypeElement();
+            return new DeclaredBuildMethod(
+                returnType == null ? "" : DeclaredBuilderShape.erasedName(returnType.getText()),
+                method.hasModifierProperty(PsiModifier.ABSTRACT));
+        }
+        return null;
+    }
+
+    /**
+     * The text of a reference list's first entry, read rather than resolved.
+     *
+     * @param list the extends or bounds list, or {@code null}
+     * @return the first reference as written, or {@code null} when the list is empty
+     */
+    private static @Nullable String firstReferenceText(@Nullable PsiReferenceList list) {
+        if (list == null) return null;
+        PsiJavaCodeReferenceElement[] references = list.getReferenceElements();
+        return references.length == 0 ? null : references[0].getText();
     }
 
 }

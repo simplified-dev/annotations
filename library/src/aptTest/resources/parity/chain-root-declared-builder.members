@@ -1,0 +1,13 @@
+# A root merges into its declared builder: the slot's field and self-typed
+# setter, and the abstract self() and build() every link below overrides, land
+# beside the author's verb. An abstract target gets no entry points.
+type demo.Rooted
+
+target -builder
+target -from
+target -mutate
+
+builder +apply
+builder +label
+builder +build
+builder +self
