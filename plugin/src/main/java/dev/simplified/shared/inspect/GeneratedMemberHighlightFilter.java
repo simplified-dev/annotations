@@ -44,8 +44,9 @@ import org.jetbrains.annotations.Nullable;
  * error on a class carrying no annotation of ours; the field test alone would
  * swallow every other error reported on an annotated class's field. A write to
  * a lifted blank final also has to sit where javac accepts one - a plain
- * assignment directly in a constructor of the field's class - or the report
- * stands, since javac rejects that write on the same line.
+ * assignment directly in a constructor of the field's class, reached while the
+ * field is still unassigned on every path through that constructor - or the
+ * report stands, since javac rejects that write on the same line.
  *
  * <p>The two messages anchor in different places, so each has its own resolver.
  * Definite assignment ranges over a declaration, where the element under the
@@ -84,7 +85,8 @@ public final class GeneratedMemberHighlightFilter implements HighlightInfoFilter
         if (description.contains(FINAL_ASSIGNMENT)) {
             PsiReferenceExpression written = writtenReference(file, info.getStartOffset());
             if (written == null || !(written.resolve() instanceof PsiField assigned)) return true;
-            return !constructorAssigns(written, assigned) || !GeneratedFieldAccess.liftedBlankFinal(assigned);
+            return !constructorAssigns(written, assigned) || !GeneratedFieldAccess.liftedBlankFinal(assigned)
+                || !GeneratedFieldAccess.constructorAcceptsWrite(written, assigned);
         }
         return true;
     }

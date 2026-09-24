@@ -800,22 +800,28 @@ public final class ClassBuilderAugmentProvider extends AbstractRecursionSafeAugm
     }
 
     /**
-     * Whether the all-args constructor this target is otherwise owed is
-     * withheld beside an author's own {@code build()}.
+     * Whether a constructor {@code @ClassBuilder} generates on this target
+     * assigns every field the builder selects.
      *
-     * <p>Every {@code final} initializer then stays on its field on both halves,
-     * nothing generated being left to assign it, which is what the blank-final
-     * lift has to know.
+     * <p>The all-args constructor outside a chain and the copy constructor on a
+     * chain's role, each where the processor appends it. Under a
+     * {@code factoryMethod}, beside an author's own {@code build()}, beside an
+     * author constructor, or on a chain role with
+     * {@code generateCopyConstructor = false} or an author copy constructor,
+     * none is appended - which is what the blank-final lift has to know where
+     * no constructor is written.
      *
      * @param target the class to test
-     * @return whether the constructor is withheld
+     * @return whether a generated constructor assigns the builder's fields
      */
-    public static boolean withholdsAllArgsConstructor(@NotNull PsiClass target) {
+    public static boolean generatedConstructorAssigns(@NotNull PsiClass target) {
         PsiAnnotation annotation = findClassBuilderAnnotation(target);
         if (annotation == null) return false;
         GeneratedMemberFactory.EditorBuilderConfig config =
             GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(annotation);
-        return owesAllArgsConstructor(target, config) && authorBuildSurvives(target, config);
+        return ClassBuilderConstants.chainRoleOf(target).isChained()
+            ? needsCopyConstructor(target, config)
+            : needsAllArgsConstructor(target, config);
     }
 
     /**

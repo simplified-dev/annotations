@@ -157,14 +157,17 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   read by name: where one assigns the field nowhere and delegates to no `this(..)`, the initializer
   stays, the generated setter for it has no effect on that constructor, and a second constructor
   that does assign the field is reported as writing a final that already has a value, in javac and
-  the editor alike. Only a statement of the constructor's body itself counts as assigning the field:
-  a write inside an `if` or `else`, a `switch`, a loop, a `try`, `catch` or `finally`, a lambda or a
-  nested class may not run, or may run more than once, so a constructor whose only write to the
-  field sits there keeps the initializer, and javac's `cannot assign a value to final variable` on
-  that write is shown by the editor on the same line. Such a constructor used to be lifted, failing
-  with `variable ... might not have been initialized` while the editor showed nothing. The rule
-  reads no flow, so an `if` and an `else` that between them always assign the field are refused the
-  same way, where they compiled before - assign the field in one statement of the body instead.
+  the editor alike. A constructor assigns the field by a structural reading of its body, by name:
+  a plain `=` to it, a block one of whose statements assigns it with no `break` ahead of that
+  statement, an `if` with an `else` both of whose branches assign it, or a `switch` with a `default`
+  every arm of which assigns it and leaves the switch - an arrow arm, or a colon arm ending in
+  `break`. A write on one branch only, in a `switch` without a `default`, in a loop, a `try`,
+  `catch` or `finally`, a lambda or a nested class is not counted, so a constructor whose only write
+  to the field sits there keeps the initializer, and javac's `cannot assign a value to final
+  variable` on that write is shown by the editor on the same line. Such a constructor used to be
+  lifted, failing with `variable ... might not have been initialized` while the editor showed
+  nothing. With no author constructor, the field is lifted only where a constructor the builder
+  generates assigns it - see the `factoryMethod` entry below.
 
 - **A merged builder's slot fields resolve in the editor.** The merge appends them and the editor
   contributed none, so an author's own verb inside that class referencing a slot was red over source
@@ -384,7 +387,35 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   instance initializer's write beside constructors that all assign the field, a compound assignment
   or an increment, and a write from a lambda, a local class or through another instance. The report
   is now dropped only for a plain `=` written directly in a constructor of the field's own class,
-  through the bare name or `this`.
+  through the bare name or `this`, that the constructor reaches while the field is still unassigned
+  on every path through it. A second write - `this.a = a; this.a = 2;`, a write on a branch after a
+  top-level one, a top-level write after a branch's, a write after both branches of an `if` and
+  `else` or after a `switch` every arm of which assigns the field, a write after `this(..)` - and a
+  write in a loop or a `try` stay red on the line javac reports; a branch that assigns the field and
+  returns leaves the rest of the body free to assign it.
+
+- **A `final` field with an initializer keeps it under `@ClassBuilder(factoryMethod)` with no
+  constructor written.** With a factory the builder generates no all-args constructor, yet the lift
+  took the initializer off, so `@Lazy private String label = compute();` or
+  `private final String label = "declared";` beside a factory calling `new Named()` failed with
+  `variable label not initialized in the default constructor` on the field's line, the editor green.
+  Where no constructor is written, the field is now lifted only where a constructor the builder
+  generates assigns it - the all-args constructor, or a chain's copy constructor - on both halves, so
+  the factory's `new Named()` reads the initializer, the lazy value computed. An author constructor
+  assigning the field answers for it as before.
+
+- **A Lombok constructor annotation beside a written constructor keeps a `final` initializer.**
+  `@lombok.NoArgsConstructor`, `@RequiredArgsConstructor` or `@AllArgsConstructor` on a
+  `@ClassBuilder` class that also writes a constructor adds a constructor that assigns no `final`
+  field carrying an initializer, which Lombok never assigns. The lift counted it only when Lombok ran
+  ahead of this processor, and otherwise took the initializer off, failing with
+  `variable a might not have been initialized` on the Lombok annotation; the editor never counted it
+  and cleared the written constructor's write. Both halves now read the annotation by name, so the
+  initializer stays whichever processor runs first, and javac's `cannot assign a value to final
+  variable` on the written constructor's write is shown by the editor on the same line. A class
+  carrying `@RequiredArgsConstructor` or `@AllArgsConstructor` that compiled only because Lombok ran
+  second and took the lifted field as a parameter is refused the same way. `@Data` and `@Value`
+  imply no constructor beside a written one and change nothing.
 
 - **A refused `@NoArgsConstructor` contributes no constructor in the editor.** Where it would leave
   a `final` field unassigned without `force`, the build reports that and appends nothing, and the

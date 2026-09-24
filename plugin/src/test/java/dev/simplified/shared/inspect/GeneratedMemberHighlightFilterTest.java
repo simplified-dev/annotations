@@ -553,13 +553,194 @@ public class GeneratedMemberHighlightFilterTest extends LightJavaCodeInsightFixt
     }
 
     /**
-     * Two branches that between them always assign the field are not counted,
-     * since only a statement of the body itself is, so javac refuses both
-     * writes and so does the editor.
+     * An {@code if} and an {@code else} that both assign the field assign it,
+     * so javac lifts the field and accepts both writes. Only a statement of the
+     * body itself counted, so both halves refused both writes.
      */
-    public void testWritesToAFinalOnBothBranches_keepTheReport() {
+    public void testWritesToAFinalOnBothBranches_areCleared() {
         configureFinalAssignedBy("if (a > 0) this.a = a;\n        else this.a = -a;");
-        assertEquals("javac rejects both writes", List.of(6, 7), finalAssignmentLines());
+        assertEquals("javac accepts both writes", List.of(), finalAssignmentLines());
+    }
+
+    /**
+     * A {@code switch} with a {@code default} whose every arm assigns the field
+     * and leaves the switch assigns it, in arrow form and in colon form with
+     * each arm ending in {@code break}; a block assigning it does too.
+     */
+    public void testWritesToAFinalInEveryArmOfASwitchWithADefault_areCleared() {
+        configureFinalAssignedBy("switch (a) {\n        case 1 -> this.a = 10;\n        default -> { this.a = a; }\n        }");
+        assertEquals("arrow arms", List.of(), finalAssignmentLines());
+        configureFinalAssignedBy(
+            "switch (a) {\n        case 1: case 2: this.a = 10; break;\n        default: this.a = a; break;\n        }");
+        assertEquals("colon arms", List.of(), finalAssignmentLines());
+        configureFinalAssignedBy("{ int doubled = a * 2; this.a = doubled; }");
+        assertEquals("a block", List.of(), finalAssignmentLines());
+    }
+
+    /**
+     * A {@code switch} with no {@code default}, a last colon arm falling out
+     * without a {@code break}, and an arm that may break ahead of its write are
+     * outside the rule: javac keeps the initializer and refuses every write.
+     */
+    public void testWritesToAFinalInASwitchOutsideTheRule_keepTheReport() {
+        configureFinalAssignedBy("switch (a) {\n        case 1 -> this.a = 1;\n        case 2 -> this.a = 2;\n        }");
+        assertEquals("no default", List.of(7, 8), finalAssignmentLines());
+        configureFinalAssignedBy("switch (a) {\n        case 1: this.a = 1; break;\n        default: this.a = 2;\n        }");
+        assertEquals("the last arm falls out", List.of(7, 8), finalAssignmentLines());
+        configureFinalAssignedBy(
+            "switch (a) {\n        case 1: if (a > 5) break; this.a = 1; break;\n        default: this.a = 2; break;\n        }");
+        assertEquals("a break ahead of the write", List.of(7, 8), finalAssignmentLines());
+    }
+
+    /**
+     * Two plain writes to a lifted field in one constructor: javac refuses the
+     * second with {@code variable a might already have been assigned}, on its
+     * line. Every plain constructor write was cleared, so the editor was green.
+     */
+    public void testASecondTopLevelWrite_keepsTheReport() {
+        configureFinalAssignedBy("this.a = a;\n        this.a = 2;");
+        assertEquals("javac rejects the second write", List.of(7), finalAssignmentLines());
+    }
+
+    /** A branch's write after a top-level one is refused on the branch's line. */
+    public void testABranchsWriteAfterATopLevelOne_keepsTheReport() {
+        configureFinalAssignedBy("this.a = a;\n        if (a > 0) this.a = 2;");
+        assertEquals("javac rejects the branch's write", List.of(7), finalAssignmentLines());
+    }
+
+    /**
+     * A branch's write ahead of a top-level one is the field's first on its
+     * path, so javac accepts it and refuses the top-level write.
+     */
+    public void testATopLevelWriteAfterABranchsOne_keepsTheReport() {
+        configureFinalAssignedBy("if (a > 0) this.a = 2;\n        this.a = a;");
+        assertEquals("javac rejects the top-level write", List.of(7), finalAssignmentLines());
+    }
+
+    /**
+     * A loop's write is refused whichever side of a top-level write it sits,
+     * and javac reports nothing on a write after a {@code for} loop.
+     */
+    public void testALoopsWriteBesideATopLevelOne_keepsTheLoopsReport() {
+        configureFinalAssignedBy("for (int i = 0; i < 2; i++) this.a = i;\n        this.a = a;");
+        assertEquals("javac rejects the loop's write alone", List.of(6), finalAssignmentLines());
+        configureFinalAssignedBy("this.a = a;\n        for (int i = 0; i < 2; i++) this.a = i;");
+        assertEquals("javac rejects the loop's write", List.of(7), finalAssignmentLines());
+    }
+
+    /** Both branches assign the field, so a top-level write after them is refused. */
+    public void testATopLevelWriteAfterBothBranches_keepsTheReport() {
+        configureFinalAssignedBy("if (a > 0) this.a = 1;\n        else this.a = 2;\n        this.a = 3;");
+        assertEquals("javac rejects the third write", List.of(8), finalAssignmentLines());
+        configureFinalAssignedBy(
+            "switch (a) {\n        case 1 -> this.a = 1;\n        default -> this.a = 2;\n        }\n        this.a = 3;");
+        assertEquals("after a switch every arm of which assigns it", List.of(10), finalAssignmentLines());
+    }
+
+    /**
+     * A branch that assigns the field and returns leaves the rest of the body
+     * with the field unassigned, so javac accepts both writes.
+     */
+    public void testAWriteAfterABranchThatReturns_isCleared() {
+        configureFinalAssignedBy("if (a > 0) { this.a = 1; return; }\n        this.a = a;");
+        assertEquals("javac accepts both writes", List.of(), finalAssignmentLines());
+    }
+
+    /** After {@code this(..)} the field is assigned, and javac refuses a write. */
+    public void testAWriteAfterThis_keepsTheReport() {
+        configure(
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Target {
+                private final int a = 128;
+                Target(int a) {
+                    this.a = a;
+                }
+                Target() {
+                    this(1);
+                    this.a = 2;
+                }
+            }
+            """);
+        assertEquals("javac rejects the write after this(..)", List.of(10), finalAssignmentLines());
+    }
+
+    /**
+     * Under a {@code factoryMethod} with no written constructor nothing
+     * generated assigns the field, so javac leaves its initializer on it. The
+     * editor read the field as lifted; an author constructor assigning it
+     * still answers for it.
+     */
+    public void testAFinalUnderAFactoryMethodWithNoConstructor_isNotLifted() {
+        PsiFile file = configure(
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(factoryMethod = "make")
+            class Named {
+                private final String label = "declared";
+                static Named make(String label) { return new Named(); }
+            }
+            """);
+        assertFalse("no generated constructor assigns it",
+            GeneratedFieldAccess.liftedBlankFinal(field(file, "label")));
+        PsiFile assigned = configure(
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(factoryMethod = "make")
+            class Named {
+                private final String label = "declared";
+                Named(String label) { this.label = label; }
+                static Named make(String label) { return new Named(label); }
+            }
+            """);
+        assertTrue("the author constructor answers for it",
+            GeneratedFieldAccess.liftedBlankFinal(field(assigned, "label")));
+    }
+
+    /**
+     * A Lombok constructor annotation beside a written constructor adds a
+     * constructor that assigns no initialized {@code final}, so javac keeps the
+     * initializer and refuses the written constructor's write. The editor read
+     * the written constructors alone, lifted the field and cleared the write.
+     */
+    public void testALombokConstructorBesideAWrittenOne_keepsTheReport() {
+        for (String name : List.of("NoArgsConstructor", "RequiredArgsConstructor", "AllArgsConstructor"))
+            myFixture.addClass("package lombok; public @interface " + name + " { }");
+        for (String name : List.of("NoArgsConstructor", "RequiredArgsConstructor", "AllArgsConstructor")) {
+            configure(
+                """
+                import dev.simplified.annotations.ClassBuilder;
+                @ClassBuilder
+                @lombok.%s
+                public class Target {
+                    private final int a = 128;
+                    Target(int a) {
+                        this.a = a;
+                    }
+                }
+                """.formatted(name));
+            assertEquals("javac rejects the write beside @" + name, List.of(7), finalAssignmentLines());
+        }
+    }
+
+    /** {@code @Data} implies no constructor beside a written one, so the field is lifted as before. */
+    public void testLombokDataBesideAWrittenConstructor_isCleared() {
+        myFixture.addClass("package lombok; public @interface Data { }");
+        configure(
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import lombok.Data;
+            @ClassBuilder
+            @Data
+            public class Target {
+                private final int a = 128;
+                Target(int a) {
+                    this.a = a;
+                }
+            }
+            """);
+        assertEquals(List.of(), finalAssignmentLines());
     }
 
     // ------------------------------------------------------------------

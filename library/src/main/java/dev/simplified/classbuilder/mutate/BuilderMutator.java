@@ -113,9 +113,9 @@ public final class BuilderMutator {
         // rewritten here exactly as they would be in a hand-written ctor.
         // Beside an author's own build() nothing generated calls it, and it is
         // withheld so javac's no-argument default stays.
-        boolean allArgsWithheld = allArgsConstructorWithheld(targetElement, target, ctx, isAbstract, annotatedSuper);
+        boolean allArgsGenerated = needsAllArgsConstructor(targetElement, target, ctx, isAbstract, annotatedSuper);
         boolean onlyBuilderConstructor = false;
-        if (needsAllArgsConstructor(targetElement, target, ctx, isAbstract, annotatedSuper)) {
+        if (allArgsGenerated) {
             JCMethodDecl ctor = new AllArgsConstructorFactory(ctx).build(
                 constructorAccess(targetElement, ctx));
             // A written @AllArgsConstructor whose field set happens to coincide
@@ -166,7 +166,7 @@ public final class BuilderMutator {
         // $default$<fieldName>() providers for retained-initializer fields.
         // Must run before the nested Builder is built so FieldMutators'
         // Target.$default$<name>() references resolve at javac attribution.
-        new RetainedInitFactory(ctx, messager, allArgsWithheld, onlyBuilderConstructor).appendAll();
+        new RetainedInitFactory(ctx, messager, allArgsGenerated, onlyBuilderConstructor).appendAll();
 
         if (declared != null) {
             if (!new DeclaredBuilderMerge(ctx, messager).merge(target, targetElement, declared,
@@ -298,27 +298,6 @@ public final class BuilderMutator {
                                                    AnnotatedSuper annotatedSuper) {
         return owesAllArgsConstructor(targetElement, target, ctx, isAbstract, annotatedSuper)
             && !authorBuildSurvives(targetElement, target, ctx);
-    }
-
-    /**
-     * Decides whether the all-args constructor the target is otherwise owed is
-     * withheld beside an author's own {@code build()}, which leaves every
-     * {@code final} initializer on its field.
-     *
-     * @param targetElement the annotated type
-     * @param target the target's class declaration
-     * @param ctx the per-target mutation context
-     * @param isAbstract whether the target is abstract
-     * @param annotatedSuper the annotated direct super, or {@code null}
-     * @return whether the constructor is withheld
-     */
-    private static boolean allArgsConstructorWithheld(TypeElement targetElement,
-                                                      JCClassDecl target,
-                                                      MutationContext ctx,
-                                                      boolean isAbstract,
-                                                      AnnotatedSuper annotatedSuper) {
-        return owesAllArgsConstructor(targetElement, target, ctx, isAbstract, annotatedSuper)
-            && authorBuildSurvives(targetElement, target, ctx);
     }
 
     /**

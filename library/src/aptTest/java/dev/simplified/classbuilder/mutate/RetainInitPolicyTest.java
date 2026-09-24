@@ -397,19 +397,234 @@ public class RetainInitPolicyTest {
     }
 
     /**
-     * Only a statement of the body itself counts, so two branches that between
-     * them always assign the field keep its initializer as well, and javac
-     * refuses both writes. The lift used to take it off and the constructor
-     * compiled; the rule reads no flow, so it cannot tell the two branches
-     * cover each other.
+     * Compiles a {@link #finalAssignedBy} target, builds it with {@code a} set
+     * to {@code value}, and reads the field back.
+     */
+    private static Object builtWith(JavaFileObject src, int value) throws Exception {
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+        Class<?> target = Class.forName("demo.Target", true, loadClasses(c));
+        Class<?> builder = nested(target, "Builder");
+        Object b = target.getMethod("builder").invoke(null);
+        builder.getMethod("a", int.class).invoke(b, value);
+        return get(target, builder.getMethod("build").invoke(b), "getA");
+    }
+
+    /**
+     * An {@code if} and an {@code else} that both assign the field assign it,
+     * so the field is lifted and the constructor compiles. Only a statement of
+     * the body itself counted, so the initializer stayed and javac refused both
+     * writes with {@code cannot assign a value to final variable a}.
      */
     @Test
-    public void finalAssignedOnBothBranches_isNotLifted() {
+    public void finalAssignedOnBothBranches_isLifted() throws Exception {
         JavaFileObject src = finalAssignedBy("if (a > 0) this.a = a;\n        else this.a = -a;");
+        assertEquals(3, builtWith(src, -3));
+    }
+
+    /**
+     * A {@code switch} with a {@code default} whose every arm assigns the field
+     * and leaves the switch - arrow arms, or colon arms each ending in
+     * {@code break} - assigns it too. Both forms were refused on every write.
+     */
+    @Test
+    public void finalAssignedInEveryArmOfASwitchWithADefault_isLifted() throws Exception {
+        JavaFileObject arrows = finalAssignedBy(
+            "switch (a) {\n        case 1 -> this.a = 10;\n        default -> { this.a = a; }\n        }");
+        assertEquals(10, builtWith(arrows, 1));
+        assertEquals(4, builtWith(arrows, 4));
+        JavaFileObject colons = finalAssignedBy(
+            "switch (a) {\n        case 1: case 2: this.a = 10; break;\n        default: this.a = a; break;\n        }");
+        assertEquals(10, builtWith(colons, 2));
+        assertEquals(4, builtWith(colons, 4));
+    }
+
+    /** A block whose statements assign the field assigns it; the block's write was refused. */
+    @Test
+    public void finalAssignedInABlock_isLifted() throws Exception {
+        assertEquals(6, builtWith(finalAssignedBy("{ int doubled = a * 2; this.a = doubled; }"), 3));
+    }
+
+    /**
+     * A {@code switch} with no {@code default}, one whose last colon arm falls
+     * out without a {@code break}, and one whose arm may break ahead of its
+     * write are outside the rule: the initializer stays and javac refuses each
+     * write.
+     */
+    @Test
+    public void finalAssignedInASwitchOutsideTheRule_isNotLifted() {
+        JavaFileObject noDefault = finalAssignedBy(
+            "switch (a) {\n        case 1 -> this.a = 1;\n        case 2 -> this.a = 2;\n        }");
+        Compilation first = compile(noDefault);
+        assertThat(first).hadErrorContaining("cannot assign a value to final variable a").inFile(noDefault).onLine(9);
+        assertThat(first).hadErrorContaining("cannot assign a value to final variable a").inFile(noDefault).onLine(10);
+        assertThat(first).hadErrorCount(2);
+
+        JavaFileObject fallsOut = finalAssignedBy(
+            "switch (a) {\n        case 1: this.a = 1; break;\n        default: this.a = 2;\n        }");
+        Compilation second = compile(fallsOut);
+        assertThat(second).hadErrorContaining("cannot assign a value to final variable a").inFile(fallsOut).onLine(9);
+        assertThat(second).hadErrorContaining("cannot assign a value to final variable a").inFile(fallsOut).onLine(10);
+        assertThat(second).hadErrorCount(2);
+
+        JavaFileObject breaksFirst = finalAssignedBy(
+            "switch (a) {\n        case 1: if (a > 5) break; this.a = 1; break;\n        default: this.a = 2; break;\n        }");
+        Compilation third = compile(breaksFirst);
+        assertThat(third).hadErrorContaining("cannot assign a value to final variable a").inFile(breaksFirst).onLine(9);
+        assertThat(third).hadErrorContaining("cannot assign a value to final variable a").inFile(breaksFirst).onLine(10);
+        assertThat(third).hadErrorCount(2);
+    }
+
+    /**
+     * javac's lines for a lifted field written more than once in one
+     * constructor, which the editor has to match: each write the constructor
+     * reaches after the field may already be assigned is refused, and nothing
+     * else. A loop's write is refused as a write in a loop, and javac reports
+     * no second error on a write after a {@code for} loop. A branch that
+     * returns leaves the rest of the body with the field unassigned.
+     */
+    @Test
+    public void liftedFinal_writtenMoreThanOnceInAConstructor_isRejectedWhereItMayBeAssigned() {
+        String already = "variable a might already have been assigned";
+        assertOnlyError(finalAssignedBy("this.a = a;\n        this.a = 2;"), already, 9);
+        assertOnlyError(finalAssignedBy("this.a = a;\n        if (a > 0) this.a = 2;"), already, 9);
+        assertOnlyError(finalAssignedBy("if (a > 0) this.a = 2;\n        this.a = a;"), already, 9);
+        assertOnlyError(finalAssignedBy("for (int i = 0; i < 2; i++) this.a = i;\n        this.a = a;"),
+            "variable a might be assigned in loop", 8);
+        assertOnlyError(finalAssignedBy("this.a = a;\n        for (int i = 0; i < 2; i++) this.a = i;"), already, 9);
+        assertOnlyError(finalAssignedBy("if (a > 0) this.a = 1;\n        else this.a = 2;\n        this.a = 3;"),
+            already, 10);
+        assertThat(compile(finalAssignedBy("if (a > 0) { this.a = 1; return; }\n        this.a = a;"))).succeeded();
+    }
+
+    /** After {@code this(..)} every blank final is assigned, and a write is refused. */
+    @Test
+    public void liftedFinal_writtenAfterThis_isRejected() {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Target",
+            """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false)
+            public class Target {
+                private final int a = 128;
+                Target(int a) {
+                    this.a = a;
+                }
+                Target() {
+                    this(1);
+                    this.a = 2;
+                }
+            }
+            """.split("\n"));
+        assertOnlyError(src, "variable a might already have been assigned", 11);
+    }
+
+    private static void assertOnlyError(JavaFileObject src, String message, int line) {
         Compilation c = compile(src);
+        assertThat(c).hadErrorContaining(message).inFile(src).onLine(line);
+        assertThat(c).hadErrorCount(1);
+    }
+
+    /**
+     * Under a {@code factoryMethod} with no author constructor nothing the
+     * generator appends assigns the field, so its initializer stays and the
+     * factory's {@code new Named()} reads it. The lift took it off, and javac
+     * failed with {@code variable label not initialized in the default
+     * constructor}.
+     */
+    @Test
+    public void finalUnderAFactoryMethodWithNoConstructor_keepsItsInitializer() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Named",
+            """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false, factoryMethod = "make")
+            public class Named {
+                private final String label = "declared";
+                public String getLabel() { return label; }
+                static Named make(String label) { return new Named(); }
+            }
+            """.split("\n"));
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+        Class<?> target = Class.forName("demo.Named", true, loadClasses(c));
+        assertEquals("declared", get(target, buildUntouched(target), "getLabel"));
+    }
+
+    /** An author constructor assigning the field answers for it under a factory, as before. */
+    @Test
+    public void finalUnderAFactoryMethodBesideAnAssigningConstructor_isLifted() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Named",
+            """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false, factoryMethod = "make")
+            public class Named {
+                private final String label = "declared";
+                public String getLabel() { return label; }
+                Named(String label) { this.label = label; }
+                static Named make(String label) { return new Named(label + "!"); }
+            }
+            """.split("\n"));
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+        Class<?> target = Class.forName("demo.Named", true, loadClasses(c));
+        assertEquals("declared!", get(target, buildUntouched(target), "getLabel"));
+    }
+
+    /** A {@code lombok} annotation of the given simple name, compiled beside the target as a stub. */
+    private static JavaFileObject lombokStub(String name) {
+        return JavaFileObjects.forSourceLines("lombok." + name,
+            "package lombok;",
+            "public @interface " + name + " { }");
+    }
+
+    /**
+     * Beside a constructor the author wrote, a Lombok constructor annotation
+     * adds a constructor that assigns no {@code final} field carrying an
+     * initializer, so the initializer stays and javac refuses the author's
+     * write. The lift took it off wherever the processor ran ahead of Lombok,
+     * and Lombok's constructor then failed with {@code variable a might not
+     * have been initialized} on its annotation, where the editor showed nothing.
+     */
+    @Test
+    public void finalBesideALombokConstructorAndAnAuthorOne_isNotLifted() {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Target",
+            """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false)
+            @lombok.NoArgsConstructor
+            public class Target {
+                private final int a = 128;
+                Target(int a) {
+                    this.a = a;
+                }
+            }
+            """.split("\n"));
+        Compilation c = compile(src, lombokStub("NoArgsConstructor"));
         assertThat(c).hadErrorContaining("cannot assign a value to final variable a").inFile(src).onLine(8);
-        assertThat(c).hadErrorContaining("cannot assign a value to final variable a").inFile(src).onLine(9);
-        assertThat(c).hadErrorCount(2);
+        assertThat(c).hadErrorCount(1);
+    }
+
+    /** {@code @Data} beside a written constructor implies no Lombok constructor, and the field is lifted. */
+    @Test
+    public void finalBesideLombokDataAndAnAuthorConstructor_isLifted() {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Target",
+            """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            import lombok.Data;
+            @ClassBuilder(validate = false)
+            @Data
+            public class Target {
+                private final int a = 128;
+                Target(int a) {
+                    this.a = a;
+                }
+            }
+            """.split("\n"));
+        assertThat(compile(src, lombokStub("Data"))).succeeded();
     }
 
     /**

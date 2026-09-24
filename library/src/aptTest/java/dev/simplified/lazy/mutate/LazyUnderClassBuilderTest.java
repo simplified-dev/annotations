@@ -141,6 +141,32 @@ public class LazyUnderClassBuilderTest {
     }
 
     /**
+     * Under a {@code factoryMethod} with no author constructor no generated
+     * constructor assigns the lazy holder, so it keeps its initializer and the
+     * factory's {@code new Named()} computes the value. The lift took the
+     * initializer off, and javac failed with {@code variable label not
+     * initialized in the default constructor} on the field's line.
+     */
+    @Test
+    public void lazyFieldWithAnInitializer_underAFactoryMethodWithNoConstructor_buildsTheComputedValue()
+        throws Exception {
+        Object result = run(
+            src("demo.Named",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import dev.simplified.annotations.Lazy;",
+                "import java.util.function.Supplier;",
+                "@ClassBuilder(validate = false, factoryMethod = \"make\")",
+                "public class Named {",
+                "    @Lazy private String label = compute();",
+                "    private static String compute() { return \"computed\"; }",
+                "    static Named make(Supplier<String> label) { return new Named(); }",
+                "}"),
+            use("return Named.builder().build().getLabel();"));
+        assertEquals("computed", result);
+    }
+
+    /**
      * Beside a refused declared builder no setter is appended, and the all-args
      * constructor's retyped parameter alone produced a second error under the
      * refusal.
