@@ -83,4 +83,29 @@ public enum SlotHolding {
         return this == LAZY || this == INSTANCE_DEFAULT;
     }
 
+    /**
+     * Whether the builder declares a {@code private boolean} marker beside the
+     * slot, named by {@link #replacedMarker}, recording that a setter replaced
+     * the collection wholesale rather than adding to it - which is what tells
+     * the constructor whether to discard the instance-computed default or fold
+     * the slot onto it. Only a collected slot whose default reads instance state
+     * has one, on a generated and a merged builder alike.
+     *
+     * @return whether the slot has a replaced marker
+     */
+    public boolean carriesReplacedMarker() {
+        return this == COLLECTED_SCRATCH;
+    }
+
+    /**
+     * Names the replaced marker a builder declares beside a slot whose holding
+     * {@link #carriesReplacedMarker carries one}.
+     *
+     * @param slot the slot's name
+     * @return the marker field's name
+     */
+    public static @NotNull String replacedMarker(@NotNull String slot) {
+        return "$replaced$" + slot;
+    }
+
 }

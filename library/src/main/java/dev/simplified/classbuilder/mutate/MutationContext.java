@@ -14,6 +14,7 @@ import dev.simplified.classbuilder.apt.BuilderConfig;
 import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.classbuilder.apt.SetterShape;
+import dev.simplified.classbuilder.apt.SlotHolding;
 import dev.simplified.shared.apt.TypeNames;
 import dev.simplified.shared.javac.ContractAnnotations;
 import dev.simplified.shared.javac.GeneratedAnnotations;
@@ -281,9 +282,13 @@ public final class MutationContext {
         return isInstanceDefault(field.name) && isCollected(field);
     }
 
-    /** The builder-side marker recording that a setter replaced the collection wholesale. */
+    /**
+     * Names the builder-side marker recording that a setter replaced the
+     * collection wholesale - {@link SlotHolding#replacedMarker}, the name the
+     * editor declares too.
+     */
     public static String replacedMarker(String fieldName) {
-        return "$replaced$" + fieldName;
+        return SlotHolding.replacedMarker(fieldName);
     }
 
     /** Whether the generated builder carries type parameters. */

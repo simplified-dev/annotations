@@ -308,8 +308,11 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   it: `builder("o")` red and a bare `builder()` green where javac answers the opposite, and the
   all-args constructor keeping its old arity. Opening the same text fresh was always right. The
   members are now rebuilt whenever the written declarations they are built from change - the
-  target's annotations, fields, constructors and methods, and a declared builder's - and reused as
-  the same instances while the text stands.
+  target's annotations, fields, constructors and methods, and a declared builder's - and whenever the
+  target's chain role does, which `@ClassBuilder` written on or removed from its superclass in
+  another file decides: a subclass highlighted before that edit kept a standalone builder and
+  all-args constructor where javac builds a link, or the reverse. They are reused as the same
+  instances while all of it stands.
 
 - **Every refusal of a constructor or static factory target is reported in the editor.** The build
   refuses `@ClassBuilder` on an instance method, on a `void` method, on a member of a type that
@@ -324,6 +327,23 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   or a helper in the target reading a builder's slot, was `Cannot resolve symbol` over source that
   builds. Each field is offered in the type the builder holds it in: a `@Lazy` slot as a supplier of
   its declared type, and an `Optional` or a collection as written.
+
+- **A collected slot's replaced marker resolves in the editor.** Beside a `@Collector` slot whose
+  default reads the instance, the processor declares `private boolean $replaced$<name>`, which its
+  wholesale-replace setters raise, on a generated builder and a merged one alike; the editor
+  offered the slot and not the marker, so an author's verb or a helper reading `$replaced$tags` was
+  `Cannot resolve symbol` over source that builds. The marker is offered after its slot wherever the
+  processor declares one, under the name the library gives it, and nowhere else.
+
+- **A link below a compiled root reads the root's generated builder as the generator's.** The
+  processor reads the `Generated` annotation it wrote into a compiled root's builder and asks
+  nothing of that builder's reach, as for one it generated in the same round. The editor matched that
+  annotation by its written spelling, which a class file does not carry, so it asked the reach rule of
+  a compiled root's generated builder and reported
+  `@ClassBuilder generates no builder on 'Circle' - 'Shape.Builder', which its builder has to extend, is package-private, and 'Circle' is in another package`
+  below a root compiled with `access = AccessLevel.PACKAGE`, a sentence the build never prints, while
+  withholding the link's builder the build generates. A class file's annotation is now matched by the
+  qualified name it carries.
 
 - **A static factory with a self-bounded type parameter gets a `builder()` the editor accepts.**
   `@ClassBuilder public static <T extends Comparable<T>> Range<T> of(T low, T high)` builds and runs
@@ -583,6 +603,14 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   passes set and a class file carries only what a class file carries. Three cases now cross that
   boundary - a chain inheriting its parent's setters, a lazy parent field staying one slot, and the
   no-runtime-dependency pin applied to an inherited builder, which no existing fixture covered.
+
+- **An editor suite that reads a chain's root from its class file.** The editor fixtures wrote every
+  ancestor as source, so what the editor reads off a compiled root's builder - its access, the
+  constructors javac wrote into it, a `self()` its author wrote, and the `Generated` annotation on
+  what the processor wrote - was pinned on the processor's side alone. Each root is now also compiled
+  in the test by javac, with the library's processor or without it, and attached to the fixture as a
+  library, and the link's editor is asked what the processor's two-stage compile answers on the same
+  shape.
 
 - **One parity root both editor suites and the processor suite read.** A case is a target source and
   a list of members each half must agree about, written once. The editor fixtures also hand-wrote

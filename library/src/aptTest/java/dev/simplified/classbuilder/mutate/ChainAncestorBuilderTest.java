@@ -543,6 +543,48 @@ public class ChainAncestorBuilderTest {
     }
 
     /**
+     * A compiled builder is read for the constructors its class file holds: a
+     * {@code @NoArgsConstructor} on a builder compiled with no processor
+     * appended nothing, so the link is refused as for any builder whose
+     * constructors all take parameters. {@code CompiledChainAncestorTest} reads
+     * the same class file in the editor.
+     */
+    @Test
+    public void unprocessedCompiledRootBuilderNamingANoArgsConstructor_isRefusedOnTheLink() throws Exception {
+        Compilation stage = Compiler.javac().withOptions("-proc:none").compile(shapeWith(
+            "@dev.simplified.annotations.NoArgsConstructor " + PARAMETERISED_ROOT));
+        assertThat(stage).succeeded();
+        Path root = classesOf(stage);
+        assertRefusedWith(compileAgainst(root, circle()),
+            linkRefusal("Circle", "Shape.Builder", "declares no constructor taking no parameters"));
+    }
+
+    /**
+     * A builder the processor generated into a compiled root is the
+     * generator's, read as absent through the {@code Generated} annotation on
+     * it, so the reach rule is not asked of it and the processor reports
+     * nothing on a link in another package below a package-private one -
+     * javac alone refuses the generated extends clause.
+     * {@code CompiledChainAncestorTest} reads the same class file in the editor.
+     */
+    @Test
+    public void compiledRootsGeneratedPackagePrivateBuilder_isNotAskedTheReachRule() throws Exception {
+        Path root = compiledAncestor(src("demo.Shape",
+            "package demo;",
+            "import dev.simplified.annotations.AccessLevel;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "@ClassBuilder(validate = false, access = AccessLevel.PACKAGE)",
+            "public abstract class Shape {",
+            "    private String name;",
+            "    public String getName() { return name; }",
+            "}"));
+        Compilation c = compileAgainst(root, otherCircle());
+        assertThat(c).failed();
+        assertTrue("the processor reports nothing: " + errors(c),
+            errors(c).stream().noneMatch(error -> error.startsWith("@ClassBuilder")));
+    }
+
+    /**
      * A protected no-argument constructor on a public root builder is reached
      * through {@code super()} from a link's builder in another package, which is
      * a subclass.

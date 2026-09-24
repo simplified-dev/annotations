@@ -539,6 +539,39 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
     }
 
     /**
+     * The merge appends the processor's {@code private boolean $replaced$<name>}
+     * marker beside a {@code @Collector} slot whose default reads the instance,
+     * so an author's verb reading it compiles, as the apt twin runs it. The
+     * editor contributed the slot and not the marker, and the read was
+     * {@code Cannot resolve symbol '$replaced$tags'}.
+     */
+    public void testMergedBuilder_aCollectedInstanceDefaultsReplacedMarkerIsAField() {
+        addCollectorAnnotation();
+        PsiFile file = myFixture.configureByText("Tagged.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Collector;
+            import java.util.ArrayList;
+            import java.util.List;
+            @ClassBuilder
+            public class Tagged {
+                private String name;
+                @Collector private ArrayList<String> tags = new ArrayList<>(List.of(String.valueOf(name)));
+                public List<String> getTags() { return tags; }
+                public static class Builder {
+                    public boolean replaced() { return this.$replaced$tags; }
+                }
+            }
+            """);
+        assertNoErrors();
+        PsiField marker = nestedOf(((PsiJavaFile) file).getClasses()[0], "Builder")
+            .findFieldByName("$replaced$tags", false);
+        assertNotNull("the marker is contributed", marker);
+        assertEquals("boolean", marker.getType().getCanonicalText());
+        assertTrue("private, as the processor declares it", marker.hasModifierProperty(PsiModifier.PRIVATE));
+    }
+
+    /**
      * An initializer calling a getter {@code @Getter} generates reads the
      * instance, so its slot is a supplier, as the apt twin runs it. Both halves
      * held it as declared, and javac refused the class for the static provider

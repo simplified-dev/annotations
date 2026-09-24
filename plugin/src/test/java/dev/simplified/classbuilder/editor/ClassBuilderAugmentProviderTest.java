@@ -1609,6 +1609,64 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
     }
 
     /**
+     * A {@code @Collector} slot whose default reads the instance is followed on
+     * the generated builder by the processor's {@code private boolean
+     * $replaced$<name>} marker, so a static helper in the target reads it; javac
+     * builds and runs the same source. The editor contributed the slot and not
+     * the marker, and the read was {@code Cannot resolve symbol '$replaced$tags'}.
+     */
+    public void testACollectedInstanceDefaultsReplacedMarker_resolvesOnTheGeneratedBuilder() {
+        myFixture.configureByText("Tagged.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Collector;
+            import java.util.ArrayList;
+            import java.util.List;
+            @ClassBuilder
+            public class Tagged {
+                String name;
+                @Collector List<String> tags = new ArrayList<>(List.of(String.valueOf(name)));
+                static boolean replaced(Builder b) { return b.$replaced$tags; }
+                public static boolean go() { return replaced(Tagged.builder()); }
+            }
+            """);
+        assertEquals("javac compiles this", List.of(), errors());
+
+        PsiClass builder = ((PsiJavaFile) myFixture.getFile()).getClasses()[0].getInnerClasses()[0];
+        List<String> fields = new ArrayList<>();
+        for (PsiField field : builder.getFields()) {
+            fields.add((field.hasModifierProperty(PsiModifier.PRIVATE) ? "private " : "")
+                + field.getType().getCanonicalText() + " " + field.getName());
+        }
+        assertEquals("the marker follows its slot, as the processor declares it", List.of(
+            "private java.lang.String name",
+            "private java.util.List<java.lang.String> tags",
+            "private boolean $replaced$tags"), fields);
+    }
+
+    /**
+     * A {@code @Collector} slot whose default reads nothing of the instance has
+     * no marker on either half: javac reports {@code cannot find symbol} for the
+     * same read, and the editor resolves nothing.
+     */
+    public void testACollectedSlotWithAStaticDefault_hasNoReplacedMarker() {
+        myFixture.configureByText("Tagged.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.Collector;
+            import java.util.ArrayList;
+            import java.util.List;
+            @ClassBuilder
+            public class Tagged {
+                String name;
+                @Collector List<String> tags = new ArrayList<>(List.of("t"));
+                static boolean replaced(Builder b) { return b.$replaced$tags; }
+            }
+            """);
+        assertEquals("javac rejects the read", List.of("Cannot resolve symbol '$replaced$tags'"), errors());
+    }
+
+    /**
      * A primitive {@code @Lazy} field's supplier setter and all-args constructor
      * parameter take the boxed supplier the processor declares. Both read
      * {@code Supplier<int>}, a type javac refuses to name.

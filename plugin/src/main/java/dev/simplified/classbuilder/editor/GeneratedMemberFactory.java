@@ -1034,10 +1034,14 @@ public final class GeneratedMemberFactory {
      * into, and every other as declared, a varargs parameter's as the array it
      * is.
      *
+     * <p>That scratch slot is followed by its {@code private boolean} replaced
+     * marker wherever {@link SlotHolding#carriesReplacedMarker} says the
+     * processor declares one, under {@link SlotHolding#replacedMarker}.
+     *
      * @param site the annotated site
      * @param config the resolved configuration
      * @param builder the builder the fields are declared in
-     * @return the fields to add, in slot order
+     * @return the fields to add, in slot order, each marker after its slot
      */
     static List<PsiField> synthesizeBuilderFields(BuilderSite site, EditorBuilderConfig config,
                                                   PsiClass builder) {
@@ -1076,6 +1080,16 @@ public final class GeneratedMemberFactory {
             field.setNavigationElement(target);
             GeneratedMemberMarker.mark(field);
             out.add(field);
+            if (!holding.carriesReplacedMarker()) continue;
+            // The processor follows the slot with the private boolean its
+            // wholesale-replace setters raise, in the name the library gives it.
+            LightFieldBuilder marker = new LightFieldBuilder(psiManager,
+                SlotHolding.replacedMarker(slot.name), PsiTypes.booleanType());
+            marker.setContainingClass(builder);
+            marker.setModifiers(PsiModifier.PRIVATE);
+            marker.setNavigationElement(target);
+            GeneratedMemberMarker.mark(marker);
+            out.add(marker);
         }
         return out;
     }

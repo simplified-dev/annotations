@@ -3598,6 +3598,41 @@ public class DeclaredBuilderMergeTest {
     }
 
     /**
+     * The merge appends a {@code boolean $replaced$<name>} marker beside a
+     * {@code @Collector} slot whose default reads the instance, and an author's
+     * verb reads it: {@code false} until a setter replaces the collection
+     * wholesale. {@code DeclaredBuilderMergeParityTest} resolves the same read.
+     */
+    @Test
+    public void merge_aCollectedInstanceDefaultsReplacedMarker_isReadableByAnAuthorVerb() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Tagged",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import dev.simplified.annotations.Collector;",
+                "import java.util.ArrayList;",
+                "import java.util.List;",
+                "@ClassBuilder(validate = false)",
+                "public class Tagged {",
+                "    private String name;",
+                "    @Collector private ArrayList<String> tags = new ArrayList<>(List.of(String.valueOf(name)));",
+                "    public List<String> getTags() { return tags; }",
+                "    public static class Builder {",
+                "        public boolean replaced() { return this.$replaced$tags; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseTagged",
+                "package demo;",
+                "public class UseTagged {",
+                "    public static Object go() {",
+                "        return Tagged.builder().replaced();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals(false, runGo(c, "demo.UseTagged"));
+    }
+
+    /**
      * A declared field of the collected slot's declared type is not the scratch
      * container the merge holds it in, and is refused in the sentence naming the
      * container - a list's and a map's. {@code DeclaredBuilderShapeInspectionTest}

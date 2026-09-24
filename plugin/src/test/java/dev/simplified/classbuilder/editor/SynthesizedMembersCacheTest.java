@@ -4,8 +4,10 @@ import com.intellij.codeInsight.daemon.impl.HighlightInfo;
 import com.intellij.lang.annotation.HighlightSeverity;
 import com.intellij.openapi.application.AccessToken;
 import com.intellij.openapi.command.WriteCommandAction;
+import com.intellij.openapi.editor.Document;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiDocumentManager;
+import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiManager;
 import com.intellij.psi.PsiMethod;
@@ -18,6 +20,7 @@ import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 
 /**
  * The members the editor synthesises for a target are kept across reads so the
@@ -205,6 +208,72 @@ public class SynthesizedMembersCacheTest extends LightJavaCodeInsightFixtureTest
     }
 
     // ------------------------------------------------------------------
+    // An edit to the superclass re-synthesises the subclass
+    // ------------------------------------------------------------------
+
+    private static final String SHAPE = """
+        public abstract class Shape {
+            private String name;
+        }
+        """;
+
+    private static final String CIRCLE = """
+        import dev.simplified.annotations.ClassBuilder;
+        @ClassBuilder
+        public class Circle extends Shape {
+            private double radius;
+        }
+        """;
+
+    /**
+     * {@code @ClassBuilder} written on the superclass in another file after the
+     * subclass was highlighted makes the subclass a link: javac compiles a chain
+     * reaching the superclass's setter and a copy constructor taking the link's
+     * builder. The editor kept the standalone builder, entry points and all-args
+     * constructor built before the edit, since nothing in the subclass's own
+     * text changed.
+     */
+    public void testAnAnnotationWrittenOnTheSuperclass_makesTheSubclassALink() {
+        PsiFile shape = myFixture.addFileToProject("Shape.java", SHAPE);
+        myFixture.configureByText("Circle.java",
+            CIRCLE + "class Caller { Circle make() { return Circle.builder().name(\"n\").radius(1).build(); } }\n");
+        errors();
+        assertEquals("standalone before the edit", List.of("Circle(double)"), signatures(target(), "Circle"));
+
+        edit(shape, document -> document.insertString(0,
+            "import dev.simplified.annotations.ClassBuilder;\n@ClassBuilder\n"));
+
+        assertEquals("javac compiles the edited text", List.of(), errors());
+        assertEquals("the link's copy constructor", List.of("Circle(Builder)"), signatures(target(), "Circle"));
+        PsiClass builder = target().getInnerClasses()[0];
+        assertEquals("the link's builder extends the superclass's", "Shape.Builder",
+            builder.getSuperClass() == null ? null : builder.getSuperClass().getQualifiedName());
+    }
+
+    /**
+     * {@code @ClassBuilder} removed from the superclass after the subclass was
+     * highlighted makes the subclass standalone again: javac compiles the
+     * all-args constructor, and the editor kept the link's copy constructor.
+     */
+    public void testAnAnnotationRemovedFromTheSuperclass_makesTheSubclassStandalone() {
+        String annotated = "import dev.simplified.annotations.ClassBuilder;\n@ClassBuilder\n" + SHAPE;
+        PsiFile shape = myFixture.addFileToProject("Shape.java", annotated);
+        myFixture.configureByText("Circle.java",
+            CIRCLE + "class Caller { Circle make() { return new Circle(1.0); } }\n");
+        errors();
+        assertEquals("a link before the edit", List.of("Circle(Builder)"), signatures(target(), "Circle"));
+
+        int start = annotated.indexOf("@ClassBuilder");
+        edit(shape, document -> document.deleteString(start, start + "@ClassBuilder\n".length()));
+
+        assertEquals("javac compiles the edited text", List.of(), errors());
+        assertEquals("the all-args constructor", List.of("Circle(double)"), signatures(target(), "Circle"));
+        PsiClass builder = target().getInnerClasses()[0];
+        assertEquals("a standalone builder extends nothing of the superclass's", "java.lang.Object",
+            builder.getSuperClass() == null ? null : builder.getSuperClass().getQualifiedName());
+    }
+
+    // ------------------------------------------------------------------
     // Unchanged text keeps the instances
     // ------------------------------------------------------------------
 
@@ -228,6 +297,29 @@ public class SynthesizedMembersCacheTest extends LightJavaCodeInsightFixtureTest
         assertSame("the same builder class", builder, target.getInnerClasses()[0]);
     }
 
+    /**
+     * A link's members, whose role is read off the superclass's annotation,
+     * are handed back as the same instances over unchanged text as well.
+     */
+    public void testUnchangedText_rereadsTheSameInstancesOfALink() {
+        myFixture.addFileToProject("Shape.java",
+            "import dev.simplified.annotations.ClassBuilder;\n@ClassBuilder\n" + SHAPE);
+        myFixture.configureByText("Circle.java", CIRCLE);
+        PsiClass target = target();
+        PsiMethod entry = target.findMethodsByName("builder", false)[0];
+        PsiMethod constructor = target.findMethodsByName("Circle", false)[0];
+        PsiClass builder = target.getInnerClasses()[0];
+
+        long before = PsiModificationTracker.getInstance(getProject()).getModificationCount();
+        PsiManager.getInstance(getProject()).dropPsiCaches();
+        assertTrue("the cached values were dropped",
+            PsiModificationTracker.getInstance(getProject()).getModificationCount() != before);
+
+        assertSame("the same entry point", entry, target.findMethodsByName("builder", false)[0]);
+        assertSame("the same copy constructor", constructor, target.findMethodsByName("Circle", false)[0]);
+        assertSame("the same builder class", builder, target.getInnerClasses()[0]);
+    }
+
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
@@ -248,6 +340,14 @@ public class SynthesizedMembersCacheTest extends LightJavaCodeInsightFixtureTest
     private void insertAtCaret(String text) {
         WriteCommandAction.runWriteCommandAction(getProject(), () ->
             myFixture.getEditor().getDocument().insertString(myFixture.getCaretOffset(), text));
+        PsiDocumentManager.getInstance(getProject()).commitAllDocuments();
+    }
+
+    /** Edits another file's document through a write command, then commits it. */
+    private void edit(PsiFile file, Consumer<Document> change) {
+        Document document = PsiDocumentManager.getInstance(getProject()).getDocument(file);
+        assertNotNull("the file has a document", document);
+        WriteCommandAction.runWriteCommandAction(getProject(), () -> change.accept(document));
         PsiDocumentManager.getInstance(getProject()).commitAllDocuments();
     }
 

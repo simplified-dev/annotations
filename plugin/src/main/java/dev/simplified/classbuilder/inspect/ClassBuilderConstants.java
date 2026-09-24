@@ -993,7 +993,7 @@ public final class ClassBuilderConstants {
             return new AncestorBlock(parent,
                 DeclaredBuilderShape.ancestorDeclaresItsOwnBuilder(targetName, parentName));
         }
-        if (WrittenAnnotations.hasOnMember(declared, GENERATED_FQN)) return null;
+        if (generatorMarked(declared)) return null;
         ChainBuilderReach.Unreachable reason = ChainBuilderReach.unreachable(accessOf(declared),
             declaresAnyConstructor(declared), noArgumentConstructorAccess(declared),
             PsiUtil.getPackageName(target) != null
@@ -1052,7 +1052,7 @@ public final class ClassBuilderConstants {
         for (PsiClass parent = annotatedSuperOf(target); parent != null && seen.add(parent);
              parent = annotatedSuperOf(parent)) {
             PsiClass declared = declaredBuilderOf(parent, builderName);
-            if (declared == null || WrittenAnnotations.hasOnMember(declared, GENERATED_FQN)) continue;
+            if (declared == null || generatorMarked(declared)) continue;
             PsiMethod self = authoredSelf(declared);
             if (self == null) continue;
             if (!chainRoleOf(parent).isSelfTyped() && !self.hasModifierProperty(PsiModifier.ABSTRACT)) continue;
@@ -1072,10 +1072,29 @@ public final class ClassBuilderConstants {
         for (PsiMethod own : ownMethodsOf(declared)) {
             if (own.isConstructor() || !ChainBuilderReach.SELF.equals(own.getName())) continue;
             if (!own.getParameterList().isEmpty()) continue;
-            if (WrittenAnnotations.hasOnMember(own, GENERATED_FQN)) continue;
+            if (generatorMarked(own)) continue;
             return own;
         }
         return null;
+    }
+
+    /**
+     * Whether a builder or one of its members carries the marker the generator
+     * writes, which only a compiled ancestor's can.
+     *
+     * <p>A class file names each annotation by its binary name, so a compiled
+     * one is matched by the qualified name it carries - read off the class
+     * file, not resolved - where the written-text match
+     * {@link WrittenAnnotations#hasOnMember} asks for a qualifier or an import
+     * a class file has neither of. A source declaration is matched as written.
+     *
+     * @param owner the builder or member
+     * @return whether the generator wrote it
+     */
+    private static boolean generatorMarked(@NotNull PsiModifierListOwner owner) {
+        return owner instanceof PsiCompiledElement
+            ? WrittenAnnotations.has(owner, GENERATED_FQN)
+            : WrittenAnnotations.hasOnMember(owner, GENERATED_FQN);
     }
 
     /** The access a declaration's modifiers give it. */

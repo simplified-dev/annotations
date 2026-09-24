@@ -12,12 +12,15 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.net.URI;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
 
 import static com.google.testing.compile.CompilationSubject.assertThat;
@@ -355,6 +358,66 @@ public class BuilderMutatorTest {
             builder.getDeclaredField("tags").getGenericType().getTypeName());
         assertEquals("java.util.function.Supplier<java.lang.String>",
             builder.getDeclaredField("heavy").getGenericType().getTypeName());
+    }
+
+    /**
+     * A {@code @Collector} slot whose default reads the instance is followed by
+     * a {@code private boolean $replaced$<name>} marker, which a static helper in
+     * the target reads off a builder. The editor declares the same field in the
+     * same place.
+     */
+    @Test
+    public void generatedBuilderReplacedMarker_followsACollectedInstanceDefault() throws Exception {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Tagged",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Collector;",
+            "import java.util.ArrayList;",
+            "import java.util.List;",
+            "@ClassBuilder(validate = false)",
+            "public class Tagged {",
+            "    String name;",
+            "    @Collector List<String> tags = new ArrayList<>(List.of(String.valueOf(name)));",
+            "    static boolean replaced(Builder b) { return b.$replaced$tags; }",
+            "    public static boolean go() { return replaced(Tagged.builder()); }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).succeeded();
+
+        Class<?> tagged = Class.forName("demo.Tagged", true, loadClasses(c));
+        assertEquals(false, tagged.getMethod("go").invoke(null));
+        List<String> fields = new ArrayList<>();
+        for (Field field : nested(tagged, "Builder").getDeclaredFields()) {
+            fields.add(Modifier.toString(field.getModifiers()) + " " + field.getGenericType().getTypeName()
+                + " " + field.getName());
+        }
+        assertEquals(List.of(
+            "private java.lang.String name",
+            "private java.util.List<java.lang.String> tags",
+            "private boolean $replaced$tags"), fields);
+    }
+
+    /**
+     * A {@code @Collector} slot whose default reads nothing of the instance has
+     * no marker, so the same read is {@code cannot find symbol}.
+     */
+    @Test
+    public void generatedBuilderReplacedMarker_isAbsentBesideAStaticDefault() {
+        JavaFileObject src = JavaFileObjects.forSourceLines("demo.Tagged",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            "import dev.simplified.annotations.Collector;",
+            "import java.util.ArrayList;",
+            "import java.util.List;",
+            "@ClassBuilder(validate = false)",
+            "public class Tagged {",
+            "    String name;",
+            "    @Collector List<String> tags = new ArrayList<>(List.of(\"t\"));",
+            "    static boolean replaced(Builder b) { return b.$replaced$tags; }",
+            "}");
+        Compilation c = compile(src);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("cannot find symbol");
     }
 
 }

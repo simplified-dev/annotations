@@ -26,8 +26,12 @@ import org.jetbrains.annotations.Nullable;
  * {@code @BuilderSeed} parameters and {@code exclude} are all among them.
  *
  * <p>Built from names and written text alone, never a resolved type, so an
- * augment provider can ask for it without re-entering itself. A supertype's own
- * annotation lives in another declaration and is not read here.
+ * augment provider can ask for it without re-entering itself. The one input
+ * written in another declaration is the target's chain role, which turns on
+ * whether its direct superclass carries {@code @ClassBuilder}; it is carried as
+ * {@link GeneratedMemberFactory#roleOf} answers it, the answer the synthesis
+ * itself builds from, so annotating or un-annotating the superclass rebuilds
+ * the subclass's members without any resolve the synthesis does not make.
  */
 final class SynthesisFingerprint {
 
@@ -43,6 +47,7 @@ final class SynthesisFingerprint {
      */
     static @NotNull String of(@NotNull BuilderSite site, @Nullable PsiClass declared) {
         StringBuilder out = new StringBuilder();
+        out.append("role ").append(GeneratedMemberFactory.roleOf(site)).append('\n');
         declaration(out, site.owner());
         if (declared != null) {
             out.append("declared\n");
