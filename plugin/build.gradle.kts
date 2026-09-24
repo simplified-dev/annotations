@@ -147,14 +147,33 @@ intellijPlatform {
         // Pulled from CHANGELOG.md (at the repo root) by the changelog plugin.
         // Renders only the current release's section; older versions stay
         // discoverable on the marketplace's release-history view.
+        //
+        // The plugin descriptor refuses change notes longer than 65535
+        // characters, which verifyPluginStructure enforces. A section that
+        // renders longer is rendered as the bold lead of each entry alone -
+        // every entry opens with one - so the notes still name every change.
         changeNotes = provider {
             with(changelog) {
-                renderItem(
-                    (getOrNull(project.version.toString()) ?: getUnreleased())
-                        .withHeader(false)
-                        .withEmptySections(false),
-                    Changelog.OutputType.HTML
-                )
+                val limit = 65535
+                val item = (getOrNull(project.version.toString()) ?: getUnreleased())
+                    .withHeader(false)
+                    .withEmptySections(false)
+                val full = renderItem(item, Changelog.OutputType.HTML)
+                if (full.length <= limit) full
+                else {
+                    val lead = Regex("""^\*\*(.+?)\*\*""", RegexOption.DOT_MATCHES_ALL)
+                    val leads = item.sections.mapValues { (_, entries) ->
+                        entries.map { entry ->
+                            lead.find(entry)?.let { "**${it.groupValues[1]}**" } ?: entry.lineSequence().first()
+                        }.toSet()
+                    }
+                    renderItem(
+                        Changelog.Item(item.version, item.header, item.summary, item.isUnreleased, leads)
+                            .withHeader(false)
+                            .withEmptySections(false),
+                        Changelog.OutputType.HTML
+                    )
+                }
             }
         }
     }

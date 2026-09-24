@@ -936,4 +936,102 @@ public class ChainAncestorBuilderTest {
         assertEquals("c", runGo("demo.UseShape", c));
     }
 
+    // ------------------------------------------------------------------
+    // A link extending a generic root without its type arguments
+    // ------------------------------------------------------------------
+
+    /** The link's refusal of a generic annotated supertype its extends clause names raw. */
+    private static String rawRefusal(String link, String ancestor) {
+        return "@ClassBuilder generates no builder on '" + link + "' - its annotated supertype '" + ancestor
+            + "' is generic, so the extends clause has to give its type arguments";
+    }
+
+    /** A generic abstract root in {@code demo} whose builder the generator writes. */
+    private static JavaFileObject genericBox() {
+        return src("demo.Box",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            CB,
+            "public abstract class Box<V> {",
+            "    private V value;",
+            "    public V getValue() { return value; }",
+            "}");
+    }
+
+    /** A concrete link below {@code demo.Box}, extending it as written. */
+    private static JavaFileObject circleExtending(String extendsClause) {
+        return src("demo.Circle",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            CB,
+            "public class Circle extends " + extendsClause + " {",
+            "    private int radius;",
+            "    public int getRadius() { return radius; }",
+            "}");
+    }
+
+    /** A consumer of a link extending {@code Box<String>}, returning the value it built with. */
+    private static JavaFileObject useBox() {
+        return src("demo.UseBox",
+            "package demo;",
+            "public class UseBox {",
+            "    public static String go() { return Circle.builder().value(\"v\").radius(1).build().getValue(); }",
+            "}");
+    }
+
+    /**
+     * A link extending a same-round generic root raw is refused on its own
+     * annotation. The generated extends clause passed the root's builder the
+     * self-typed pair alone, and javac failed on that generated line with
+     * {@code wrong number of type arguments; required 3}.
+     */
+    @Test
+    public void linkExtendingASameRoundGenericRootRaw_isRefused() {
+        assertRefusedWith(compile(genericBox(), circleExtending("Box")), rawRefusal("Circle", "Box"));
+    }
+
+    /**
+     * A link extending a compiled generic root raw is refused as a same-round
+     * one is. The root's builder is the generator's, read off the class file's
+     * marker, so the processor asked it nothing and javac failed on the
+     * generated extends clause.
+     */
+    @Test
+    public void linkExtendingACompiledGenericRootRaw_isRefused() throws Exception {
+        Path root = compiledAncestor(genericBox());
+        assertRefusedWith(compileAgainst(root, circleExtending("Box")), rawRefusal("Circle", "Box"));
+    }
+
+    /** A same-round generic root given its type arguments is extended and the chain runs. */
+    @Test
+    public void linkExtendingASameRoundGenericRootWithItsTypeArguments_buildsAndRuns() throws Exception {
+        Compilation c = compile(genericBox(), circleExtending("Box<String>"), useBox());
+        assertBuilt(c);
+        assertEquals("v", runGo("demo.UseBox", c));
+    }
+
+    /** A compiled generic root given its type arguments is extended and the chain runs. */
+    @Test
+    public void linkExtendingACompiledGenericRootWithItsTypeArguments_buildsAndRuns() throws Exception {
+        Path root = compiledAncestor(genericBox());
+        Compilation c = compileAgainst(root, circleExtending("Box<String>"), useBox());
+        assertBuilt(c);
+        assertEquals("v", runGo("demo.UseBox", c, root));
+    }
+
+    /**
+     * A builder a root's author wrote with none of the type parameters the
+     * clause passes, compiled with no processor, keeps the sentence naming the
+     * builder the supertype declares.
+     */
+    @Test
+    public void compiledRootBuilderTheAuthorWroteWithoutThePair_isRefusedAsDeclaringItsOwn() throws Exception {
+        Compilation stage = Compiler.javac().withOptions("-proc:none")
+            .compile(shapeWith("public abstract static class Builder { }"));
+        assertThat(stage).succeeded();
+        assertRefusedWith(compileAgainst(classesOf(stage), circle()),
+            "@ClassBuilder generates no builder on 'Circle' - its annotated supertype 'Shape' declares its own "
+                + "nested builder");
+    }
+
 }

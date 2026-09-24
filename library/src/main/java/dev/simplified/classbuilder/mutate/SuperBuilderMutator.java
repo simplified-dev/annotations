@@ -12,11 +12,13 @@ import com.sun.tools.javac.tree.TreeMaker;
 import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Names;
+import dev.simplified.annotations.ClassBuilder;
 import dev.simplified.classbuilder.apt.ChainBuilderReach;
 import dev.simplified.classbuilder.apt.ChainMemberIndex;
 import dev.simplified.classbuilder.apt.ChainRole;
 import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.FieldSpec;
+import dev.simplified.shared.apt.AnnotationLookup;
 import dev.simplified.shared.javac.AstMarkers;
 import dev.simplified.shared.javac.ContractAnnotations;
 import dev.simplified.shared.javac.JavacBridge;
@@ -92,6 +94,22 @@ final class SuperBuilderMutator {
         // merging into it would skip every member by name and report them all.
         JCClassDecl declared = DeclaredBuilderMerge.declaredBuilder(ctx.target(), ctx.builderName());
         if (declared != null && AstMarkers.isGenerated(declared)) return;
+
+        // The extends clause a link generates passes the ancestor's builder the
+        // arguments the link's own extends clause gives the ancestor, so a raw
+        // clause over a generic ancestor leaves it too few whoever wrote that
+        // builder - one generated in this round, one read off a class file, or
+        // the author's. Asked first, of the two counts alone, and reported on
+        // the link's annotation.
+        String raw = annotatedSuper == null
+            ? null
+            : DeclaredBuilderShape.rawGenericAncestor(ctx.targetSimpleName(), annotatedSuper.simpleName(),
+                annotatedSuper.element().getTypeParameters().size(), annotatedSuper.typeArguments().size());
+        if (raw != null) {
+            messager.printMessage(Diagnostic.Kind.ERROR, raw, ctx.targetElement(),
+                new AnnotationLookup().findMirror(ctx.targetElement(), ClassBuilder.class.getName()));
+            return;
+        }
 
         // The extends clause a link generates names the ancestor's builder and
         // passes it the ancestor's own arguments plus the self-typed pair, so a

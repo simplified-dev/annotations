@@ -290,6 +290,54 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
     }
 
     /**
+     * A link extending a generic root raw is refused on its annotation, in the
+     * sentence the processor reports. The editor said nothing and contributed a
+     * builder whose generated extends clause javac fails on.
+     */
+    public void testALinkExtendingAGenericRootRaw_isReportedOnItsAnnotation() {
+        myFixture.configureByText("Circle.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            abstract class Box<V> {
+                private V value;
+            }
+            @ClassBuilder
+            public class Circle extends Box {
+                private int radius;
+            }
+            """);
+        assertEquals(List.of("@ClassBuilder generates no builder on 'Circle' - its annotated supertype 'Box' is "
+            + "generic, so the extends clause has to give its type arguments"), errors());
+        List<String> anchors = new ArrayList<>();
+        for (HighlightInfo info : myFixture.doHighlighting()) {
+            String description = info.getDescription();
+            if (info.getSeverity() == HighlightSeverity.ERROR && description != null
+                && description.startsWith("@ClassBuilder generates no builder on 'Circle'")) {
+                anchors.add(info.getText());
+            }
+        }
+        assertEquals("reported on the link's annotation", List.of("@ClassBuilder"), anchors);
+    }
+
+    /** A link giving a generic root its type arguments is left alone. */
+    public void testALinkExtendingAGenericRootWithItsTypeArguments_isNotReported() {
+        myFixture.configureByText("Circle.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            abstract class Box<V> {
+                private V value;
+            }
+            @ClassBuilder
+            public class Circle extends Box<String> {
+                private int radius;
+            }
+            """);
+        assertEquals("a parameterised chain is left alone: " + errors(), 0, errors().size());
+    }
+
+    /**
      * The processor refuses a declared field of a slot's name whose type the
      * generated setter cannot assign, and the editor said nothing - the merged
      * setters were contributed beside the field and the class was green up to

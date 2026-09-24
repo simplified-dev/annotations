@@ -992,7 +992,14 @@ public final class ClassBuilderConstants {
      * link's reach, as {@link ChainBuilderReach#unreachableGenerated} decides
      * it: a source ancestor's at the access its annotation asks for, and a
      * compiled one's, which carries the generator's marker, at the access its
-     * class file holds.
+     * class file holds. The marker is asked before the type-parameter count,
+     * so a builder the generator wrote is never taken for one its author
+     * declared.
+     *
+     * <p>Ahead of all of these, a generic ancestor the link's extends clause
+     * names without its type arguments blocks, as
+     * {@link DeclaredBuilderShape#rawGenericAncestor} decides it for both
+     * halves, whoever wrote the ancestor's builder.
      *
      * @param target the annotated type
      * @param builderName the builder class name the chain is written in
@@ -1035,6 +1042,9 @@ public final class ClassBuilderConstants {
         if (parent == null) return null;
         String targetName = target.getName() == null ? "" : target.getName();
         String parentName = parent.getName() == null ? "" : parent.getName();
+        String raw = DeclaredBuilderShape.rawGenericAncestor(targetName, parentName,
+            parent.getTypeParameters().length, superTypeArgumentTexts(target).size());
+        if (raw != null) return new AncestorBlock(parent, raw);
         boolean samePackage = PsiUtil.getPackageName(target) != null
             && PsiUtil.getPackageName(target).equals(PsiUtil.getPackageName(parent));
         PsiClass targetTop = PsiUtil.getTopLevelClass(target);
@@ -1046,15 +1056,17 @@ public final class ClassBuilderConstants {
             // generator will write, so there is nothing to ask.
             if (parent instanceof PsiCompiledElement) return null;
             reason = ChainBuilderReach.unreachableGenerated(generatedAccessOf(parent), samePackage, sameTopLevel);
+        } else if (generatorMarked(declared)) {
+            // The generator's builder is answered as absent, as the processor
+            // answers it: it takes the clause, and only its access is asked.
+            reason = ChainBuilderReach.unreachableGenerated(accessOf(declared), samePackage, sameTopLevel);
         } else {
             if (declared.getTypeParameters().length != superTypeArgumentTexts(target).size() + 2) {
                 return new AncestorBlock(parent,
                     DeclaredBuilderShape.ancestorDeclaresItsOwnBuilder(targetName, parentName));
             }
-            reason = generatorMarked(declared)
-                ? ChainBuilderReach.unreachableGenerated(accessOf(declared), samePackage, sameTopLevel)
-                : ChainBuilderReach.unreachable(accessOf(declared), declaresAnyConstructor(declared),
-                    noArgumentConstructorAccess(declared), samePackage, sameTopLevel);
+            reason = ChainBuilderReach.unreachable(accessOf(declared), declaresAnyConstructor(declared),
+                noArgumentConstructorAccess(declared), samePackage, sameTopLevel);
         }
         return reason == null
             ? null

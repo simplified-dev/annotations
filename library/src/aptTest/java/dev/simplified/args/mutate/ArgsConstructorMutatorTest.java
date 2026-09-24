@@ -655,6 +655,77 @@ public class ArgsConstructorMutatorTest {
         assertEquals("the annotation's error alone: " + c.errors(), 1, c.errors().size());
     }
 
+    /**
+     * {@code @BuilderArgsConstructor(access = PRIVATE)} makes the constructor
+     * {@code build()} calls private over the default {@code constructorAccess},
+     * so a same-package {@code new Widget("x")} is refused.
+     */
+    @Test
+    public void builderArgsConstructorPrivate_refusesASamePackageCall() {
+        Compilation c = compile(
+            builderArgsWidget("@ClassBuilder(validate = false)",
+                "@BuilderArgsConstructor(access = AccessLevel.PRIVATE)"),
+            JavaFileObjects.forSourceLines("p.UseWidget",
+                "package p;",
+                "public class UseWidget {",
+                "    static Widget direct() { return new Widget(\"x\"); }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("has private access in p.Widget");
+        assertEquals("the call's error alone: " + c.errors(), 1, c.errors().size());
+    }
+
+    /**
+     * {@code @BuilderArgsConstructor(access = PUBLIC)} wins over
+     * {@code constructorAccess = PACKAGE}, so a call from another package builds.
+     */
+    @Test
+    public void builderArgsConstructorPublic_acceptsACallFromAnotherPackageOverPackageConstructorAccess() {
+        Compilation c = compile(
+            builderArgsWidget("@ClassBuilder(validate = false, constructorAccess = AccessLevel.PACKAGE)",
+                "@BuilderArgsConstructor(access = AccessLevel.PUBLIC)"),
+            JavaFileObjects.forSourceLines("q.UseWidget",
+                "package q;",
+                "public class UseWidget {",
+                "    static p.Widget direct() { return new p.Widget(\"x\"); }",
+                "}"));
+        assertThat(c).succeeded();
+    }
+
+    /**
+     * {@code @BuilderArgsConstructor(access = NONE)} reads as unwritten, so the
+     * constructor takes {@code constructorAccess = PUBLIC} and a call from
+     * another package draws no error beside the annotation's own.
+     */
+    @Test
+    public void builderArgsConstructorNone_takesConstructorAccess() {
+        Compilation c = compile(
+            builderArgsWidget("@ClassBuilder(validate = false, constructorAccess = AccessLevel.PUBLIC)",
+                "@BuilderArgsConstructor(access = AccessLevel.NONE)"),
+            JavaFileObjects.forSourceLines("q.UseWidget",
+                "package q;",
+                "public class UseWidget {",
+                "    static p.Widget direct() { return new p.Widget(\"x\"); }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@BuilderArgsConstructor(access = NONE) generates nothing");
+        assertEquals("the annotation's error alone: " + c.errors(), 1, c.errors().size());
+    }
+
+    /** A {@code p.Widget} with one field under the two annotations given. */
+    private static JavaFileObject builderArgsWidget(String classBuilder, String builderArgs) {
+        return JavaFileObjects.forSourceLines("p.Widget",
+            "package p;",
+            "import dev.simplified.annotations.AccessLevel;",
+            "import dev.simplified.annotations.BuilderArgsConstructor;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            classBuilder,
+            builderArgs,
+            "public class Widget {",
+            "    private String name;",
+            "}");
+    }
+
     // ------------------------------------------------------------------
     // Coverage marker
     // ------------------------------------------------------------------

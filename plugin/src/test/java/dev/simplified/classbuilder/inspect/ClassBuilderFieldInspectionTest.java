@@ -667,6 +667,72 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
         assertEquals(List.of(), namingProblems());
     }
 
+    /**
+     * A field's own {@code @SetterNames} expands once, so a pattern without the
+     * placeholder is that setter's name and javac builds it, a call to
+     * {@code withName("x")} included. It was an error reading
+     * {@code Naming pattern for 'set' must contain the '{}' placeholder,
+     * otherwise every field generates the same method name}.
+     */
+    public void testSetterNamesOnAFieldWithoutThePlaceholder_isClean() {
+        myFixture.configureByText("Cfg.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.SetterNames;
+            @ClassBuilder
+            public class Cfg {
+                @SetterNames(set = "withName") String name;
+                static Object use() { return Cfg.builder().withName("x"); }
+            }
+            """);
+        assertEquals(List.of(), namingProblems());
+        assertEquals(List.of(), errors());
+    }
+
+    /**
+     * A constructor parameter's own {@code @SetterNames} expands once as a
+     * field's does, so a pattern without the placeholder is clean.
+     */
+    public void testSetterNamesOnAParameterWithoutThePlaceholder_isClean() {
+        myFixture.configureByText("Ranged.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.SetterNames;
+            public final class Ranged {
+                @ClassBuilder
+                Ranged(int min, @SetterNames(set = "upTo") int max) { }
+            }
+            """);
+        assertEquals(List.of(), namingProblems());
+    }
+
+    /**
+     * The target's {@code @SetterNames} fans out over every slot, so a pattern
+     * without the placeholder stays reported, as javac reports it.
+     */
+    public void testSetterNamesOnTheTargetWithoutThePlaceholder_isReported() {
+        myFixture.configureByText("Cfg.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.SetterNames;
+            @ClassBuilder(setters = @SetterNames(set = "withName"))
+            public class Cfg {
+                String name;
+            }
+            """);
+        assertEquals(List.of("Naming pattern for 'set' must contain the '{}' placeholder, otherwise every field "
+            + "generates the same method name"), namingProblems());
+    }
+
+    /** The description of every ERROR highlight in the open file. */
+    private List<String> errors() {
+        List<String> out = new ArrayList<>();
+        for (HighlightInfo h : myFixture.doHighlighting()) {
+            if (h.getSeverity() == HighlightSeverity.ERROR && h.getDescription() != null) out.add(h.getDescription());
+        }
+        return out;
+    }
+
     /** The description of every highlight about a naming pattern. */
     private List<String> namingProblems() {
         List<String> out = new ArrayList<>();

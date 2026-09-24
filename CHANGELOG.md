@@ -242,6 +242,14 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   constructor `build()` calls is now generated at `constructorAccess`, as though the annotation were
   absent.
 
+- **A written `@BuilderArgsConstructor(access)` sets the all-args constructor's access in the
+  editor.** javac lets the value written on `@BuilderArgsConstructor` win over
+  `@ClassBuilder(constructorAccess)`, a written `NONE` read as unwritten, while the editor applied
+  `constructorAccess` alone: `access = PRIVATE` left a same-package `new Widget("x")` green over
+  source javac rejects with `has private access`, and `access = PUBLIC` under
+  `constructorAccess = PACKAGE` left a call from another package red over source that builds. Both
+  halves now ask one rule of the two written values.
+
 - **`@Lazy(access = NONE)` is an error in the editor too.** javac refused it with
   `@Lazy(access = NONE) would leave field '...' unreadable - its storage holds the deferred supplier and the synthesised getter is the only read that resolves it`
   and generated the getter public beside the error, while the editor reported nothing and offered
@@ -294,6 +302,13 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   `@BuilderNames` or `@SetterNames` attribute now names the member exactly as the unwritten default
   does, on both halves. Its value is the empty string, so an empty literal - `from = ""` - is read
   the same way.
+
+- **A slot's own `@SetterNames` pattern needs no placeholder in the editor.**
+  `@SetterNames(set = "withName") String name;` builds, `withName("x")` included - a pattern written
+  on a field or parameter expands exactly once, so javac asks the placeholder of the target's
+  pattern alone - while the editor reported `Naming pattern for 'set' must contain the '{}'
+  placeholder, otherwise every field generates the same method name` on it. The editor now asks
+  the placeholder of the target's `@SetterNames` only, and judges a slot's as javac does.
 
 - **An accessor or lazy name written as a constant is read as its value in the editor.**
   `@Getter(name)`, `@Setter(name)` and `@Lazy(name)` were read only as string literals, so
@@ -383,6 +398,17 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   below a root compiled with `access = AccessLevel.PACKAGE`, a sentence the build never prints, while
   withholding the link's builder the build generates. A class file's annotation is now matched by the
   qualified name it carries.
+
+- **A link extending a generic root without its type arguments is refused on its annotation.**
+  `class Circle extends Box` below `@ClassBuilder abstract class Box<V>` failed on the generated
+  extends clause with `wrong number of type arguments; required 3`, whether the root's builder was
+  generated in the same round or read off a class file. The editor said nothing below a same-round
+  root and, below a compiled one, reported that `'Box' declares its own nested builder`, a builder
+  its author never wrote. Both halves now report
+  `@ClassBuilder generates no builder on 'Circle' - its annotated supertype 'Box' is generic, so the extends clause has to give its type arguments`
+  on the link's annotation and generate no builder for it, and the editor asks whether the
+  generator wrote an ancestor's builder before comparing its type parameters with the extends
+  clause. `extends Box<String>` builds as before.
 
 - **A static factory with a self-bounded type parameter gets a `builder()` the editor accepts.**
   `@ClassBuilder public static <T extends Comparable<T>> Range<T> of(T low, T high)` builds and runs

@@ -323,8 +323,81 @@ public class CompiledChainAncestorTest extends BasePlatformTestCase {
     }
 
     // ------------------------------------------------------------------
+    // A link extending a compiled generic root without its type arguments
+    // ------------------------------------------------------------------
+
+    /**
+     * A link extending a compiled generic root raw is refused on its
+     * annotation, in the sentence the processor reports, and gets no builder.
+     * The root's builder is the generator's, read off the class file's marker;
+     * the editor compared its type-parameter count with the raw clause first and
+     * reported that 'Box' declares its own nested builder, which its author
+     * never wrote.
+     */
+    public void testALinkExtendingACompiledGenericRootRaw_isReported() throws Exception {
+        compiledBox();
+        addBoxLink("Box");
+        assertEquals(List.of("@ClassBuilder generates no builder on 'Circle' - its annotated supertype 'Box' is "
+            + "generic, so the extends clause has to give its type arguments"), errorsIn("demo/Circle.java"));
+        assertEquals("the link's builder is withheld, as the processor generates none", 0,
+            findClass("demo.Circle").getInnerClasses().length);
+    }
+
+    /** A link giving a compiled generic root its type arguments extends its builder, and the chain resolves. */
+    public void testALinkExtendingACompiledGenericRootWithItsTypeArguments_resolves() throws Exception {
+        compiledBox();
+        addBoxLink("Box<String>");
+        myFixture.addFileToProject("demo/UseBox.java", """
+            package demo;
+            public class UseBox {
+                public static String go() { return Circle.builder().value("v").radius(1).build().getValue(); }
+            }
+            """);
+        assertEquals(List.of(), errorsIn("demo/Circle.java"));
+        assertEquals(List.of(), allErrorsIn("demo/UseBox.java"));
+    }
+
+    /**
+     * A compiled root's builder its author wrote with none of the type
+     * parameters the clause passes keeps the sentence naming the builder the
+     * supertype declares.
+     */
+    public void testACompiledRootBuilderTheAuthorWroteWithoutThePair_isReportedAsDeclaringItsOwn() throws Exception {
+        compiledShape(false, "public abstract static class Builder { }");
+        addCircle();
+        assertEquals(List.of("@ClassBuilder generates no builder on 'Circle' - its annotated supertype 'Shape' "
+            + "declares its own nested builder"), errorsIn("demo/Circle.java"));
+    }
+
+    // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+
+    /** Compiles a generic abstract root {@code demo.Box<V>} with the processor, and attaches it. */
+    private void compiledBox() throws Exception {
+        compiled(true, "demo/Box.java", """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false)
+            public abstract class Box<V> {
+                private V value;
+                public V getValue() { return value; }
+            }
+            """);
+    }
+
+    /** Adds a concrete link {@code demo.Circle} extending the compiled box as written. */
+    private void addBoxLink(String extendsClause) {
+        myFixture.addFileToProject("demo/Circle.java", """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false)
+            public class Circle extends %s {
+                private int radius;
+                public int getRadius() { return radius; }
+            }
+            """.formatted(extendsClause));
+    }
 
     /** Compiles an abstract root in {@code demo} whose body ends with the declaration, and attaches it. */
     private void compiledShape(boolean processed, String builderDeclaration) throws Exception {

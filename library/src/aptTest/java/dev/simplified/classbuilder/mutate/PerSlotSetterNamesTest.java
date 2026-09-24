@@ -249,6 +249,44 @@ public class PerSlotSetterNamesTest {
         assertEquals("2-9", runGo(c, "demo.UseRanged"));
     }
 
+    /**
+     * A slot's own pattern expands once, so one without the placeholder is that
+     * setter's name, on a field and on a constructor parameter alike, with no
+     * diagnostic - the answer the editor's inspection gives the same source.
+     */
+    @Test
+    public void aSlotsPatternWithoutThePlaceholder_buildsOnAFieldAndAParameter() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Cfg",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import dev.simplified.annotations.SetterNames;",
+                "@ClassBuilder(validate = false)",
+                "public class Cfg {",
+                "    @SetterNames(set = \"withName\") String name;",
+                "    public String getName() { return name; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.Ranged",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import dev.simplified.annotations.SetterNames;",
+                "public final class Ranged {",
+                "    private final int max;",
+                "    @ClassBuilder",
+                "    Ranged(@SetterNames(set = \"upTo\") int max) { this.max = max; }",
+                "    public int max() { return max; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseCfg",
+                "package demo;",
+                "public class UseCfg {",
+                "    public static String go() {",
+                "        return Cfg.builder().withName(\"x\").build().getName() + Ranged.builder().upTo(9).build().max();",
+                "    }",
+                "}"));
+        assertThat(c).succeededWithoutWarnings();
+        assertEquals("x9", runGo(c, "demo.UseCfg"));
+    }
+
     // ------------------------------------------------------------------
     // The boolean prefix the pattern is about to add
     // ------------------------------------------------------------------

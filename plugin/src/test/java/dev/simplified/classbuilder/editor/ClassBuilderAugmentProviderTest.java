@@ -1532,6 +1532,62 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
         assertEquals("javac: cannot be accessed from outside package; editor: " + errors, 1, errors.size());
     }
 
+    /**
+     * {@code @BuilderArgsConstructor(access = PRIVATE)} makes the all-args
+     * constructor private, as javac makes it, so a same-package
+     * {@code new Widget("x")} is refused. The editor applied
+     * {@code constructorAccess} alone and left the call green.
+     */
+    public void testBuilderArgsConstructorPrivate_closesTheAllArgsConstructorToItsOwnPackage() {
+        addBuilderArgsWidget("@ClassBuilder", "@BuilderArgsConstructor(access = AccessLevel.PRIVATE)");
+        List<String> errors = errorsIn("p/UseWidget.java",
+            """
+            package p;
+            public class UseWidget {
+                String go() { return new Widget("x").getName(); }
+            }
+            """);
+        assertEquals("javac: Widget(java.lang.String) has private access in p.Widget; editor: " + errors,
+            1, errors.size());
+    }
+
+    /**
+     * {@code @BuilderArgsConstructor(access = PUBLIC)} wins over
+     * {@code constructorAccess = PACKAGE}, as it does in javac, so a call from
+     * another package resolves. The editor applied {@code constructorAccess}
+     * alone and refused it.
+     */
+    public void testBuilderArgsConstructorPublic_opensTheAllArgsConstructorOverPackageConstructorAccess() {
+        addBuilderArgsWidget("@ClassBuilder(constructorAccess = AccessLevel.PACKAGE)",
+            "@BuilderArgsConstructor(access = AccessLevel.PUBLIC)");
+        List<String> errors = errorsIn("q/UseWidget.java",
+            """
+            package q;
+            public class UseWidget {
+                String go() { return new p.Widget("x").getName(); }
+            }
+            """);
+        assertEquals(List.of(), errors);
+    }
+
+    /**
+     * {@code @BuilderArgsConstructor(access = NONE)} reads as unwritten, so the
+     * all-args constructor takes {@code constructorAccess = PUBLIC}, as javac's
+     * does, and a call from another package resolves.
+     */
+    public void testBuilderArgsConstructorNone_takesConstructorAccess() {
+        addBuilderArgsWidget("@ClassBuilder(constructorAccess = AccessLevel.PUBLIC)",
+            "@BuilderArgsConstructor(access = AccessLevel.NONE)");
+        List<String> errors = errorsIn("q/UseWidget.java",
+            """
+            package q;
+            public class UseWidget {
+                String go() { return new p.Widget("x").getName(); }
+            }
+            """);
+        assertEquals(List.of(), errors);
+    }
+
     /** {@code builder()} at {@code access = PACKAGE} is closed to another package. */
     public void testEntryPointAtPackageAccess_isClosedToAnotherPackage() {
         addWidget("@ClassBuilder(access = AccessLevel.PACKAGE)");
@@ -1823,6 +1879,32 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
                 public String getName() { return name; }
             }
             """.formatted(annotation));
+    }
+
+    /** Adds {@code p.Widget} under the two annotations given, with the {@code @BuilderArgsConstructor} stub. */
+    private void addBuilderArgsWidget(String classBuilder, String builderArgs) {
+        myFixture.addFileToProject("dev/simplified/annotations/BuilderArgsConstructor.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target(ElementType.TYPE)
+            public @interface BuilderArgsConstructor {
+                AccessLevel access() default AccessLevel.PACKAGE;
+            }
+            """);
+        myFixture.addFileToProject("p/Widget.java",
+            """
+            package p;
+            import dev.simplified.annotations.AccessLevel;
+            import dev.simplified.annotations.BuilderArgsConstructor;
+            import dev.simplified.annotations.ClassBuilder;
+            %s
+            %s
+            public class Widget {
+                private String name;
+                public String getName() { return name; }
+            }
+            """.formatted(classBuilder, builderArgs));
     }
 
     /** Opens a new file at the given path and returns the errors highlighted in it. */

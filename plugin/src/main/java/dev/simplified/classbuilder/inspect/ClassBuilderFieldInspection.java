@@ -60,7 +60,8 @@ import java.util.Objects;
  *   <li>{@code @BuildFlag} on a method that is not an interface target's
  *       accessor, where nothing will read it</li>
  *   <li>a {@code @SetterNames} pattern that cannot expand to a Java
- *       identifier, or that suppresses the setter role</li>
+ *       identifier, that lacks the placeholder on the target, where it fans
+ *       out over every slot, or that suppresses the setter role</li>
  *   <li>{@code @ClassBuilder(access = NONE)}, which names no modifier the
  *       always-generated builder class can carry</li>
  *   <li>{@code @ClassBuilder(constructorAccess = NONE)}, which names no
@@ -93,10 +94,14 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
                 super.visitAnnotation(annotation);
                 String qualifiedName = annotation.getQualifiedName();
                 if (SETTER_NAMES_FQN.equals(qualifiedName)) {
-                    // Generated once per field, so a pattern without the
-                    // placeholder would name every field's setter the same.
+                    // The target's pattern fans out over every slot, so one
+                    // without the placeholder would name every setter the same.
+                    // A slot's own, written on its field or parameter, expands
+                    // exactly once, and a literal is simply that setter's name -
+                    // the processor asks the placeholder of the target's alone.
+                    boolean fansOut = !(annotation.getOwner() instanceof PsiModifierList);
                     for (String role : ClassBuilderConstants.SETTER_ROLES) {
-                        checkPattern(holder, annotation, role, true);
+                        checkPattern(holder, annotation, role, fansOut);
                     }
                     checkNotSuppressed(holder, annotation, "set",
                         "a field would then have no way to be assigned on the builder");

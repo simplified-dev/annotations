@@ -17,6 +17,7 @@ import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiModifierList;
 import com.intellij.psi.PsiParameter;
+import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiSubstitutor;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypeParameter;
@@ -34,11 +35,14 @@ import com.intellij.psi.impl.source.PsiExtensibleClass;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.psi.util.PsiUtil;
 import com.intellij.util.IncorrectOperationException;
+import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.NamingStyle;
+import dev.simplified.args.inspect.ArgsConstants;
 import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
 import dev.simplified.classbuilder.apt.BuilderScheme;
 import dev.simplified.classbuilder.apt.ChainBuilderReach;
 import dev.simplified.classbuilder.apt.ChainRole;
+import dev.simplified.classbuilder.apt.ConstructorAccess;
 import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.SetterScheme;
 import dev.simplified.classbuilder.apt.SetterShape;
@@ -378,10 +382,30 @@ public final class GeneratedMemberFactory {
                 : nullnessFqns(ownField(target, field.name));
             ctor.addParameter(buildParam(ctor, field.name, type, false, nullness));
         }
-        applyAccess(ctor, config.constructorAccess());
+        applyAccess(ctor, allArgsAccess(target, config).toKeyword());
         GeneratedMemberMarker.mark(ctor);
         ctor.setNavigationElement(target);
         return ctor;
+    }
+
+    /**
+     * The access the all-args constructor carries, as
+     * {@link ConstructorAccess#allArgs} decides it for the processor: an
+     * {@code access} written on the target's {@code @BuilderArgsConstructor}
+     * over {@code constructorAccess}, a written {@code NONE} read as unwritten.
+     * Read from the constant's name as written, without a resolve.
+     *
+     * @param target the annotated type
+     * @param config resolved editor-side builder configuration
+     * @return the level the constructor carries
+     */
+    private static AccessLevel allArgsAccess(PsiClass target, EditorBuilderConfig config) {
+        PsiAnnotation builderArgs = WrittenAnnotations.find(target, ArgsConstants.BUILDER_ARGS_FQN);
+        PsiAnnotationMemberValue access = builderArgs == null
+            ? null
+            : builderArgs.findDeclaredAttributeValue("access");
+        return ConstructorAccess.allArgs(config.constructorAccess(),
+            access instanceof PsiReferenceExpression reference ? reference.getReferenceName() : null);
     }
 
     /**
@@ -1638,9 +1662,12 @@ public final class GeneratedMemberFactory {
      * {@code "protected"}, {@code "private"}, or {@code ""} for package-
      * private) so call sites can pass it straight into
      * {@code LightMethodBuilder.addModifier} without a second translation.
+     * {@code constructorAccess} holds the level itself, which
+     * {@link ConstructorAccess#allArgs} weighs against a written
+     * {@code @BuilderArgsConstructor}.
      */
     record EditorBuilderConfig(BuilderScheme names, SetterScheme setters,
-                               String access, String constructorAccess,
+                               String access, AccessLevel constructorAccess,
                                String builderConstructorAccess,
                                boolean generateCopyConstructor,
                                String factoryMethod,
@@ -1653,8 +1680,12 @@ public final class GeneratedMemberFactory {
             // Package-private default, matching the ctor Lombok @Builder supplies.
             // NONE falls to it: the processor reports that value at the
             // annotation and generates at the default beside the error.
-            String constructorAccess = ClassBuilderConstants.accessKeyword(annotation,
-                ClassBuilderConstants.ATTR_CONSTRUCTOR_ACCESS, "");
+            PsiAnnotationMemberValue writtenConstructorAccess =
+                annotation.findDeclaredAttributeValue(ConstructorAccess.ATTRIBUTE);
+            AccessLevel constructorAccess = ConstructorAccess.generatedAt(
+                writtenConstructorAccess instanceof PsiReferenceExpression reference
+                    ? reference.getReferenceName()
+                    : null);
             // Same default one level down, so builder() is the one way in. NONE
             // falls to it as well: the processor reports that value at the
             // annotation and generates as under the default beside the error.

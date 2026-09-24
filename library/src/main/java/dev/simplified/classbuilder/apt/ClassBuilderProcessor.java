@@ -1242,10 +1242,8 @@ public class ClassBuilderProcessor extends AbstractProcessor {
             access = BuilderAccess.DEFAULT;
         // NONE is reported at the annotation by validateConstructorAccess, and
         // the constructor build() calls is then generated at the default.
-        AccessLevel constructorAccess = parseAccess(lookup.stringAttr(target, ANNOTATION_FQN,
-            ConstructorAccess.ATTRIBUTE, ConstructorAccess.DEFAULT.name()));
-        if (!ConstructorAccess.expressible(constructorAccess))
-            constructorAccess = ConstructorAccess.DEFAULT;
+        AccessLevel constructorAccess = ConstructorAccess.generatedAt(lookup.stringAttr(target, ANNOTATION_FQN,
+            ConstructorAccess.ATTRIBUTE, null));
         // NONE is reported at the annotation by validateBuilderConstructorAccess,
         // and the builder is then generated as under the default, so that error
         // is the only one the author sees - the editor contributes the same.

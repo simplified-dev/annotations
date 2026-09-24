@@ -6,6 +6,7 @@ import dev.simplified.annotations.AccessLevel;
 import dev.simplified.args.mutate.ArgsConstructorMutator;
 import dev.simplified.classbuilder.apt.BuilderConfig;
 import dev.simplified.classbuilder.apt.ChainRole;
+import dev.simplified.classbuilder.apt.ConstructorAccess;
 import dev.simplified.classbuilder.apt.DeclaredBuilderShape;
 import dev.simplified.classbuilder.apt.FieldSpec;
 import dev.simplified.lazy.mutate.LazyFieldMutator;
@@ -234,33 +235,18 @@ public final class BuilderMutator {
     }
 
     /**
-     * Resolves the visibility of the constructor {@code build()} calls.
-     *
-     * <p>A value written on {@code @BuilderArgsConstructor} wins, then one
-     * written as {@code @ClassBuilder(constructorAccess)}, then package-private.
-     * Both steps read the written value rather than the effective one - a bare
-     * {@code @BuilderArgsConstructor} states nothing about visibility and must
-     * not silently overrule a {@code constructorAccess} beside it.
-     *
-     * <p>{@code @BuilderArgsConstructor(access = NONE)} is read as unwritten.
-     * The constructor pass reports that value on the annotation, and
-     * {@code build()} still calls a constructor, so it is generated as though
-     * the annotation were absent rather than failing the target a second time.
+     * Resolves the visibility of the constructor {@code build()} calls, as
+     * {@link ConstructorAccess#allArgs} decides it from the written
+     * {@code @BuilderArgsConstructor(access)} and {@code constructorAccess} -
+     * the rule the editor asks of the same annotations.
      *
      * @param targetElement the annotated type
      * @param ctx the per-target mutation context
      * @return the resolved access level
      */
     private static AccessLevel constructorAccess(TypeElement targetElement, MutationContext ctx) {
-        String written = new AnnotationLookup().stringAttr(
-            targetElement, BUILDER_ARGS_CONSTRUCTOR, "access", null);
-        if (written == null) return ctx.config().constructorAccess();
-        try {
-            AccessLevel access = AccessLevel.valueOf(written);
-            return access.emits() ? access : ctx.config().constructorAccess();
-        } catch (IllegalArgumentException e) {
-            return ctx.config().constructorAccess();
-        }
+        return ConstructorAccess.allArgs(ctx.config().constructorAccess(),
+            new AnnotationLookup().stringAttr(targetElement, BUILDER_ARGS_CONSTRUCTOR, "access", null));
     }
 
     /**

@@ -625,6 +625,33 @@ public final class DeclaredBuilderShape {
     }
 
     /**
+     * The diagnostic for a link whose extends clause names a generic annotated
+     * supertype without its type arguments, or {@code null} when the clause
+     * gives them or the supertype takes none.
+     *
+     * <p>The extends clause a link's builder generates passes the ancestor's
+     * builder the arguments the link's own extends clause gives the ancestor,
+     * then the self-typed pair. A raw clause gives none, so the generated one
+     * passes a generic ancestor's builder too few, whoever wrote that builder,
+     * and javac fails on a line nobody wrote. Asked ahead of the ancestor's
+     * builder, on both halves, from the count of the ancestor's type parameters
+     * and of the arguments written, so a same-round ancestor and a compiled one
+     * answer alike.
+     *
+     * @param targetName the link's simple name
+     * @param ancestorName the annotated supertype's simple name
+     * @param ancestorTypeParameters how many type parameters the annotated supertype declares
+     * @param typeArguments how many type arguments the link's extends clause gives it
+     * @return the diagnostic text both halves report on the link's annotation, or {@code null}
+     */
+    public static @Nullable String rawGenericAncestor(@NotNull String targetName, @NotNull String ancestorName,
+                                                     int ancestorTypeParameters, int typeArguments) {
+        if (ancestorTypeParameters == 0 || typeArguments != 0) return null;
+        return "@ClassBuilder generates no builder on '" + targetName + "' - its annotated supertype '"
+            + ancestorName + "' is generic, so the extends clause has to give its type arguments";
+    }
+
+    /**
      * Reports a declared builder field whose type is not the one the merge holds
      * the slot of its name in, which the generated setter would otherwise fail to
      * assign on a line the author never wrote.
