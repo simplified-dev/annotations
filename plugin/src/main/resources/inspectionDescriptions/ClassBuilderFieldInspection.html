@@ -55,6 +55,18 @@ Flags misuse of the per-field companion annotations that travel with
       annotated member of one type; and a member of a type declaring a
       <code>@Lazy</code> field. The build generates no builder for the member,
       and the editor offers none.</li>
+  <li>A slot whose setter meets a <code>java.lang.Object</code> method it
+      cannot override, on a builder the generator writes whole - one no
+      declared <code>Builder</code> is merged into. The final
+      <code>getClass()</code>, <code>notify()</code>, <code>notifyAll()</code>
+      and the three <code>wait</code> overloads cannot be overridden at all, and
+      <code>hashCode()</code>, <code>toString()</code>,
+      <code>equals(Object)</code> and <code>finalize()</code> return a type the
+      builder is not: a <code>long wait</code> field, or a boolean whose flag
+      setter is named <code>notify</code>, fails the build. The slot's field,
+      record component or parameter is reported in the build's own words.
+      <code>clone()</code> returns <code>Object</code> and is overridden
+      legally.</li>
 </ul>
 
 <!-- tooltip end -->

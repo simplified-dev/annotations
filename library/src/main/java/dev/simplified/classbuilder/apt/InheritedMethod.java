@@ -18,6 +18,7 @@ import java.util.List;
  * @param isFinal whether the method is declared {@code final}
  * @param acceptsBuilderReturn whether a method returning the declared builder may override it - its
  *     return type, as a member of the builder, is a reference type the builder is assignable to
+ * @param isStatic whether the method is declared {@code static}, which no instance method can override
  */
 public record InheritedMethod(String name, List<String> parameterTypes, String declaringType, String returnType,
-                              boolean isFinal, boolean acceptsBuilderReturn) { }
+                              boolean isFinal, boolean acceptsBuilderReturn, boolean isStatic) { }

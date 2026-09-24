@@ -304,7 +304,7 @@ final class DeclaredBuilderMerge {
      * @param parameters the parameters to read, the target's or the declared builder's
      * @return the bounds, in declaration order, null where a parameter has none
      */
-    private static List<String> boundsOf(@Nullable Iterable<JCTypeParameter> parameters) {
+    static List<String> boundsOf(@Nullable Iterable<JCTypeParameter> parameters) {
         List<String> out = new ArrayList<>();
         if (parameters == null) return out;
         for (JCTypeParameter parameter : parameters) {
@@ -467,13 +467,15 @@ final class DeclaredBuilderMerge {
                                                      Set<String> authorKeys) {
         TypeElement builder = declared.sym;
         if (builder == null) return;
+        Map<String, String> erasures = DeclaredBuilderShape.typeVariableErasures(declaredParameterNames(declared),
+            boundsOf(declared.typarams));
         List<InheritedMethod> inherited = null;
         for (JCTree member : members) {
             if (!(member instanceof JCMethodDecl method) || ctx.setterSlot(method) == null) continue;
             if (authorKeys.contains(key(declared, method))) continue;
             if (inherited == null) inherited = inheritedMethods(builder);
             String message = DeclaredBuilderShape.unoverridableInheritedMethod(declared.name.toString(),
-                method.name.toString(), parameterTypes(method), inherited);
+                method.name.toString(), parameterTypes(method), erasures, inherited);
             if (message != null) messager.printMessage(Diagnostic.Kind.ERROR, message, builder);
         }
     }
@@ -483,11 +485,13 @@ final class DeclaredBuilderMerge {
      *
      * <p>Its supertypes are walked depth first, each superclass ahead of the
      * interfaces beside it, with {@code java.lang.Object} read last; a private
-     * or static method, and a package-private one declared in another package,
-     * is not inherited and is left out. Each method is read as a member of the
-     * builder, so a self-typed supertype's {@code B} is the builder itself, and
-     * its return type accepts the builder where the builder is assignable to it
-     * or to its erasure.
+     * method, a package-private one declared in another package, and a static
+     * one an interface declares are not inherited and are left out. A static
+     * method of a superclass is read, flagged static, since the setter cannot
+     * override it either. Each method is read as a member of the builder, so a
+     * self-typed supertype's {@code B} is the builder itself, and its return
+     * type accepts the builder where the builder is assignable to it or to its
+     * erasure.
      *
      * <p>The element model holds what the supertype's source declares: a
      * supertype compiled in the same round is read through the members written
@@ -512,9 +516,11 @@ final class DeclaredBuilderMerge {
         List<InheritedMethod> out = new ArrayList<>();
         for (TypeElement supertype : supertypes) {
             boolean samePackage = elements.getPackageOf(supertype).equals(home);
+            boolean isInterface = supertype.getKind().isInterface();
             for (ExecutableElement method : ElementFilter.methodsIn(supertype.getEnclosedElements())) {
                 Set<Modifier> modifiers = method.getModifiers();
-                if (modifiers.contains(Modifier.PRIVATE) || modifiers.contains(Modifier.STATIC)) continue;
+                boolean isStatic = modifiers.contains(Modifier.STATIC);
+                if (modifiers.contains(Modifier.PRIVATE) || (isStatic && isInterface)) continue;
                 if (!samePackage && !modifiers.contains(Modifier.PUBLIC) && !modifiers.contains(Modifier.PROTECTED))
                     continue;
                 ExecutableType member = (ExecutableType) types.asMemberOf(builderType, method);
@@ -526,7 +532,7 @@ final class DeclaredBuilderMerge {
                         || types.isAssignable(builderType, types.erasure(returned)));
                 out.add(new InheritedMethod(method.getSimpleName().toString(), parameters,
                     supertype.getSimpleName().toString(), method.getReturnType().toString(),
-                    modifiers.contains(Modifier.FINAL), accepts));
+                    modifiers.contains(Modifier.FINAL), accepts, isStatic));
             }
         }
         return out;
@@ -734,7 +740,7 @@ final class DeclaredBuilderMerge {
     }
 
     /** Each parameter's type as the tree spells it, in order. */
-    private static List<String> parameterTypes(JCMethodDecl method) {
+    static List<String> parameterTypes(JCMethodDecl method) {
         List<String> types = new ArrayList<>(method.params.size());
         for (JCVariableDecl parameter : method.params)
             types.add(parameter.vartype == null ? "" : parameter.vartype.toString());

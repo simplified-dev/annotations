@@ -2098,6 +2098,108 @@ public class DeclaredBuilderShapeInspectionTest extends BasePlatformTestCase {
             + "so the generated setter of that signature cannot override it", theOnlyError());
     }
 
+    /**
+     * An inherited {@code static} method under a setter's signature is reported
+     * on the declared builder's name. The editor's reader skipped static
+     * methods, so it was green while javac refused the appended setter with
+     * {@code overridden method is static}.
+     */
+    public void testAnInheritedStaticMethodOfASetterSignature_isReportedOnTheBuildersName() {
+        configureItemOver("public static Fluent<?> tag(String t) { return null; }");
+        assertEquals("@ClassBuilder merged into 'Builder' finds tag(String) inherited from Fluent declared static, "
+            + "so the generated setter of that signature cannot override it", theOnlyError());
+        assertEquals(List.of("Builder@5"), inheritedAnchors());
+    }
+
+    /** A static inherited method of the setter's name taking another type is an overload. */
+    public void testAnInheritedStaticMethodOfAnotherParameterType_isNotReported() {
+        configureItemOver("public static Fluent<?> tag(int t) { return null; }");
+        assertEquals(List.of(), errors());
+    }
+
+    /** A class inherits no static method of an interface it implements. */
+    public void testAStaticInterfaceMethodOfASetterSignature_isNotReported() {
+        myFixture.addFileToProject("Fluent.java",
+            """
+            public abstract class Fluent<B> {
+                protected String tag;
+                protected abstract B self();
+            }
+            """);
+        myFixture.addFileToProject("Tagging.java",
+            """
+            public interface Tagging {
+                static Object tag(String t) { return null; }
+            }
+            """);
+        myFixture.configureByText("Item.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Item {
+                String tag;
+                public static class Builder extends Fluent<Builder> implements Tagging {
+                    @Override
+                    protected Builder self() { return this; }
+                }
+            }
+            """);
+        assertEquals(List.of(), errors());
+    }
+
+    /**
+     * A generic {@code Box} whose declared builder, declaring
+     * {@code typeParameter}, extends {@code superclass}, declared by
+     * {@code baseSource}, with a {@code value} slot of the type variable.
+     */
+    private void configureBoxOver(String typeParameter, String superclass, String baseSource) {
+        myFixture.addFileToProject("Base.java", baseSource);
+        myFixture.configureByText("Box.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Box<%1$s> {
+                T value;
+                public static class Builder<%1$s> extends %2$s { }
+            }
+            """.formatted(typeParameter, superclass));
+    }
+
+    /**
+     * A generated {@code value(T)} erases to {@code value(Object)}, the
+     * signature of an inherited {@code final value(Object)}. The setter was
+     * keyed by the variable's name, so the editor was green while javac
+     * reported a name clash on the target's line.
+     */
+    public void testATypeVariableSetterUnderAnInheritedFinalObjectMethod_isReportedOnTheBuildersName() {
+        configureBoxOver("T", "Base", "public class Base { public final Base value(Object v) { return this; } }");
+        assertEquals("@ClassBuilder merged into 'Builder' finds value(T) inherited from Base declared final, "
+            + "so the generated setter of that signature cannot override it", theOnlyError());
+        assertEquals(List.of("Builder@5"), inheritedAnchors());
+    }
+
+    /** A generic supertype's {@code final value(X)} taken with {@code T} is the method {@code value(T)} overrides. */
+    public void testATypeVariableSetterUnderAGenericSupertypesFinalMethod_isReportedOnTheBuildersName() {
+        configureBoxOver("T", "Base<T>",
+            "public class Base<X> { public final Base<X> value(X v) { return this; } }");
+        assertEquals("@ClassBuilder merged into 'Builder' finds value(T) inherited from Base declared final, "
+            + "so the generated setter of that signature cannot override it", theOnlyError());
+    }
+
+    /** A bounded variable erases to its bound, so {@code value(T extends Number)} meets a final {@code value(Number)}. */
+    public void testABoundedTypeVariableSetterUnderAnInheritedFinalMethodOfItsBound_isReportedOnTheBuildersName() {
+        configureBoxOver("T extends Number", "Base",
+            "public class Base { public final Base value(Number v) { return this; } }");
+        assertEquals("@ClassBuilder merged into 'Builder' finds value(T) inherited from Base declared final, "
+            + "so the generated setter of that signature cannot override it", theOnlyError());
+    }
+
+    /** An unbounded variable erases to {@code Object}, so a final {@code value(String)} is an overload beside it. */
+    public void testATypeVariableSetterBesideAnInheritedFinalMethodOfAnotherErasure_isNotReported() {
+        configureBoxOver("T", "Base", "public class Base { public final Base value(String v) { return this; } }");
+        assertEquals(List.of(), errors());
+    }
+
     private String theOnlyError() {
         List<String> errors = errors();
         assertEquals("expected exactly one highlight, got: " + errors, 1, errors.size());

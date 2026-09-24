@@ -98,7 +98,9 @@ public final class ExecutableBuilderMutator {
                 return true;
             }
         } else {
-            bridge.compat().appendDef(target, new NestedBuilderFactory(ctx).build());
+            JCClassDecl nested = new NestedBuilderFactory(ctx).build();
+            BuilderMutator.rejectUnoverridableObjectMethods(ctx, messager, nested.defs);
+            bridge.compat().appendDef(target, nested);
         }
         new BootstrapMethodFactory(ctx, messager, ctx.fields(), declared).appendAll();
         return true;

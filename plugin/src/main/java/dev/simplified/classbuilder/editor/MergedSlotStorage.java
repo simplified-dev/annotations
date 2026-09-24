@@ -78,6 +78,10 @@ import java.util.Set;
  * in the form it is held in: its declared type, a supplier of it, or the
  * {@code java.util} scratch container a collected slot whose default reads
  * instance state gathers into.
+ *
+ * <p>It also reads, for the inspections, the methods a generated setter meets
+ * and cannot override: those a declared builder inherits, and those of
+ * {@code java.lang.Object} on a builder the generator writes whole.
  */
 public final class MergedSlotStorage {
 
@@ -269,6 +273,7 @@ public final class MergedSlotStorage {
         GeneratedMemberFactory.EditorBuilderConfig config =
             GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(annotation);
         Set<String> authorKeys = authorKeys(declared);
+        Map<String, String> erasures = typeVariableErasures(declared);
         List<InheritedMethod> inherited = null;
         List<String> out = new ArrayList<>();
         for (List<GeneratedMemberFactory.SlotSetter> setters
@@ -278,8 +283,65 @@ public final class MergedSlotStorage {
                 if (authorKeys.contains(generatedKey(method, declared))) continue;
                 if (inherited == null) inherited = inheritedMethods(declared);
                 String message = DeclaredBuilderShape.unoverridableInheritedMethod(declaredName, method.getName(),
-                    presentableTypes(method), inherited);
+                    presentableTypes(method), erasures, inherited);
                 if (message != null) out.add(message);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * A setter of a builder the generator writes whole that meets a method of
+     * {@code java.lang.Object} it cannot override, with the diagnostic the
+     * processor prints for it.
+     *
+     * @param slot the field, record component or parameter the setter's slot is read from, or the
+     *     target where the setter names none
+     * @param message the diagnostic text
+     */
+    public record ObjectMethodSetter(@NotNull PsiElement slot, @NotNull String message) { }
+
+    /**
+     * Reports each setter of a builder the generator writes whole that meets a
+     * method of {@code java.lang.Object} it cannot override.
+     *
+     * <p>The rule and its wording are
+     * {@link DeclaredBuilderShape#unoverridableObjectMethod}, asked of every
+     * setter synthesised for the site in the generated builder - the ones the
+     * augment provider contributes - keyed by the presentable text of its
+     * parameter types, each of the builder's type variables keyed by the erasure
+     * its bound written on the site gives it. The processor reports on the
+     * slot's declaration, which is where the synthesised setter navigates. Not
+     * for use from an augment provider: the setters are synthesised, which
+     * resolves the slot types.
+     *
+     * @param site the annotated site
+     * @param builder the builder the generator writes whole for the site
+     * @return each blocked setter's slot and diagnostic, in synthesis order
+     */
+    public static @NotNull List<ObjectMethodSetter> unoverridableObjectMethods(@NotNull BuilderSite site,
+                                                                               @NotNull PsiClass builder) {
+        String builderName = builder.getName();
+        if (builderName == null) return List.of();
+        GeneratedMemberFactory.EditorBuilderConfig config =
+            GeneratedMemberFactory.EditorBuilderConfig.fromAnnotation(site.annotation());
+        List<String> names = new ArrayList<>();
+        List<String> bounds = new ArrayList<>();
+        for (PsiTypeParameter parameter : site.typeParameterSource()) {
+            names.add(parameter.getName() == null ? "" : parameter.getName());
+            bounds.add(ClassBuilderConstants.boundsText(parameter));
+        }
+        Map<String, String> erasures = DeclaredBuilderShape.typeVariableErasures(names, bounds);
+        List<ObjectMethodSetter> out = new ArrayList<>();
+        for (List<GeneratedMemberFactory.SlotSetter> setters
+            : GeneratedMemberFactory.settersBySlot(site, config, builder).values()) {
+            for (GeneratedMemberFactory.SlotSetter setter : setters) {
+                PsiMethod method = setter.method();
+                String message = DeclaredBuilderShape.unoverridableObjectMethod(builderName, method.getName(),
+                    presentableTypes(method), erasures);
+                if (message == null) continue;
+                PsiElement slot = method.getNavigationElement();
+                out.add(new ObjectMethodSetter(slot == null || slot == method ? site.owner() : slot, message));
             }
         }
         return out;
@@ -290,9 +352,11 @@ public final class MergedSlotStorage {
      *
      * <p>Its supertypes are walked depth first, each superclass ahead of the
      * interfaces beside it, with {@code java.lang.Object} read last; a private
-     * or static method, and a package-private one declared in another package,
-     * is not inherited and is left out. Each method is read as a member of the
-     * builder through the supertype's substitutor, so a self-typed supertype's
+     * method, a package-private one declared in another package, and a static
+     * one an interface declares are not inherited and are left out. A static
+     * method of a superclass is read, flagged static, since the setter cannot
+     * override it either. Each method is read as a member of the builder
+     * through the supertype's substitutor, so a self-typed supertype's
      * {@code B} is the builder itself, and its return type accepts the builder
      * where the builder is assignable to it or to its erasure. A supertype's own
      * methods are read without the augment pass, as the element model holds
@@ -317,7 +381,8 @@ public final class MergedSlotStorage {
             for (PsiMethod method : GeneratedMemberFactory.ownMethods(supertype)) {
                 PsiType declaredReturn = method.getReturnType();
                 if (method.isConstructor() || declaredReturn == null) continue;
-                if (method.hasModifierProperty(PsiModifier.PRIVATE) || method.hasModifierProperty(PsiModifier.STATIC))
+                boolean isStatic = method.hasModifierProperty(PsiModifier.STATIC);
+                if (method.hasModifierProperty(PsiModifier.PRIVATE) || (isStatic && supertype.isInterface()))
                     continue;
                 if (!samePackage && !method.hasModifierProperty(PsiModifier.PUBLIC)
                     && !method.hasModifierProperty(PsiModifier.PROTECTED)) continue;
@@ -332,7 +397,8 @@ public final class MergedSlotStorage {
                     && (returned.isAssignableFrom(builderType)
                         || TypeConversionUtil.erasure(returned).isAssignableFrom(builderType));
                 out.add(new InheritedMethod(method.getName(), parameters, String.valueOf(supertype.getName()),
-                    declaredReturn.getCanonicalText(), method.hasModifierProperty(PsiModifier.FINAL), accepts));
+                    declaredReturn.getCanonicalText(), method.hasModifierProperty(PsiModifier.FINAL), accepts,
+                    isStatic));
             }
         }
         return out;

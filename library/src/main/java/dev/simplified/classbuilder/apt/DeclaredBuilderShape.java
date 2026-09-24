@@ -945,41 +945,124 @@ public final class DeclaredBuilderShape {
     }
 
     /**
+     * The methods of {@code java.lang.Object} a generated setter of the same
+     * name and parameter types cannot override - the {@code final} ones, and
+     * those returning a type no builder is. {@code clone()} returns
+     * {@code Object}, which every builder is, and is overridden legally.
+     */
+    private static final List<InheritedMethod> OBJECT_METHODS = List.of(
+        objectMethod("getClass", List.of(), "java.lang.Class<?>", true),
+        objectMethod("hashCode", List.of(), "int", false),
+        objectMethod("equals", List.of("java.lang.Object"), "boolean", false),
+        objectMethod("toString", List.of(), "java.lang.String", false),
+        objectMethod("notify", List.of(), "void", true),
+        objectMethod("notifyAll", List.of(), "void", true),
+        objectMethod("wait", List.of(), "void", true),
+        objectMethod("wait", List.of("long"), "void", true),
+        objectMethod("wait", List.of("long", "int"), "void", true),
+        objectMethod("finalize", List.of(), "void", false));
+
+    /** One of {@link #OBJECT_METHODS}, whose return type no builder is. */
+    private static InheritedMethod objectMethod(String name, List<String> parameterTypes, String returnType,
+                                                boolean isFinal) {
+        return new InheritedMethod(name, parameterTypes, "java.lang.Object", returnType, isFinal, false, false);
+    }
+
+    /**
      * Reports an inherited method of the declared builder's supertypes that a
      * generated setter appended into it cannot override.
      *
      * <p>The merge appends a setter wherever the declared builder itself spells
      * nothing under its {@link #methodKey}, and a method the builder inherits
      * under that key is then overridden by it. javac refuses the override where
-     * the inherited method is {@code final}, or where the setter's return type -
-     * the builder itself - is not one the inherited method's return type
-     * accepts: {@code void}, a primitive, or a reference type the builder is not
-     * assignable to. It refuses it on the target's line, a line the author
-     * never wrote, so the report names the method and the supertype declaring
-     * it instead. The first inherited method under the key that blocks the
-     * setter is reported; an inherited method taking other parameter types is
-     * an overload beside the setter and is left alone.
+     * the inherited method is {@code static} or {@code final}, or where the
+     * setter's return type - the builder itself - is not one the inherited
+     * method's return type accepts: {@code void}, a primitive, or a reference
+     * type the builder is not assignable to. It refuses it on the target's
+     * line, a line the author never wrote, so the report names the method and
+     * the supertype declaring it instead. The first inherited method under the
+     * key that blocks the setter is reported; an inherited method taking other
+     * parameter types is an overload beside the setter and is left alone.
+     *
+     * <p>The setter is keyed as the builder's own methods are, a parameter typed
+     * by one of the builder's type variables by that variable's erasure - the
+     * form the inherited method's erased parameters are in - so a generated
+     * {@code value(T)} meets an inherited {@code value(Object)}.
      *
      * @param declaredName the declared builder's simple name
      * @param setterName the appended setter's name
      * @param setterParameterTypes each parameter type of the appended setter as either model renders it, in order
+     * @param typeVariableErasures each of the declared builder's type parameter names with its erasure,
+     *     from {@link #typeVariableErasures}
      * @param inherited the methods the declared builder inherits, in the order its supertypes are read
      * @return the diagnostic text both halves report, or {@code null} when the setter overrides nothing it cannot
      */
     public static @Nullable String unoverridableInheritedMethod(@NotNull String declaredName,
                                                                 @NotNull String setterName,
                                                                 @NotNull List<String> setterParameterTypes,
+                                                                @NotNull Map<String, String> typeVariableErasures,
                                                                 @NotNull List<InheritedMethod> inherited) {
-        String key = methodKey(setterName, setterParameterTypes);
+        return unoverridable("@ClassBuilder merged into '" + declaredName + "'", declaredName, setterName,
+            setterParameterTypes, typeVariableErasures, inherited);
+    }
+
+    /**
+     * Reports a method of {@code java.lang.Object} that a setter of a builder
+     * the generator writes whole cannot override.
+     *
+     * <p>A builder with no declared class to merge into has {@code Object} as
+     * its only supertype the author did not generate, so the methods a setter
+     * can meet and fail to override are {@code Object}'s: a {@code final} one -
+     * {@code getClass}, {@code notify}, {@code notifyAll} and the three
+     * {@code wait} overloads - or one returning a type the builder is not -
+     * {@code hashCode}, {@code toString}, {@code equals(Object)} and
+     * {@code finalize}. That list is fixed, so the answer is read from names
+     * alone. javac refuses the override on the target's line; the report is
+     * made on the slot the setter is generated for.
+     *
+     * @param builderName the generated builder's simple name
+     * @param setterName the setter's name
+     * @param setterParameterTypes each parameter type of the setter as either model renders it, in order
+     * @param typeVariableErasures each of the builder's type parameter names with its erasure,
+     *     from {@link #typeVariableErasures}
+     * @return the diagnostic text both halves report, or {@code null} when the setter meets no such method
+     */
+    public static @Nullable String unoverridableObjectMethod(@NotNull String builderName,
+                                                             @NotNull String setterName,
+                                                             @NotNull List<String> setterParameterTypes,
+                                                             @NotNull Map<String, String> typeVariableErasures) {
+        return unoverridable("@ClassBuilder generating '" + builderName + "'", builderName, setterName,
+            setterParameterTypes, typeVariableErasures, OBJECT_METHODS);
+    }
+
+    /**
+     * The sentence for the first of the inherited methods a setter meets under
+     * its {@link #methodKey} and cannot override.
+     *
+     * @param opening how the sentence names the builder, ahead of what it finds
+     * @param builderName the builder's simple name, which the setter returns
+     * @param setterName the setter's name
+     * @param setterParameterTypes each parameter type of the setter, in order
+     * @param typeVariableErasures each of the builder's type parameter names with its erasure
+     * @param inherited the methods to meet, in the order they are read
+     * @return the diagnostic text, or {@code null} when the setter overrides nothing it cannot
+     */
+    private static @Nullable String unoverridable(String opening, String builderName, String setterName,
+                                                  List<String> setterParameterTypes,
+                                                  Map<String, String> typeVariableErasures,
+                                                  List<InheritedMethod> inherited) {
+        String key = methodKey(setterName, setterParameterTypes, typeVariableErasures);
         for (InheritedMethod method : inherited) {
-            if (!method.isFinal() && method.acceptsBuilderReturn()) continue;
+            if (!method.isStatic() && !method.isFinal() && method.acceptsBuilderReturn()) continue;
             if (!methodKey(method.name(), method.parameterTypes()).equals(key)) continue;
-            String opening = "@ClassBuilder merged into '" + declaredName + "' finds "
-                + signature(setterName, setterParameterTypes) + " inherited from " + method.declaringType();
-            if (method.isFinal())
-                return opening + " declared final, so the generated setter of that signature cannot override it";
-            return opening + " returning " + unqualified(typeText(method.returnType()))
-                + ", which the generated setter returning " + declaredName + " cannot override";
+            String found = opening + " finds " + signature(setterName, setterParameterTypes) + " inherited from "
+                + method.declaringType();
+            if (method.isStatic() || method.isFinal()) {
+                return found + " declared " + (method.isStatic() ? "static" : "final")
+                    + ", so the generated setter of that signature cannot override it";
+            }
+            return found + " returning " + unqualified(typeText(method.returnType()))
+                + ", which the generated setter returning " + builderName + " cannot override";
         }
         return null;
     }

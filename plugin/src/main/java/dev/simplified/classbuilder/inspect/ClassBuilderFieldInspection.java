@@ -8,17 +8,21 @@ import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationMemberValue;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiClassType;
+import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiElementVisitor;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiModifierList;
+import com.intellij.psi.PsiModifierListOwner;
+import com.intellij.psi.PsiNameIdentifierOwner;
 import com.intellij.psi.PsiPrimitiveType;
 import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypes;
 import com.intellij.psi.util.InheritanceUtil;
+import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.psi.util.PsiUtil;
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.SetterNames;
@@ -26,11 +30,14 @@ import dev.simplified.classbuilder.apt.BuilderAccess;
 import dev.simplified.classbuilder.apt.BuilderConstructorAccess;
 import dev.simplified.classbuilder.apt.ConstructorAccess;
 import dev.simplified.classbuilder.apt.NamePattern;
+import dev.simplified.classbuilder.editor.BuilderSite;
+import dev.simplified.classbuilder.editor.MergedSlotStorage;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.Collection;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Flags misuse of companion field annotations on a {@code @ClassBuilder}
@@ -64,6 +71,9 @@ import java.util.Map;
  *       refuses - an instance method, a {@code void} method, a member of an
  *       annotated type, a second annotated member, or a member of a type
  *       declaring a {@code @Lazy} field</li>
+ *   <li>a slot whose setter, on a builder the generator writes whole, meets a
+ *       {@code java.lang.Object} method it cannot override - {@code wait(long)}
+ *       for a {@code long wait}, reported on the slot</li>
  * </ul>
  */
 public class ClassBuilderFieldInspection extends LocalInspectionTool {
@@ -105,6 +115,7 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
                     checkConstructorAccess(holder, annotation);
                     checkBuilderConstructorAccess(holder, annotation);
                     checkExecutableTarget(holder, annotation);
+                    checkObjectMethodSetters(holder, annotation);
                 }
             }
 
@@ -228,6 +239,46 @@ public class ClassBuilderFieldInspection extends LocalInspectionTool {
         if (owner == null) return;
         String refusal = ClassBuilderConstants.executableRefusal(owner, member);
         if (refusal != null) holder.registerProblem(annotation, refusal, ProblemHighlightType.GENERIC_ERROR);
+    }
+
+    /**
+     * Reports each setter of a builder the generator writes whole that meets a
+     * {@code java.lang.Object} method it cannot override, on the name of the
+     * slot's field, record component or parameter, in the sentence
+     * {@link MergedSlotStorage#unoverridableObjectMethods} answers - the one the
+     * processor prints on the slot.
+     *
+     * <p>Judged only where the processor generates the whole builder: on the
+     * annotation it builds from, with no declared builder to merge into - where
+     * the declared builder's own supertypes are read instead - and with no chain
+     * ancestor refusing the link. An interface type target's builder is a
+     * sibling file and is not judged here. The augment provider keeps
+     * contributing the setter, as the processor keeps generating it.
+     *
+     * @param holder sink for the diagnostics
+     * @param annotation the {@code @ClassBuilder} annotation
+     */
+    private static void checkObjectMethodSetters(@NotNull ProblemsHolder holder, @NotNull PsiAnnotation annotation) {
+        PsiModifierListOwner owner = PsiTreeUtil.getParentOfType(annotation, PsiModifierListOwner.class);
+        PsiMethod member = owner instanceof PsiMethod method ? method : null;
+        PsiClass target = owner instanceof PsiClass cls ? cls : member != null ? member.getContainingClass() : null;
+        if (target == null || target.getName() == null || (target.isInterface() && member == null)) return;
+        BuilderSite site = BuilderSite.of(target);
+        if (site == null || !Objects.equals(site.executable(), member)) return;
+        String builderName = ClassBuilderConstants.builderScheme(annotation,
+            ClassBuilderConstants.namingStyle(annotation), target.getName()).type();
+        if (ClassBuilderConstants.declaredBuilderOf(target, builderName) != null) return;
+        if (ClassBuilderConstants.ancestorBlock(target, builderName, member != null) != null) return;
+        PsiClass builder = null;
+        for (PsiClass nested : target.getInnerClasses()) {
+            if (builderName.equals(nested.getName())) builder = nested;
+        }
+        if (builder == null) return;
+        for (MergedSlotStorage.ObjectMethodSetter blocked : MergedSlotStorage.unoverridableObjectMethods(site, builder)) {
+            PsiElement anchor = blocked.slot() instanceof PsiNameIdentifierOwner named ? named.getNameIdentifier() : null;
+            holder.registerProblem(anchor == null ? blocked.slot() : anchor, blocked.message(),
+                ProblemHighlightType.GENERIC_ERROR);
+        }
     }
 
     /**

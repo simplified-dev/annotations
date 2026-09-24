@@ -138,7 +138,9 @@ final class SuperBuilderMutator {
         // been reported, and nothing below it can compile against that class.
         ChainRole role = ChainRole.of(isAbstract, annotatedSuper != null);
         if (declared == null) {
-            ctx.bridge().compat().appendDef(ctx.target(), buildBuilder(role));
+            JCClassDecl built = buildBuilder(role);
+            BuilderMutator.rejectUnoverridableObjectMethods(ctx, messager, built.defs);
+            ctx.bridge().compat().appendDef(ctx.target(), built);
         } else if (!new DeclaredBuilderMerge(ctx, messager).merge(ctx.target(), ctx.targetElement(),
             declared, role, membersFor(role, declared), annotatedSuper)) {
             return;

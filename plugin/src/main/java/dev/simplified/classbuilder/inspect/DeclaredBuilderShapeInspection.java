@@ -56,9 +56,9 @@ import java.util.Objects;
  * the same generic type is reported on its name where {@code from(T)} or
  * {@code mutate()} is emitted to pass it the slot's own type. A generated setter
  * the merge appends that a method the builder inherits keeps from overriding it
- * - a {@code final} one, or one returning a type the builder cannot stand in for
- * - is reported on the builder's name, the supertypes resolved here as the
- * processor reads them from the element model.
+ * - a {@code static} or {@code final} one, or one returning a type the builder
+ * cannot stand in for - is reported on the builder's name, the supertypes
+ * resolved here as the processor reads them from the element model.
  *
  * <p>On an abstract root or a chained abstract, a declared builder the builders
  * generated below it cannot extend - a private one, or one declaring

@@ -1,6 +1,7 @@
 package dev.simplified.classbuilder.mutate;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import com.sun.tools.javac.tree.JCTree.JCMethodDecl;
+import com.sun.tools.javac.tree.JCTree;
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.args.mutate.ArgsConstructorMutator;
 import dev.simplified.classbuilder.apt.BuilderConfig;
@@ -24,6 +25,7 @@ import javax.lang.model.type.TypeMirror;
 import javax.tools.Diagnostic;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * High-level orchestrator that turns a {@code @ClassBuilder}-annotated type
@@ -173,11 +175,62 @@ public final class BuilderMutator {
             }
         } else {
             JCClassDecl nested = new NestedBuilderFactory(ctx).build();
+            rejectUnoverridableObjectMethods(ctx, messager, nested.defs);
             bridge.compat().appendDef(target, nested);
         }
 
         new BootstrapMethodFactory(ctx, messager, ctx.fields(), declared).appendAll();
         return true;
+    }
+
+    /**
+     * Reports each setter of a builder the generator writes whole that meets a
+     * {@code java.lang.Object} method it cannot override.
+     *
+     * <p>With no declared builder to merge into, a standalone builder's only
+     * supertype is {@code Object}, and a chain's builders extend only the
+     * builders the chain generates above them, so a setter meeting a method it
+     * cannot override meets one of {@code Object}'s, and javac refuses it on
+     * the target's line. The decision and its wording are
+     * {@link DeclaredBuilderShape#unoverridableObjectMethod}, which the editor
+     * asks of the setters it synthesises; what is left here is asking it of each
+     * setter in the member list and reporting on the slot the setter is
+     * generated for - the field, record component or annotated member's
+     * parameter, or the target where the slot names none. The builder is still
+     * generated, and the error ends the compilation ahead of javac's refusal.
+     *
+     * @param ctx the per-target mutation context, which recorded each setter's slot
+     * @param messager where the errors go
+     * @param members the members of the builder being generated
+     */
+    static void rejectUnoverridableObjectMethods(MutationContext ctx, Messager messager, Iterable<JCTree> members) {
+        Map<String, String> erasures = null;
+        for (JCTree member : members) {
+            String slot = ctx.setterSlot(member);
+            if (slot == null) continue;
+            JCMethodDecl setter = (JCMethodDecl) member;
+            if (erasures == null) {
+                erasures = DeclaredBuilderShape.typeVariableErasures(DeclaredBuilderMerge.targetParameterNames(ctx),
+                    DeclaredBuilderMerge.boundsOf(ctx.typeParams()));
+            }
+            String message = DeclaredBuilderShape.unoverridableObjectMethod(ctx.builderName(),
+                setter.name.toString(), DeclaredBuilderMerge.parameterTypes(setter), erasures);
+            if (message != null) messager.printMessage(Diagnostic.Kind.ERROR, message, slotElement(ctx, slot));
+        }
+    }
+
+    /**
+     * The declaration a slot is read from, or the target where none is known.
+     *
+     * @param ctx the per-target mutation context
+     * @param slot the slot's name
+     * @return the element to report on
+     */
+    private static Element slotElement(MutationContext ctx, String slot) {
+        for (FieldSpec field : ctx.fields()) {
+            if (field.name.equals(slot) && field.element != null) return field.element;
+        }
+        return ctx.targetElement();
     }
 
     /**

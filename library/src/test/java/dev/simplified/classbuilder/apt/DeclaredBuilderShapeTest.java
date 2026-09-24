@@ -1122,24 +1122,128 @@ public class DeclaredBuilderShapeTest {
     public void unoverridableInheritedMethod_namesTheMethodAndItsSupertype() {
         assertEquals("@ClassBuilder merged into 'Builder' finds tag(String) inherited from Fluent declared "
                 + "final, so the generated setter of that signature cannot override it",
-            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "tag", List.of("String"),
-                List.of(new InheritedMethod("tag", List.of("java.lang.String"), "Fluent", "B", true, true))));
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "tag", List.of("String"), Map.of(),
+                List.of(new InheritedMethod("tag", List.of("java.lang.String"), "Fluent", "B", true, true, false))));
         assertEquals("@ClassBuilder merged into 'Builder' finds tag(String) inherited from Fluent returning "
                 + "void, which the generated setter returning Builder cannot override",
             DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "tag", List.of("java.lang.String"),
-                List.of(new InheritedMethod("tag", List.of("java.lang.String"), "Fluent", "void", false,
-                    false))));
+                Map.of(), List.of(new InheritedMethod("tag", List.of("java.lang.String"), "Fluent", "void", false,
+                    false, false))));
         assertEquals("@ClassBuilder merged into 'Builder' finds count(int) inherited from Counter returning "
                 + "Integer, which the generated setter returning Builder cannot override",
-            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "count", List.of("int"),
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "count", List.of("int"), Map.of(),
                 List.of(new InheritedMethod("count", List.of("int"), "Counter", "java.lang.Integer", false,
-                    false))));
+                    false, false))));
         assertEquals("the first inherited method that blocks the setter is named",
             "@ClassBuilder merged into 'Builder' finds wait(long) inherited from Object declared final, so "
                 + "the generated setter of that signature cannot override it",
-            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "wait", List.of("long"),
-                List.of(new InheritedMethod("wait", List.of("long"), "Fluent", "B", false, true),
-                    new InheritedMethod("wait", List.of("long"), "Object", "void", true, false))));
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "wait", List.of("long"), Map.of(),
+                List.of(new InheritedMethod("wait", List.of("long"), "Fluent", "B", false, true, false),
+                    new InheritedMethod("wait", List.of("long"), "Object", "void", true, false, false))));
+    }
+
+    /**
+     * A {@code static} inherited method under the setter's key is named as
+     * static, whatever it returns - no instance method overrides one. Both
+     * halves' readers skipped static methods, so javac's refusal on the
+     * target's line was the only report.
+     */
+    @Test
+    public void unoverridableInheritedMethod_namesAStaticMethodAsStatic() {
+        assertEquals("@ClassBuilder merged into 'Builder' finds tag(String) inherited from Base declared "
+                + "static, so the generated setter of that signature cannot override it",
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "tag", List.of("String"), Map.of(),
+                List.of(new InheritedMethod("tag", List.of("java.lang.String"), "Base", "Base", false, true,
+                    true))));
+        assertEquals("static is named ahead of final",
+            "@ClassBuilder merged into 'Builder' finds tag(String) inherited from Base declared static, so the "
+                + "generated setter of that signature cannot override it",
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "tag", List.of("String"), Map.of(),
+                List.of(new InheritedMethod("tag", List.of("java.lang.String"), "Base", "void", true, false,
+                    true))));
+        assertNull("a static method taking another type is an overload",
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "tag", List.of("String"), Map.of(),
+                List.of(new InheritedMethod("tag", List.of("int"), "Base", "Base", false, true, true))));
+    }
+
+    /**
+     * A setter parameter typed by one of the builder's type variables is keyed
+     * by that variable's erasure, the form the inherited method's parameters
+     * are in. The setter was keyed by the variable's name, so a generated
+     * {@code value(T)} never met an inherited {@code value(Object)}.
+     */
+    @Test
+    public void unoverridableInheritedMethod_keysATypeVariableByItsErasure() {
+        List<InheritedMethod> finalObject = List.of(
+            new InheritedMethod("value", List.of("java.lang.Object"), "Base", "Base", true, true, false));
+        List<InheritedMethod> finalNumber = List.of(
+            new InheritedMethod("value", List.of("java.lang.Number"), "Base", "Base", true, true, false));
+        List<InheritedMethod> finalString = List.of(
+            new InheritedMethod("value", List.of("java.lang.String"), "Base", "Base", true, true, false));
+        Map<String, String> unbounded = DeclaredBuilderShape.typeVariableErasures(List.of("T"), Arrays.asList(
+            (String) null));
+        Map<String, String> bounded = DeclaredBuilderShape.typeVariableErasures(List.of("T"), List.of("Number"));
+        assertEquals("@ClassBuilder merged into 'Builder' finds value(T) inherited from Base declared final, so "
+                + "the generated setter of that signature cannot override it",
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "value", List.of("T"), unbounded,
+                finalObject));
+        assertNotNull("a bounded variable erases to its bound",
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "value", List.of("T"), bounded,
+                finalNumber));
+        assertNull("an unbounded variable does not erase to String",
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "value", List.of("T"), unbounded,
+                finalString));
+    }
+
+    /**
+     * A setter of a builder the generator writes whole meets one of
+     * {@code java.lang.Object}'s methods it cannot override - a final one, or
+     * one whose return type the builder is not - and is named in the same
+     * sentence. Nothing read {@code Object} for such a builder, so javac's
+     * refusal on the target's line was the only report.
+     */
+    @Test
+    public void unoverridableObjectMethod_namesAFinalOrMistypedObjectMethod() {
+        assertEquals("@ClassBuilder generating 'Builder' finds wait(long) inherited from java.lang.Object "
+                + "declared final, so the generated setter of that signature cannot override it",
+            DeclaredBuilderShape.unoverridableObjectMethod("Builder", "wait", List.of("long"), Map.of()));
+        for (String zeroArgFinal : List.of("getClass", "notify", "notifyAll", "wait")) {
+            assertNotNull(zeroArgFinal,
+                DeclaredBuilderShape.unoverridableObjectMethod("Builder", zeroArgFinal, List.of(), Map.of()));
+        }
+        assertNotNull("wait(long, int)",
+            DeclaredBuilderShape.unoverridableObjectMethod("Builder", "wait", List.of("long", "int"), Map.of()));
+        assertEquals("@ClassBuilder generating 'Builder' finds hashCode() inherited from java.lang.Object "
+                + "returning int, which the generated setter returning Builder cannot override",
+            DeclaredBuilderShape.unoverridableObjectMethod("Builder", "hashCode", List.of(), Map.of()));
+        assertEquals("@ClassBuilder generating 'Builder' finds toString() inherited from java.lang.Object "
+                + "returning String, which the generated setter returning Builder cannot override",
+            DeclaredBuilderShape.unoverridableObjectMethod("Builder", "toString", List.of(), Map.of()));
+        assertNotNull("equals(Object)",
+            DeclaredBuilderShape.unoverridableObjectMethod("Builder", "equals", List.of("Object"), Map.of()));
+        assertNotNull("equals(T) erases to equals(Object)",
+            DeclaredBuilderShape.unoverridableObjectMethod("Builder", "equals", List.of("T"),
+                Map.of("T", "Object")));
+        assertNotNull("finalize()",
+            DeclaredBuilderShape.unoverridableObjectMethod("Builder", "finalize", List.of(), Map.of()));
+    }
+
+    /**
+     * {@code clone()} returns {@code Object}, which a builder is, and an
+     * overload of an {@code Object} method's name is no override at all.
+     */
+    @Test
+    public void unoverridableObjectMethod_leavesCloneAndOverloads() {
+        assertNull("clone()",
+            DeclaredBuilderShape.unoverridableObjectMethod("Builder", "clone", List.of(), Map.of()));
+        assertNull("wait(int)",
+            DeclaredBuilderShape.unoverridableObjectMethod("Builder", "wait", List.of("int"), Map.of()));
+        assertNull("notify(boolean)",
+            DeclaredBuilderShape.unoverridableObjectMethod("Builder", "notify", List.of("boolean"), Map.of()));
+        assertNull("equals(String)",
+            DeclaredBuilderShape.unoverridableObjectMethod("Builder", "equals", List.of("String"), Map.of()));
+        assertNull("a name Object does not declare",
+            DeclaredBuilderShape.unoverridableObjectMethod("Builder", "name", List.of("String"), Map.of()));
     }
 
     /**
@@ -1150,19 +1254,23 @@ public class DeclaredBuilderShapeTest {
     @Test
     public void unoverridableInheritedMethod_leavesAnOverrideAndAnOverload() {
         assertNull("a non-final method returning a supertype of the builder is overridden",
-            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "tag", List.of("String"),
-                List.of(new InheritedMethod("tag", List.of("java.lang.String"), "Fluent", "B", false, true))));
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "tag", List.of("String"), Map.of(),
+                List.of(new InheritedMethod("tag", List.of("java.lang.String"), "Fluent", "B", false, true,
+                    false))));
         assertNull("another parameter type is an overload",
-            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "tag", List.of("String"),
-                List.of(new InheritedMethod("tag", List.of("int"), "Fluent", "void", true, false))));
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "tag", List.of("String"), Map.of(),
+                List.of(new InheritedMethod("tag", List.of("int"), "Fluent", "void", true, false, false))));
         assertNull("the erasure is compared, not the arguments",
             DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "tags", List.of("java.util.List<String>"),
-                List.of(new InheritedMethod("tags", List.of("java.util.List"), "Fluent", "B", false, true))));
+                Map.of(), List.of(new InheritedMethod("tags", List.of("java.util.List"), "Fluent", "B", false,
+                    true, false))));
         assertNotNull("under the same erasure it is the same key",
             DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "tags", List.of("java.util.List<String>"),
-                List.of(new InheritedMethod("tags", List.of("java.util.List"), "Fluent", "B", true, true))));
+                Map.of(), List.of(new InheritedMethod("tags", List.of("java.util.List"), "Fluent", "B", true,
+                    true, false))));
         assertNull("nothing inherited",
-            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "tag", List.of("String"), List.of()));
+            DeclaredBuilderShape.unoverridableInheritedMethod("Builder", "tag", List.of("String"), Map.of(),
+                List.of()));
     }
 
     /**

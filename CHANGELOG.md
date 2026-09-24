@@ -415,6 +415,18 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   factory target, and is printed on the annotated member there, as the path's other diagnostics
   are.
 
+- **A setter that cannot override a method of `Object` is reported on its slot.** A builder the
+  generator writes whole - standalone, on a constructor or factory target, or on any role of a
+  chain - extends nothing the author wrote, so the one method a setter can meet and fail to override
+  is `Object`'s: a `long wait` field's `wait(long)`, or a boolean whose flag setter a
+  `@SetterNames(flag = "{}")` names `notify`, `hashCode` or `toString`, or a collector add named
+  `equals` over a list of `Object`. javac refused each with `cannot override ... overridden method
+  is final` or `return type ... is not compatible` on the target's line, and the editor was green.
+  Both halves now report it on the slot's field, record component or parameter as an error naming
+  the method and `java.lang.Object` - rename the slot or its setter. The build still generates the
+  setter and the editor still offers it; `clone()`, which returns `Object`, is overridden legally
+  and stays accepted.
+
 ### Changed
 
 - **BREAKING: `mergeDeclaredBuilder` is removed, and a declared builder is always merged into.** A
@@ -481,11 +493,14 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   - on a chain, a build method returning something other than the built type - return that type, or
     on a root the root itself;
   - a method the builder inherits - from a superclass up to and including `Object`, or a
-    superinterface - under an appended setter's name and erased parameter types that is `final`, or
-    returns `void`, a primitive or a type the builder is not assignable to, reported on the builder
-    naming the method and the supertype declaring it where javac refused the override on the
-    target's line, `Object`'s final `wait(long)` meeting the setter of a `long wait` slot - drop
-    `final` or return a supertype of the builder there, or rename the slot or its setter. This refusal
+    superinterface - under an appended setter's name and erased parameter types that is `static`
+    or `final`, or returns `void`, a primitive or a type the builder is not assignable to, reported
+    on the builder naming the method and the supertype declaring it where javac refused the
+    override on the target's line, `Object`'s final `wait(long)` meeting the setter of a `long wait`
+    slot. A setter's parameter typed by one of the builder's type variables is compared by the
+    variable's erasure, so `value(T)` meets an inherited `value(Object)`; an interface's static
+    methods are not inherited and block nothing - drop `static` or `final` or return a supertype
+    of the builder there, or rename the slot or its setter. This refusal
     withholds nothing: the build appends the setter before reporting it, and the editor keeps
     offering that setter, the rest of the builder and the entry points in completion, beside the
     error on the builder's name;

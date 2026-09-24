@@ -4305,6 +4305,149 @@ public class DeclaredBuilderMergeTest {
         assertEquals("the report on the builder is the only error: " + c.errors(), 1, c.errors().size());
     }
 
+    /**
+     * An inherited {@code static} method under a generated setter's name and
+     * erased parameter types is reported on the declared builder. Both halves'
+     * readers skipped static methods, so only javac's refusal was reported, on
+     * the target's line: {@code tag(java.lang.String) in demo.Item.Builder
+     * cannot override tag(java.lang.String) in demo.Fluent / overridden method
+     * is static}.
+     */
+    @Test
+    public void merge_underAnInheritedStaticMethodOfASetterSignature_isRejectedOnTheBuilder() {
+        JavaFileObject[] sources = itemOver("public static Fluent<?> tag(String t) { return null; }");
+        Compilation c = compile(sources);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds tag(String) inherited from "
+            + "Fluent declared static, so the generated setter of that signature cannot override it")
+            .inFile(sources[1]).onLine(6);
+        assertEquals("the report on the builder is the only error: " + c.errors(), 1, c.errors().size());
+    }
+
+    /** A static inherited method of the setter's name taking another type is an overload. */
+    @Test
+    public void merge_underAnInheritedStaticMethodOfAnotherParameterType_compiles() throws Exception {
+        Compilation c = compile(itemOver("public static Fluent<?> tag(int t) { return null; }"));
+        assertThat(c).succeeded();
+        assertEquals("x", runGo(c, "demo.UseItem"));
+    }
+
+    /**
+     * A class inherits no static method of an interface it implements, so a
+     * static interface method under the setter's signature blocks nothing.
+     */
+    @Test
+    public void merge_besideAStaticInterfaceMethodOfASetterSignature_compiles() throws Exception {
+        Compilation c = compile(
+            fluent(""),
+            JavaFileObjects.forSourceLines("demo.Tagging",
+                "package demo;",
+                "public interface Tagging {",
+                "    static Object tag(String t) { return null; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.Item",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public class Item {",
+                "    String tag;",
+                "    public static class Builder extends Fluent<Builder> implements Tagging {",
+                "        @Override",
+                "        protected Builder self() { return this; }",
+                "    }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseItem",
+                "package demo;",
+                "public class UseItem {",
+                "    public static String go() { return Item.builder().tag(\"x\").build().tag; }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals("x", runGo(c, "demo.UseItem"));
+    }
+
+    /**
+     * A generic {@code Box} whose declared builder, declaring {@code typeParameter},
+     * extends {@code superclass}, with a {@code value} slot of the type variable.
+     */
+    private static JavaFileObject[] boxOver(String typeParameter, String superclass, String baseSource) {
+        return new JavaFileObject[]{
+            JavaFileObjects.forSourceLines("demo.Base", "package demo;", baseSource),
+            JavaFileObjects.forSourceLines("demo.Box",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public class Box<" + typeParameter + "> {",
+                "    T value;",
+                "    public static class Builder<" + typeParameter + "> extends " + superclass + " { }",
+                "}")
+        };
+    }
+
+    /**
+     * A generated {@code value(T)} erases to {@code value(Object)}, the
+     * signature of an inherited {@code final value(Object)}, and is reported on
+     * the declared builder. The setter was keyed by the variable's name, which
+     * no erased inherited parameter carries, so only javac's name clash was
+     * reported, on the target's line.
+     */
+    @Test
+    public void merge_aTypeVariableSetterUnderAnInheritedFinalObjectMethod_isRejectedOnTheBuilder() {
+        JavaFileObject[] sources = boxOver("T", "Base",
+            "public class Base { public final Base value(Object v) { return this; } }");
+        Compilation c = compile(sources);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds value(T) inherited from "
+            + "Base declared final, so the generated setter of that signature cannot override it")
+            .inFile(sources[1]).onLine(6);
+        assertEquals("the report on the builder is the only error: " + c.errors(), 1, c.errors().size());
+    }
+
+    /**
+     * A generic supertype's {@code final value(X)}, taken as a member of a
+     * builder passing it {@code T}, is the method the generated {@code value(T)}
+     * overrides - javac's {@code overridden method is final} on the target's
+     * line - and is reported on the declared builder.
+     */
+    @Test
+    public void merge_aTypeVariableSetterUnderAGenericSupertypesFinalMethod_isRejectedOnTheBuilder() {
+        JavaFileObject[] sources = boxOver("T", "Base<T>",
+            "public class Base<X> { public final Base<X> value(X v) { return this; } }");
+        Compilation c = compile(sources);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds value(T) inherited from "
+            + "Base declared final, so the generated setter of that signature cannot override it")
+            .inFile(sources[1]).onLine(6);
+        assertEquals("the report on the builder is the only error: " + c.errors(), 1, c.errors().size());
+    }
+
+    /** A bounded variable erases to its bound, so {@code value(T extends Number)} meets a final {@code value(Number)}. */
+    @Test
+    public void merge_aBoundedTypeVariableSetterUnderAnInheritedFinalMethodOfItsBound_isRejectedOnTheBuilder() {
+        JavaFileObject[] sources = boxOver("T extends Number", "Base",
+            "public class Base { public final Base value(Number v) { return this; } }");
+        Compilation c = compile(sources);
+        assertThat(c).failed();
+        assertThat(c).hadErrorContaining("@ClassBuilder merged into 'Builder' finds value(T) inherited from "
+            + "Base declared final, so the generated setter of that signature cannot override it")
+            .inFile(sources[1]).onLine(6);
+        assertEquals("the report on the builder is the only error: " + c.errors(), 1, c.errors().size());
+    }
+
+    /** An unbounded variable erases to {@code Object}, so a final {@code value(String)} is an overload beside it. */
+    @Test
+    public void merge_aTypeVariableSetterBesideAnInheritedFinalMethodOfAnotherErasure_compiles() throws Exception {
+        JavaFileObject[] sources = boxOver("T", "Base",
+            "public class Base { public final Base value(String v) { return this; } }");
+        Compilation c = compile(sources[0], sources[1],
+            JavaFileObjects.forSourceLines("demo.UseBox",
+                "package demo;",
+                "public class UseBox {",
+                "    public static Integer go() { return Box.<Integer>builder().value(7).build().value; }",
+                "}"));
+        assertThat(c).succeeded();
+        assertEquals(7, runGo(c, "demo.UseBox"));
+    }
+
     // ------------------------------------------------------------------
     // The all-args constructor beside an author's own build()
     // ------------------------------------------------------------------
