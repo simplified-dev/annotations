@@ -33,6 +33,7 @@ import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.TypeParameterElement;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.TypeKind;
@@ -204,7 +205,9 @@ final class DeclaredBuilderMerge {
      * <p>The decision itself is {@link DeclaredBuilderShape#check}, which the
      * editor runs over the same facts read out of PSI, so a builder the editor
      * populates is a builder javac accepts. What is left here is filling the
-     * facts from the tree and choosing the operands each rejection interpolates.
+     * facts from the tree, answering from the element model whether a
+     * self-typed pair's first bound names a supertype of the target, and
+     * choosing the operands each rejection interpolates.
      *
      * @param anchor the element every diagnostic is reported against
      * @param declared the builder the target declares
@@ -216,13 +219,39 @@ final class DeclaredBuilderMerge {
                                         @Nullable AnnotatedSuper annotatedSuper) {
         DeclaredBuilderFacts facts = factsOf(declared);
         RoleExpectation expectation = expectationFor(role, facts, annotatedSuper);
-        DeclaredBuilderRejection rejection = DeclaredBuilderShape.check(role, facts, expectation);
+        DeclaredBuilderRejection rejection = DeclaredBuilderShape.check(role, facts, expectation,
+            index -> firstBoundIsSupertype(declared, index));
         if (rejection == null) return true;
         messager.printMessage(Diagnostic.Kind.ERROR,
             DeclaredBuilderShape.describe(rejection, role, declared.name.toString(),
                 ctx.targetSimpleName(), ctx.config().builderMethodName(), facts, expectation),
             anchor);
         return false;
+    }
+
+    /**
+     * Whether the first bound written on one of the declared builder's type
+     * parameters names a supertype of the target at any depth, read from the
+     * element model.
+     *
+     * <p>The bound is the one the parameter's symbol carries in its position,
+     * compared by erasure, so a supertype compiled in the same round and one
+     * read off a class file answer alike. A bound that resolved to nothing is
+     * an error type, and a type variable a supertype of nothing the target
+     * declares; neither is one.
+     *
+     * @param declared the builder the author wrote
+     * @param index the position of the type parameter among the builder's own
+     * @return whether the target is a subtype of the bound's erasure
+     */
+    private boolean firstBoundIsSupertype(JCClassDecl declared, int index) {
+        if (declared.sym == null) return false;
+        List<? extends TypeParameterElement> parameters = declared.sym.getTypeParameters();
+        if (index < 0 || index >= parameters.size()) return false;
+        List<? extends TypeMirror> bounds = parameters.get(index).getBounds();
+        if (bounds.isEmpty() || bounds.get(0).getKind() != TypeKind.DECLARED) return false;
+        Types types = ctx.bridge().processingEnvironment().getTypeUtils();
+        return types.isSubtype(types.erasure(ctx.targetElement().asType()), types.erasure(bounds.get(0)));
     }
 
     /**

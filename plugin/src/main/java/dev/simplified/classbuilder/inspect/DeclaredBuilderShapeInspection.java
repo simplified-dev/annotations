@@ -69,9 +69,11 @@ import java.util.Objects;
  * a {@code self()} that returns another type than the pair's builder parameter.
  * A link whose annotated ancestor's builder, declared or generated, is out of
  * its reach is reported on its annotation, as is a link whose ancestor's
- * builder cannot take the extends clause, and a concrete link overriding a
+ * builder cannot take the extends clause, a concrete link overriding a
  * {@code final} {@code self()} on a compiled ancestor the processor never
- * judged.
+ * judged, and a concrete link or a chained abstract declaring no builder that
+ * is not within a type a self-typed ancestor's builder bounds the type it
+ * builds by, each resolved as instantiated for it.
  *
  * <p>On a class or record target and on a constructor or factory target, a
  * {@code builderConstructorAccess} written on the annotation while the declared

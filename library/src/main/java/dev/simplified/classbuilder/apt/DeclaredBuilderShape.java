@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Set;
+import java.util.function.IntPredicate;
 import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -30,9 +31,10 @@ import java.util.regex.Pattern;
  * <p>Every question here is asked of names and flags, never of a resolved type,
  * because the javac side runs while the round is still building the tree and the
  * PSI side must not resolve anything - a resolve started from inside an augment
- * provider re-enters it. The one answer that needs a resolve, whether a thrown
- * type is unchecked, is handed in by the caller as a verdict per name, each half
- * reaching it where it may resolve.
+ * provider re-enters it. The two answers that need a resolve - whether a thrown
+ * type is unchecked, and whether a self-typed pair's first bound the names leave
+ * refused names a supertype of the target further up - are handed in by the
+ * caller as a verdict, each half reaching it where it may resolve.
  */
 public final class DeclaredBuilderShape {
 
@@ -340,6 +342,33 @@ public final class DeclaredBuilderShape {
     public static @Nullable DeclaredBuilderRejection check(@NotNull ChainRole role,
                                                            @NotNull DeclaredBuilderFacts facts,
                                                            @NotNull RoleExpectation expectation) {
+        return check(role, facts, expectation, index -> false);
+    }
+
+    /**
+     * Reports why a declared builder cannot carry the generated members, asking
+     * the caller whether the first bound of a self-typed pair names a supertype
+     * of the target where its name alone does not say.
+     *
+     * <p>As {@link #check(ChainRole, DeclaredBuilderFacts, RoleExpectation)},
+     * the first bound of a self-typed pair's first parameter also passing where
+     * the caller's verdict resolves it to a supertype of the target at any
+     * depth: the processor from the element model, the editor from the bound's
+     * own reference and the target's resolved supertypes. The verdict is asked
+     * only where the names leave the bound refused, and a bound that resolves to
+     * nothing is refused.
+     *
+     * @param role the position the target holds in a builder chain
+     * @param facts the declared builder as written
+     * @param expectation the parameter names, supertype and build return type the role requires
+     * @param firstBoundIsSupertype the caller's verdict, given the index of a declared type parameter, on
+     *     whether the first bound written on it names a supertype of the target
+     * @return the rejection, or null when the shape is usable
+     */
+    public static @Nullable DeclaredBuilderRejection check(@NotNull ChainRole role,
+                                                           @NotNull DeclaredBuilderFacts facts,
+                                                           @NotNull RoleExpectation expectation,
+                                                           @NotNull IntPredicate firstBoundIsSupertype) {
         if (!DeclaredBuilderFacts.CLASS.equals(facts.kind())) return DeclaredBuilderRejection.NOT_A_CLASS;
         if (!facts.nestedStatic()) return DeclaredBuilderRejection.NOT_STATIC;
         if (role.isSelfTyped() && !facts.nestedAbstract()) {
@@ -352,7 +381,7 @@ public final class DeclaredBuilderShape {
             return DeclaredBuilderRejection.TYPE_PARAMETERS;
         }
         if (!targetBoundsKept(facts, expectation)) return DeclaredBuilderRejection.TYPE_PARAMETER_BOUNDS;
-        if (role.isSelfTyped() && !selfTypeBoundsKept(facts, expectation)) {
+        if (role.isSelfTyped() && !selfTypeBoundsKept(facts, expectation, firstBoundIsSupertype)) {
             return DeclaredBuilderRejection.SELF_TYPE_BOUNDS;
         }
         String expectedSuper = expectation.superType();
@@ -585,6 +614,22 @@ public final class DeclaredBuilderShape {
      */
     private static List<String> boundList(@Nullable String bounds) {
         List<String> out = new ArrayList<>();
+        for (String bound : boundParts(bounds)) {
+            if (!"Object".equals(erasedName(bound))) out.add(bound);
+        }
+        return out;
+    }
+
+    /**
+     * Splits a parameter's bounds as written at their top-level {@code &},
+     * each rendered through {@link #typeText}, an {@code Object} bound kept in
+     * its place.
+     *
+     * @param bounds the bounds as written, or null when none is
+     * @return the bounds, in order
+     */
+    private static List<String> boundParts(@Nullable String bounds) {
+        List<String> out = new ArrayList<>();
         if (bounds == null || bounds.isBlank()) return out;
         String text = typeText(bounds);
         int depth = 0;
@@ -595,7 +640,7 @@ public final class DeclaredBuilderShape {
             if (c == '>') depth--;
             if (c != '&' || depth != 0) continue;
             String bound = text.substring(start, i).trim();
-            if (!bound.isEmpty() && !"Object".equals(erasedName(bound))) out.add(bound);
+            if (!bound.isEmpty()) out.add(bound);
             start = i + 1;
         }
         return out;
@@ -2184,24 +2229,29 @@ public final class DeclaredBuilderShape {
      *
      * <p>Every link below the declaration binds the pair to itself and its own
      * builder, so the first parameter needs a bound the link is within and the
-     * second one the link's builder is within. Both are read as written, by name,
-     * since neither half can resolve them. Every type the first one's bound
-     * names has to erase to a type each link is within: the target's simple
-     * name, however qualified and whatever type arguments a generic target is
-     * written with, a type the target's own extends or implements clause names,
-     * or {@code Object} - a type the target reaches only further up is not one
-     * names can tell from an unrelated one. The second has to carry a bound
-     * whose erasure is the builder's simple name and whose type arguments end
-     * with the pair's own two names, in order - a generic root's own parameters
-     * leading them. An unbounded parameter carries neither. Where the
-     * expectation names neither the target nor the builder the bounds are asked
-     * for their presence only.
+     * second one the link's builder is within. The first type the first
+     * parameter's bound names has to be a type each link is within: by name,
+     * the target's simple name, however qualified and whatever type arguments
+     * a generic target is written with, a type the target's own extends or
+     * implements clause names, or {@code Object}; failing those, a supertype
+     * of the target at any depth, as the caller's verdict resolves it. Every
+     * further type of an intersection bound is accepted here, and each link
+     * below is judged against it through
+     * {@link ChainBuilderReach#unmetBuiltTypeBound}. The second parameter has
+     * to carry a bound whose erasure is the builder's simple name and whose
+     * type arguments end with the pair's own two names, in order - a generic
+     * root's own parameters leading them - read by name. An unbounded
+     * parameter carries neither. Where the expectation names neither the
+     * target nor the builder the bounds are asked for their presence only.
      *
      * @param facts the declared builder as written
      * @param expectation what the role requires
+     * @param firstBoundIsSupertype the caller's verdict, given the index of a declared type parameter, on
+     *     whether the first bound written on it names a supertype of the target
      * @return whether the trailing pair carries the bounds a link below it needs
      */
-    private static boolean selfTypeBoundsKept(DeclaredBuilderFacts facts, RoleExpectation expectation) {
+    private static boolean selfTypeBoundsKept(DeclaredBuilderFacts facts, RoleExpectation expectation,
+                                              IntPredicate firstBoundIsSupertype) {
         int size = expectation.typeParameterNames().size();
         List<@Nullable String> bounds = facts.typeParameterBounds();
         if (size < 2 || bounds.size() < size || facts.typeParameterNames().size() < size) return false;
@@ -2215,14 +2265,17 @@ public final class DeclaredBuilderShape {
         // present as written and has nothing left to compare.
         if (writtenBuilt == null || writtenBuilt.isBlank() || builderBounds.isEmpty()) return false;
         List<String> pair = facts.typeParameterNames().subList(size - 2, size);
-        return builtBounds.stream().allMatch(bound -> keepsBuiltType(erasedName(bound), targetName,
-                expectation.targetSupertypes()))
-            && builderBounds.stream().anyMatch(bound -> appliesToPair(bound, builderName, pair));
+        if (builderBounds.stream().noneMatch(bound -> appliesToPair(bound, builderName, pair))) return false;
+        List<String> builtParts = boundParts(writtenBuilt);
+        if (builtParts.isEmpty()) return false;
+        // Names first; the caller resolves only a first bound they leave refused.
+        return keepsBuiltType(erasedName(builtParts.get(0)), targetName, expectation.targetSupertypes())
+            || firstBoundIsSupertype.test(size - 2);
     }
 
     /**
-     * Whether one type a self-typed pair's first bound names is a type every
-     * link below the target is within, by its erased simple name.
+     * Whether the first type a self-typed pair's first bound names is a type
+     * every link below the target is within, by its erased simple name.
      *
      * @param erased the bound's erased simple name
      * @param targetName the target's simple name

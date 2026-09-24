@@ -5,9 +5,11 @@ import com.intellij.lang.annotation.HighlightSeverity;
 import com.intellij.openapi.application.AccessToken;
 import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiManager;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.search.GlobalSearchScope;
+import com.intellij.psi.util.PsiModificationTracker;
 import com.intellij.testFramework.LightProjectDescriptor;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
@@ -242,23 +244,185 @@ public class ChainAncestorBuilderInspectionTest extends BasePlatformTestCase {
         assertEquals(List.of(), errorsIn("demo/Circle.java"));
     }
 
-    /** A bound naming a type the root reaches only through an unannotated superclass stays refused. */
-    public void testARootBoundingItsBuiltTypeByAnIndirectSupertype_isReported() {
+    /** Adds {@code demo.Figure}, an unannotated abstract superclass implementing {@code Serializable}. */
+    private void addFigure() {
         myFixture.addFileToProject("demo/Figure.java", """
             package demo;
             public abstract class Figure implements java.io.Serializable { }
             """);
+    }
+
+    /** Adds an abstract root below {@code demo.Figure} whose builder bounds its built type by the given type. */
+    private void addFigureShape(String bound) {
         myFixture.addFileToProject("demo/Shape.java", """
             package demo;
             import dev.simplified.annotations.ClassBuilder;
             @ClassBuilder(validate = false)
             public abstract class Shape extends Figure {
                 private String name;
-                public abstract static class Builder<T extends java.io.Serializable, B extends Builder<T, B>> { }
+                public String getName() { return name; }
+                public abstract static class Builder<T extends %s, B extends Builder<T, B>> { }
+            }
+            """.formatted(bound));
+    }
+
+    /** Adds a consumer of the link {@link #addCircle()} adds, building it through the root's setter. */
+    private void addUseShape() {
+        myFixture.addFileToProject("demo/UseShape.java", """
+            package demo;
+            public class UseShape {
+                public static String go() { return Circle.builder().name("c").radius(1).build().getName(); }
             }
             """);
+    }
+
+    /**
+     * A bound naming a type the root reaches only through an unannotated
+     * superclass is accepted, as javac builds it, and a consumer's chain
+     * resolves. It was reported, the rule reading only the names the root's own
+     * clauses write.
+     */
+    public void testARootBoundingItsBuiltTypeByAnIndirectSupertype_isNotReported() {
+        addFigure();
+        addFigureShape("java.io.Serializable");
+        addCircle();
+        addUseShape();
+        assertEquals(List.of(), errorsIn("demo/Shape.java"));
+        assertEquals(List.of(), allErrorsIn("demo/UseShape.java"));
+    }
+
+    /** An interface the root reaches at no depth stays refused. */
+    public void testARootBoundingItsBuiltTypeByAnUnrelatedInterface_isReported() {
+        addFigure();
+        addFigureShape("java.lang.Runnable");
         assertEquals(List.of(boundsRefusal("<T extends Shape, B extends Builder<T, B>>",
-            "<T extends java.io.Serializable, B extends Builder<T, B>>")), errorsIn("demo/Shape.java"));
+            "<T extends java.lang.Runnable, B extends Builder<T, B>>")), errorsIn("demo/Shape.java"));
+    }
+
+    /**
+     * Rereading the root's members over unchanged text, after every cached
+     * value is dropped, hands back the same copy constructor - the resolve the
+     * bound is judged by leaves the synthesis cache as it is. The root was
+     * refused, and carried no copy constructor at all.
+     */
+    public void testARootBoundingItsBuiltTypeByAnIndirectSupertype_rereadsTheSameInstances() {
+        addFigure();
+        addFigureShape("java.io.Serializable");
+        PsiClass shape = findClass("demo.Shape");
+        PsiMethod[] constructors = shape.findMethodsByName("Shape", false);
+        assertEquals("the root carries the chain's copy constructor", 1, constructors.length);
+
+        long before = PsiModificationTracker.getInstance(getProject()).getModificationCount();
+        PsiManager.getInstance(getProject()).dropPsiCaches();
+        assertTrue("the cached values were dropped",
+            PsiModificationTracker.getInstance(getProject()).getModificationCount() != before);
+
+        assertSame("the same copy constructor", constructors[0], shape.findMethodsByName("Shape", false)[0]);
+    }
+
+    // ------------------------------------------------------------------
+    // An intersection bound's extra interface, which every link has to implement
+    // ------------------------------------------------------------------
+
+    /** The root builder bounding its built type by the root and {@code Comparable<Shape>}. */
+    private static final String COMPARABLE_ROOT =
+        "public abstract static class Builder<T extends Shape & Comparable<Shape>, B extends Builder<T, B>> { }";
+
+    /** Adds a concrete link below {@code demo.Shape} implementing {@code Comparable<Shape>}. */
+    private void addComparableCircle() {
+        myFixture.addFileToProject("demo/Circle.java", """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false)
+            public class Circle extends Shape implements Comparable<Shape> {
+                private int radius;
+                public int getRadius() { return radius; }
+                @Override public int compareTo(Shape other) { return 0; }
+            }
+            """);
+    }
+
+    /** The sentence for a link that is not within a type its ancestor's builder bounds its built type by. */
+    private static String unmetBound(String link, String bound) {
+        return "@ClassBuilder generates no builder on '" + link + "' - 'Shape.Builder' bounds the type it builds by "
+            + bound + ", which '" + link + "' does not implement";
+    }
+
+    /**
+     * An intersection bound's extra interface, which every link implements, is
+     * accepted on the root and the link's chain resolves, as javac builds it.
+     * It was reported on the root.
+     */
+    public void testARootBoundingItsBuiltTypeByAnInterfaceEveryLinkImplements_isNotReported() {
+        addShape(COMPARABLE_ROOT);
+        addComparableCircle();
+        addUseShape();
+        assertEquals(List.of(), errorsIn("demo/Shape.java"));
+        assertEquals(List.of(), errorsIn("demo/Circle.java"));
+        assertEquals(List.of(), allErrorsIn("demo/UseShape.java"));
+    }
+
+    /**
+     * A link that does not implement the extra interface is reported on its
+     * annotation, and its builder withheld, as javac refuses it; the root is
+     * not reported.
+     */
+    public void testALinkNotImplementingTheInterfaceTheRootBoundsItsBuiltTypeBy_isReportedOnTheLink() {
+        addShape(COMPARABLE_ROOT);
+        addCircle();
+        assertEquals(List.of(), errorsIn("demo/Shape.java"));
+        assertEquals(List.of(unmetBound("Circle", "Comparable<Shape>")), errorsIn("demo/Circle.java"));
+        assertEquals("the link's builder is withheld", 0, findClass("demo.Circle").getInnerClasses().length);
+    }
+
+    /**
+     * A chained abstract whose builder is generated has to implement the extra
+     * interface itself, and is reported on its annotation where it does not.
+     */
+    public void testAChainedAbstractNotImplementingTheInterfaceTheRootBoundsItsBuiltTypeBy_isReportedOnIt() {
+        addShape(COMPARABLE_ROOT);
+        myFixture.addFileToProject("demo/Polygon.java", """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false)
+            public abstract class Polygon extends Shape {
+                private int sides;
+            }
+            """);
+        assertEquals(List.of(unmetBound("Polygon", "Comparable<Shape>")), errorsIn("demo/Polygon.java"));
+    }
+
+    /** A chained abstract implementing the extra interface, and a leaf below it, resolve. */
+    public void testAChainedAbstractImplementingTheInterfaceTheRootBoundsItsBuiltTypeBy_resolvesBelowIt() {
+        addShape(COMPARABLE_ROOT);
+        myFixture.addFileToProject("demo/Polygon.java", """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false)
+            public abstract class Polygon extends Shape implements Comparable<Shape> {
+                private int sides;
+                public int getSides() { return sides; }
+                @Override public int compareTo(Shape other) { return 0; }
+            }
+            """);
+        myFixture.addFileToProject("demo/Square.java", """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false)
+            public class Square extends Polygon {
+                private int edge;
+                public int getEdge() { return edge; }
+            }
+            """);
+        myFixture.addFileToProject("demo/UseSquare.java", """
+            package demo;
+            public class UseSquare {
+                public static String go() { return Square.builder().name("s").sides(4).edge(1).build().getName(); }
+            }
+            """);
+        assertEquals(List.of(), errorsIn("demo/Polygon.java"));
+        assertEquals(List.of(), errorsIn("demo/Square.java"));
+        assertEquals(List.of(), allErrorsIn("demo/UseSquare.java"));
     }
 
     // ------------------------------------------------------------------

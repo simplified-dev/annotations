@@ -145,11 +145,26 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   overridden by it`, on both halves. A generic supertype's `value(X)` that the builder passes its
   `T` is overridden and builds as before.
 
-- **A self-typed builder's built type may be bounded by a supertype the target names.** A declared
-  root or chained abstract builder bounding the first of its pair by a type the target's own
-  `extends` or `implements` clause names - `T extends Base` on a chained abstract below `Base`,
-  `T extends Object & Serializable` on a root implementing `Serializable` - was refused as a wrong
-  bound, though every link is within it and javac builds it. It is accepted on both halves.
+- **A self-typed builder's built type may be bounded by any supertype of the target.** A declared
+  root or chained abstract builder bounding the first of its pair by a supertype of the target -
+  `T extends Base` on a chained abstract below `Base`, `T extends Object & Serializable` on a root
+  implementing `Serializable`, `T extends Serializable` on a root whose unannotated superclass
+  implements it - was refused as a wrong bound, though every link is within it and javac builds it.
+  A type the target's own `extends` or `implements` clause names is accepted by name; any other is
+  resolved, the processor reading the target's supertypes at every depth from the element model and
+  the editor resolving only the bound's reference and the target's supertype references. It is
+  accepted on both halves, and a name that resolves to nothing, or to a type the target does not
+  reach, is still refused.
+
+- **An intersection bound's further interfaces are judged on each link.** `T extends Shape &
+  Comparable<Shape>` on a root's declared builder was refused on the root, every type of the bound
+  having to be the root, a type its own clauses name, or `Object`, though javac builds it wherever
+  every link implements `Comparable<Shape>`. The root accepts it, and each concrete link, and each
+  chained abstract whose builder is generated, is judged against every type of the bound as
+  instantiated for it; one that is not within a type is refused on its own annotation with
+  `@ClassBuilder generates no builder on 'Circle' - 'Shape.Builder' bounds the type it builds by
+  Comparable<Shape>, which 'Circle' does not implement`, nothing generated for it, on both halves -
+  where javac would fail on the link's generated extends clause.
 
 - **A link in another package naming its root fully qualified builds.** The generated extends clause
   spelled the root's builder `Shape.Builder`, which resolves only where the link's file imports
@@ -596,12 +611,12 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
     standing in for another setter of the slot, a singular `addItem(List<Integer>)` beside a
     `List<List<String>>` slot among them, is never passed the slot and is left alone;
   - on a chain root, a builder that is not abstract or not self-typed, or whose self-typed pair is
-    bounded otherwise - the first parameter by a type other than the target, a type the target's own
-    `extends` or `implements` clause names, or `Object`, every type of an intersection bound counted,
-    the pair written the other way round, or the builder's bound applied to the pair out of order -
-    declare it `abstract static class Builder<T extends Target, B extends Builder<T, B>>`, a generic
-    target's own parameters leading. A type the target reaches only through a supertype further up
-    is not one the names can tell from an unrelated type, and is refused;
+    bounded otherwise - the first type of the first parameter's bound other than the target, a
+    supertype of the target at any depth, or `Object`, the pair written the other way round, or the
+    builder's bound applied to the pair out of order - declare it
+    `abstract static class Builder<T extends Target, B extends Builder<T, B>>`, a generic target's
+    own parameters leading. Further types of an intersection bound are accepted on the root, and a
+    link below it that does not implement one is refused on the link;
   - on a chain root or a chained abstract, a builder whose constructors all take parameters, which
     the links below cannot extend - reported on the builder: declare a no-argument constructor. The
     links below it are refused as well;

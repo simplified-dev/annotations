@@ -348,29 +348,175 @@ public class ChainAncestorBuilderTest {
         assertEquals("c", runGo("demo.UseShape", c));
     }
 
+    /** An unannotated abstract superclass implementing {@code Serializable}. */
+    private static JavaFileObject figure() {
+        return src("demo.Figure",
+            "package demo;",
+            "public abstract class Figure implements java.io.Serializable { }");
+    }
+
+    /** An abstract root below {@code demo.Figure} whose builder bounds its built type by the given type. */
+    private static JavaFileObject figureShape(String bound) {
+        return src("demo.Shape",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            CB,
+            "public abstract class Shape extends Figure {",
+            "    private String name;",
+            "    public String getName() { return name; }",
+            "    public abstract static class Builder<T extends " + bound + ", B extends Builder<T, B>> { }",
+            "}");
+    }
+
     /**
      * A bound naming a type the root reaches only through an unannotated
-     * superclass is not one its own clauses name, and names cannot tell it from
-     * an unrelated type, so it stays refused.
+     * superclass is a type every link is within, and javac builds it. It was
+     * refused, the rule reading only the names the root's own clauses write.
      */
     @Test
-    public void rootBoundingItsBuiltTypeByAnIndirectSupertype_isRefused() {
-        Compilation c = compile(
-            src("demo.Figure",
-                "package demo;",
-                "public abstract class Figure implements java.io.Serializable { }"),
-            src("demo.Shape",
+    public void rootBoundingItsBuiltTypeByAnIndirectSupertype_buildsAndRuns() throws Exception {
+        Compilation c = compile(figure(), figureShape("java.io.Serializable"), circle(), useShape());
+        assertBuilt(c);
+        assertEquals("c", runGo("demo.UseShape", c));
+    }
+
+    /** The same bound over a superclass compiled before the root, read off its class file. */
+    @Test
+    public void rootBoundingItsBuiltTypeByASupertypeOfACompiledSuperclass_buildsAndRuns() throws Exception {
+        Path figure = compiledAncestor(figure());
+        Compilation c = compileAgainst(figure, figureShape("java.io.Serializable"), circle(), useShape());
+        assertBuilt(c);
+        assertEquals("c", runGo("demo.UseShape", c, figure));
+    }
+
+    /** An interface the root reaches at no depth stays refused. */
+    @Test
+    public void rootBoundingItsBuiltTypeByAnUnrelatedInterface_isRefused() {
+        Compilation c = compile(figure(), figureShape("java.lang.Runnable"), circle());
+        assertRefusedWith(c, boundsRefusal("<T extends Shape, B extends Builder<T, B>>",
+            "<T extends java.lang.Runnable, B extends Builder<T, B>>"));
+    }
+
+    // ------------------------------------------------------------------
+    // An intersection bound's extra interface, which every link has to implement
+    // ------------------------------------------------------------------
+
+    /** An abstract root whose builder bounds its built type by the root and {@code Comparable<Shape>}. */
+    private static JavaFileObject comparableShape() {
+        return shapeWith("public abstract static class Builder<T extends Shape & Comparable<Shape>, "
+            + "B extends Builder<T, B>> { }");
+    }
+
+    /** A concrete link below {@code demo.Shape} implementing {@code Comparable<Shape>}. */
+    private static JavaFileObject comparableCircle() {
+        return src("demo.Circle",
+            "package demo;",
+            "import dev.simplified.annotations.ClassBuilder;",
+            CB,
+            "public class Circle extends Shape implements Comparable<Shape> {",
+            "    private int radius;",
+            "    public int getRadius() { return radius; }",
+            "    @Override public int compareTo(Shape other) { return 0; }",
+            "}");
+    }
+
+    /** The sentence for a link that is not within a type its ancestor's builder bounds its built type by. */
+    private static String unmetBound(String link, String bound) {
+        return "@ClassBuilder generates no builder on '" + link + "' - 'Shape.Builder' bounds the type it builds by "
+            + bound + ", which '" + link + "' does not implement";
+    }
+
+    /**
+     * An intersection bound's extra interface, which every link implements,
+     * builds and runs. It was refused on the root, every type of the bound
+     * having to be the root, a type its own clauses name, or {@code Object}.
+     */
+    @Test
+    public void rootBoundingItsBuiltTypeByAnInterfaceEveryLinkImplements_buildsAndRuns() throws Exception {
+        Compilation c = compile(comparableShape(), comparableCircle(), useShape());
+        assertBuilt(c);
+        assertEquals("c", runGo("demo.UseShape", c));
+    }
+
+    /** The same bound on a root compiled before the link, read off its class file. */
+    @Test
+    public void linkImplementingTheInterfaceACompiledRootBoundsItsBuiltTypeBy_buildsAndRuns() throws Exception {
+        Path shape = compiledAncestor(comparableShape());
+        Compilation c = compileAgainst(shape, comparableCircle(), useShape());
+        assertBuilt(c);
+        assertEquals("c", runGo("demo.UseShape", c, shape));
+    }
+
+    /**
+     * A link that does not implement the extra interface is refused on its own
+     * annotation, and the root is not. javac would fail on the link's generated
+     * extends clause.
+     */
+    @Test
+    public void linkNotImplementingTheInterfaceTheRootBoundsItsBuiltTypeBy_isRefusedOnTheLink() {
+        Compilation c = compile(comparableShape(), circle());
+        assertRefusedWith(c, unmetBound("Circle", "Comparable<Shape>"));
+        assertEquals(List.of(unmetBound("Circle", "Comparable<Shape>")), errors(c));
+    }
+
+    /** The same link below a root compiled before it. */
+    @Test
+    public void linkNotImplementingTheInterfaceACompiledRootBoundsItsBuiltTypeBy_isRefusedOnTheLink()
+        throws Exception {
+        Path shape = compiledAncestor(comparableShape());
+        Compilation c = compileAgainst(shape, circle());
+        assertRefusedWith(c, unmetBound("Circle", "Comparable<Shape>"));
+        assertEquals(List.of(unmetBound("Circle", "Comparable<Shape>")), errors(c));
+    }
+
+    /**
+     * A chained abstract whose builder is generated passes its own built type
+     * up to the root's builder, so it has to implement the extra interface
+     * itself, and is refused on its annotation where it does not.
+     */
+    @Test
+    public void chainedAbstractNotImplementingTheInterfaceTheRootBoundsItsBuiltTypeBy_isRefusedOnIt() {
+        Compilation c = compile(comparableShape(),
+            src("demo.Polygon",
                 "package demo;",
                 "import dev.simplified.annotations.ClassBuilder;",
                 CB,
-                "public abstract class Shape extends Figure {",
-                "    private String name;",
-                "    public String getName() { return name; }",
-                "    public abstract static class Builder<T extends java.io.Serializable, B extends Builder<T, B>> { }",
+                "public abstract class Polygon extends Shape {",
+                "    private int sides;",
+                "}"));
+        assertRefusedWith(c, unmetBound("Polygon", "Comparable<Shape>"));
+        assertEquals(List.of(unmetBound("Polygon", "Comparable<Shape>")), errors(c));
+    }
+
+    /** A chained abstract implementing the extra interface, and a leaf below it, build and run. */
+    @Test
+    public void chainedAbstractImplementingTheInterfaceTheRootBoundsItsBuiltTypeBy_buildsAndRunsBelowIt()
+        throws Exception {
+        Compilation c = compile(comparableShape(),
+            src("demo.Polygon",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                CB,
+                "public abstract class Polygon extends Shape implements Comparable<Shape> {",
+                "    private int sides;",
+                "    public int getSides() { return sides; }",
+                "    @Override public int compareTo(Shape other) { return 0; }",
                 "}"),
-            circle());
-        assertRefusedWith(c, boundsRefusal("<T extends Shape, B extends Builder<T, B>>",
-            "<T extends java.io.Serializable, B extends Builder<T, B>>"));
+            src("demo.Square",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                CB,
+                "public class Square extends Polygon {",
+                "    private int edge;",
+                "    public int getEdge() { return edge; }",
+                "}"),
+            src("demo.UseSquare",
+                "package demo;",
+                "public class UseSquare {",
+                "    public static String go() { return Square.builder().name(\"s\").sides(4).edge(1).build().getName(); }",
+                "}"));
+        assertBuilt(c);
+        assertEquals("s", runGo("demo.UseSquare", c));
     }
 
     // ------------------------------------------------------------------

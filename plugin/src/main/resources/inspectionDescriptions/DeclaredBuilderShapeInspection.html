@@ -37,12 +37,13 @@ The shapes refused, each for a reason the generated members cannot work around:
       <code>builder()</code>.</li>
   <li><b>An unbounded or otherwise bounded trailing pair</b> on a self-typed
       builder - every link binds the pair to itself and its own builder, so
-      each type the first parameter's bound names has to be the target, a type
-      the target's own <code>extends</code> or <code>implements</code> clause
-      names, or <code>Object</code>, and the second has to be bounded by the
-      builder applied to the pair in order. A type the target reaches only
-      through a supertype further up is refused, the names being unable to tell
-      it from an unrelated one.</li>
+      the first type the first parameter's bound names has to be the target,
+      <code>Object</code>, or a supertype of the target at any depth - one its
+      own <code>extends</code> or <code>implements</code> clause names, or one
+      it reaches further up, which is resolved - and the second has to be
+      bounded by the builder applied to the pair in order. A name that resolves
+      to nothing is refused. Further types of an intersection bound are
+      accepted here, and judged on each link below.</li>
   <li><b>The wrong <code>extends</code> clause</b> - a chained builder inherits
       the parent's setters through it, so it has to name the annotated
       ancestor's builder, qualifier included, and pass it the ancestor's own
@@ -75,7 +76,11 @@ another package, and a link whose extends clause names a generic ancestor
 without its type arguments. A concrete link is reported on its annotation, too,
 where the nearest <code>self()</code> it overrides is <code>final</code> on a
 compiled ancestor - one built without the processor, whose own builder nothing
-judged; a source ancestor's is reported on that ancestor's builder alone.
+judged; a source ancestor's is reported on that ancestor's builder alone. So is
+a concrete link, or a chained abstract whose builder is generated, that is not
+within a type an ancestor's builder bounds the type it builds by, as
+instantiated for it - <code>T extends Shape &amp; Comparable&lt;Shape&gt;</code>
+above a link that does not implement <code>Comparable&lt;Shape&gt;</code>.
 </p>
 
 <p>

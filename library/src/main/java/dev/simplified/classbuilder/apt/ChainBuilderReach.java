@@ -5,6 +5,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
+import java.util.function.IntPredicate;
 
 /**
  * The rules deciding whether a builder an author declares on a chain role can
@@ -24,9 +25,12 @@ import java.util.List;
  * <p>Every question is answered from names, flags, parameter counts and
  * rendered type text, never from a resolved type: the processor reads them off
  * a tree the round is still building or off an ancestor's class file, and the
- * editor off PSI it must not resolve. The one exception is a {@code self()} a
+ * editor off PSI it must not resolve. The two exceptions are a {@code self()} a
  * root's builder inherits, which each half finds through the builder's
- * resolved supertypes and hands over as flags and the text of its return type.
+ * resolved supertypes and hands over as flags and the text of its return type,
+ * and the types an ancestor's builder bounds the type it builds by, which each
+ * half instantiates with the link and hands over as text with its verdict on
+ * whether the link is within each.
  */
 public final class ChainBuilderReach {
 
@@ -327,6 +331,62 @@ public final class ChainBuilderReach {
         if (nearest == null || !nearest.isFinal() || judged) return null;
         return "@ClassBuilder generates no builder on '" + targetName + "' - the self() of '" + ancestorName + "."
             + builderName + "' is final, so its builder cannot override it";
+    }
+
+    /**
+     * Decides whether a target below an annotated ancestor is judged against
+     * the types each self-typed ancestor's builder bounds the type it builds by.
+     *
+     * <p>A concrete link's generated builder passes the link itself as that
+     * type, and a chained abstract's generated builder passes its own built
+     * type, bounded by the chained abstract alone. A chained abstract declaring
+     * its builder passes the parameter its author bounded, and the extends
+     * clause the author wrote is where javac judges it.
+     *
+     * @param role the target's position in the chain
+     * @param declaresBuilder whether the target declares its own builder
+     * @return whether the target is judged
+     */
+    public static boolean judgesBuiltTypeBounds(@NotNull ChainRole role, boolean declaresBuilder) {
+        return role == ChainRole.CONCRETE_LINK || (role == ChainRole.CHAINED_ABSTRACT && !declaresBuilder);
+    }
+
+    /**
+     * Reports the first type a self-typed ancestor's builder bounds the type it
+     * builds by that a target below it is not within, reported on the target's
+     * annotation.
+     *
+     * <p>An intersection bound's first type is a supertype of the ancestor,
+     * which every target below it is within, and each further type is accepted
+     * on the ancestor's builder whoever implements it. Each target the chain
+     * binds that type to is judged here instead, against every type of the bound
+     * but {@code Object} as instantiated for it - {@code Comparable<Shape>}
+     * stays itself, {@code Comparable<T>} is {@code Comparable<Circle>} on a
+     * concrete link {@code Circle}, and on a chained abstract, whose own built
+     * type stands in for {@code T}, no type naming {@code T} is one it can be
+     * within. Where it is not, javac fails on the target's generated extends
+     * clause, so the target is refused and nothing is generated for it.
+     *
+     * @param targetName the target's simple name
+     * @param ancestorName the simple name of the annotated ancestor whose builder declares the bound
+     * @param builderName the builder class name the chain is written in
+     * @param boundTypes each type the bound names, instantiated for the target, in either model's spelling and
+     *     in the order written
+     * @param within the caller's verdict, given a position in {@code boundTypes}, on whether the target is a
+     *     subtype of the type there
+     * @return the error, or null when the target is within every type
+     */
+    public static @Nullable String unmetBuiltTypeBound(@NotNull String targetName, @NotNull String ancestorName,
+                                                       @NotNull String builderName, @NotNull List<String> boundTypes,
+                                                       @NotNull IntPredicate within) {
+        for (int i = 0; i < boundTypes.size(); i++) {
+            String bound = DeclaredBuilderShape.typeText(boundTypes.get(i));
+            if ("Object".equals(DeclaredBuilderShape.erasedName(bound)) || within.test(i)) continue;
+            return "@ClassBuilder generates no builder on '" + targetName + "' - '" + ancestorName + "."
+                + builderName + "' bounds the type it builds by " + DeclaredBuilderShape.unqualified(bound)
+                + ", which '" + targetName + "' does not implement";
+        }
+        return null;
     }
 
     /**

@@ -7,9 +7,11 @@ import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationMemberValue;
 import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiClassType;
 import com.intellij.psi.PsiCompiledElement;
 import com.intellij.psi.PsiConstantEvaluationHelper;
 import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiElementFactory;
 import com.intellij.psi.PsiExpression;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiImportList;
@@ -962,11 +964,61 @@ public final class ClassBuilderConstants {
         RoleExpectation expectation = roleExpectation(target,
             typeParameterSource(target, executable), role, names.type(), facts.typeParameterNames(),
             ancestor == null ? null : ancestor.getName(), superTypeArgumentTexts(target));
-        DeclaredBuilderRejection rejection = DeclaredBuilderShape.check(role, facts, expectation);
+        DeclaredBuilderRejection rejection = DeclaredBuilderShape.check(role, facts, expectation,
+            index -> firstBoundIsSupertype(target, declared, index));
         return rejection == null
             ? null
             : DeclaredBuilderShape.describe(rejection, role, declaredName, targetName,
                 names.builder(), facts, expectation);
+    }
+
+    /**
+     * Whether the first bound written on one of a declared builder's type
+     * parameters names a supertype of the target at any depth, as the processor
+     * reads it from the element model.
+     *
+     * <p>Only the bound's own reference is resolved, and the target's
+     * supertypes through their extends and implements references, each
+     * supertype's own in turn - never a member of any of them - inside the
+     * re-entry guard of the target, whose nested types the resolve walks and
+     * whose augment pass may be the one asking. A reference that resolves to
+     * nothing, or to a type parameter, is not one.
+     *
+     * @param target the type the builder nests in
+     * @param declared the builder it declares
+     * @param index the position of the type parameter among the builder's own
+     * @return whether the bound names a supertype of the target
+     */
+    private static boolean firstBoundIsSupertype(@NotNull PsiClass target, @NotNull PsiClass declared, int index) {
+        PsiTypeParameter[] parameters = declared.getTypeParameters();
+        if (index < 0 || index >= parameters.length) return false;
+        PsiJavaCodeReferenceElement[] references = parameters[index].getExtendsList().getReferenceElements();
+        if (references.length == 0) return false;
+        return AbstractRecursionSafeAugmentProvider.withInProgress(target, () -> {
+            if (!(references[0].resolve() instanceof PsiClass bound) || bound instanceof PsiTypeParameter)
+                return false;
+            String name = bound.getQualifiedName();
+            return name != null && reachesSupertype(target, name, new HashSet<>());
+        });
+    }
+
+    /**
+     * Whether a type reaches the named class among its supertypes at any
+     * depth, walked through each one's resolved supertypes.
+     *
+     * @param type the type whose supertypes are walked
+     * @param qualifiedName the class looked for
+     * @param seen the supertypes already walked
+     * @return whether one of them is the class
+     */
+    private static boolean reachesSupertype(@NotNull PsiClass type, @NotNull String qualifiedName,
+                                            @NotNull Set<PsiClass> seen) {
+        for (PsiClass supertype : type.getSupers()) {
+            if (!seen.add(supertype)) continue;
+            if (qualifiedName.equals(supertype.getQualifiedName()) || reachesSupertype(supertype, qualifiedName, seen))
+                return true;
+        }
+        return false;
     }
 
     /**
@@ -1010,6 +1062,12 @@ public final class ClassBuilderConstants {
      * compiled ancestor, as {@link ChainBuilderReach#unjudgedFinalSelf} decides
      * it: the processor judged a source ancestor's on that ancestor's builder,
      * and a compiled one's reaches the link unjudged.
+     *
+     * <p>Last, on a concrete link and on a chained abstract declaring no
+     * builder, so does a type a self-typed ancestor's builder bounds the type
+     * it builds by that the target is not within, as
+     * {@link ChainBuilderReach#unmetBuiltTypeBound} decides it - an
+     * intersection bound's further interface the target does not implement.
      *
      * @param target the annotated type
      * @param builderName the builder class name the chain is written in
@@ -1082,16 +1140,88 @@ public final class ClassBuilderConstants {
             return new AncestorBlock(parent,
                 ChainBuilderReach.unreachableAncestorBuilder(reason, targetName, parentName, builderName));
         }
-        if (chainRoleOf(target) != ChainRole.CONCRETE_LINK) return null;
-        // The nearest self() the link overrides is read through the ancestors'
-        // resolved supertypes, under this target's guard.
-        NearestSelf nearest = AbstractRecursionSafeAugmentProvider.withInProgress(target,
-            () -> nearestSelf(target, builderName));
-        if (nearest == null) return null;
-        String nearestName = nearest.ancestor().getName() == null ? "" : nearest.ancestor().getName();
-        String finalSelf = ChainBuilderReach.unjudgedFinalSelf(targetName, nearestName, builderName,
-            nearest.self(), !(nearest.ancestor() instanceof PsiCompiledElement));
-        return finalSelf == null ? null : new AncestorBlock(nearest.ancestor(), finalSelf);
+        ChainRole role = chainRoleOf(target);
+        if (role == ChainRole.CONCRETE_LINK) {
+            // The nearest self() the link overrides is read through the
+            // ancestors' resolved supertypes, under this target's guard.
+            NearestSelf nearest = AbstractRecursionSafeAugmentProvider.withInProgress(target,
+                () -> nearestSelf(target, builderName));
+            String finalSelf = nearest == null
+                ? null
+                : ChainBuilderReach.unjudgedFinalSelf(targetName,
+                    nearest.ancestor().getName() == null ? "" : nearest.ancestor().getName(), builderName,
+                    nearest.self(), !(nearest.ancestor() instanceof PsiCompiledElement));
+            if (finalSelf != null) return new AncestorBlock(nearest.ancestor(), finalSelf);
+        }
+        if (!ChainBuilderReach.judgesBuiltTypeBounds(role, declaredBuilderOf(target, builderName) != null))
+            return null;
+        // The bounds are instantiated for this target and judged by resolving
+        // its supertypes and each bound's references, under this target's guard.
+        return AbstractRecursionSafeAugmentProvider.withInProgress(target,
+            () -> unmetBuiltTypeBound(target, builderName, role == ChainRole.CONCRETE_LINK));
+    }
+
+    /**
+     * The first type a self-typed ancestor's builder bounds the type it builds
+     * by that the target is not within, as
+     * {@link ChainBuilderReach#unmetBuiltTypeBound} decides it for each
+     * annotated ancestor upward from the direct one, the processor reading the
+     * same bounds from the element model.
+     *
+     * <p>Each ancestor's builder is read where its author wrote it, source or
+     * class file - a source ancestor's generated builder is contributed rather
+     * than declared, and its one bound is the ancestor itself. Each type of its
+     * built type's bound is instantiated for the target: the ancestor's own
+     * leading parameters by the arguments the target's supertype passes the
+     * ancestor, the built type by the target on a concrete link and left as it
+     * is on a chained abstract, and judged as a subtype with no unchecked
+     * conversion.
+     *
+     * @param target the annotated type
+     * @param builderName the builder class name the chain is written in
+     * @param concrete whether the target is a concrete link, which binds the built type to itself
+     * @return the ancestor declaring the bound and the error, or {@code null} when the target is within every type
+     */
+    private static @Nullable AncestorBlock unmetBuiltTypeBound(@NotNull PsiClass target, @NotNull String builderName,
+                                                               boolean concrete) {
+        // The target applied to its own type parameters, as the element model's
+        // type of a class declaration reads - not the raw type.
+        PsiElementFactory factory = JavaPsiFacade.getElementFactory(target.getProject());
+        PsiTypeParameter[] own = target.getTypeParameters();
+        PsiType[] arguments = new PsiType[own.length];
+        for (int i = 0; i < own.length; i++) arguments[i] = factory.createType(own[i]);
+        PsiType targetType = factory.createType(target, arguments);
+        String targetName = target.getName() == null ? "" : target.getName();
+        Set<PsiClass> seen = new HashSet<>();
+        for (PsiClass parent = annotatedSuperOf(target); parent != null && seen.add(parent);
+             parent = annotatedSuperOf(parent)) {
+            if (!chainRoleOf(parent).isSelfTyped()) continue;
+            PsiClass builder = declaredBuilderOf(parent, builderName);
+            if (builder == null) continue;
+            PsiTypeParameter[] parameters = builder.getTypeParameters();
+            int size = parameters.length;
+            if (size < 2) continue;
+            PsiSubstitutor inherited = TypeConversionUtil.getSuperClassSubstitutor(parent, target,
+                PsiSubstitutor.EMPTY);
+            PsiTypeParameter[] parentParameters = parent.getTypeParameters();
+            PsiSubstitutor substitutor = PsiSubstitutor.EMPTY;
+            for (int i = 0; i < size - 2 && i < parentParameters.length; i++)
+                substitutor = substitutor.put(parameters[i], inherited.substitute(parentParameters[i]));
+            if (concrete) substitutor = substitutor.put(parameters[size - 2], targetType);
+            List<PsiType> instantiated = new ArrayList<>();
+            List<String> texts = new ArrayList<>();
+            for (PsiClassType bound : parameters[size - 2].getExtendsListTypes()) {
+                PsiType type = substitutor.substitute(bound);
+                instantiated.add(type);
+                texts.add(type == null ? "" : type.getCanonicalText());
+            }
+            String unmet = ChainBuilderReach.unmetBuiltTypeBound(targetName,
+                parent.getName() == null ? "" : parent.getName(), builderName, texts,
+                i -> instantiated.get(i) != null
+                    && TypeConversionUtil.isAssignable(instantiated.get(i), targetType, false));
+            if (unmet != null) return new AncestorBlock(parent, unmet);
+        }
+        return null;
     }
 
     /**

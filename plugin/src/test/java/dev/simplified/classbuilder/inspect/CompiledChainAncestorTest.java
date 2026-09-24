@@ -495,6 +495,71 @@ public class CompiledChainAncestorTest extends BasePlatformTestCase {
     }
 
     // ------------------------------------------------------------------
+    // The bound a root's built type is declared with, over compiled types
+    // ------------------------------------------------------------------
+
+    /**
+     * A source root below a compiled, unannotated superclass implementing
+     * {@code Serializable}, its builder bounding its built type by it, is
+     * accepted and the link's chain resolves, as javac builds it. It was
+     * reported, the rule reading only the names the root's own clauses write.
+     */
+    public void testARootBoundingItsBuiltTypeByASupertypeOfACompiledSuperclass_isNotReported() throws Exception {
+        compiled(false, "demo/Figure.java", """
+            package demo;
+            public abstract class Figure implements java.io.Serializable { }
+            """);
+        myFixture.addFileToProject("demo/Shape.java", """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false)
+            public abstract class Shape extends Figure {
+                private String name;
+                public String getName() { return name; }
+                public abstract static class Builder<T extends java.io.Serializable, B extends Builder<T, B>> { }
+            }
+            """);
+        addCircle();
+        addUseShape();
+        assertEquals(List.of(), errorsIn("demo/Shape.java"));
+        assertEquals(List.of(), allErrorsIn("demo/UseShape.java"));
+    }
+
+    /** The root builder bounding its built type by the root and {@code Comparable<Shape>}. */
+    private static final String COMPARABLE_ROOT =
+        "public abstract static class Builder<T extends Shape & Comparable<Shape>, B extends Builder<T, B>> { }";
+
+    /**
+     * A link implementing the extra interface a compiled root's builder bounds
+     * its built type by resolves, as javac builds it. The root was refused, and
+     * compiling it failed.
+     */
+    public void testALinkImplementingTheInterfaceACompiledRootBoundsItsBuiltTypeBy_resolves() throws Exception {
+        compiledShape(true, COMPARABLE_ROOT);
+        myFixture.addFileToProject("demo/Circle.java", """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(validate = false)
+            public class Circle extends Shape implements Comparable<Shape> {
+                private int radius;
+                public int getRadius() { return radius; }
+                @Override public int compareTo(Shape other) { return 0; }
+            }
+            """);
+        addUseShape();
+        assertEquals(List.of(), errorsIn("demo/Circle.java"));
+        assertEquals(List.of(), allErrorsIn("demo/UseShape.java"));
+    }
+
+    /** A link that does not implement it is reported on its annotation, as javac refuses it. */
+    public void testALinkNotImplementingTheInterfaceACompiledRootBoundsItsBuiltTypeBy_isReported() throws Exception {
+        compiledShape(true, COMPARABLE_ROOT);
+        addCircle();
+        assertEquals(List.of("@ClassBuilder generates no builder on 'Circle' - 'Shape.Builder' bounds the type it "
+            + "builds by Comparable<Shape>, which 'Circle' does not implement"), errorsIn("demo/Circle.java"));
+    }
+
+    // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
 

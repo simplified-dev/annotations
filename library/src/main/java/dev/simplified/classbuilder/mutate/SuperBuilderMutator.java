@@ -1,5 +1,8 @@
 package dev.simplified.classbuilder.mutate;
 import com.sun.tools.javac.code.Flags;
+import com.sun.tools.javac.code.Symbol;
+import com.sun.tools.javac.code.Type;
+import com.sun.tools.javac.code.Types;
 import com.sun.tools.javac.tree.JCTree.JCBlock;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import com.sun.tools.javac.tree.JCTree.JCExpression;
@@ -26,6 +29,9 @@ import dev.simplified.shared.javac.JavacTypeFactory;
 
 import javax.annotation.processing.Messager;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.TypeParameterElement;
+import javax.lang.model.type.TypeMirror;
+import javax.lang.model.util.ElementFilter;
 import javax.lang.model.util.Elements;
 import javax.tools.Diagnostic;
 import java.util.Collection;
@@ -149,6 +155,20 @@ final class SuperBuilderMutator {
         String finalSelf = annotatedSuper == null || isAbstract ? null : unjudgedFinalSelf();
         if (finalSelf != null) {
             messager.printMessage(Diagnostic.Kind.ERROR, finalSelf, ctx.targetElement(),
+                new AnnotationLookup().findMirror(ctx.targetElement(), ClassBuilder.class.getName()));
+            return;
+        }
+
+        // A self-typed ancestor's builder may bound the type it builds by an
+        // interface beside its own supertype, which only the target the chain
+        // binds that type to can meet. One that does not fails on its generated
+        // extends clause, so it is refused on its annotation instead.
+        String unmetBound = annotatedSuper == null
+            || !ChainBuilderReach.judgesBuiltTypeBounds(ChainRole.of(isAbstract, true), declared != null)
+            ? null
+            : unmetBuiltTypeBound(!isAbstract);
+        if (unmetBound != null) {
+            messager.printMessage(Diagnostic.Kind.ERROR, unmetBound, ctx.targetElement(),
                 new AnnotationLookup().findMirror(ctx.targetElement(), ClassBuilder.class.getName()));
             return;
         }
@@ -587,6 +607,82 @@ final class SuperBuilderMutator {
             ? null
             : ChainBuilderReach.unjudgedFinalSelf(ctx.targetSimpleName(), nearest.ancestor().simpleName(),
                 ctx.builderName(), nearest.index().self(), nearest.index().judged());
+    }
+
+    /**
+     * Renders the first type a self-typed ancestor's builder bounds the type it
+     * builds by that this target is not within, as
+     * {@link ChainBuilderReach#unmetBuiltTypeBound} decides it for each
+     * annotated ancestor upward from the direct one.
+     *
+     * <p>Each ancestor's builder is read where its author wrote it - off the
+     * tree for an ancestor in this round, a builder this pass generated left
+     * out, since its one bound is the ancestor itself, and off the class file
+     * for one compiled before. Each type of its built type's bound is
+     * instantiated for this target: the ancestor's own leading parameters by
+     * the arguments this target's supertype passes the ancestor, the built type
+     * by this target on a concrete link and left as it is on a chained
+     * abstract, and judged by javac's subtype test.
+     *
+     * @param concrete whether this target is a concrete link, which binds the built type to itself
+     * @return the error, or null when this target is within every type
+     */
+    private String unmetBuiltTypeBound(boolean concrete) {
+        Types types = ctx.bridge().types();
+        Type target = (Type) ctx.targetElement().asType();
+        for (AnnotatedSuper ancestor = annotatedSuper; ancestor != null;
+             ancestor = BuilderMutator.findAnnotatedDirectSuper(ancestor.element())) {
+            if (!ancestor.role().isSelfTyped()) continue;
+            TypeElement builder = authoredBuilderOf(ancestor.element());
+            if (builder == null) continue;
+            java.util.List<? extends TypeParameterElement> parameters = builder.getTypeParameters();
+            int size = parameters.size();
+            if (size < 2) continue;
+            ListBuffer<Type> from = new ListBuffer<>();
+            ListBuffer<Type> to = new ListBuffer<>();
+            Type asSuper = types.asSuper(target, (Symbol) ancestor.element());
+            List<Type> arguments = asSuper == null ? List.nil() : asSuper.getTypeArguments();
+            for (int i = 0; i < size - 2 && i < arguments.size(); i++) {
+                from.append((Type) parameters.get(i).asType());
+                to.append(arguments.get(i));
+            }
+            if (concrete) {
+                from.append((Type) parameters.get(size - 2).asType());
+                to.append(target);
+            }
+            java.util.List<Type> instantiated = new java.util.ArrayList<>();
+            java.util.List<String> texts = new java.util.ArrayList<>();
+            for (TypeMirror bound : parameters.get(size - 2).getBounds()) {
+                Type type = types.subst((Type) bound, from.toList(), to.toList());
+                instantiated.add(type);
+                texts.add(type.toString());
+            }
+            String unmet = ChainBuilderReach.unmetBuiltTypeBound(ctx.targetSimpleName(), ancestor.simpleName(),
+                ctx.builderName(), texts, i -> types.isSubtype(target, instantiated.get(i)));
+            if (unmet != null) return unmet;
+        }
+        return null;
+    }
+
+    /**
+     * The builder an annotated ancestor's author declared, as its type element.
+     *
+     * @param ancestor the annotated ancestor
+     * @return the builder, or null when it has none or its builder is one this pass generated
+     */
+    private TypeElement authoredBuilderOf(TypeElement ancestor) {
+        JCClassDecl tree = ctx.bridge().treeOf(ancestor);
+        if (tree != null) {
+            for (JCTree def : tree.defs) {
+                if (def instanceof JCClassDecl nested && nested.name.contentEquals(ctx.builderName()))
+                    return AstMarkers.isGenerated(nested) ? null : nested.sym;
+            }
+            return null;
+        }
+        for (TypeElement nested : ElementFilter.typesIn(ancestor.getEnclosedElements())) {
+            if (nested.getSimpleName().contentEquals(ctx.builderName())) return nested;
+        }
+        return null;
     }
 
     /**
