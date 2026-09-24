@@ -3,6 +3,7 @@ package dev.simplified.shared.inspect;
 import com.intellij.psi.JavaRecursiveElementWalkingVisitor;
 import com.intellij.psi.JavaTokenType;
 import com.intellij.psi.PsiAnnotation;
+import com.intellij.psi.PsiAssertStatement;
 import com.intellij.psi.PsiAssignmentExpression;
 import com.intellij.psi.PsiBlockStatement;
 import com.intellij.psi.PsiBreakStatement;
@@ -10,28 +11,53 @@ import com.intellij.psi.PsiCaseLabelElement;
 import com.intellij.psi.PsiCaseLabelElementList;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiCodeBlock;
+import com.intellij.psi.PsiConditionalExpression;
+import com.intellij.psi.PsiContinueStatement;
+import com.intellij.psi.PsiDeclarationStatement;
 import com.intellij.psi.PsiDefaultCaseLabelElement;
+import com.intellij.psi.PsiDoWhileStatement;
+import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiEnumConstant;
 import com.intellij.psi.PsiExpression;
+import com.intellij.psi.PsiExpressionListStatement;
 import com.intellij.psi.PsiExpressionStatement;
 import com.intellij.psi.PsiField;
+import com.intellij.psi.PsiForStatement;
+import com.intellij.psi.PsiForeachStatement;
+import com.intellij.psi.PsiIdentifier;
 import com.intellij.psi.PsiIfStatement;
+import com.intellij.psi.PsiLabeledStatement;
 import com.intellij.psi.PsiLambdaExpression;
+import com.intellij.psi.PsiLiteralExpression;
+import com.intellij.psi.PsiLocalVariable;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiMethodCallExpression;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiParameter;
+import com.intellij.psi.PsiPattern;
+import com.intellij.psi.PsiPolyadicExpression;
 import com.intellij.psi.PsiReferenceExpression;
+import com.intellij.psi.PsiResourceExpression;
+import com.intellij.psi.PsiResourceList;
+import com.intellij.psi.PsiResourceVariable;
 import com.intellij.psi.PsiReturnStatement;
 import com.intellij.psi.PsiStatement;
+import com.intellij.psi.PsiSwitchBlock;
+import com.intellij.psi.PsiSwitchExpression;
 import com.intellij.psi.PsiSwitchLabelStatement;
 import com.intellij.psi.PsiSwitchLabelStatementBase;
 import com.intellij.psi.PsiSwitchLabeledRuleStatement;
 import com.intellij.psi.PsiSwitchStatement;
+import com.intellij.psi.PsiSynchronizedStatement;
 import com.intellij.psi.PsiThisExpression;
 import com.intellij.psi.PsiThrowStatement;
+import com.intellij.psi.PsiTryStatement;
+import com.intellij.psi.PsiUnaryExpression;
 import com.intellij.psi.PsiVariable;
+import com.intellij.psi.PsiWhileStatement;
+import com.intellij.psi.PsiYieldStatement;
 import com.intellij.psi.impl.source.PsiExtensibleClass;
+import com.intellij.psi.tree.IElementType;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.psi.util.PsiUtil;
 import dev.simplified.accessor.inspect.AccessorConstants;
@@ -47,7 +73,6 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -156,10 +181,10 @@ public final class GeneratedFieldAccess {
      * class, is one javac accepts.
      *
      * <p>{@link BlankFinalLift#acceptedWrites} answers it from the
-     * constructor's statements by name: a write reached while the field is
-     * still unassigned on every path is accepted, and every other write -
-     * a second one, one after {@code this(..)}, one in a loop or a {@code try} -
-     * is refused, as javac refuses it.
+     * constructor's statements by name, by javac's definite-unassignment rules:
+     * a write reached where the field is definitely unassigned is accepted, and
+     * every other write - a second one, one after {@code this(..)}, one a loop
+     * may run again - is refused, as javac refuses it.
      *
      * @param written the written reference
      * @param field the field it writes
@@ -215,10 +240,10 @@ public final class GeneratedFieldAccess {
      * Reads the statements one constructor body writes through and the names
      * it declares, by name and without resolving.
      *
-     * <p>The body is read into {@link BlankFinalLift}'s statement shapes, as
-     * the processor reads the javac tree: a plain assignment or a chain of
-     * them, a block, an {@code if}, a {@code switch}, an exit and a
-     * {@code break}, every other statement being one the rule never counts.
+     * <p>The body is read into {@link BlankFinalLift}'s statement and
+     * expression shapes, as the processor reads the javac tree: every
+     * statement form by its own shape and every expression by the operands it
+     * evaluates.
      *
      * @param constructor the written constructor
      * @param body its body
@@ -277,59 +302,209 @@ public final class GeneratedFieldAccess {
      */
     private static @NotNull BlankFinalLift.Statement<PsiReferenceExpression> statementOf(
         @Nullable PsiStatement statement) {
-        if (statement == null) return new BlankFinalLift.Other<>(List.of());
-        if (statement instanceof PsiExpressionStatement expression) {
-            PsiExpression top = PsiUtil.skipParenthesizedExprDown(expression.getExpression());
-            if (top instanceof PsiAssignmentExpression assignment
-                && assignment.getOperationTokenType() == JavaTokenType.EQ)
-                return new BlankFinalLift.Assignment<>(chainOf(assignment));
+        if (statement instanceof PsiExpressionStatement expression)
+            return new BlankFinalLift.Expression<>(valueOf(expression.getExpression()));
+        if (statement instanceof PsiExpressionListStatement list) {
+            List<BlankFinalLift.Statement<PsiReferenceExpression>> out = new ArrayList<>();
+            for (PsiExpression expression : list.getExpressionList().getExpressions())
+                out.add(new BlankFinalLift.Expression<>(valueOf(expression)));
+            return new BlankFinalLift.Block<>(out);
         }
-        if (statement instanceof PsiBlockStatement block)
-            return new BlankFinalLift.Block<>(statementsOf(block.getCodeBlock().getStatements()));
+        if (statement instanceof PsiDeclarationStatement declaration) {
+            List<BlankFinalLift.Statement<PsiReferenceExpression>> out = new ArrayList<>();
+            for (PsiElement element : declaration.getDeclaredElements()) {
+                if (element instanceof PsiLocalVariable local)
+                    out.add(new BlankFinalLift.Expression<>(valueOf(local.getInitializer())));
+            }
+            return new BlankFinalLift.Block<>(out);
+        }
+        if (statement instanceof PsiBlockStatement block) return blockOf(block.getCodeBlock());
         if (statement instanceof PsiIfStatement branch) {
             PsiStatement otherwise = branch.getElseBranch();
-            return new BlankFinalLift.Branch<>(statementOf(branch.getThenBranch()),
+            return new BlankFinalLift.Branch<>(valueOf(branch.getCondition()), statementOf(branch.getThenBranch()),
                 otherwise == null ? null : statementOf(otherwise));
         }
-        if (statement instanceof PsiSwitchStatement choice) return switchOf(choice);
-        if (statement instanceof PsiReturnStatement || statement instanceof PsiThrowStatement)
-            return new BlankFinalLift.Exit<>();
-        if (statement instanceof PsiBreakStatement jump && jump.getLabelIdentifier() == null)
-            return new BlankFinalLift.Break<>();
-        return new BlankFinalLift.Other<>(writesWithin(statement));
-    }
-
-    /**
-     * Reads a chain of plain assignments, keeping each target written through
-     * its bare name or an unqualified {@code this}.
-     *
-     * @param first the outermost assignment
-     * @return the targets, the innermost first
-     */
-    private static @NotNull List<BlankFinalLift.Write<PsiReferenceExpression>> chainOf(
-        @NotNull PsiAssignmentExpression first) {
-        List<BlankFinalLift.Write<PsiReferenceExpression>> out = new ArrayList<>();
-        PsiExpression step = first;
-        while (step instanceof PsiAssignmentExpression assignment
-            && assignment.getOperationTokenType() == JavaTokenType.EQ) {
-            BlankFinalLift.Write<PsiReferenceExpression> write = writeOf(assignment);
-            if (write != null) out.add(write);
-            step = PsiUtil.skipParenthesizedExprDown(assignment.getRExpression());
+        if (statement instanceof PsiWhileStatement loop)
+            return loop(BlankFinalLift.LoopKind.WHILE, List.of(), loop.getCondition(), List.of(), loop.getBody());
+        if (statement instanceof PsiDoWhileStatement loop)
+            return loop(BlankFinalLift.LoopKind.DO, List.of(), loop.getCondition(), List.of(), loop.getBody());
+        if (statement instanceof PsiForStatement loop) {
+            return loop(BlankFinalLift.LoopKind.FOR, List.of(statementOf(loop.getInitialization())),
+                loop.getCondition(), List.of(statementOf(loop.getUpdate())), loop.getBody());
         }
-        Collections.reverse(out);
-        return out;
+        if (statement instanceof PsiForeachStatement loop) {
+            return new BlankFinalLift.Loop<>(BlankFinalLift.LoopKind.FOREACH,
+                List.of(new BlankFinalLift.Expression<>(valueOf(loop.getIteratedValue()))), null, List.of(),
+                statementOf(loop.getBody()));
+        }
+        if (statement instanceof PsiSwitchStatement choice)
+            return new BlankFinalLift.Switch<>(valueOf(choice.getExpression()), exhaustive(choice), armsOf(choice, false));
+        if (statement instanceof PsiTryStatement attempt) return tryOf(attempt);
+        if (statement instanceof PsiSynchronizedStatement lock) {
+            return new BlankFinalLift.Block<>(List.of(
+                new BlankFinalLift.Expression<>(valueOf(lock.getLockExpression())), blockOf(lock.getBody())));
+        }
+        if (statement instanceof PsiLabeledStatement labelled)
+            return new BlankFinalLift.Labelled<>(labelled.getLabelIdentifier().getText(),
+                statementOf(labelled.getStatement()));
+        if (statement instanceof PsiReturnStatement)
+            return new BlankFinalLift.Jump<>(BlankFinalLift.JumpKind.RETURN, null, null);
+        if (statement instanceof PsiThrowStatement thrown)
+            return new BlankFinalLift.Jump<>(BlankFinalLift.JumpKind.THROW, null, valueOf(thrown.getException()));
+        if (statement instanceof PsiBreakStatement jump)
+            return new BlankFinalLift.Jump<>(BlankFinalLift.JumpKind.BREAK, labelOf(jump.getLabelIdentifier()), null);
+        if (statement instanceof PsiContinueStatement jump) {
+            return new BlankFinalLift.Jump<>(BlankFinalLift.JumpKind.CONTINUE, labelOf(jump.getLabelIdentifier()),
+                null);
+        }
+        if (statement instanceof PsiYieldStatement yielded)
+            return new BlankFinalLift.Jump<>(BlankFinalLift.JumpKind.YIELD, null, valueOf(yielded.getExpression()));
+        if (statement instanceof PsiAssertStatement check) {
+            PsiExpression detail = check.getAssertDescription();
+            return new BlankFinalLift.Assert<>(valueOf(check.getAssertCondition()),
+                detail == null ? null : valueOf(detail));
+        }
+        return new BlankFinalLift.Block<>(List.of());
     }
 
     /**
-     * Reads the target of one plain assignment.
+     * Reads a code block into the rule's shape.
      *
-     * @param assignment the assignment
+     * @param block the block, or {@code null} where the source leaves it out
+     * @return its shape
+     */
+    private static @NotNull BlankFinalLift.Statement<PsiReferenceExpression> blockOf(@Nullable PsiCodeBlock block) {
+        return new BlankFinalLift.Block<>(block == null ? List.of() : statementsOf(block.getStatements()));
+    }
+
+    /**
+     * Reads a loop into the rule's shape.
+     *
+     * @param kind which loop it is
+     * @param init what runs once ahead of it
+     * @param condition the condition, or {@code null}
+     * @param update the update statements
+     * @param body the body, or {@code null} where the source leaves it out
+     * @return its shape
+     */
+    private static @NotNull BlankFinalLift.Statement<PsiReferenceExpression> loop(
+        @NotNull BlankFinalLift.LoopKind kind, @NotNull List<BlankFinalLift.Statement<PsiReferenceExpression>> init,
+        @Nullable PsiExpression condition, @NotNull List<BlankFinalLift.Statement<PsiReferenceExpression>> update,
+        @Nullable PsiStatement body) {
+        return new BlankFinalLift.Loop<>(kind, init, condition == null ? null : valueOf(condition), update,
+            statementOf(body));
+    }
+
+    /**
+     * Reads a {@code try} statement into the rule's shape, its resources ahead
+     * of its block.
+     *
+     * @param attempt the statement
+     * @return its shape
+     */
+    private static @NotNull BlankFinalLift.Statement<PsiReferenceExpression> tryOf(@NotNull PsiTryStatement attempt) {
+        List<BlankFinalLift.Statement<PsiReferenceExpression>> body = new ArrayList<>();
+        PsiResourceList resources = attempt.getResourceList();
+        if (resources != null) {
+            for (PsiElement resource : resources.getChildren()) {
+                if (resource instanceof PsiResourceVariable variable)
+                    body.add(new BlankFinalLift.Expression<>(valueOf(variable.getInitializer())));
+                else if (resource instanceof PsiResourceExpression expression)
+                    body.add(new BlankFinalLift.Expression<>(valueOf(expression.getExpression())));
+            }
+        }
+        PsiCodeBlock block = attempt.getTryBlock();
+        if (block != null) body.addAll(statementsOf(block.getStatements()));
+        List<List<BlankFinalLift.Statement<PsiReferenceExpression>>> catches = new ArrayList<>();
+        for (PsiCodeBlock handler : attempt.getCatchBlocks()) catches.add(statementsOf(handler.getStatements()));
+        PsiCodeBlock finalizer = attempt.getFinallyBlock();
+        return new BlankFinalLift.Try<>(body, catches, finalizer == null ? null : statementsOf(finalizer.getStatements()));
+    }
+
+    /**
+     * The text of a jump's label.
+     *
+     * @param label the label, or {@code null}
+     * @return its name, or {@code null}
+     */
+    private static @Nullable String labelOf(@Nullable PsiIdentifier label) {
+        return label == null ? null : label.getText();
+    }
+
+    /**
+     * Reads an expression into the rule's shapes, by the operands it
+     * evaluates and the names it writes.
+     *
+     * @param expression the expression, or {@code null} where the source leaves one out
+     * @return its shape
+     */
+    private static @NotNull BlankFinalLift.Value<PsiReferenceExpression> valueOf(@Nullable PsiExpression expression) {
+        PsiExpression tree = PsiUtil.skipParenthesizedExprDown(expression);
+        if (tree == null || tree instanceof PsiLambdaExpression) return new BlankFinalLift.Evaluate<>(List.of());
+        if (tree instanceof PsiLiteralExpression literal && literal.getValue() instanceof Boolean value)
+            return new BlankFinalLift.Constant<>(value);
+        if (tree instanceof PsiAssignmentExpression assignment) {
+            return new BlankFinalLift.Assign<>(
+                List.of(valueOf(assignment.getLExpression()), valueOf(assignment.getRExpression())),
+                writeOf(assignment.getLExpression()));
+        }
+        if (tree instanceof PsiUnaryExpression unary) {
+            IElementType operator = unary.getOperationTokenType();
+            if (operator == JavaTokenType.EXCL) return new BlankFinalLift.Not<>(valueOf(unary.getOperand()));
+            if (operator == JavaTokenType.PLUSPLUS || operator == JavaTokenType.MINUSMINUS)
+                return new BlankFinalLift.Assign<>(List.of(valueOf(unary.getOperand())), writeOf(unary.getOperand()));
+        }
+        if (tree instanceof PsiPolyadicExpression polyadic) {
+            IElementType operator = polyadic.getOperationTokenType();
+            if (operator == JavaTokenType.ANDAND || operator == JavaTokenType.OROR) {
+                PsiExpression[] operands = polyadic.getOperands();
+                BlankFinalLift.Value<PsiReferenceExpression> combined = valueOf(operands[0]);
+                for (int i = 1; i < operands.length; i++) {
+                    combined = operator == JavaTokenType.ANDAND
+                        ? new BlankFinalLift.And<>(combined, valueOf(operands[i]))
+                        : new BlankFinalLift.Or<>(combined, valueOf(operands[i]));
+                }
+                return combined;
+            }
+        }
+        if (tree instanceof PsiConditionalExpression choice) {
+            return new BlankFinalLift.Choice<>(valueOf(choice.getCondition()), valueOf(choice.getThenExpression()),
+                valueOf(choice.getElseExpression()));
+        }
+        if (tree instanceof PsiSwitchExpression choice)
+            return new BlankFinalLift.SwitchValue<>(valueOf(choice.getExpression()), armsOf(choice, true));
+        List<BlankFinalLift.Value<PsiReferenceExpression>> operands = new ArrayList<>();
+        for (PsiElement child = tree.getFirstChild(); child != null; child = child.getNextSibling())
+            collectOperands(child, operands);
+        return new BlankFinalLift.Evaluate<>(operands);
+    }
+
+    /**
+     * Collects the outermost expressions under an element, in source order,
+     * leaving out a nested class's body.
+     *
+     * @param element the element
+     * @param out where each expression's shape goes
+     */
+    private static void collectOperands(@NotNull PsiElement element,
+                                        @NotNull List<BlankFinalLift.Value<PsiReferenceExpression>> out) {
+        if (element instanceof PsiExpression expression) {
+            out.add(valueOf(expression));
+            return;
+        }
+        if (element instanceof PsiClass || element instanceof PsiCodeBlock || element instanceof PsiStatement) return;
+        for (PsiElement child = element.getFirstChild(); child != null; child = child.getNextSibling())
+            collectOperands(child, out);
+    }
+
+    /**
+     * Reads the target of a write.
+     *
+     * @param target the written expression
      * @return the write, or {@code null} when its target is not a bare name or an unqualified {@code this} one
      */
-    private static @Nullable BlankFinalLift.Write<PsiReferenceExpression> writeOf(
-        @NotNull PsiAssignmentExpression assignment) {
-        if (!(PsiUtil.skipParenthesizedExprDown(assignment.getLExpression()) instanceof PsiReferenceExpression reference))
-            return null;
+    private static @Nullable BlankFinalLift.Write<PsiReferenceExpression> writeOf(@Nullable PsiExpression target) {
+        if (!(PsiUtil.skipParenthesizedExprDown(target) instanceof PsiReferenceExpression reference)) return null;
         String name = reference.getReferenceName();
         if (name == null) return null;
         PsiExpression qualifier = PsiUtil.skipParenthesizedExprDown(reference.getQualifierExpression());
@@ -340,57 +515,29 @@ public final class GeneratedFieldAccess {
     }
 
     /**
-     * Collects the plain assignments inside a statement the rule never counts,
-     * outside any lambda or nested class.
+     * Reads a {@code switch}'s body into its arms, consecutive colon labels
+     * joining one arm.
      *
-     * @param statement the statement
-     * @return its writes
+     * @param choice the switch statement or expression
+     * @param yields whether it is an expression, whose arrow arm with an expression body yields it
+     * @return the arms
      */
-    private static @NotNull List<BlankFinalLift.Write<PsiReferenceExpression>> writesWithin(
-        @NotNull PsiStatement statement) {
-        List<BlankFinalLift.Write<PsiReferenceExpression>> out = new ArrayList<>();
-        statement.accept(new JavaRecursiveElementWalkingVisitor() {
-            @Override
-            public void visitClass(@NotNull PsiClass aClass) {
-            }
-
-            @Override
-            public void visitLambdaExpression(@NotNull PsiLambdaExpression expression) {
-            }
-
-            @Override
-            public void visitAssignmentExpression(@NotNull PsiAssignmentExpression expression) {
-                super.visitAssignmentExpression(expression);
-                if (expression.getOperationTokenType() != JavaTokenType.EQ) return;
-                BlankFinalLift.Write<PsiReferenceExpression> write = writeOf(expression);
-                if (write != null) out.add(write);
-            }
-        });
-        return out;
-    }
-
-    /**
-     * Reads a {@code switch} into its arms, consecutive colon labels joining
-     * one arm.
-     *
-     * @param choice the switch statement
-     * @return its shape
-     */
-    private static @NotNull BlankFinalLift.Statement<PsiReferenceExpression> switchOf(
-        @NotNull PsiSwitchStatement choice) {
-        PsiCodeBlock body = choice.getBody();
-        if (body == null) return new BlankFinalLift.Other<>(writesWithin(choice));
-        boolean hasDefault = false;
+    private static @NotNull List<BlankFinalLift.Arm<PsiReferenceExpression>> armsOf(@NotNull PsiSwitchBlock choice,
+                                                                                    boolean yields) {
         List<BlankFinalLift.Arm<PsiReferenceExpression>> arms = new ArrayList<>();
+        PsiCodeBlock body = choice.getBody();
+        if (body == null) return arms;
         List<BlankFinalLift.Statement<PsiReferenceExpression>> group = null;
         for (PsiStatement statement : body.getStatements()) {
             if (statement instanceof PsiSwitchLabeledRuleStatement rule) {
-                hasDefault |= isDefault(rule);
                 PsiStatement ruleBody = rule.getBody();
-                arms.add(new BlankFinalLift.Arm<>(true,
-                    ruleBody == null ? List.of() : List.of(statementOf(ruleBody))));
-            } else if (statement instanceof PsiSwitchLabelStatement label) {
-                hasDefault |= isDefault(label);
+                BlankFinalLift.Statement<PsiReferenceExpression> shape =
+                    yields && ruleBody instanceof PsiExpressionStatement expression
+                        ? new BlankFinalLift.Jump<>(BlankFinalLift.JumpKind.YIELD, null,
+                            valueOf(expression.getExpression()))
+                        : statementOf(ruleBody);
+                arms.add(new BlankFinalLift.Arm<>(true, List.of(shape)));
+            } else if (statement instanceof PsiSwitchLabelStatement) {
                 if (group == null || !group.isEmpty()) {
                     group = new ArrayList<>();
                     arms.add(new BlankFinalLift.Arm<>(false, group));
@@ -399,21 +546,28 @@ public final class GeneratedFieldAccess {
                 group.add(statementOf(statement));
             }
         }
-        return new BlankFinalLift.Switch<>(hasDefault, arms);
+        return arms;
     }
 
     /**
-     * Whether a switch label is, or includes, {@code default}.
+     * Whether a {@code switch}'s labels make javac require it to cover every
+     * value - a {@code default}, a pattern or a {@code null} label.
      *
-     * @param label the label
-     * @return whether it is a default label
+     * @param choice the switch statement
+     * @return whether it is exhaustive
      */
-    private static boolean isDefault(@NotNull PsiSwitchLabelStatementBase label) {
-        if (label.isDefaultCase()) return true;
-        PsiCaseLabelElementList elements = label.getCaseLabelElementList();
-        if (elements == null) return false;
-        for (PsiCaseLabelElement element : elements.getElements()) {
-            if (element instanceof PsiDefaultCaseLabelElement) return true;
+    private static boolean exhaustive(@NotNull PsiSwitchBlock choice) {
+        PsiCodeBlock body = choice.getBody();
+        if (body == null) return false;
+        for (PsiStatement statement : body.getStatements()) {
+            if (!(statement instanceof PsiSwitchLabelStatementBase label)) continue;
+            if (label.isDefaultCase()) return true;
+            PsiCaseLabelElementList elements = label.getCaseLabelElementList();
+            if (elements == null) continue;
+            for (PsiCaseLabelElement element : elements.getElements()) {
+                if (element instanceof PsiDefaultCaseLabelElement || element instanceof PsiPattern) return true;
+                if (element instanceof PsiLiteralExpression literal && "null".equals(literal.getText())) return true;
+            }
         }
         return false;
     }

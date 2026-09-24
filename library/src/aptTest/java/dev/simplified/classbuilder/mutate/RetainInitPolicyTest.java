@@ -446,26 +446,18 @@ public class RetainInitPolicyTest {
     }
 
     /**
-     * A {@code switch} with no {@code default}, one whose last colon arm falls
-     * out without a {@code break}, and one whose arm may break ahead of its
-     * write are outside the rule: the initializer stays and javac refuses each
-     * write.
+     * A {@code switch} with no {@code default}, and one whose arm may break
+     * ahead of its write, leave the field unassigned on a path through it: the
+     * initializer stays and javac refuses each write.
      */
     @Test
-    public void finalAssignedInASwitchOutsideTheRule_isNotLifted() {
+    public void finalLeftUnassignedOnAPathThroughASwitch_isNotLifted() {
         JavaFileObject noDefault = finalAssignedBy(
             "switch (a) {\n        case 1 -> this.a = 1;\n        case 2 -> this.a = 2;\n        }");
         Compilation first = compile(noDefault);
         assertThat(first).hadErrorContaining("cannot assign a value to final variable a").inFile(noDefault).onLine(9);
         assertThat(first).hadErrorContaining("cannot assign a value to final variable a").inFile(noDefault).onLine(10);
         assertThat(first).hadErrorCount(2);
-
-        JavaFileObject fallsOut = finalAssignedBy(
-            "switch (a) {\n        case 1: this.a = 1; break;\n        default: this.a = 2;\n        }");
-        Compilation second = compile(fallsOut);
-        assertThat(second).hadErrorContaining("cannot assign a value to final variable a").inFile(fallsOut).onLine(9);
-        assertThat(second).hadErrorContaining("cannot assign a value to final variable a").inFile(fallsOut).onLine(10);
-        assertThat(second).hadErrorCount(2);
 
         JavaFileObject breaksFirst = finalAssignedBy(
             "switch (a) {\n        case 1: if (a > 5) break; this.a = 1; break;\n        default: this.a = 2; break;\n        }");
@@ -780,6 +772,170 @@ public class RetainInitPolicyTest {
         assertThat(throughQualifier).hadErrorContaining("cannot assign a value to final variable a")
             .inFile(qualified).onLine(10);
         assertThat(throughQualifier).hadErrorCount(2);
+    }
+
+    // ------------------------------------------------------------------
+    // The constructor walk follows javac's definite-assignment rules
+    // ------------------------------------------------------------------
+
+    /**
+     * Asserts the compilation failed with exactly one error on each of the
+     * given lines of the source, and on no other.
+     */
+    private static void assertErrorLines(JavaFileObject src, int... lines) {
+        Compilation c = compile(src);
+        for (int line : lines) assertThat(c).hadErrorContaining("").inFile(src).onLine(line);
+        assertThat(c).hadErrorCount(lines.length);
+    }
+
+    /**
+     * A {@code return} reached while the field is unassigned leaves the
+     * constructor with a blank final, so the field keeps its initializer and
+     * javac refuses the write as a second assignment on the write's own line,
+     * where the editor reports it too - at the top level, in a block and in a
+     * {@code switch} arm alike. The lift counted the write after the
+     * {@code return}, and javac reported {@code variable a might not have been
+     * initialized} on the {@code return}, where the editor showed nothing.
+     */
+    @Test
+    public void aReturnAheadOfTheOnlyWrite_keepsTheInitializer() {
+        String refused = "cannot assign a value to final variable a";
+        assertOnlyError(finalAssignedBy("if (a > 0) return;\n        this.a = a;"), refused, 9);
+        assertOnlyError(finalAssignedBy("{ if (a > 0) return; this.a = a; }"), refused, 8);
+        JavaFileObject inAnArm = finalAssignedBy(
+            "switch (a) {\n        case 1: if (a > 5) return; this.a = 1; break;\n        default: this.a = 2; break;\n        }");
+        Compilation c = compile(inAnArm);
+        assertThat(c).hadErrorContaining(refused).inFile(inAnArm).onLine(9);
+        assertThat(c).hadErrorContaining(refused).inFile(inAnArm).onLine(10);
+        assertThat(c).hadErrorCount(2);
+    }
+
+    /** A {@code return} after the write leaves the field assigned, and the field is lifted as before. */
+    @Test
+    public void aReturnAfterTheWrite_isLifted() throws Exception {
+        JavaFileObject src = finalAssignedBy("this.a = a;\n        if (a > 5) return;");
+        assertEquals(3, builtWith(src, 3));
+        assertEquals(7, builtWith(src, 7));
+    }
+
+    /**
+     * A write in a statement that always runs it - a {@code synchronized} or
+     * labelled block, a {@code try} whose {@code catch} rethrows or whose only
+     * other clause is {@code finally}, a declaration's initializer, a
+     * {@code do} loop over {@code false}, a {@code while (true)} that breaks
+     * after it, an {@code if} whose {@code else} throws, or a {@code switch}
+     * whose last colon arm falls out of it - definitely assigns the field, and
+     * javac builds the lifted class. Each was read as a statement the rule
+     * never counts, and javac refused the write with {@code cannot assign a
+     * value to final variable a}.
+     */
+    @Test
+    public void finalAssignedInAStatementThatAlwaysRunsTheWrite_isLifted() throws Exception {
+        for (String body : new String[] {
+            "synchronized (this) { this.a = a; }",
+            "lbl: { this.a = a; }",
+            "try { this.a = a; } finally { }",
+            "try { this.a = a; } catch (RuntimeException e) { throw e; }",
+            "int k = this.a = a;",
+            "do { this.a = a; } while (false);",
+            "while (true) { this.a = a; break; }",
+            "if (a > 0) this.a = a;\n        else throw new IllegalArgumentException();",
+            "switch (a) {\n        case 1: this.a = 3; break;\n        default: this.a = a;\n        }",
+        })
+            assertEquals(body, 3, builtWith(finalAssignedBy(body), 3));
+    }
+
+    /**
+     * javac's own lines for a write inside a statement followed by a
+     * top-level write, which the editor has to match: after a {@code do} or
+     * enhanced {@code for} loop both writes are refused, and after a
+     * {@code try}, a {@code synchronized} or labelled block or a declaration
+     * only the top-level one is.
+     */
+    @Test
+    public void aWriteInsideAStatementThenATopLevelWrite_isRejectedOnJavacsLines() {
+        assertErrorLines(finalAssignedBy("do { this.a = 1; } while (a > 5);\n        this.a = a;"), 8, 9);
+        assertErrorLines(finalAssignedBy("for (int i : new int[] {1}) this.a = i;\n        this.a = a;"), 8, 9);
+        assertErrorLines(finalAssignedBy("try { this.a = 1; } catch (RuntimeException e) { }\n        this.a = a;"), 9);
+        assertErrorLines(finalAssignedBy("try { this.a = 1; } finally { }\n        this.a = a;"), 9);
+        assertErrorLines(finalAssignedBy("synchronized (this) { this.a = 1; }\n        this.a = a;"), 9);
+        assertErrorLines(finalAssignedBy("lbl: { this.a = 1; }\n        this.a = a;"), 9);
+        assertErrorLines(finalAssignedBy("int k = this.a = 1;\n        this.a = a;"), 9);
+    }
+
+    /**
+     * A write the field's first on a path that then returns is accepted
+     * wherever it sits, and so is the write after the {@code if}: javac builds
+     * the lifted class.
+     */
+    @Test
+    public void aFirstWriteInsideAStatementOnAPathThatReturns_isAccepted() throws Exception {
+        JavaFileObject src = finalAssignedBy(
+            "if (a > 0) { synchronized (this) { this.a = 1; } return; }\n        this.a = a;");
+        assertEquals(1, builtWith(src, 5));
+        assertEquals(-2, builtWith(src, -2));
+    }
+
+    /**
+     * An args-annotation constructor beside the builder's assigns no field the
+     * lift takes an initializer off, so each keeps the initializer's value
+     * while {@code build()} sets the builder's. The lift stripped the
+     * initializer for the builder's constructor and left the args
+     * constructor's blank final unassigned: {@code variable label might not
+     * have been initialized} on the annotation's line.
+     */
+    @Test
+    public void finalBesideAnArgsAnnotationConstructor_keepsItsValueThere() throws Exception {
+        JavaFileObject required = JavaFileObjects.forSourceLines("demo.Named",
+            """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.RequiredArgsConstructor;
+            @ClassBuilder(validate = false)
+            @RequiredArgsConstructor
+            public class Named {
+                private final String label = "declared";
+                private final int count;
+                public String getLabel() { return label; }
+                public int getCount() { return count; }
+            }
+            """.split("\n"));
+        Compilation first = compile(required);
+        assertThat(first).succeeded();
+        Class<?> named = Class.forName("demo.Named", true, loadClasses(first));
+        var viaArgs = named.getDeclaredConstructor(int.class);
+        viaArgs.setAccessible(true);
+        Object argsBuilt = viaArgs.newInstance(4);
+        assertEquals("declared", get(named, argsBuilt, "getLabel"));
+        assertEquals(4, get(named, argsBuilt, "getCount"));
+        Class<?> builder = nested(named, "Builder");
+        Object b = named.getMethod("builder").invoke(null);
+        builder.getMethod("label", String.class).invoke(b, "built");
+        assertEquals("built", get(named, builder.getMethod("build").invoke(b), "getLabel"));
+
+        JavaFileObject none = JavaFileObjects.forSourceLines("demo.Named",
+            """
+            package demo;
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.NoArgsConstructor;
+            @ClassBuilder(validate = false)
+            @NoArgsConstructor
+            public class Named {
+                private final String label = "declared";
+                public String getLabel() { return label; }
+            }
+            """.split("\n"));
+        Compilation second = compile(none);
+        assertThat(second).succeeded();
+        Class<?> bare = Class.forName("demo.Named", true, loadClasses(second));
+        var noArgs = bare.getDeclaredConstructor();
+        noArgs.setAccessible(true);
+        assertEquals("declared", get(bare, noArgs.newInstance(), "getLabel"));
+        Class<?> bareBuilder = nested(bare, "Builder");
+        Object nb = bare.getMethod("builder").invoke(null);
+        bareBuilder.getMethod("label", String.class).invoke(nb, "built");
+        assertEquals("built", get(bare, bareBuilder.getMethod("build").invoke(nb), "getLabel"));
+        assertEquals("declared", get(bare, buildUntouched(bare), "getLabel"));
     }
 
     // ------------------------------------------------------------------

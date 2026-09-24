@@ -578,15 +578,13 @@ public class GeneratedMemberHighlightFilterTest extends LightJavaCodeInsightFixt
     }
 
     /**
-     * A {@code switch} with no {@code default}, a last colon arm falling out
-     * without a {@code break}, and an arm that may break ahead of its write are
-     * outside the rule: javac keeps the initializer and refuses every write.
+     * A {@code switch} with no {@code default}, and an arm that may break ahead
+     * of its write, leave the field unassigned on a path through it: javac
+     * keeps the initializer and refuses every write.
      */
-    public void testWritesToAFinalInASwitchOutsideTheRule_keepTheReport() {
+    public void testWritesToAFinalLeftUnassignedOnAPathThroughASwitch_keepTheReport() {
         configureFinalAssignedBy("switch (a) {\n        case 1 -> this.a = 1;\n        case 2 -> this.a = 2;\n        }");
         assertEquals("no default", List.of(7, 8), finalAssignmentLines());
-        configureFinalAssignedBy("switch (a) {\n        case 1: this.a = 1; break;\n        default: this.a = 2;\n        }");
-        assertEquals("the last arm falls out", List.of(7, 8), finalAssignmentLines());
         configureFinalAssignedBy(
             "switch (a) {\n        case 1: if (a > 5) break; this.a = 1; break;\n        default: this.a = 2; break;\n        }");
         assertEquals("a break ahead of the write", List.of(7, 8), finalAssignmentLines());
@@ -741,6 +739,114 @@ public class GeneratedMemberHighlightFilterTest extends LightJavaCodeInsightFixt
             }
             """);
         assertEquals(List.of(), finalAssignmentLines());
+    }
+
+    /**
+     * A {@code return} reached while the field is unassigned keeps the
+     * initializer on the field, so javac refuses the write after it on the
+     * write's line - at the top level, in a block and in a {@code switch} arm.
+     * The write was counted, the field read as lifted and the report cleared,
+     * green over javac's {@code variable a might not have been initialized}.
+     */
+    public void testAReturnAheadOfTheOnlyWrite_keepsTheReport() {
+        configureFinalAssignedBy("if (a > 0) return;\n        this.a = a;");
+        assertEquals("at the top level", List.of(7), finalAssignmentLines());
+        configureFinalAssignedBy("{ if (a > 0) return; this.a = a; }");
+        assertEquals("in a block", List.of(6), finalAssignmentLines());
+        configureFinalAssignedBy(
+            "switch (a) {\n        case 1: if (a > 5) return; this.a = 1; break;\n        default: this.a = 2; break;\n        }");
+        assertEquals("in an arm", List.of(7, 8), finalAssignmentLines());
+    }
+
+    /** A {@code return} after the write leaves the field assigned, and the write is cleared as before. */
+    public void testAReturnAfterTheWrite_isCleared() {
+        configureFinalAssignedBy("this.a = a;\n        if (a > 5) return;");
+        assertEquals(List.of(), finalAssignmentLines());
+    }
+
+    /**
+     * A write in a statement that always runs it assigns the field, so javac
+     * lifts it and accepts the write: a {@code synchronized} or labelled
+     * block, a {@code try} whose {@code catch} rethrows or whose only other
+     * clause is {@code finally}, a declaration's initializer, a {@code do} over
+     * {@code false}, a {@code while (true)} breaking after it, an {@code if}
+     * whose {@code else} throws, and a {@code switch} whose last colon arm
+     * falls out of it. Each kept the report.
+     */
+    public void testAWriteInAStatementThatAlwaysRunsIt_isCleared() {
+        for (String body : List.of(
+            "synchronized (this) { this.a = a; }",
+            "lbl: { this.a = a; }",
+            "try { this.a = a; } finally { }",
+            "try { this.a = a; } catch (RuntimeException e) { throw e; }",
+            "int k = this.a = a;",
+            "do { this.a = a; } while (false);",
+            "while (true) { this.a = a; break; }",
+            "if (a > 0) this.a = a;\n        else throw new IllegalArgumentException();",
+            "switch (a) {\n        case 1: this.a = 3; break;\n        default: this.a = a;\n        }")) {
+            configureFinalAssignedBy(body);
+            assertEquals(body, List.of(), finalAssignmentLines());
+        }
+    }
+
+    /**
+     * javac's lines for a write inside a statement followed by a top-level
+     * write: after a {@code do} or enhanced {@code for} loop it refuses both,
+     * and after a {@code try}, a {@code synchronized} or labelled block or a
+     * declaration it accepts the inner write and refuses the top-level one.
+     * The editor kept the inner write's report and cleared the top-level one
+     * in every case.
+     */
+    public void testAWriteInsideAStatementThenATopLevelOne_isReportedOnJavacsLines() {
+        configureFinalAssignedBy("do { this.a = 1; } while (a > 5);\n        this.a = a;");
+        assertEquals("do", List.of(6, 7), finalAssignmentLines());
+        configureFinalAssignedBy("for (int i : new int[] {1}) this.a = i;\n        this.a = a;");
+        assertEquals("enhanced for", List.of(6, 7), finalAssignmentLines());
+        configureFinalAssignedBy("try { this.a = 1; } catch (RuntimeException e) { }\n        this.a = a;");
+        assertEquals("try", List.of(7), finalAssignmentLines());
+        configureFinalAssignedBy("try { this.a = 1; } finally { }\n        this.a = a;");
+        assertEquals("try and finally", List.of(7), finalAssignmentLines());
+        configureFinalAssignedBy("synchronized (this) { this.a = 1; }\n        this.a = a;");
+        assertEquals("synchronized", List.of(7), finalAssignmentLines());
+        configureFinalAssignedBy("lbl: { this.a = 1; }\n        this.a = a;");
+        assertEquals("labelled", List.of(7), finalAssignmentLines());
+        configureFinalAssignedBy("int k = this.a = 1;\n        this.a = a;");
+        assertEquals("declaration", List.of(7), finalAssignmentLines());
+    }
+
+    /**
+     * The field's first write on a path that then returns is accepted wherever
+     * it sits, and so is the write after the {@code if}. The write inside the
+     * {@code synchronized} block stayed red over source that builds.
+     */
+    public void testAFirstWriteInsideAStatementOnAPathThatReturns_isCleared() {
+        configureFinalAssignedBy("if (a > 0) { synchronized (this) { this.a = 1; } return; }\n        this.a = a;");
+        assertEquals("javac accepts both writes", List.of(), finalAssignmentLines());
+    }
+
+    /**
+     * An args-annotation constructor beside the builder's keeps the field's
+     * initializer value, and nothing about the field is an error in the
+     * editor, as nothing is in javac.
+     */
+    public void testAFinalBesideAnArgsAnnotationConstructor_showsNoError() {
+        for (String annotation : List.of("RequiredArgsConstructor", "NoArgsConstructor")) {
+            configure(
+                """
+                import dev.simplified.annotations.ClassBuilder;
+                import dev.simplified.annotations.%s;
+                @ClassBuilder
+                @%s
+                public class Target {
+                    private final String label = "declared";
+                    public String getLabel() { return label; }
+                }
+                """.formatted(annotation, annotation));
+            List<String> errors = new ArrayList<>();
+            for (HighlightInfo info : myFixture.doHighlighting())
+                if (info.getSeverity() == HighlightSeverity.ERROR) errors.add(info.getDescription());
+            assertEquals("@" + annotation, List.of(), errors);
+        }
     }
 
     // ------------------------------------------------------------------

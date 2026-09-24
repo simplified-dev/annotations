@@ -1,25 +1,45 @@
 package dev.simplified.classbuilder.mutate;
 import com.sun.source.tree.CaseTree;
 import com.sun.tools.javac.code.Flags;
+import com.sun.tools.javac.code.TypeTag;
 import com.sun.tools.javac.parser.ParserFactory;
+import com.sun.tools.javac.tree.JCTree.JCAnnotation;
+import com.sun.tools.javac.tree.JCTree.JCAssert;
 import com.sun.tools.javac.tree.JCTree.JCAssign;
+import com.sun.tools.javac.tree.JCTree.JCAssignOp;
+import com.sun.tools.javac.tree.JCTree.JCBinary;
 import com.sun.tools.javac.tree.JCTree.JCBlock;
 import com.sun.tools.javac.tree.JCTree.JCBreak;
 import com.sun.tools.javac.tree.JCTree.JCCase;
+import com.sun.tools.javac.tree.JCTree.JCCatch;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
+import com.sun.tools.javac.tree.JCTree.JCConditional;
+import com.sun.tools.javac.tree.JCTree.JCContinue;
+import com.sun.tools.javac.tree.JCTree.JCDoWhileLoop;
+import com.sun.tools.javac.tree.JCTree.JCEnhancedForLoop;
 import com.sun.tools.javac.tree.JCTree.JCExpression;
 import com.sun.tools.javac.tree.JCTree.JCExpressionStatement;
 import com.sun.tools.javac.tree.JCTree.JCFieldAccess;
+import com.sun.tools.javac.tree.JCTree.JCForLoop;
 import com.sun.tools.javac.tree.JCTree.JCIdent;
 import com.sun.tools.javac.tree.JCTree.JCIf;
+import com.sun.tools.javac.tree.JCTree.JCLabeledStatement;
+import com.sun.tools.javac.tree.JCTree.JCLambda;
+import com.sun.tools.javac.tree.JCTree.JCLiteral;
 import com.sun.tools.javac.tree.JCTree.JCMethodDecl;
 import com.sun.tools.javac.tree.JCTree.JCMethodInvocation;
 import com.sun.tools.javac.tree.JCTree.JCNewClass;
 import com.sun.tools.javac.tree.JCTree.JCReturn;
 import com.sun.tools.javac.tree.JCTree.JCStatement;
 import com.sun.tools.javac.tree.JCTree.JCSwitch;
+import com.sun.tools.javac.tree.JCTree.JCSwitchExpression;
+import com.sun.tools.javac.tree.JCTree.JCSynchronized;
 import com.sun.tools.javac.tree.JCTree.JCThrow;
+import com.sun.tools.javac.tree.JCTree.JCTry;
+import com.sun.tools.javac.tree.JCTree.JCUnary;
 import com.sun.tools.javac.tree.JCTree.JCVariableDecl;
+import com.sun.tools.javac.tree.JCTree.JCWhileLoop;
+import com.sun.tools.javac.tree.JCTree.JCYield;
 import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.TreeCopier;
 import com.sun.tools.javac.tree.TreeInfo;
@@ -40,7 +60,6 @@ import javax.annotation.processing.Messager;
 import javax.lang.model.element.AnnotationMirror;
 import javax.tools.Diagnostic;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -218,9 +237,10 @@ final class RetainedInitFactory {
      * {@link BlankFinalLift}.
      *
      * <p>javac's implicit default and every constructor this pipeline generated
-     * are left out: a generated constructor assigns every field it is built
-     * over, which the lift is told apart from these, and the implicit default
-     * stands only where no constructor is written.
+     * are left out: the constructor {@code build()} reaches assigns every field
+     * it is built over, which the lift is told apart from these, one an args
+     * annotation generates is given the initializer of each field lifted, and
+     * the implicit default stands only where no constructor is written.
      *
      * @param target the target's class declaration
      * @return one summary per author-written constructor
@@ -254,13 +274,12 @@ final class RetainedInitFactory {
      * Reads the statements one constructor body writes through and the names
      * it declares, never descending into a nested class's body.
      *
-     * <p>The body is read into {@link BlankFinalLift}'s statement shapes - a
-     * plain assignment or a chain of them, a block, an {@code if}, a
-     * {@code switch}, an exit and a {@code break} - and every other statement
-     * is one the rule never counts. Every name the body declares is read, at
-     * any depth.
+     * <p>The body is read into {@link BlankFinalLift}'s statement and
+     * expression shapes, every statement form by its own shape and every
+     * expression by the operands it evaluates. Every name the body declares is
+     * read, at any depth.
      *
-     * @param constructor the author-written constructor
+     * @param constructor the constructor
      * @return its summary
      */
     private static BlankFinalLift.Writes writesOf(JCMethodDecl constructor) {
@@ -286,78 +305,211 @@ final class RetainedInitFactory {
      * @param statements the statements
      * @return one shape per statement
      */
-    private static java.util.List<BlankFinalLift.Statement<JCTree>> statementsOf(List<JCStatement> statements) {
+    private static java.util.List<BlankFinalLift.Statement<JCTree>> statementsOf(List<? extends JCTree> statements) {
         java.util.List<BlankFinalLift.Statement<JCTree>> out = new ArrayList<>();
-        for (JCStatement statement : statements) out.add(statementOf(statement));
+        for (JCTree statement : statements) out.add(statementOf(statement));
         return out;
     }
 
     /**
-     * Reads one statement into the rule's shapes.
+     * Reads one statement, or a {@code try} statement's resource, into the rule's shapes.
      *
-     * @param statement the statement
+     * @param statement the statement, or {@code null} where the source leaves one out
      * @return its shape
      */
-    private static BlankFinalLift.Statement<JCTree> statementOf(JCStatement statement) {
-        if (statement instanceof JCExpressionStatement expression
-            && TreeInfo.skipParens(expression.expr) instanceof JCAssign assign)
-            return new BlankFinalLift.Assignment<>(chainOf(assign));
+    private static BlankFinalLift.Statement<JCTree> statementOf(JCTree statement) {
+        if (statement instanceof JCExpressionStatement expression)
+            return new BlankFinalLift.Expression<>(valueOf(expression.expr));
+        if (statement instanceof JCVariableDecl variable) return new BlankFinalLift.Expression<>(valueOf(variable.init));
+        if (statement instanceof JCExpression resource) return new BlankFinalLift.Expression<>(valueOf(resource));
         if (statement instanceof JCBlock block) return new BlankFinalLift.Block<>(statementsOf(block.stats));
         if (statement instanceof JCIf branch) {
-            return new BlankFinalLift.Branch<>(statementOf(branch.thenpart),
+            return new BlankFinalLift.Branch<>(valueOf(branch.cond), statementOf(branch.thenpart),
                 branch.elsepart == null ? null : statementOf(branch.elsepart));
         }
-        if (statement instanceof JCSwitch choice) return switchOf(choice);
-        if (statement instanceof JCReturn || statement instanceof JCThrow) return new BlankFinalLift.Exit<>();
-        if (statement instanceof JCBreak jump && jump.label == null) return new BlankFinalLift.Break<>();
-        return new BlankFinalLift.Other<>(java.util.List.of());
+        if (statement instanceof JCWhileLoop loop)
+            return loop(BlankFinalLift.LoopKind.WHILE, List.nil(), loop.cond, List.nil(), loop.body);
+        if (statement instanceof JCDoWhileLoop loop)
+            return loop(BlankFinalLift.LoopKind.DO, List.nil(), loop.cond, List.nil(), loop.body);
+        if (statement instanceof JCForLoop loop)
+            return loop(BlankFinalLift.LoopKind.FOR, loop.init, loop.cond, loop.step, loop.body);
+        if (statement instanceof JCEnhancedForLoop loop)
+            return loop(BlankFinalLift.LoopKind.FOREACH, List.of(loop.expr), null, List.nil(), loop.body);
+        if (statement instanceof JCSwitch choice)
+            return new BlankFinalLift.Switch<>(valueOf(choice.selector), exhaustive(choice.cases), armsOf(choice.cases));
+        if (statement instanceof JCTry attempt) {
+            java.util.List<BlankFinalLift.Statement<JCTree>> body = statementsOf(attempt.resources);
+            body.addAll(statementsOf(attempt.body.stats));
+            java.util.List<java.util.List<BlankFinalLift.Statement<JCTree>>> catches = new ArrayList<>();
+            for (JCCatch handler : attempt.catchers) catches.add(statementsOf(handler.body.stats));
+            return new BlankFinalLift.Try<>(body, catches,
+                attempt.finalizer == null ? null : statementsOf(attempt.finalizer.stats));
+        }
+        if (statement instanceof JCSynchronized lock) {
+            return new BlankFinalLift.Block<>(java.util.List.of(
+                new BlankFinalLift.Expression<>(valueOf(lock.lock)), statementOf(lock.body)));
+        }
+        if (statement instanceof JCLabeledStatement labelled)
+            return new BlankFinalLift.Labelled<>(labelled.label.toString(), statementOf(labelled.body));
+        if (statement instanceof JCReturn)
+            return new BlankFinalLift.Jump<>(BlankFinalLift.JumpKind.RETURN, null, null);
+        if (statement instanceof JCThrow thrown)
+            return new BlankFinalLift.Jump<>(BlankFinalLift.JumpKind.THROW, null, valueOf(thrown.expr));
+        if (statement instanceof JCBreak jump) {
+            return new BlankFinalLift.Jump<>(BlankFinalLift.JumpKind.BREAK,
+                jump.label == null ? null : jump.label.toString(), null);
+        }
+        if (statement instanceof JCContinue jump) {
+            return new BlankFinalLift.Jump<>(BlankFinalLift.JumpKind.CONTINUE,
+                jump.label == null ? null : jump.label.toString(), null);
+        }
+        if (statement instanceof JCYield yielded)
+            return new BlankFinalLift.Jump<>(BlankFinalLift.JumpKind.YIELD, null, valueOf(yielded.value));
+        if (statement instanceof JCAssert check) {
+            return new BlankFinalLift.Assert<>(valueOf(check.cond),
+                check.detail == null ? null : valueOf(check.detail));
+        }
+        return new BlankFinalLift.Block<>(java.util.List.of());
     }
 
     /**
-     * Reads a chain of plain assignments, keeping each target written through
-     * its bare name or an unqualified {@code this}.
+     * Reads a loop into the rule's shape.
      *
-     * @param first the outermost assignment
-     * @return the targets, the innermost first
+     * @param kind which loop it is
+     * @param init what runs once ahead of it
+     * @param condition the condition, or {@code null}
+     * @param update the update statements
+     * @param body the body
+     * @return its shape
      */
-    private static java.util.List<BlankFinalLift.Write<JCTree>> chainOf(JCAssign first) {
-        java.util.List<BlankFinalLift.Write<JCTree>> out = new ArrayList<>();
-        JCExpression step = first;
-        while (step instanceof JCAssign assign) {
-            JCExpression written = TreeInfo.skipParens(assign.lhs);
-            if (written instanceof JCIdent bare) {
-                out.add(new BlankFinalLift.Write<>(bare.name.toString(), false, written));
-            } else if (written instanceof JCFieldAccess select
-                && TreeInfo.skipParens(select.selected) instanceof JCIdent qualifier
-                && qualifier.name.toString().equals("this")) {
-                out.add(new BlankFinalLift.Write<>(select.name.toString(), true, written));
-            }
-            step = TreeInfo.skipParens(assign.rhs);
+    private static BlankFinalLift.Statement<JCTree> loop(BlankFinalLift.LoopKind kind, List<? extends JCTree> init,
+                                                         JCExpression condition, List<? extends JCTree> update,
+                                                         JCStatement body) {
+        return new BlankFinalLift.Loop<>(kind, statementsOf(init), condition == null ? null : valueOf(condition),
+            statementsOf(update), statementOf(body));
+    }
+
+    /**
+     * Reads an expression into the rule's shapes, by the operands it
+     * evaluates and the names it writes.
+     *
+     * @param expression the expression, or {@code null} where the source leaves one out
+     * @return its shape
+     */
+    private static BlankFinalLift.Value<JCTree> valueOf(JCExpression expression) {
+        if (expression == null) return new BlankFinalLift.Evaluate<>(java.util.List.of());
+        JCExpression tree = TreeInfo.skipParens(expression);
+        if (tree instanceof JCLiteral literal && literal.typetag == TypeTag.BOOLEAN)
+            return new BlankFinalLift.Constant<>(Boolean.TRUE.equals(literal.getValue()));
+        if (tree instanceof JCAssign assign)
+            return new BlankFinalLift.Assign<>(java.util.List.of(valueOf(assign.lhs), valueOf(assign.rhs)), writeOf(assign.lhs));
+        if (tree instanceof JCAssignOp assign)
+            return new BlankFinalLift.Assign<>(java.util.List.of(valueOf(assign.lhs), valueOf(assign.rhs)), writeOf(assign.lhs));
+        if (tree instanceof JCUnary unary) {
+            if (unary.hasTag(JCTree.Tag.NOT)) return new BlankFinalLift.Not<>(valueOf(unary.arg));
+            if (unary.hasTag(JCTree.Tag.PREINC) || unary.hasTag(JCTree.Tag.PREDEC)
+                || unary.hasTag(JCTree.Tag.POSTINC) || unary.hasTag(JCTree.Tag.POSTDEC))
+                return new BlankFinalLift.Assign<>(java.util.List.of(valueOf(unary.arg)), writeOf(unary.arg));
         }
-        Collections.reverse(out);
+        if (tree instanceof JCBinary binary && binary.hasTag(JCTree.Tag.AND))
+            return new BlankFinalLift.And<>(valueOf(binary.lhs), valueOf(binary.rhs));
+        if (tree instanceof JCBinary binary && binary.hasTag(JCTree.Tag.OR))
+            return new BlankFinalLift.Or<>(valueOf(binary.lhs), valueOf(binary.rhs));
+        if (tree instanceof JCConditional choice) {
+            return new BlankFinalLift.Choice<>(valueOf(choice.cond), valueOf(choice.truepart),
+                valueOf(choice.falsepart));
+        }
+        if (tree instanceof JCSwitchExpression choice)
+            return new BlankFinalLift.SwitchValue<>(valueOf(choice.selector), armsOf(choice.cases));
+        if (tree instanceof JCLambda || tree instanceof JCAnnotation)
+            return new BlankFinalLift.Evaluate<>(java.util.List.of());
+        return new BlankFinalLift.Evaluate<>(operandsOf(tree));
+    }
+
+    /**
+     * Reads the operands an expression evaluates, in order, leaving out a
+     * nested class's body.
+     *
+     * @param expression the expression
+     * @return one shape per operand
+     */
+    private static java.util.List<BlankFinalLift.Value<JCTree>> operandsOf(JCExpression expression) {
+        java.util.List<BlankFinalLift.Value<JCTree>> out = new ArrayList<>();
+        new TreeScanner() {
+            private boolean entered;
+
+            @Override
+            public void scan(JCTree child) {
+                if (child == null) return;
+                if (!entered) {
+                    entered = true;
+                    child.accept(this);
+                } else if (child instanceof JCExpression operand) {
+                    out.add(valueOf(operand));
+                }
+            }
+        }.scan(expression);
         return out;
     }
 
     /**
-     * Reads a {@code switch} into its arms, a colon label with no statements
-     * of its own joining the arm after it.
+     * Reads the target of a write, kept where it is written through its bare
+     * name or an unqualified {@code this}.
      *
-     * @param choice the switch statement
-     * @return its shape
+     * @param target the written expression
+     * @return the write, or {@code null} for any other target
      */
-    private static BlankFinalLift.Statement<JCTree> switchOf(JCSwitch choice) {
-        boolean hasDefault = false;
+    private static BlankFinalLift.Write<JCTree> writeOf(JCExpression target) {
+        JCExpression written = TreeInfo.skipParens(target);
+        if (written instanceof JCIdent bare) return new BlankFinalLift.Write<>(bare.name.toString(), false, written);
+        if (written instanceof JCFieldAccess select
+            && TreeInfo.skipParens(select.selected) instanceof JCIdent qualifier
+            && qualifier.name.toString().equals("this"))
+            return new BlankFinalLift.Write<>(select.name.toString(), true, written);
+        return null;
+    }
+
+    /**
+     * Reads a {@code switch}'s cases into its arms, a colon label with no
+     * statements of its own joining the arm after it.
+     *
+     * @param cases the cases
+     * @return the arms
+     */
+    private static java.util.List<BlankFinalLift.Arm<JCTree>> armsOf(List<JCCase> cases) {
         java.util.List<BlankFinalLift.Arm<JCTree>> arms = new ArrayList<>();
-        for (List<JCCase> rest = choice.cases; rest.nonEmpty(); rest = rest.tail) {
+        for (List<JCCase> rest = cases; rest.nonEmpty(); rest = rest.tail) {
             JCCase arm = rest.head;
-            for (JCTree label : arm.labels) {
-                if (label.hasTag(JCTree.Tag.DEFAULTCASELABEL)) hasDefault = true;
-            }
             boolean rule = arm.caseKind == CaseTree.CaseKind.RULE;
             if (!rule && arm.stats.isEmpty() && rest.tail.nonEmpty()) continue;
             arms.add(new BlankFinalLift.Arm<>(rule, statementsOf(arm.stats)));
         }
-        return new BlankFinalLift.Switch<>(hasDefault, arms);
+        return arms;
+    }
+
+    /**
+     * Whether a {@code switch} statement's labels make javac require it to
+     * cover every value - a {@code default}, a pattern or a {@code null} label.
+     *
+     * <p>Read by the tree's tag names, which differ between the JDKs the
+     * processor runs on.
+     *
+     * @param cases the cases
+     * @return whether it is exhaustive
+     */
+    private static boolean exhaustive(List<JCCase> cases) {
+        for (JCCase arm : cases) {
+            for (JCTree label : arm.labels) {
+                String tag = label.getTag().name();
+                if (label.hasTag(JCTree.Tag.DEFAULTCASELABEL) || tag.endsWith("PATTERN")
+                    || tag.equals("PATTERNCASELABEL")) return true;
+            }
+            for (JCExpression constant : arm.getExpressions()) {
+                if (TreeInfo.skipParens(constant) instanceof JCLiteral literal && literal.typetag == TypeTag.BOT)
+                    return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -384,6 +536,13 @@ final class RetainedInitFactory {
      * genuine blank final - and clears {@code HASINIT} on the field symbol for
      * the single-round case where no re-enter happens. Idempotent across rounds
      * (an already-blank field is left alone).
+     *
+     * <p>A constructor an args annotation generated beside the builder's
+     * assigns none of the fields the lift takes an initializer off, and would
+     * leave the blank final unassigned. Each such constructor is given the
+     * initializer as its first statement, so an instance built through it holds
+     * the value the initializer gave it, as one built through an author
+     * constructor leaving the field does.
      */
     private void stripToBlankFinal(JCClassDecl target, String fieldName) {
         for (JCTree def : target.defs) {
@@ -395,9 +554,31 @@ final class RetainedInitFactory {
             // initializer and the constructor's assignment.
             if ((decl.mods.flags & Flags.FINAL) == 0) return;
             if (decl.init == null) return; // already blank (re-run idempotency)
+            carryIntoGeneratedConstructors(target, fieldName, decl.init);
             decl.init = null;
             if (decl.sym != null) decl.sym.flags_field &= ~Flags.HASINIT;
             return;
+        }
+    }
+
+    /**
+     * Assigns a lifted field its initializer in every generated constructor
+     * that neither assigns the field nor delegates to another constructor.
+     *
+     * @param target the target's tree
+     * @param fieldName the lifted field
+     * @param initializer the initializer taken off it
+     */
+    private void carryIntoGeneratedConstructors(JCClassDecl target, String fieldName, JCExpression initializer) {
+        for (JCTree def : target.defs) {
+            if (!(def instanceof JCMethodDecl m)) continue;
+            if (!m.name.toString().equals("<init>") || m.body == null || !AstMarkers.isGenerated(m)) continue;
+            BlankFinalLift.Writes writes = writesOf(m);
+            if (writes.delegates() || writes.assigned().contains(fieldName)) continue;
+            JCStatement assign = make.Exec(make.Assign(
+                make.Select(make.Ident(names._this), names.fromString(fieldName)),
+                new ResettingCopier(make).copy(initializer)));
+            m.body.stats = m.body.stats.prepend(assign);
         }
     }
 

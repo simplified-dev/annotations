@@ -197,17 +197,23 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   read by name: where one assigns the field nowhere and delegates to no `this(..)`, the initializer
   stays, the generated setter for it has no effect on that constructor, and a second constructor
   that does assign the field is reported as writing a final that already has a value, in javac and
-  the editor alike. A constructor assigns the field by a structural reading of its body, by name:
-  a plain `=` to it, a block one of whose statements assigns it with no `break` ahead of that
-  statement, an `if` with an `else` both of whose branches assign it, or a `switch` with a `default`
-  every arm of which assigns it and leaves the switch - an arrow arm, or a colon arm ending in
-  `break`. A write on one branch only, in a `switch` without a `default`, in a loop, a `try`,
-  `catch` or `finally`, a lambda or a nested class is not counted, so a constructor whose only write
-  to the field sits there keeps the initializer, and javac's `cannot assign a value to final
-  variable` on that write is shown by the editor on the same line. Such a constructor used to be
-  lifted, failing with `variable ... might not have been initialized` while the editor showed
-  nothing. With no author constructor, the field is lifted only where a constructor the builder
-  generates assigns it - see the `factoryMethod` entry below.
+  the editor alike. A constructor assigns the field where javac's definite-assignment rules find it
+  assigned at every `return` and wherever the body completes, read by name over every statement a
+  constructor body holds - blocks, `if`, the four loops, `switch` statements and expressions, `try`
+  with its `catch` and `finally` blocks, labelled and `synchronized` statements, declarations and
+  the jumps that leave them - with the literals `true` and `false` the only constant conditions. So
+  a write in a `synchronized` or labelled block, a declaration's initializer, a `try` whose `catch`
+  rethrows or that has only a `finally`, a `do` over `false`, a `while (true)` that breaks after it,
+  an `if` whose `else` throws, or a `switch` whose last arm falls out after writing it assigns the
+  field, and the field is lifted. A write on one branch only, in a `switch` without a `default`,
+  behind a `return` or a `break` that may leave first, in a loop that may not run, in a `try` block
+  a `catch` swallows, in a lambda or in a nested class leaves the field unassigned on some way out,
+  so a constructor whose only write to the field sits there keeps the initializer, and javac's
+  `cannot assign a value to final variable` on that write is shown by the editor on the same line.
+  Such a constructor used to be lifted - `if (a > 0) return; this.a = a;` among them - failing with
+  `variable ... might not have been initialized` while the editor showed nothing. With no author
+  constructor, the field is lifted only where a constructor the builder generates assigns it - see
+  the `factoryMethod` entry below.
 
 - **A merged builder's slot fields resolve in the editor.** The merge appends them and the editor
   contributed none, so an author's own verb inside that class referencing a slot was red over source
@@ -466,12 +472,15 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   instance initializer's write beside constructors that all assign the field, a compound assignment
   or an increment, and a write from a lambda, a local class or through another instance. The report
   is now dropped only for a plain `=` written directly in a constructor of the field's own class,
-  through the bare name or `this`, that the constructor reaches while the field is still unassigned
-  on every path through it. A second write - `this.a = a; this.a = 2;`, a write on a branch after a
-  top-level one, a top-level write after a branch's, a write after both branches of an `if` and
-  `else` or after a `switch` every arm of which assigns the field, a write after `this(..)` - and a
-  write in a loop or a `try` stay red on the line javac reports; a branch that assigns the field and
-  returns leaves the rest of the body free to assign it.
+  through the bare name or `this`, that the constructor reaches where javac's rules find the field
+  definitely unassigned, over the same statements the lift reads. A second write - `this.a = a;
+  this.a = 2;`, a write on a branch after a top-level one, a top-level write after a branch's, a
+  write after both branches of an `if` and `else` or after a `switch` every arm of which assigns the
+  field, a write after `this(..)` or after a `do` or enhanced `for` loop that writes the field - and
+  a write a loop may run again stay red on the line javac reports. A write inside a `try`,
+  `synchronized` or labelled block or a declaration is cleared where it is the field's first, as
+  javac accepts it, and the top-level write after it stays red; a branch that assigns the field and
+  returns leaves the rest of the body free to assign it, wherever in that branch the write sits.
 
 - **A `final` field with an initializer keeps it under `@ClassBuilder(factoryMethod)` with no
   constructor written.** With a factory the builder generates no all-args constructor, yet the lift
@@ -482,6 +491,16 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   generates assigns it - the all-args constructor, or a chain's copy constructor - on both halves, so
   the factory's `new Named()` reads the initializer, the lazy value computed. An author constructor
   assigning the field answers for it as before.
+
+- **A constructor an args annotation generates beside the builder's keeps a lifted field's
+  initializer value.** `@ClassBuilder` with `@RequiredArgsConstructor` or `@NoArgsConstructor` on a
+  class declaring `private final String label = "declared";` and no constructor lifted the
+  initializer off the field for the constructor `build()` reaches, and the args annotation's
+  constructor, which takes no initialized `final` as a parameter, left the blank final unassigned:
+  `variable label might not have been initialized` on the annotation's line, the editor green. Each
+  constructor an args annotation generates beside the builder's that leaves a lifted field
+  unassigned now assigns it the initializer first, so an instance built through it holds
+  `"declared"` while `build()` sets the builder's value.
 
 - **A Lombok constructor annotation beside a written constructor keeps a `final` initializer.**
   `@lombok.NoArgsConstructor`, `@RequiredArgsConstructor` or `@AllArgsConstructor` on a
