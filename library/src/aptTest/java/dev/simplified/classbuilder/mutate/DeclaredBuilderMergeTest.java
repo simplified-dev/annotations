@@ -2023,14 +2023,27 @@ public class DeclaredBuilderMergeTest {
         assertEquals("hi", runGo(c, "demo.UseConn"));
     }
 
+    /** The consumer calling all three entry points of {@code demo.Conn}, returning the two copies' hosts. */
+    private static JavaFileObject useConn() {
+        return JavaFileObjects.forSourceLines("demo.UseConn",
+            "package demo;",
+            "public class UseConn {",
+            "    public static Object go() {",
+            "        Conn first = Conn.builder().host(\"h\").build();",
+            "        return Conn.from(first).build().host + first.mutate().host(\"i\").build().host;",
+            "    }",
+            "}");
+    }
+
     /**
-     * A throws clause naming a type neither half can tell is unchecked - here
-     * the author's own, which is - still skips the entry points: the name is
-     * treated as checked, which is the answer that never emits a call javac
-     * refuses.
+     * A throws clause naming the author's own subclass of
+     * {@code RuntimeException}, declared in the same file, leaves a constructor
+     * the entry points can call, so all three are emitted. The name was
+     * treated as checked and skipped them, over entry points that compile.
      */
     @Test
-    public void merge_intoABuilderWhoseNoArgConstructorThrowsAnUnknownName_skipsTheEntryPoints() {
+    public void merge_intoABuilderWhoseNoArgConstructorThrowsAnUncheckedTypeOfTheSameFile_keepsTheEntryPoints()
+        throws Exception {
         Compilation c = compile(
             JavaFileObjects.forSourceLines("demo.Conn",
                 "package demo;",
@@ -2042,10 +2055,113 @@ public class DeclaredBuilderMergeTest {
                 "        Builder() throws Failure { }",
                 "    }",
                 "    static class Failure extends RuntimeException { }",
+                "}"),
+            useConn());
+        assertThat(c).succeeded();
+        assertEquals("hi", runGo(c, "demo.UseConn"));
+    }
+
+    /**
+     * The unchecked type declared in another file of the round, below another
+     * unchecked type, is read through its superclasses to
+     * {@code RuntimeException}, and the entry points are emitted.
+     */
+    @Test
+    public void merge_intoABuilderWhoseNoArgConstructorThrowsAnUncheckedTypeOfAnotherFile_keepsTheEntryPoints()
+        throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Failure",
+                "package demo;",
+                "public class Failure extends IllegalStateException { }"),
+            JavaFileObjects.forSourceLines("demo.Conn",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public class Conn {",
+                "    String host;",
+                "    public static class Builder {",
+                "        Builder() throws Failure { }",
+                "    }",
+                "}"),
+            useConn());
+        assertThat(c).succeeded();
+        assertEquals("hi", runGo(c, "demo.UseConn"));
+    }
+
+    /** The unchecked type read from a class file, compiled before the round, is read the same. */
+    @Test
+    public void merge_intoABuilderWhoseNoArgConstructorThrowsACompiledUncheckedType_keepsTheEntryPoints()
+        throws Exception {
+        Compilation failure = Compiler.javac().compile(
+            JavaFileObjects.forSourceLines("lib.Failure",
+                "package lib;",
+                "public class Failure extends RuntimeException { }"));
+        assertThat(failure).succeeded();
+
+        Compilation c = Compiler.javac()
+            .withProcessors(new ClassBuilderProcessor())
+            .withClasspath(runtimeClasspathPlus(classesOf(failure)))
+            .compile(
+                JavaFileObjects.forSourceLines("demo.Conn",
+                    "package demo;",
+                    "import dev.simplified.annotations.ClassBuilder;",
+                    "@ClassBuilder",
+                    "public class Conn {",
+                    "    String host;",
+                    "    public static class Builder {",
+                    "        Builder() throws lib.Failure { }",
+                    "    }",
+                    "}"),
+                useConn());
+        assertThat(c).succeeded();
+    }
+
+    /**
+     * A checked exception of the author's own is read as checked, so the entry
+     * points are still skipped with the note.
+     */
+    @Test
+    public void merge_intoABuilderWhoseNoArgConstructorThrowsACheckedTypeOfTheAuthors_skipsTheEntryPoints() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Conn",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public class Conn {",
+                "    String host;",
+                "    public static class Builder {",
+                "        Builder() throws Failure { }",
+                "    }",
+                "    static class Failure extends Exception { }",
                 "}"));
         assertThat(c).succeeded();
         assertThat(c).hadNoteContaining("@ClassBuilder merged into 'Builder' but its no-argument "
-            + "constructor declares a throws clause");
+            + "constructor declares a throws clause naming an exception not known to be unchecked");
+    }
+
+    /**
+     * A thrown name that resolves to nothing stays checked, the answer that
+     * never emits a call javac refuses: the entry points are skipped with the
+     * note, and javac's only error is the unresolved name itself.
+     */
+    @Test
+    public void merge_intoABuilderWhoseNoArgConstructorThrowsAnUnresolvableName_skipsTheEntryPoints() {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Conn",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder",
+                "public class Conn {",
+                "    String host;",
+                "    public static class Builder {",
+                "        Builder() throws Missing { }",
+                "    }",
+                "}"));
+        assertThat(c).failed();
+        assertThat(c).hadNoteContaining("@ClassBuilder merged into 'Builder' but its no-argument "
+            + "constructor declares a throws clause naming an exception not known to be unchecked");
+        assertEquals(c.errors().toString(), 1, c.errors().size());
+        assertThat(c).hadErrorContaining("cannot find symbol");
     }
 
     // ------------------------------------------------------------------

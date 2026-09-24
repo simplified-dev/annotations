@@ -1527,7 +1527,8 @@ public class ClassBuilderProcessor extends AbstractProcessor {
     /**
      * Checks the once-per-target names. The placeholder is optional here, every
      * default being a plain literal, so only malformed text and a suppressed
-     * {@code type} or {@code build} are errors.
+     * {@code type} or {@code build} are errors; a written {@code INHERIT} takes
+     * the style's name, as the unwritten default does.
      */
     private void validateBuilderNames(Element target, Messager messager) {
         AnnotationMirror names =

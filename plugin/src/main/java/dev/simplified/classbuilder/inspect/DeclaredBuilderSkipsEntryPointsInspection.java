@@ -32,8 +32,8 @@ import java.util.Objects;
  * with the seeds leaves {@code builder()}, {@code from(T)} and
  * {@code mutate()} nothing to call, and so does one whose constructor it
  * selects declares a throws clause naming an
- * exception {@link DeclaredBuilderShape#throwsNothingChecked} does not know to
- * be unchecked. The
+ * exception {@link DeclaredBuilderShape#throwsNothingChecked} does not find
+ * unchecked. The
  * processor skips them with a note and the
  * augment provider withholds them from completion through the same
  * {@link ClassBuilderConstants#withholdsEntryPointsOnly} decision; this is the

@@ -57,6 +57,7 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
             @Target({ElementType.TYPE, ElementType.CONSTRUCTOR, ElementType.METHOD})
             public @interface ClassBuilder {
                 BuilderNames builder() default @BuilderNames;
+                SetterNames setters() default @SetterNames;
                 AccessLevel access() default AccessLevel.PUBLIC;
                 AccessLevel constructorAccess() default AccessLevel.PACKAGE;
                 AccessLevel builderConstructorAccess() default AccessLevel.PACKAGE;
@@ -75,6 +76,23 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
                 String build() default INHERIT;
                 String from() default INHERIT;
                 String toBuilder() default INHERIT;
+            }
+            """);
+        myFixture.addFileToProject("dev/simplified/annotations/SetterNames.java",
+            """
+            package dev.simplified.annotations;
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.CLASS) @Target({ElementType.FIELD, ElementType.PARAMETER})
+            public @interface SetterNames {
+                String INHERIT = "";
+                String NONE = "-";
+                String set() default INHERIT;
+                String flag() default INHERIT;
+                String add() default INHERIT;
+                String put() default INHERIT;
+                String compute() default INHERIT;
+                String clear() default INHERIT;
+                String remove() default INHERIT;
             }
             """);
         myFixture.addFileToProject("dev/simplified/annotations/AccessLevel.java",
@@ -588,6 +606,75 @@ public class ClassBuilderFieldInspectionTest extends BasePlatformTestCase {
             }
             """);
         assertTrue(hasErrorContaining("Naming pattern for 'from' expands to an invalid Java identifier"));
+    }
+
+    /**
+     * {@code BuilderNames.INHERIT} written on every attribute takes the style's
+     * name, as javac takes it, so no attribute is reported. Each was an error
+     * reading {@code Naming pattern for 'type' must not be empty}.
+     */
+    public void testBuilderNamesWrittenAsInherit_isClean() {
+        myFixture.configureByText("Named.java",
+            """
+            import dev.simplified.annotations.BuilderNames;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builder = @BuilderNames(type = BuilderNames.INHERIT, builder = BuilderNames.INHERIT,
+                build = BuilderNames.INHERIT, from = BuilderNames.INHERIT, toBuilder = BuilderNames.INHERIT))
+            public class Named {
+                String name;
+            }
+            """);
+        assertEquals(List.of(), namingProblems());
+    }
+
+    /**
+     * An empty literal is the value {@code INHERIT} holds and is read the same,
+     * as javac reads it. It was an error reading
+     * {@code Naming pattern for 'from' must not be empty}.
+     */
+    public void testBuilderNamesWrittenAsAnEmptyLiteral_isClean() {
+        myFixture.configureByText("Named.java",
+            """
+            import dev.simplified.annotations.BuilderNames;
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder(builder = @BuilderNames(from = ""))
+            public class Named {
+                String name;
+            }
+            """);
+        assertEquals(List.of(), namingProblems());
+    }
+
+    /**
+     * {@code SetterNames.INHERIT} written on every role, on the target and on a
+     * field, takes the style's pattern, and javac builds it. Each role was an
+     * error reading {@code Naming pattern for 'set' must not be empty}.
+     */
+    public void testSetterNamesWrittenAsInherit_isClean() {
+        myFixture.configureByText("Named.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.SetterNames;
+            @ClassBuilder(setters = @SetterNames(set = SetterNames.INHERIT, flag = SetterNames.INHERIT,
+                add = SetterNames.INHERIT, put = SetterNames.INHERIT, compute = SetterNames.INHERIT,
+                clear = SetterNames.INHERIT, remove = SetterNames.INHERIT))
+            public class Named {
+                String name;
+                @SetterNames(set = SetterNames.INHERIT)
+                boolean active;
+            }
+            """);
+        assertEquals(List.of(), namingProblems());
+    }
+
+    /** The description of every highlight about a naming pattern. */
+    private List<String> namingProblems() {
+        List<String> out = new ArrayList<>();
+        for (HighlightInfo h : myFixture.doHighlighting()) {
+            String description = h.getDescription();
+            if (description != null && description.startsWith("Naming pattern")) out.add(description);
+        }
+        return out;
     }
 
     // ------------------------------------------------------------------

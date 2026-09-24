@@ -190,10 +190,14 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   and no note. The constructor they would call serves no entry point either where its throws clause
   may name a checked exception, each of them calling it with nothing to handle what it throws, so they are skipped
   with a note saying so rather than failing as `unreported exception ... in default constructor` on
-  the class line. Neither half resolves a thrown name, so a clause naming only `RuntimeException`,
-  `Error` and their common subclasses in `java.lang` and `java.util`, by simple or qualified name,
-  leaves the entry points emitted; any other name, an unchecked exception of the author's own among
-  them, is treated as checked and skips them. The note
+  the class line. A clause naming only unchecked types leaves the entry points emitted:
+  `RuntimeException`, `Error` and their common subclasses in `java.lang` and `java.util` are read
+  by simple or qualified name, and any other name is resolved - the processor reads the thrown type
+  from the element model, the editor resolves the throws clause's own reference and walks its
+  superclasses - and counts as unchecked where it is a subtype of `RuntimeException` or `Error`, so
+  an unchecked exception of the author's own, declared in the same file, in another or in a
+  compiled class, keeps them. A checked exception skips them, and so does a name that resolves to
+  nothing, treated as checked. The note
   sits on the member the annotation is written on, the constructor or factory on that path, where the
   editor's weak warning sits.
 
@@ -281,6 +285,15 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   recognised by name, qualified or statically imported; any other constant is evaluated, so it
   names the member in the editor as javac names it, and the naming checks judge it by the value it
   holds.
+
+- **A written `INHERIT` takes the style's name.** `@BuilderNames(from = BuilderNames.INHERIT)` failed
+  the build with `@BuilderNames 'from' must not be empty`, and the editor reported `Naming pattern
+  for 'from' must not be empty` on it, though `INHERIT` is every attribute's default and is
+  documented as taking the style's name; `@SetterNames(set = SetterNames.INHERIT)` built, and the
+  editor reported the same error on every role written so. A written `INHERIT` on any
+  `@BuilderNames` or `@SetterNames` attribute now names the member exactly as the unwritten default
+  does, on both halves. Its value is the empty string, so an empty literal - `from = ""` - is read
+  the same way.
 
 - **An accessor or lazy name written as a constant is read as its value in the editor.**
   `@Getter(name)`, `@Setter(name)` and `@Lazy(name)` were read only as string literals, so
@@ -569,8 +582,7 @@ Versions 2.0.0 onward are published under `dev.simplified.simplified-annotations
   A declared builder whose constructors all take parameters keeps its setters and loses only the
   entry points, with a note; declaring a no-argument constructor restores them. So does one whose
   no-argument constructor declares a throws clause naming an exception not known to be unchecked;
-  declaring one that throws only `RuntimeException`, `Error` or their common `java.lang` and
-  `java.util` subclasses restores them.
+  declaring one that throws only subtypes of `RuntimeException` or `Error` restores them.
 
 - **The README documents the dependency scope the artifact is actually built for.** It showed
   `implementation`, which puts a jar on a consumer's runtime classpath that nothing ever loads: every

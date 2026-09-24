@@ -34,6 +34,10 @@ public class DeclaredBuilderSkipsEntryPointsInspectionTest extends BasePlatformT
         + "Object or a listed JDK supertype such as CharSequence, Number, Comparable or a java.util collection "
         + "interface, so 'builder' was not added - declare a constructor taking (origin) or write it";
 
+    private static final String THROWS_SKIPPED = "@ClassBuilder merged into 'Builder' but its no-argument "
+        + "constructor declares a throws clause naming an exception not known to be unchecked, so 'builder', "
+        + "'from' and 'mutate' were not added - declare one throwing only unchecked exceptions or write them";
+
     private AccessToken jsvgSuppressor;
 
     @Override
@@ -160,6 +164,61 @@ public class DeclaredBuilderSkipsEntryPointsInspectionTest extends BasePlatformT
             }
             """);
         assertEquals("the entry points are emitted: " + weakWarningTexts(), 0, weakWarnings().size());
+    }
+
+    /**
+     * A throws clause naming the author's own subclass of
+     * {@code RuntimeException} leaves the entry points a constructor to call,
+     * so the processor emits them and there is no note. The editor read the
+     * name as checked and warned over entry points javac emits.
+     */
+    public void testADeclaredBuilderWhoseNoArgConstructorThrowsAnUncheckedTypeOfTheAuthors_isNotWarned() {
+        myFixture.configureByText("Conn.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Conn {
+                private String host;
+                public static class Builder {
+                    Builder() throws Failure { }
+                }
+                static class Failure extends RuntimeException { }
+            }
+            """);
+        assertEquals("the entry points are emitted: " + weakWarningTexts(), 0, weakWarnings().size());
+    }
+
+    /** A checked exception of the author's own is read as checked, and the note is shown. */
+    public void testADeclaredBuilderWhoseNoArgConstructorThrowsACheckedTypeOfTheAuthors_isWarned() {
+        myFixture.configureByText("Conn.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Conn {
+                private String host;
+                public static class Builder {
+                    Builder() throws Failure { }
+                }
+                static class Failure extends Exception { }
+            }
+            """);
+        assertEquals(THROWS_SKIPPED, theOnlyWarning());
+    }
+
+    /** A thrown name that resolves to nothing stays checked, and the note is shown. */
+    public void testADeclaredBuilderWhoseNoArgConstructorThrowsAnUnresolvableName_isWarned() {
+        myFixture.configureByText("Conn.java",
+            """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Conn {
+                private String host;
+                public static class Builder {
+                    Builder() throws Missing { }
+                }
+            }
+            """);
+        assertEquals(THROWS_SKIPPED, theOnlyWarning());
     }
 
     /** A no-argument constructor beside a parameterised one serves the entry points. */

@@ -26,9 +26,15 @@ import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.type.TypeKind;
+import javax.lang.model.type.TypeMirror;
+import javax.lang.model.util.Elements;
+import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Injects the three bootstrap methods onto the target type:
@@ -136,7 +142,7 @@ final class BootstrapMethodFactory {
             // javac's own default is in the tree by now; it is what a class
             // declaring nothing falls back to, not a constructor the author wrote.
             if ((method.mods.flags & Flags.GENERATEDCONSTR) != 0) continue;
-            if (callableOnly && !DeclaredBuilderShape.throwsNothingChecked(thrownTypes(method))) continue;
+            if (callableOnly && !throwsNothingChecked(method)) continue;
             java.util.List<String> types = new ArrayList<>(method.params.size());
             for (JCVariableDecl parameter : method.params)
                 types.add(parameter.vartype == null ? "" : parameter.vartype.toString());
@@ -145,12 +151,56 @@ final class BootstrapMethodFactory {
         return signatures;
     }
 
-    /** Each type a constructor's throws clause names, as the tree spells it. */
-    private static java.util.List<String> thrownTypes(JCMethodDecl constructor) {
-        java.util.List<String> out = new ArrayList<>();
-        if (constructor.thrown == null) return out;
-        for (JCExpression thrown : constructor.thrown) out.add(thrown.toString());
-        return out;
+    /**
+     * Whether a constructor's throws clause names only unchecked exception
+     * types, as {@link DeclaredBuilderShape#throwsNothingChecked} decides it,
+     * each name it does not list answered from the element model.
+     *
+     * <p>Each name is read as the type the constructor's symbol throws in its
+     * position - or, with no symbol, as the type attributed to the written
+     * name - and counted unchecked where that is a subtype of
+     * {@link RuntimeException} or {@link Error}. A name that resolved to
+     * nothing is an error type, a subtype of neither, and stays checked.
+     *
+     * @param constructor the author's constructor
+     * @return whether the entry points can call it with nothing to handle what it throws
+     */
+    private boolean throwsNothingChecked(JCMethodDecl constructor) {
+        java.util.List<String> names = new ArrayList<>();
+        Map<String, Boolean> unchecked = new HashMap<>();
+        if (constructor.thrown != null) {
+            java.util.List<? extends TypeMirror> resolved = constructor.sym == null
+                ? null
+                : constructor.sym.getThrownTypes();
+            int index = 0;
+            for (JCExpression thrown : constructor.thrown) {
+                TypeMirror type = resolved != null && index < resolved.size() ? resolved.get(index) : thrown.type;
+                String name = thrown.toString();
+                names.add(name);
+                unchecked.merge(name, isUnchecked(type), Boolean::logicalAnd);
+                index++;
+            }
+        }
+        return DeclaredBuilderShape.throwsNothingChecked(names, name -> unchecked.getOrDefault(name, false));
+    }
+
+    /**
+     * Whether a thrown type is a subtype of {@link RuntimeException} or
+     * {@link Error}.
+     *
+     * @param type the thrown type, or {@code null} when it was never attributed
+     * @return whether a call throwing it needs nothing to handle it
+     */
+    private boolean isUnchecked(@Nullable TypeMirror type) {
+        if (type == null || (type.getKind() != TypeKind.DECLARED && type.getKind() != TypeKind.TYPEVAR))
+            return false;
+        Types types = ctx.bridge().processingEnvironment().getTypeUtils();
+        Elements elements = ctx.bridge().processingEnvironment().getElementUtils();
+        for (Class<?> root : java.util.List.of(RuntimeException.class, Error.class)) {
+            TypeElement element = elements.getTypeElement(root.getName());
+            if (element != null && types.isSubtype(types.erasure(type), element.asType())) return true;
+        }
+        return false;
     }
 
     /**

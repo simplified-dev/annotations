@@ -53,8 +53,10 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
@@ -806,7 +808,7 @@ public final class ClassBuilderConstants {
         if (!(declared instanceof PsiExtensibleClass extensible)) return out;
         for (PsiMethod own : extensible.getOwnMethods()) {
             if (!own.isConstructor()) continue;
-            if (callableOnly && !DeclaredBuilderShape.throwsNothingChecked(thrownTypes(own))) continue;
+            if (callableOnly && !throwsNothingChecked(own, declared)) continue;
             List<String> types = new ArrayList<>();
             for (PsiParameter parameter : own.getParameterList().getParameters()) {
                 String written = MergedSlotStorage.writtenTypeText(parameter);
@@ -818,17 +820,57 @@ public final class ClassBuilderConstants {
     }
 
     /**
-     * Each type a constructor's throws clause names, as written - read off the
-     * reference elements rather than resolved.
+     * Whether a constructor's throws clause names only unchecked exception
+     * types, as {@link DeclaredBuilderShape#throwsNothingChecked} decides it for
+     * the processor.
+     *
+     * <p>Each name is its reference element's text. A name the rule lists is
+     * answered without a resolve; any other is resolved - the throws clause's
+     * own class reference and nothing of the target's or the builder's members
+     * - inside the re-entry guard of the class the builder is declared in,
+     * since a resolve walks that class's nested types and the augment pass
+     * asking this may be the one that walk reaches.
      *
      * @param constructor the author's constructor
-     * @return the thrown types' texts, in order
+     * @param declared the builder it is declared in
+     * @return whether the entry points can call it with nothing to handle what it throws
      */
-    private static @NotNull List<String> thrownTypes(@NotNull PsiMethod constructor) {
-        List<String> out = new ArrayList<>();
-        for (PsiJavaCodeReferenceElement thrown : constructor.getThrowsList().getReferenceElements())
-            out.add(thrown.getText());
-        return out;
+    private static boolean throwsNothingChecked(@NotNull PsiMethod constructor, @NotNull PsiClass declared) {
+        List<String> names = new ArrayList<>();
+        Map<String, PsiJavaCodeReferenceElement> references = new HashMap<>();
+        for (PsiJavaCodeReferenceElement thrown : constructor.getThrowsList().getReferenceElements()) {
+            names.add(thrown.getText());
+            references.putIfAbsent(thrown.getText(), thrown);
+        }
+        PsiClass owner = declared.getContainingClass();
+        return DeclaredBuilderShape.throwsNothingChecked(names, name -> {
+            PsiJavaCodeReferenceElement reference = references.get(name);
+            if (reference == null) return false;
+            return owner == null
+                ? resolvesUnchecked(reference)
+                : AbstractRecursionSafeAugmentProvider.withInProgress(owner, () -> resolvesUnchecked(reference));
+        });
+    }
+
+    /**
+     * Whether a thrown name resolves to a subtype of {@link RuntimeException}
+     * or {@link Error}, read through its superclasses. A name that resolves to
+     * nothing is not.
+     *
+     * @param reference the throws clause's reference to the type
+     * @return whether a call throwing it needs nothing to handle it
+     */
+    private static boolean resolvesUnchecked(@NotNull PsiJavaCodeReferenceElement reference) {
+        if (!(reference.resolve() instanceof PsiClass resolved)) return false;
+        Set<PsiClass> seen = new HashSet<>();
+        for (PsiClass type = resolved; type != null && seen.add(type); type = type.getSuperClass()) {
+            String name = type.getQualifiedName();
+            if (CommonClassNames.JAVA_LANG_RUNTIME_EXCEPTION.equals(name)
+                || CommonClassNames.JAVA_LANG_ERROR.equals(name)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

@@ -54,10 +54,9 @@ import java.lang.annotation.Target;
  * {@link AllArgsConstructor}. The target still gets the three
  * entry points unless the declared builder has no constructor they can call -
  * none of the arity they pass, or only ones declaring a throws clause that
- * names an exception other than {@link RuntimeException}, {@link Error} and
- * their common subclasses in {@code java.lang} and {@code java.util}, which is
- * treated as checked - in which case all three are skipped with a note naming
- * the constructor they need. A
+ * names an exception other than a subtype of {@link RuntimeException} or
+ * {@link Error}, a name that resolves to nothing treated as checked - in which
+ * case all three are skipped with a note naming the constructor they need. A
  * declared builder that declares no constructor has its implicit default
  * retyped to {@link #builderConstructorAccess()}, so {@code new Target.Builder()}
  * is closed off exactly as on a generated builder. A

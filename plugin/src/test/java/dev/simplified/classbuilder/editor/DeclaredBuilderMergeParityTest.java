@@ -9,16 +9,20 @@ import com.intellij.psi.PsiDocumentManager;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiJavaFile;
+import com.intellij.psi.PsiManager;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
+import com.intellij.psi.util.PsiModificationTracker;
 import com.intellij.testFramework.LightProjectDescriptor;
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase;
 import dev.simplified.testutil.BuilderParityFixture;
+import dev.simplified.testutil.CompiledLibrary;
 import dev.simplified.testutil.JSvgErrorSuppressor;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * The editor's half of the declared-builder merge, with the annotation bare.
@@ -1396,6 +1400,106 @@ public class DeclaredBuilderMergeParityTest extends LightJavaCodeInsightFixtureT
         assertTrue("javac emits builder(): " + names, names.contains("builder"));
         assertTrue("and from(T): " + names, names.contains("from"));
         assertTrue("and mutate(): " + names, names.contains("mutate"));
+    }
+
+    /** A caller of all three entry points of {@code Conn}, which compiles wherever javac emits them. */
+    private static final String USE_CONN = """
+        class UseConn {
+            static String go() {
+                Conn first = Conn.builder().host("h").build();
+                return Conn.from(first).build().host + first.mutate().host("i").build().host;
+            }
+        }
+        """;
+
+    /** {@code Conn} with a declared builder whose no-argument constructor throws {@code thrown}. */
+    private static String connThrowing(String thrown, String more) {
+        return """
+            import dev.simplified.annotations.ClassBuilder;
+            @ClassBuilder
+            public class Conn {
+                String host;
+                public static class Builder {
+                    Builder() throws %s { }
+                }
+            %s}
+            """.formatted(thrown, more) + USE_CONN;
+    }
+
+    /**
+     * A throws clause naming the author's own subclass of
+     * {@code RuntimeException}, declared in the same file, serves the entry
+     * points javac emits. The editor withheld all three, the name read as
+     * checked, and a call to any of them was red over source that builds.
+     */
+    public void testMergedBuilderWhoseNoArgConstructorThrowsAnUncheckedTypeOfTheSameFile_offersTheEntryPoints() {
+        PsiFile file = myFixture.configureByText("Conn.java",
+            connThrowing("Failure", "    static class Failure extends RuntimeException { }\n"));
+        List<String> errors = errors();
+        assertTrue("javac emits all three; editor errors: " + errors, errors.isEmpty());
+        List<String> names = methodNamesOf(((PsiJavaFile) file).getClasses()[0]);
+        assertTrue("builder(), from(T) and mutate(): " + names,
+            names.containsAll(List.of("builder", "from", "mutate")));
+    }
+
+    /** The unchecked type in another file, below another unchecked type, is read through its superclasses. */
+    public void testMergedBuilderWhoseNoArgConstructorThrowsAnUncheckedTypeOfAnotherFile_offersTheEntryPoints() {
+        myFixture.addFileToProject("Failure.java", "public class Failure extends IllegalStateException { }");
+        myFixture.configureByText("Conn.java", connThrowing("Failure", ""));
+        List<String> errors = errors();
+        assertTrue("javac emits all three; editor errors: " + errors, errors.isEmpty());
+    }
+
+    /** The unchecked type read from a class file on the module's classpath is read the same. */
+    public void testMergedBuilderWhoseNoArgConstructorThrowsACompiledUncheckedType_offersTheEntryPoints()
+        throws Exception {
+        CompiledLibrary.attach(getTestRootDisposable(), getModule(), CompiledLibrary.compile(false,
+            Map.of("lib/Failure.java", "package lib; public class Failure extends RuntimeException { }")));
+        myFixture.configureByText("Conn.java", connThrowing("lib.Failure", ""));
+        List<String> errors = errors();
+        assertTrue("javac emits all three; editor errors: " + errors, errors.isEmpty());
+    }
+
+    /** A checked exception of the author's own still withholds the entry points, as javac skips them. */
+    public void testMergedBuilderWhoseNoArgConstructorThrowsACheckedTypeOfTheAuthors_offersNoEntryPoints() {
+        PsiFile file = myFixture.configureByText("Conn.java",
+            connThrowing("Failure", "    static class Failure extends Exception { }\n"));
+        List<String> names = methodNamesOf(((PsiJavaFile) file).getClasses()[0]);
+        assertFalse("javac emits no builder(): " + names, names.contains("builder"));
+        assertFalse("nor from(T): " + names, names.contains("from"));
+        assertFalse("nor mutate(): " + names, names.contains("mutate"));
+    }
+
+    /** A thrown name that resolves to nothing stays checked, and the entry points are withheld. */
+    public void testMergedBuilderWhoseNoArgConstructorThrowsAnUnresolvableName_offersNoEntryPoints() {
+        PsiFile file = myFixture.configureByText("Conn.java", connThrowing("Missing", ""));
+        List<String> names = methodNamesOf(((PsiJavaFile) file).getClasses()[0]);
+        assertFalse("javac emits no builder(): " + names, names.contains("builder"));
+        assertFalse("nor from(T): " + names, names.contains("from"));
+        assertFalse("nor mutate(): " + names, names.contains("mutate"));
+    }
+
+    /**
+     * The entry points offered over a resolved unchecked type are handed back
+     * as the same instances over unchanged text, which is what the platform's
+     * idempotence check compares.
+     */
+    public void testMergedBuilderWhoseNoArgConstructorThrowsAnUncheckedType_rereadsTheSameInstances() {
+        PsiFile file = myFixture.configureByText("Conn.java",
+            connThrowing("Failure", "    static class Failure extends RuntimeException { }\n"));
+        PsiClass target = ((PsiJavaFile) file).getClasses()[0];
+        PsiMethod[] builders = target.findMethodsByName("builder", false);
+        assertEquals("javac emits builder()", 1, builders.length);
+        PsiMethod[] mutators = target.findMethodsByName("mutate", false);
+        assertEquals("javac emits mutate()", 1, mutators.length);
+
+        long before = PsiModificationTracker.getInstance(getProject()).getModificationCount();
+        PsiManager.getInstance(getProject()).dropPsiCaches();
+        assertTrue("the cached values were dropped",
+            PsiModificationTracker.getInstance(getProject()).getModificationCount() != before);
+
+        assertSame("the same builder()", builders[0], target.findMethodsByName("builder", false)[0]);
+        assertSame("the same mutate()", mutators[0], target.findMethodsByName("mutate", false)[0]);
     }
 
     // ------------------------------------------------------------------

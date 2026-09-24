@@ -1386,6 +1386,35 @@ public class ClassBuilderAugmentProviderTest extends LightJavaCodeInsightFixture
     }
 
     /**
+     * {@code INHERIT} written on a {@code @BuilderNames} or {@code @SetterNames}
+     * attribute takes the style's name, so every member is named as the
+     * unwritten default names it, as javac names it.
+     */
+    public void testNamesWrittenAsInherit_nameTheMembersAsTheDefault() {
+        myFixture.configureByText("Config.java",
+            """
+            import dev.simplified.annotations.BuilderNames;
+            import dev.simplified.annotations.ClassBuilder;
+            import dev.simplified.annotations.SetterNames;
+            @ClassBuilder(builder = @BuilderNames(type = BuilderNames.INHERIT, builder = BuilderNames.INHERIT,
+                build = BuilderNames.INHERIT, from = BuilderNames.INHERIT, toBuilder = BuilderNames.INHERIT),
+                setters = @SetterNames(set = SetterNames.INHERIT))
+            public class Config {
+                private String name;
+                static String go(Config c) {
+                    Config.Builder builder = Config.builder().name("x");
+                    return Config.from(builder.build()).build().name + c.mutate().name("y").build().name;
+                }
+            }
+            """);
+        List<String> errors = errors();
+        assertTrue("javac names every member as the default; editor errors: " + errors, errors.isEmpty());
+        PsiClass config = myFixture.findClass("Config");
+        assertEquals(1, config.findMethodsByName("from", false).length);
+        assertEquals(1, config.findMethodsByName("mutate", false).length);
+    }
+
+    /**
      * A {@code String} constant the target declares names the member as javac
      * names it, through the platform's constant evaluator.
      */

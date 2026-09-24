@@ -14,11 +14,10 @@ the entry points can call, <code>builder()</code>,
 <code>from(T)</code> and <code>mutate()</code> are not generated - and neither
 are they where the constructor they would call declares a throws clause naming an
 exception not known to be unchecked, since the entry points call it with nothing
-around the call to handle what it throws. Neither the processor nor the editor
-resolves a thrown name, so only <code>RuntimeException</code>, <code>Error</code>
-and their common subclasses in <code>java.lang</code> and <code>java.util</code>,
-written by simple or qualified name, count as unchecked; any other name is
-treated as checked, an unchecked exception of the author's own among them. The processor says so in a compiler
+around the call to handle what it throws. A thrown name counts as unchecked
+where it resolves to a subtype of <code>RuntimeException</code> or
+<code>Error</code>, an exception of the author's own among them, and as checked
+where it resolves to anything else or to nothing. The processor says so in a compiler
 note and completion leaves the three out; this warning is the note, in the
 same words, on the annotation.
 </p>

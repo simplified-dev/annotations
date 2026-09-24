@@ -5,6 +5,7 @@ import org.junit.Test;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Predicate;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -593,24 +594,32 @@ public class DeclaredBuilderShapeTest {
     /**
      * A throws clause naming only the known unchecked types, by simple name or
      * by their {@code java.lang} or {@code java.util} qualified name, is one the
-     * entry points can call through. Any clause at all took the constructor out
-     * of the count; any other name still does.
+     * entry points can call through, and those names never reach the caller's
+     * verdict. Any other name is answered by the verdict alone.
      */
     @Test
-    public void throwsNothingChecked_readsTheKnownUncheckedNamesAlone() {
-        assertTrue("no clause", DeclaredBuilderShape.throwsNothingChecked(List.of()));
+    public void throwsNothingChecked_readsTheKnownUncheckedNamesAndAsksTheVerdictOfTheRest() {
+        Predicate<String> neverAsked = thrown -> {
+            throw new AssertionError("a listed name was handed to the verdict: " + thrown);
+        };
+        assertTrue("no clause", DeclaredBuilderShape.throwsNothingChecked(List.of(), neverAsked));
         assertTrue("simple names", DeclaredBuilderShape.throwsNothingChecked(
-            List.of("IllegalStateException", "Error", "NoSuchElementException")));
+            List.of("IllegalStateException", "Error", "NoSuchElementException"), neverAsked));
         assertTrue("qualified names", DeclaredBuilderShape.throwsNothingChecked(
             List.of("java.lang.RuntimeException", "java.util.ConcurrentModificationException",
-                "java.lang . AssertionError")));
-        assertFalse("a checked type", DeclaredBuilderShape.throwsNothingChecked(List.of("java.io.IOException")));
-        assertFalse("an unknown name among known ones", DeclaredBuilderShape.throwsNothingChecked(
-            List.of("IllegalStateException", "MyFailure")));
+                "java.lang . AssertionError"), neverAsked));
+
+        Predicate<String> failureIsUnchecked = "Failure"::equals;
+        assertTrue("an unlisted name the verdict reads as unchecked", DeclaredBuilderShape.throwsNothingChecked(
+            List.of("IllegalStateException", "Failure"), failureIsUnchecked));
+        assertFalse("an unlisted name the verdict reads as checked", DeclaredBuilderShape.throwsNothingChecked(
+            List.of("IllegalStateException", "MyFailure"), failureIsUnchecked));
+        assertFalse("a checked type", DeclaredBuilderShape.throwsNothingChecked(
+            List.of("java.io.IOException"), failureIsUnchecked));
         assertFalse("a known name in the wrong package", DeclaredBuilderShape.throwsNothingChecked(
-            List.of("java.util.IllegalStateException")));
+            List.of("java.util.IllegalStateException"), failureIsUnchecked));
         assertFalse("nor a checked exception in java.lang", DeclaredBuilderShape.throwsNothingChecked(
-            List.of("Exception")));
+            List.of("Exception"), failureIsUnchecked));
         List<List<String>> noArgument = List.of(List.of());
         assertTrue("so the constructor serves the entry points",
             DeclaredBuilderShape.instantiable(noArgument, noArgument, List.of()));

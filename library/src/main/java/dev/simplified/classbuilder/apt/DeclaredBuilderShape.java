@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -29,7 +30,9 @@ import java.util.regex.Pattern;
  * <p>Every question here is asked of names and flags, never of a resolved type,
  * because the javac side runs while the round is still building the tree and the
  * PSI side must not resolve anything - a resolve started from inside an augment
- * provider re-enters it.
+ * provider re-enters it. The one answer that needs a resolve, whether a thrown
+ * type is unchecked, is handed in by the caller as a verdict per name, each half
+ * reaching it where it may resolve.
  */
 public final class DeclaredBuilderShape {
 
@@ -54,8 +57,7 @@ public final class DeclaredBuilderShape {
     /**
      * The exception types known to be unchecked, each by its simple name and by
      * its {@code java.lang} or {@code java.util} qualified name - the names a
-     * throws clause may be written in that neither half has to resolve to
-     * judge.
+     * throws clause may be written in that neither half resolves to judge.
      */
     private static final Set<String> UNCHECKED_EXCEPTIONS = uncheckedExceptions();
 
@@ -1147,10 +1149,11 @@ public final class DeclaredBuilderShape {
      * <p>A constructor whose throws clause may name a checked exception is not
      * one the entry points can call either: each of them calls it with nothing
      * around the call to handle what it throws. Whether a thrown type is checked
-     * is a question of what it resolves to, which neither half asks, so it is
-     * answered by name through {@link #throwsNothingChecked} - a clause naming
-     * only known unchecked types leaves the selected constructor callable, and
-     * any other name does not, the answer that never emits a call javac refuses.
+     * is a question of what it resolves to, answered by
+     * {@link #throwsNothingChecked} - a listed unchecked name by name, any other
+     * by the caller's resolve - so a clause naming only unchecked types leaves
+     * the selected constructor callable, and a checked or unresolvable name does
+     * not, the answer that never emits a call javac refuses.
      *
      * <p>An erasure match is not taken where the seed and the parameter are two
      * distinct concrete parameterisations of one generic type - both carrying
@@ -1198,31 +1201,38 @@ public final class DeclaredBuilderShape {
     }
 
     /**
-     * Whether a throws clause names only exception types known to be unchecked,
-     * which the entry points can call through with nothing to handle them.
+     * Whether a throws clause names only unchecked exception types, which the
+     * entry points can call through with nothing to handle them.
      *
-     * <p>Read by name, since neither half resolves one: {@link RuntimeException},
-     * {@link Error} and the common unchecked subclasses of each in
-     * {@code java.lang} and {@code java.util} - {@link IllegalArgumentException},
-     * {@link IllegalStateException}, {@link UnsupportedOperationException},
-     * {@link NullPointerException}, {@link IndexOutOfBoundsException} and its
-     * array and string forms, {@link ArithmeticException},
-     * {@link ClassCastException}, {@link NegativeArraySizeException},
-     * {@link ArrayStoreException}, {@link SecurityException},
-     * {@link NumberFormatException}, {@link AssertionError},
-     * {@link ConcurrentModificationException} and
-     * {@link NoSuchElementException} - each by
-     * its simple name or its qualified one. Any other name is
-     * treated as checked, an unchecked type of the author's own among them, so
-     * the entry points are skipped wherever the name is unknown - the answer
-     * that never emits a call javac refuses.
+     * <p>A listed name is answered by name, with nothing resolved:
+     * {@link RuntimeException}, {@link Error} and the common unchecked
+     * subclasses of each in {@code java.lang} and {@code java.util} -
+     * {@link IllegalArgumentException}, {@link IllegalStateException},
+     * {@link UnsupportedOperationException}, {@link NullPointerException},
+     * {@link IndexOutOfBoundsException} and its array and string forms,
+     * {@link ArithmeticException}, {@link ClassCastException},
+     * {@link NegativeArraySizeException}, {@link ArrayStoreException},
+     * {@link SecurityException}, {@link NumberFormatException},
+     * {@link AssertionError}, {@link ConcurrentModificationException} and
+     * {@link NoSuchElementException} - each by its simple name or its qualified
+     * one. Every other name is answered by the caller's verdict, which resolves
+     * the name and reads it as unchecked where it is a subtype of
+     * {@link RuntimeException} or {@link Error}: the processor from the element
+     * model, the editor from the throws clause's own class references. A name
+     * that resolves to nothing is read as checked, so the entry points are
+     * skipped wherever the answer is unknown - the answer that never emits a
+     * call javac refuses.
      *
      * @param thrownTypes each type the throws clause names, as either model renders it
-     * @return whether every one is a known unchecked type, and {@code true} for an empty clause
+     * @param resolvesUnchecked the caller's verdict on a name the list does not hold, as it is
+     *     passed in {@code thrownTypes}
+     * @return whether every one is unchecked, and {@code true} for an empty clause
      */
-    public static boolean throwsNothingChecked(@NotNull List<String> thrownTypes) {
+    public static boolean throwsNothingChecked(@NotNull List<String> thrownTypes,
+                                               @NotNull Predicate<String> resolvesUnchecked) {
         for (String thrown : thrownTypes) {
-            if (!UNCHECKED_EXCEPTIONS.contains(typeText(thrown))) return false;
+            if (UNCHECKED_EXCEPTIONS.contains(typeText(thrown))) continue;
+            if (!resolvesUnchecked.test(thrown)) return false;
         }
         return true;
     }
@@ -1735,8 +1745,8 @@ public final class DeclaredBuilderShape {
     /**
      * Renders the note for entry points skipped because the constructor they
      * would call declares a throws clause naming an exception
-     * {@link #throwsNothingChecked} does not know to be unchecked, which is
-     * treated as checked.
+     * {@link #throwsNothingChecked} does not find unchecked - a checked one, or
+     * a name that resolves to nothing, which is treated as checked.
      *
      * @param declaredName the declared builder's simple name
      * @param entryPoints the names of the entry points that were not added

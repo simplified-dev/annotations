@@ -1181,4 +1181,101 @@ public class BuilderConfigAttributesTest {
         Class<?> use = Class.forName("demo.UseConfig", true, loadClasses(c));
         assertEquals("x", use.getMethod("go").invoke(null));
     }
+
+    /**
+     * {@code BuilderNames.INHERIT} written on every attribute takes the style's
+     * name, as the unwritten default does, so the builder class and all four
+     * members keep their default names. javac refused each written value with
+     * {@code @BuilderNames 'type' must not be empty}.
+     */
+    @Test
+    public void builderNames_writtenInheritNamesEveryMemberAsTheDefault() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Config",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderNames;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, builder = @BuilderNames(type = BuilderNames.INHERIT,",
+                "    builder = BuilderNames.INHERIT, build = BuilderNames.INHERIT,",
+                "    from = BuilderNames.INHERIT, toBuilder = BuilderNames.INHERIT))",
+                "public class Config {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseConfig",
+                "package demo;",
+                "public class UseConfig {",
+                "    public static String go() {",
+                "        Config.Builder builder = Config.builder().name(\"x\");",
+                "        Config first = builder.build();",
+                "        return Config.from(first).build().getName() + first.mutate().name(\"y\").build().getName();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        Class<?> use = Class.forName("demo.UseConfig", true, loadClasses(c));
+        assertEquals("xy", use.getMethod("go").invoke(null));
+    }
+
+    /**
+     * An empty literal is the value {@code INHERIT} holds, so it cannot be told
+     * apart from the constant and names the member as the default does. javac
+     * refused it with {@code @BuilderNames 'from' must not be empty}.
+     */
+    @Test
+    public void builderNames_writtenEmptyLiteralNamesTheMemberAsTheDefault() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Config",
+                "package demo;",
+                "import dev.simplified.annotations.BuilderNames;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "@ClassBuilder(validate = false, builder = @BuilderNames(from = \"\"))",
+                "public class Config {",
+                "    private String name;",
+                "    public String getName() { return name; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseConfig",
+                "package demo;",
+                "public class UseConfig {",
+                "    public static String go() {",
+                "        return Config.from(Config.builder().name(\"x\").build()).build().getName();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        Class<?> use = Class.forName("demo.UseConfig", true, loadClasses(c));
+        assertEquals("x", use.getMethod("go").invoke(null));
+    }
+
+    /**
+     * {@code SetterNames.INHERIT} written on every role, on the target and on a
+     * field, takes the style's pattern, so each setter keeps its default name.
+     */
+    @Test
+    public void setterNames_writtenInheritNamesEverySetterAsTheDefault() throws Exception {
+        Compilation c = compile(
+            JavaFileObjects.forSourceLines("demo.Config",
+                "package demo;",
+                "import dev.simplified.annotations.ClassBuilder;",
+                "import dev.simplified.annotations.SetterNames;",
+                "@ClassBuilder(validate = false, setters = @SetterNames(set = SetterNames.INHERIT,",
+                "    flag = SetterNames.INHERIT, add = SetterNames.INHERIT, put = SetterNames.INHERIT,",
+                "    compute = SetterNames.INHERIT, clear = SetterNames.INHERIT, remove = SetterNames.INHERIT))",
+                "public class Config {",
+                "    private String name;",
+                "    @SetterNames(set = SetterNames.INHERIT)",
+                "    private boolean active;",
+                "    public String getName() { return name; }",
+                "    public boolean isActive() { return active; }",
+                "}"),
+            JavaFileObjects.forSourceLines("demo.UseConfig",
+                "package demo;",
+                "public class UseConfig {",
+                "    public static String go() {",
+                "        Config built = Config.builder().name(\"x\").active(true).build();",
+                "        return built.getName() + built.isActive() + Config.builder().isActive().build().isActive();",
+                "    }",
+                "}"));
+        assertThat(c).succeeded();
+        Class<?> use = Class.forName("demo.UseConfig", true, loadClasses(c));
+        assertEquals("xtruetrue", use.getMethod("go").invoke(null));
+    }
 }
