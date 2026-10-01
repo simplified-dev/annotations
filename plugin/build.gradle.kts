@@ -226,6 +226,23 @@ tasks.test {
 }
 
 // ----------------------------------------------------------------------------
+// The test JVM's temporary directory is this task's own directory under build/,
+// not the machine's. CompiledLibrary deletes its jars when the JVM exits, but the
+// platform writes files of its own there that nothing removes, and a killed
+// worker skips the exit entirely - both are cleared when the task next runs
+// rather than accumulating in %TEMP%.
+// ----------------------------------------------------------------------------
+
+tasks.test {
+    val scratch = File(temporaryDir, "jvm")
+    systemProperty("java.io.tmpdir", scratch.absolutePath)
+    doFirst {
+        scratch.deleteRecursively()
+        scratch.mkdirs()
+    }
+}
+
+// ----------------------------------------------------------------------------
 // Changelog plugin: drives changeNotes above by parsing CHANGELOG.md.
 // Lives at the repo root so both modules can reference the same source.
 // ----------------------------------------------------------------------------

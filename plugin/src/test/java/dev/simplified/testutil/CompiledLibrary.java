@@ -22,6 +22,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -40,8 +41,14 @@ import java.util.stream.Stream;
  * plugin bundles: the processor, when asked for, is the one a consumer's build
  * runs, so the class files carry whatever that build writes into them - the
  * members it generated and the {@code Generated} annotation on each.
+ *
+ * <p>Every compile writes under one root, created the first time this JVM asks
+ * for one and deleted with everything under it when the JVM exits.
  */
 public final class CompiledLibrary {
+
+    /** The directory every compile writes its sources, class files and jar under, created on first use. */
+    private static Path root;
 
     private CompiledLibrary() {
     }
@@ -56,7 +63,7 @@ public final class CompiledLibrary {
      * @throws AssertionError when javac reports an error
      */
     public static @NotNull Path compile(boolean processed, @NotNull Map<String, String> sources) throws IOException {
-        Path work = Files.createTempDirectory("compiled-library");
+        Path work = Files.createTempDirectory(root(), "compiled-library");
         Path sourceRoot = Files.createDirectories(work.resolve("src"));
         Path classes = Files.createDirectories(work.resolve("classes"));
         List<Path> files = new ArrayList<>();
@@ -105,6 +112,31 @@ public final class CompiledLibrary {
         String directory = jar.getParent().toString().replace('\\', '/');
         PsiTestUtil.addLibrary(parent, module, "compiled-" + jar.getParent().getFileName(), directory + "/",
             jar.getFileName().toString());
+    }
+
+    /** Creates the root on first use and schedules its deletion for when the JVM exits. */
+    private static synchronized Path root() throws IOException {
+        if (root == null) {
+            Path created = Files.createTempDirectory("plugin-test-libraries");
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> delete(created), "delete " + created));
+            root = created;
+        }
+        return root;
+    }
+
+    /** Deletes a directory and everything under it, leaving whatever refuses to go. */
+    private static void delete(Path directory) {
+        try (Stream<Path> walk = Files.walk(directory)) {
+            for (Path path : walk.sorted(Comparator.reverseOrder()).toList()) {
+                try {
+                    Files.deleteIfExists(path);
+                } catch (IOException ignored) {
+                    // The JVM is exiting, so there is no one left to report a straggler to.
+                }
+            }
+        } catch (IOException ignored) {
+            // As above - the walk failing leaves the root, which is all it can do.
+        }
     }
 
     /** Packs every class file under a directory into a jar. */
