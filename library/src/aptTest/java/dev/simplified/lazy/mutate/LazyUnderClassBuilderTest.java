@@ -8,16 +8,11 @@ import org.junit.Test;
 
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
-import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
-import java.net.URL;
-import java.net.URLClassLoader;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
 import static com.google.testing.compile.CompilationSubject.assertThat;
+import static dev.simplified.testutil.CompiledClasses.loadClasses;
 import static org.junit.Assert.assertEquals;
 
 /**
@@ -71,21 +66,7 @@ public class LazyUnderClassBuilderTest {
     private static Object run(JavaFileObject... sources) throws Exception {
         Compilation c = compile(sources);
         assertEquals(diagnostics(c), Compilation.Status.SUCCESS, c.status());
-        Path tmp = Files.createTempDirectory("lazy-under-builder");
-        for (JavaFileObject f : c.generatedFiles()) {
-            if (f.getKind() != JavaFileObject.Kind.CLASS) continue;
-            String uri = f.toUri().toString();
-            int anchor = uri.indexOf("CLASS_OUTPUT/");
-            Path out = tmp.resolve(uri.substring(anchor + "CLASS_OUTPUT/".length()));
-            Files.createDirectories(out.getParent());
-            try (InputStream in = f.openInputStream()) {
-                ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-                in.transferTo(bytes);
-                Files.write(out, bytes.toByteArray());
-            }
-        }
-        ClassLoader loader = new URLClassLoader(new URL[]{tmp.toUri().toURL()},
-            LazyUnderClassBuilderTest.class.getClassLoader());
+        ClassLoader loader = loadClasses(c);
         return Class.forName("demo.Use", true, loader).getMethod("go").invoke(null);
     }
 

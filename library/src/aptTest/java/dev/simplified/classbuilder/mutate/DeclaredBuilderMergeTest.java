@@ -9,17 +9,14 @@ import org.junit.Test;
 
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.InputStream;
-import java.net.URL;
-import java.net.URLClassLoader;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
 import static com.google.testing.compile.CompilationSubject.assertThat;
+import static dev.simplified.testutil.CompiledClasses.classesOf;
+import static dev.simplified.testutil.CompiledClasses.loadClasses;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -44,37 +41,6 @@ public class DeclaredBuilderMergeTest {
         return Compiler.javac()
             .withProcessors(new ClassBuilderProcessor())
             .compile(sources);
-    }
-
-    private static ClassLoader loadClasses(Compilation compilation) throws Exception {
-        return new URLClassLoader(new URL[]{classesOf(compilation).toUri().toURL()},
-            DeclaredBuilderMergeTest.class.getClassLoader());
-    }
-
-    /**
-     * Writes a compilation's class files out, so a second compilation can be run
-     * against them as a classpath entry rather than as sources.
-     *
-     * @param compilation the finished compilation
-     * @return the directory holding its class files
-     * @throws Exception if a file cannot be written
-     */
-    private static Path classesOf(Compilation compilation) throws Exception {
-        Path tmp = Files.createTempDirectory("classbuilder-merge-test");
-        for (JavaFileObject f : compilation.generatedFiles()) {
-            if (f.getKind() != JavaFileObject.Kind.CLASS) continue;
-            String uri = f.toUri().toString();
-            int anchor = uri.indexOf("CLASS_OUTPUT/");
-            String rel = anchor >= 0 ? uri.substring(anchor + "CLASS_OUTPUT/".length()) : f.getName();
-            Path out = tmp.resolve(rel);
-            Files.createDirectories(out.getParent());
-            try (InputStream in = f.openInputStream()) {
-                ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                in.transferTo(baos);
-                Files.write(out, baos.toByteArray());
-            }
-        }
-        return tmp;
     }
 
     private static Object runGo(Compilation c, String consumer) throws Exception {

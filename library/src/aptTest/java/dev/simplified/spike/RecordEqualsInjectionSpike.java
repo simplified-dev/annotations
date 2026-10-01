@@ -26,19 +26,14 @@ import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.TypeElement;
 import javax.tools.JavaFileObject;
-import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
 import java.lang.reflect.Method;
-import java.net.URL;
-import java.net.URLClassLoader;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Optional;
 import java.util.Set;
 
 import static com.google.testing.compile.CompilationSubject.assertThat;
+import static dev.simplified.testutil.CompiledClasses.loadClasses;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
@@ -82,25 +77,6 @@ public class RecordEqualsInjectionSpike {
 
     private static Compilation compile(JavaFileObject... sources) {
         return Compiler.javac().withProcessors(new RecordEqualsInjector()).compile(sources);
-    }
-
-    private static ClassLoader loadClasses(Compilation compilation) throws Exception {
-        Path tmp = Files.createTempDirectory("record-spike");
-        for (JavaFileObject f : compilation.generatedFiles()) {
-            if (f.getKind() != JavaFileObject.Kind.CLASS) continue;
-            String uri = f.toUri().toString();
-            int anchor = uri.indexOf("CLASS_OUTPUT/");
-            String rel = anchor >= 0 ? uri.substring(anchor + "CLASS_OUTPUT/".length()) : f.getName();
-            Path out = tmp.resolve(rel);
-            Files.createDirectories(out.getParent());
-            try (InputStream in = f.openInputStream()) {
-                ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                in.transferTo(baos);
-                Files.write(out, baos.toByteArray());
-            }
-        }
-        return new URLClassLoader(new URL[]{tmp.toUri().toURL()},
-            RecordEqualsInjectionSpike.class.getClassLoader());
     }
 
     private static JavaFileObject arrayRecord() {

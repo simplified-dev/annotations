@@ -12,15 +12,12 @@ import java.io.InputStream;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.net.URL;
-import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
 import static com.google.testing.compile.CompilationSubject.assertThat;
+import static dev.simplified.testutil.CompiledClasses.loadClasses;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -37,24 +34,6 @@ public class BuilderConfigAttributesTest {
 
     private static Compilation compile(JavaFileObject... sources) {
         return Compiler.javac().withProcessors(new ClassBuilderProcessor()).compile(sources);
-    }
-
-    private static ClassLoader loadClasses(Compilation compilation) throws Exception {
-        Path tmp = Files.createTempDirectory("classbuilder-attrs-test");
-        for (JavaFileObject f : compilation.generatedFiles()) {
-            if (f.getKind() != JavaFileObject.Kind.CLASS) continue;
-            String uri = f.toUri().toString();
-            int anchor = uri.indexOf("CLASS_OUTPUT/");
-            String rel = anchor >= 0 ? uri.substring(anchor + "CLASS_OUTPUT/".length()) : f.getName();
-            Path out = tmp.resolve(rel);
-            Files.createDirectories(out.getParent());
-            try (InputStream in = f.openInputStream()) {
-                ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                in.transferTo(baos);
-                Files.write(out, baos.toByteArray());
-            }
-        }
-        return new URLClassLoader(new URL[]{tmp.toUri().toURL()}, BuilderConfigAttributesTest.class.getClassLoader());
     }
 
     /**

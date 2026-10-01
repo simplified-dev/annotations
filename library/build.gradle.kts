@@ -171,6 +171,20 @@ val aptTest17 by tasks.registering(Test::class) {
 
 tasks.named("check") { dependsOn(aptTest, aptTest17) }
 
+// A test JVM's temporary directory is its own task's directory under build/,
+// not the machine's. The suites delete what they write there when the JVM
+// exits, but a worker that is killed - a cancelled build, a timeout - never gets
+// that far, and what it leaves is cleared when the task next runs rather than
+// accumulating in %TEMP%, where nothing ever clears it.
+tasks.withType<Test>().configureEach {
+    val scratch = File(temporaryDir, "jvm")
+    systemProperty("java.io.tmpdir", scratch.absolutePath)
+    doFirst {
+        scratch.deleteRecursively()
+        scratch.mkdirs()
+    }
+}
+
 // Tell IntelliJ that src/aptTest is a test-scoped source root. Without this
 // the IDE imports the directory as "production" sources, which paints test
 // classes with the wrong icon, puts them in the wrong tool-window scope,

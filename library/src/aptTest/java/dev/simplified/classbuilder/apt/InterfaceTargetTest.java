@@ -6,16 +6,11 @@ import com.google.testing.compile.JavaFileObjects;
 import org.junit.Test;
 
 import javax.tools.JavaFileObject;
-import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
 import java.lang.reflect.InvocationTargetException;
-import java.net.URL;
-import java.net.URLClassLoader;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.Optional;
 
 import static com.google.testing.compile.CompilationSubject.assertThat;
+import static dev.simplified.testutil.CompiledClasses.loadClasses;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -76,24 +71,6 @@ public class InterfaceTargetTest {
     // ------------------------------------------------------------------
     // @BuildFlag on an accessor - copied onto the Impl field the validator reads
     // ------------------------------------------------------------------
-
-    private static ClassLoader loadClasses(Compilation compilation) throws Exception {
-        Path tmp = Files.createTempDirectory("interface-target");
-        for (JavaFileObject f : compilation.generatedFiles()) {
-            if (f.getKind() != JavaFileObject.Kind.CLASS) continue;
-            String uri = f.toUri().toString();
-            int anchor = uri.indexOf("CLASS_OUTPUT/");
-            String rel = anchor >= 0 ? uri.substring(anchor + "CLASS_OUTPUT/".length()) : f.getName();
-            Path out = tmp.resolve(rel);
-            Files.createDirectories(out.getParent());
-            try (InputStream in = f.openInputStream()) {
-                ByteArrayOutputStream b = new ByteArrayOutputStream();
-                in.transferTo(b);
-                Files.write(out, b.toByteArray());
-            }
-        }
-        return new URLClassLoader(new URL[]{tmp.toUri().toURL()}, InterfaceTargetTest.class.getClassLoader());
-    }
 
     /**
      * Invokes a generated builder chain and returns the

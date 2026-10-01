@@ -4,16 +4,10 @@ import com.google.testing.compile.Compilation;
 import com.google.testing.compile.Compiler;
 import com.google.testing.compile.JavaFileObjects;
 import dev.simplified.classbuilder.apt.ClassBuilderProcessor;
+import dev.simplified.testutil.CompiledClasses;
 import org.junit.Test;
 
-import javax.tools.JavaFileObject;
-import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
 import java.lang.reflect.Method;
-import java.net.URL;
-import java.net.URLClassLoader;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.function.BiFunction;
 import java.util.function.Function;
@@ -65,20 +59,7 @@ public class RetainedInitExpressionTest {
     }
 
     private static ClassLoader loadClasses(Compilation compilation) throws Exception {
-        Path tmp = Files.createTempDirectory("retained-init-expr");
-        for (JavaFileObject f : compilation.generatedFiles()) {
-            if (f.getKind() != JavaFileObject.Kind.CLASS) continue;
-            String uri = f.toUri().toString();
-            int anchor = uri.indexOf("CLASS_OUTPUT/");
-            Path out = tmp.resolve(uri.substring(anchor + "CLASS_OUTPUT/".length()));
-            Files.createDirectories(out.getParent());
-            try (InputStream in = f.openInputStream()) {
-                ByteArrayOutputStream b = new ByteArrayOutputStream();
-                in.transferTo(b);
-                Files.write(out, b.toByteArray());
-            }
-        }
-        return new URLClassLoader(new URL[]{tmp.toUri().toURL()}, RetainedInitExpressionTest.class.getClassLoader());
+        return CompiledClasses.loadClasses(compilation);
     }
 
     /** Builds with no setters called, so the field holds its retained default. */

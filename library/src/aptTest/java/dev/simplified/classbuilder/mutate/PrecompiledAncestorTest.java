@@ -13,13 +13,13 @@ import java.io.InputStream;
 import java.lang.reflect.Method;
 import java.net.URL;
 import java.net.URLClassLoader;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
 import static com.google.testing.compile.CompilationSubject.assertThat;
+import static dev.simplified.testutil.CompiledClasses.classesOf;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -64,26 +64,6 @@ public class PrecompiledAncestorTest {
             .withProcessors(new ClassBuilderProcessor())
             .withClasspath(classpath)
             .compile(sources);
-    }
-
-    /** Writes a compilation's class files to a directory a later compile can read. */
-    private static Path classesOf(Compilation compilation) throws Exception {
-        Path out = Files.createTempDirectory("precompiled-ancestor");
-        for (JavaFileObject file : compilation.generatedFiles()) {
-            if (file.getKind() != JavaFileObject.Kind.CLASS) continue;
-            String uri = file.toUri().toString();
-            int anchor = uri.indexOf("CLASS_OUTPUT/");
-            String relative =
-                anchor >= 0 ? uri.substring(anchor + "CLASS_OUTPUT/".length()) : file.getName();
-            Path destination = out.resolve(relative);
-            Files.createDirectories(destination.getParent());
-            try (InputStream in = file.openInputStream()) {
-                ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-                in.transferTo(bytes);
-                Files.write(destination, bytes.toByteArray());
-            }
-        }
-        return out;
     }
 
     /** A loader over the ancestor's classes plus the ones just compiled against them. */

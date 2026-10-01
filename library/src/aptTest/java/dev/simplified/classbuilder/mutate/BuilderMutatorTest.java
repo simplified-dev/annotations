@@ -8,22 +8,16 @@ import org.junit.Test;
 
 import javax.tools.JavaFileObject;
 import javax.tools.StandardLocation;
-import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.net.URI;
-import java.net.URL;
-import java.net.URLClassLoader;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 
 import static com.google.testing.compile.CompilationSubject.assertThat;
+import static dev.simplified.testutil.CompiledClasses.loadClasses;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertSame;
@@ -41,31 +35,6 @@ public class BuilderMutatorTest {
         return Compiler.javac()
             .withProcessors(new ClassBuilderProcessor())
             .compile(sources);
-    }
-
-    /**
-     * Loads compiled classes from a {@link Compilation} into a fresh classloader
-     * so Class objects are usable via reflection. Sister tests in the sibling-
-     * path test class string-match on generated source; this test reflects on
-     * bytecode, which is the natural API for mutation verification.
-     */
-    private static ClassLoader loadClasses(Compilation compilation) throws Exception {
-        Path tmp = Files.createTempDirectory("classbuilder-mutate-test");
-        for (JavaFileObject f : compilation.generatedFiles()) {
-            if (f.getKind() != JavaFileObject.Kind.CLASS) continue;
-            // URI shape: mem:///CLASS_OUTPUT/demo/Simple.class
-            String uri = f.toUri().toString();
-            int anchor = uri.indexOf("CLASS_OUTPUT/");
-            String rel = anchor >= 0 ? uri.substring(anchor + "CLASS_OUTPUT/".length()) : f.getName();
-            Path out = tmp.resolve(rel);
-            Files.createDirectories(out.getParent());
-            try (InputStream in = f.openInputStream()) {
-                ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                in.transferTo(baos);
-                Files.write(out, baos.toByteArray());
-            }
-        }
-        return new URLClassLoader(new URL[]{tmp.toUri().toURL()}, BuilderMutatorTest.class.getClassLoader());
     }
 
     private static Class<?> nested(Class<?> outer, String simpleName) {
